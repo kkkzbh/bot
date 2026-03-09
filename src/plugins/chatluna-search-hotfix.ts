@@ -29,6 +29,20 @@ const DEFAULT_QUERY_REWRITE_BASE_URL = process.env.OPENAI_BASE_URL || 'https://a
 const DEFAULT_QUERY_REWRITE_MAX_TERMS = 6;
 const DEFAULT_MOEGIRL_BASE_URL = 'https://mzh.moegirl.org.cn/api.php';
 const DEFAULT_WIKIPEDIA_BASE_URLS = ['https://zh.wikipedia.org/w/api.php', 'https://en.wikipedia.org/w/api.php'];
+const DIRECT_SEARCH_INTENT_PATTERN =
+  /(?:\bweb[_\s-]?search\b|联网|搜(?:索)?(?:一下|一查|一搜)?|查(?:询)?(?:一下|一查|一搜)?|帮我查|给我查|帮我搜|给我搜)/i;
+const DIRECT_SEARCH_REPLY_SYSTEM_PROMPT = [
+  '你是联网搜索结果整理器。',
+  '你只可以依据提供的搜索 observation 回答，不要补充 observation 之外的事实。',
+  '如果 status=no_match，要明确说当前公开搜索结果不足以确认，不要乱猜。',
+  '如果 status=ambiguous，要指出主要候选方向，并说明最可能的方向。',
+  '如果 status=resolved，要先直接回答，再补一句证据依据。',
+  '不要提系统、工具、JSON、内部实现。',
+  '最后单独输出“参考：”并列出 1 到 3 条“标题 URL”。',
+  '输出语言与用户问题保持一致。',
+].join('\n');
+const CHAIN_MIDDLEWARE_STOP = 1;
+const CHAIN_MIDDLEWARE_CONTINUE = 2;
 const QUERY_REWRITE_SYSTEM_PROMPT = [
   '你是搜索查询规划器。',
   '你只输出 JSON，不要解释。',
@@ -45,6 +59,7 @@ export interface Config {
   topK?: number;
   timeoutMs?: number;
   wikipediaBaseURL?: string[] | string;
+  directSearchReplyEnabled?: boolean;
   queryRewriteEnabled?: boolean;
   queryRewriteModel?: string;
   queryRewriteBaseURL?: string;
@@ -60,6 +75,7 @@ export const Config: Schema<Config> = Schema.object({
     Schema.array(Schema.string()).role('table').description('Wikipedia API 基础 URL 列表。'),
     Schema.string().description('Wikipedia API 基础 URL（逗号分隔）。'),
   ]).description('可选的 Wikipedia API Base URL 列表。'),
+  directSearchReplyEnabled: Schema.boolean().default(true).description('是否在 ChatLuna 中拦截高搜索意图消息并直接走显式搜索链。'),
   queryRewriteEnabled: Schema.boolean().default(true).description('是否启用 DeepSeek 查询规划与总结。'),
   queryRewriteModel: Schema.string().default(DEFAULT_QUERY_REWRITE_MODEL).description('查询规划与总结使用的模型。'),
   queryRewriteBaseURL: Schema.string()
@@ -73,6 +89,7 @@ type RuntimeConfig = {
   topK: number;
   timeoutMs: number;
   wikipediaBaseURLs: string[];
+  directSearchReplyEnabled: boolean;
   queryRewriteEnabled: boolean;
   queryRewriteModel: string;
   queryRewriteBaseURL: string;
@@ -91,9 +108,26 @@ type PlatformLike = {
 
 type ChatLunaLike = {
   platform?: PlatformLike;
+  chatChain?: {
+    middleware: (
+      name: string,
+      middleware: (session: unknown, context: unknown) => Promise<number>,
+    ) => {
+      after: (name: string) => { before: (name: string) => unknown };
+    };
+  };
 };
 
 type ContextWithChatLuna = Context & { chatluna?: ChatLunaLike };
+
+type SearchMiddlewareContext = {
+  send?: (message: string) => Promise<unknown>;
+  options?: {
+    inputMessage?: {
+      content?: unknown;
+    };
+  };
+};
 
 type ChatCompletionResponse = {
   choices?: Array<{
@@ -286,6 +320,7 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
     topK: Number.isFinite(topK) ? clampInteger(topK, 1, 10) : DEFAULT_TOP_K,
     timeoutMs: Number.isFinite(timeoutMs) ? Math.max(3000, Math.floor(timeoutMs)) : DEFAULT_TIMEOUT_MS,
     wikipediaBaseURLs: normalizeWikipediaBaseURLs(config.wikipediaBaseURL),
+    directSearchReplyEnabled: config.directSearchReplyEnabled !== false,
     queryRewriteEnabled: config.queryRewriteEnabled !== false,
     queryRewriteModel,
     queryRewriteBaseURL,
@@ -517,7 +552,7 @@ function buildSearchObservation(
   sanitizedQuery: string,
   plan: QueryPlan,
   results: SearchResult[],
-): string {
+): SearchObservation {
   const workCounts = new Map<string, number>();
   for (const result of results) {
     const weight = Math.max(1, 5 - results.indexOf(result));
@@ -567,7 +602,7 @@ function buildSearchObservation(
       : [{ title: 'No results found', url: '', description: 'No relevant search results were found.' }],
   };
 
-  return JSON.stringify(payload, null, 2);
+  return payload;
 }
 
 function buildSearchQueries(plan: QueryPlan, runtime: RuntimeConfig, sanitizedQuery: string): string[] {
@@ -697,6 +732,158 @@ async function executeSearchPlan(
   return [...merged, ...(await Promise.all(followUpTasks)).flat()];
 }
 
+async function runStableSearchQuery(originalQuery: string, runtime: RuntimeConfig): Promise<SearchObservation> {
+  const sanitizedQuery = sanitizeSearchQueryInput(originalQuery);
+  const fallbackPlan = parseQueryPlan('', sanitizedQuery);
+  let merged = await executeSearchPlan(fallbackPlan, sanitizedQuery, runtime);
+  let ranked = rankSearchResultsByRelevance(merged, fallbackPlan, runtime.topK, sanitizedQuery);
+
+  if (!ranked.length) {
+    try {
+      const rewrittenPlan = await rewriteSearchPlan(sanitizedQuery, runtime);
+      if (rewrittenPlan) {
+        const expandedQueries = extractEntityPreservingQueries(rewrittenPlan, fallbackPlan, runtime);
+        if (expandedQueries.length) {
+          const expandedPlan: QueryPlan = {
+            ...fallbackPlan,
+            queries: takeUnique([...fallbackPlan.queries, ...expandedQueries], runtime.queryRewriteMaxTerms),
+          };
+          merged = dedupeSearchResults(
+            [...merged, ...(await executeSearchPlan(expandedPlan, sanitizedQuery, runtime))],
+            Math.max(runtime.topK * runtime.queryRewriteMaxTerms, runtime.topK * 2),
+          );
+          ranked = rankSearchResultsByRelevance(merged, fallbackPlan, runtime.topK, sanitizedQuery);
+        }
+      }
+    } catch (error) {
+      logger.warn('query rewrite failed: %s', (error as Error).message);
+    }
+  }
+
+  const observationResults = ranked.length ? ranked : dedupeSearchResults(merged, runtime.topK);
+  return buildSearchObservation(originalQuery, sanitizedQuery, fallbackPlan, observationResults);
+}
+
+function isMeaningfulTopResult(result: SearchObservation['top_results'][number]): boolean {
+  return !!normalizeText(result.title) && !!normalizeText(result.url);
+}
+
+function formatReferenceLines(observation: SearchObservation, limit = 3): string[] {
+  return observation.top_results
+    .filter(isMeaningfulTopResult)
+    .slice(0, limit)
+    .map((result) => `${result.title} ${result.url}`);
+}
+
+function buildDirectSearchFallbackReply(observation: SearchObservation): string {
+  const references = formatReferenceLines(observation);
+  if (observation.status === 'no_match') {
+    const lines = ['我刚查了公开搜索结果，但还没有找到足够可靠的信息来确认这个问题。'];
+    if (references.length) {
+      lines.push('', '参考：', ...references);
+    }
+    return lines.join('\n');
+  }
+
+  const workHint = observation.likely_works[0] ? `更可能关联到《${observation.likely_works[0]}》。` : '';
+  const entityHint = observation.entities.length ? `我查到的核心实体是：${observation.entities.join('、')}。` : '';
+  const ambiguityHint =
+    observation.status === 'ambiguous'
+      ? '结果里仍然有一些歧义，我先给你最相关的方向。'
+      : '结果里已经有比较明确的对应信息。';
+  const body = [workHint, entityHint, ambiguityHint].filter(Boolean).join('');
+  const lines = [body || '我查到了一些相关结果。'];
+  if (references.length) {
+    lines.push('', '参考：', ...references);
+  }
+  return lines.join('\n');
+}
+
+async function summarizeSearchObservation(
+  query: string,
+  observation: SearchObservation,
+  runtime: RuntimeConfig,
+): Promise<string> {
+  if (!runtime.queryRewriteApiKey || !runtime.queryRewriteBaseURL || !runtime.queryRewriteModel) {
+    return buildDirectSearchFallbackReply(observation);
+  }
+
+  try {
+    const response = await invokeOpenAICompatible(
+      runtime,
+      DIRECT_SEARCH_REPLY_SYSTEM_PROMPT,
+      `用户问题：${query}\n\n搜索 observation：\n${JSON.stringify(observation, null, 2)}`,
+    );
+    const normalized = normalizeText(response);
+    if (!normalized) return buildDirectSearchFallbackReply(observation);
+
+    const references = formatReferenceLines(observation);
+    const hasReferenceSection = /(?:^|\n)参考[:：]/.test(normalized);
+    if (!references.length || hasReferenceSection) return normalized;
+    return `${normalized}\n\n参考：\n${references.join('\n')}`;
+  } catch (error) {
+    logger.warn('direct search summary failed: %s', (error as Error).message);
+    return buildDirectSearchFallbackReply(observation);
+  }
+}
+
+function extractSearchIntentText(content: unknown): string {
+  if (typeof content === 'string') return normalizeText(content);
+  if (Array.isArray(content)) {
+    return normalizeText(
+      content
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (isRecord(item) && typeof item.text === 'string') return item.text;
+          return '';
+        })
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
+  if (isRecord(content)) {
+    if (typeof content.content === 'string') return normalizeText(content.content);
+    if (typeof content.text === 'string') return normalizeText(content.text);
+  }
+  return '';
+}
+
+function shouldHandleDirectSearchReply(content: string): boolean {
+  const normalized = normalizeText(content);
+  if (!normalized) return false;
+  return DIRECT_SEARCH_INTENT_PATTERN.test(normalized);
+}
+
+function registerDirectSearchReplyMiddleware(chatluna: ChatLunaLike | undefined, runtime: RuntimeConfig): boolean {
+  if (!runtime.directSearchReplyEnabled) return false;
+  const chain = chatluna?.chatChain;
+  if (!chain?.middleware) return false;
+
+  chain
+    .middleware('chatluna_direct_search_reply', async (_session, rawContext) => {
+      const context = rawContext as SearchMiddlewareContext;
+      const send = context.send;
+      const inputMessage = context.options?.inputMessage;
+      if (!send || !inputMessage) return CHAIN_MIDDLEWARE_CONTINUE;
+
+      const rawContent = extractSearchIntentText(inputMessage.content);
+      if (!shouldHandleDirectSearchReply(rawContent)) return CHAIN_MIDDLEWARE_CONTINUE;
+
+      const query = extractSearchQueryInput({ input: rawContent });
+      if (!query) return CHAIN_MIDDLEWARE_CONTINUE;
+
+      const observation = await runStableSearchQuery(query, runtime);
+      const reply = await summarizeSearchObservation(query, observation, runtime);
+      await send(reply);
+      logger.info('handled search intent via direct middleware (query=%s status=%s).', observation.normalized_query, observation.status);
+      return CHAIN_MIDDLEWARE_STOP;
+    })
+    .after('read_chat_message')
+    .before('lifecycle-handle_command');
+
+  return true;
+}
+
 class StableWebSearchTool extends StructuredTool<
   typeof WEB_SEARCH_INPUT_SCHEMA,
   WebSearchToolInput,
@@ -722,36 +909,7 @@ class StableWebSearchTool extends StructuredTool<
       logger.warn('web_search received empty or unparseable input: %s', summarizeToolInput(input));
       return '[]';
     }
-
-    const sanitizedQuery = sanitizeSearchQueryInput(originalQuery);
-    const fallbackPlan = parseQueryPlan('', sanitizedQuery);
-    let merged = await executeSearchPlan(fallbackPlan, sanitizedQuery, this.runtime);
-    let ranked = rankSearchResultsByRelevance(merged, fallbackPlan, this.runtime.topK, sanitizedQuery);
-
-    if (!ranked.length) {
-      try {
-        const rewrittenPlan = await rewriteSearchPlan(sanitizedQuery, this.runtime);
-        if (rewrittenPlan) {
-          const expandedQueries = extractEntityPreservingQueries(rewrittenPlan, fallbackPlan, this.runtime);
-          if (expandedQueries.length) {
-            const expandedPlan: QueryPlan = {
-              ...fallbackPlan,
-              queries: takeUnique([...fallbackPlan.queries, ...expandedQueries], this.runtime.queryRewriteMaxTerms),
-            };
-            merged = dedupeSearchResults(
-              [...merged, ...(await executeSearchPlan(expandedPlan, sanitizedQuery, this.runtime))],
-              Math.max(this.runtime.topK * this.runtime.queryRewriteMaxTerms, this.runtime.topK * 2),
-            );
-            ranked = rankSearchResultsByRelevance(merged, fallbackPlan, this.runtime.topK, sanitizedQuery);
-          }
-        }
-      } catch (error) {
-        logger.warn('query rewrite failed: %s', (error as Error).message);
-      }
-    }
-
-    const observationResults = ranked.length ? ranked : dedupeSearchResults(merged, this.runtime.topK);
-    return buildSearchObservation(originalQuery, sanitizedQuery, fallbackPlan, observationResults);
+    return JSON.stringify(await runStableSearchQuery(originalQuery, this.runtime), null, 2);
   }
 }
 
@@ -766,20 +924,30 @@ function registerWebSearchHotfix(platform: PlatformLike | undefined, runtime: Ru
 
 export function apply(ctx: Context, config: Config): void {
   const runtime = toRuntimeConfig(config);
-  let registered = false;
+  let registeredTool = false;
+  let registeredDirectSearch = false;
   let warnedUnavailable = false;
   const ensureHotfixRegistered = (trigger: string) => {
-    if (config.enabled === false || registered) return;
+    if (config.enabled === false) return;
     const chatluna = (ctx as ContextWithChatLuna).chatluna;
-    if (!registerWebSearchHotfix(chatluna?.platform, runtime)) {
+    const toolRegisteredNow = registeredTool || registerWebSearchHotfix(chatluna?.platform, runtime);
+    const directRegisteredNow = registeredDirectSearch || registerDirectSearchReplyMiddleware(chatluna, runtime);
+
+    if (!toolRegisteredNow || (runtime.directSearchReplyEnabled && !directRegisteredNow)) {
       if (!warnedUnavailable || trigger === 'ready') {
-        logger.warn('chatluna platform is not available yet, retry web_search hotfix later.');
+        logger.warn('chatluna search hooks are not available yet, retry registration later.');
         warnedUnavailable = true;
       }
-      return;
     }
-    registered = true;
-    logger.info('registered stable web_search hotfix (topK=%d).', runtime.topK);
+
+    if (!registeredTool && toolRegisteredNow) {
+      registeredTool = true;
+      logger.info('registered stable web_search hotfix (topK=%d).', runtime.topK);
+    }
+    if (!registeredDirectSearch && directRegisteredNow) {
+      registeredDirectSearch = true;
+      logger.info('registered direct search reply middleware.');
+    }
   };
 
   ctx.on('ready', () => {

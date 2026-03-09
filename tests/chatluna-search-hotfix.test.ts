@@ -152,6 +152,40 @@ function createTool(overrides: Record<string, unknown> = {}): {
   };
 }
 
+function createDirectSearchMiddleware(overrides: Record<string, unknown> = {}): {
+  handler: (session: unknown, context: unknown) => Promise<number>;
+} {
+  const readyHandlers: Array<() => void> = [];
+  const registerTool = vi.fn();
+  const middleware = vi.fn((_name: string, handler: (session: unknown, context: unknown) => Promise<number>) => ({
+    after: () => ({
+      before: () => ({}),
+    }),
+  }));
+  const ctx = {
+    chatluna: {
+      platform: { registerTool },
+      chatChain: { middleware },
+    },
+    on: vi.fn((event: string, handler: () => void) => {
+      if (event === 'ready') readyHandlers.push(handler);
+    }),
+    setInterval: vi.fn(() => ({}) as unknown),
+  };
+
+  apply(ctx as never, {
+    enabled: true,
+    topK: 5,
+    timeoutMs: 12_000,
+    ...overrides,
+  });
+  readyHandlers[0]();
+
+  const middlewareCalls = middleware.mock.calls as Array<[string, (session: unknown, context: unknown) => Promise<number>]>;
+  const [, handler] = middlewareCalls[0]!;
+  return { handler };
+}
+
 describe('chatluna-search-hotfix', () => {
   const originalFetch = globalThis.fetch;
   const fetchMock = vi.fn();
@@ -308,6 +342,31 @@ describe('chatluna-search-hotfix', () => {
     const [toolName, descriptor] = registerTool.mock.calls[0] as [string, { selector: () => boolean }];
     expect(toolName).toBe('web_search');
     expect(descriptor.selector()).toBe(true);
+  });
+
+  it('registers direct search middleware when chat chain is available', () => {
+    const readyHandlers: Array<() => void> = [];
+    const registerTool = vi.fn();
+    const middleware = vi.fn((_name: string, _handler: (session: unknown, context: unknown) => Promise<number>) => ({
+      after: () => ({
+        before: () => ({}),
+      }),
+    }));
+    const ctx = {
+      chatluna: {
+        platform: { registerTool },
+        chatChain: { middleware },
+      },
+      on: vi.fn((event: string, handler: () => void) => {
+        if (event === 'ready') readyHandlers.push(handler);
+      }),
+      setInterval: vi.fn(() => ({}) as unknown),
+    };
+
+    apply(ctx as never, { enabled: true, topK: 5, timeoutMs: 12_000 });
+    readyHandlers[0]();
+
+    expect(middleware).toHaveBeenCalledWith('chatluna_direct_search_reply', expect.any(Function));
   });
 
   it('retries registration by interval when platform becomes available later', () => {
@@ -500,6 +559,96 @@ describe('chatluna-search-hotfix', () => {
     expect(output.top_results[0].url).toBe('https://example.com/moe');
     expect(requestedTerms).toContain('彩叶和辉夜是谁');
     expect(requestedTerms).not.toContain('[object Object]');
+  });
+
+  it('handles high-search-intent messages via direct middleware before model request', async () => {
+    const { handler } = createDirectSearchMiddleware({
+      queryRewriteApiKey: 'test-key',
+      queryRewriteBaseURL: 'https://api.example.com/v1',
+      queryRewriteModel: 'deepseek/test-model',
+    });
+
+    fetchMock.mockImplementation(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/chat/completions')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          messages?: Array<{ content?: string }>;
+        };
+        const systemPrompt = body.messages?.[0]?.content ?? '';
+        if (systemPrompt.includes('联网搜索结果整理器')) {
+          return createJsonResponse({
+            choices: [
+              {
+                message: {
+                  content: '我查到她们更可能是《超时空辉夜姬！》相关角色，其中彩叶通常指酒寄彩叶，辉夜则是作品里的辉夜。\n\n参考：\n超时空辉夜姬! - 维基百科 https://example.com/wiki',
+                },
+              },
+            ],
+          });
+        }
+        return createJsonResponse({ error: 'planner should not be called' }, 500);
+      }
+      if (url.includes('lite.duckduckgo.com/lite/')) {
+        return new Response(
+          createDuckDuckGoLiteHtml([
+            {
+              title: '超时空辉夜姬! - 维基百科',
+              url: 'https://example.com/wiki',
+              description: '酒寄彩叶与辉夜是该作品主要角色',
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (url.includes('cn.bing.com/search')) {
+        return new Response(createBingHtml([]), { status: 200 });
+      }
+      if (url.includes('wikipedia.org/w/api.php')) {
+        return createJsonResponse(['彩叶', [], [], []]);
+      }
+      if (url.includes('mzh.moegirl.org.cn/api.php')) {
+        if (url.includes('action=query')) return createJsonResponse(createMediaWikiExtractPayload([]));
+        return createJsonResponse(['', [], [], []]);
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    const send = vi.fn(async () => ['msg-id']);
+    const status = await handler(
+      { platform: 'onebot' },
+      {
+        send,
+        options: {
+          inputMessage: {
+            content: '祥子 查一下彩叶和辉夜是谁？',
+          },
+        },
+      },
+    );
+
+    expect(status).toBe(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    const sentMessages = send.mock.calls as unknown as unknown[][];
+    expect(String(sentMessages[0]?.[0] ?? '')).toContain('超时空辉夜姬');
+  });
+
+  it('ignores ordinary chat messages in direct middleware', async () => {
+    const { handler } = createDirectSearchMiddleware();
+    const send = vi.fn(async () => ['msg-id']);
+    const status = await handler(
+      { platform: 'onebot' },
+      {
+        send,
+        options: {
+          inputMessage: {
+            content: '祥子 晚上好',
+          },
+        },
+      },
+    );
+
+    expect(status).toBe(2);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('exposes object schema fields for the agent prompt renderer', () => {
