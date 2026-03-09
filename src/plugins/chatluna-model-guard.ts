@@ -58,6 +58,7 @@ type MiddlewareContextLike = {
 
 const logger = new Logger(name);
 const LLM_MODEL_TYPE = ChatLunaPlatformTypes.ModelType?.llm ?? 1;
+const deferredMultilineSendSessions = new WeakSet<object>();
 
 function listAllLlmModels(chatluna: ChatLunaLike): string[] {
   try {
@@ -86,6 +87,10 @@ function resolvePreferredPlatformForGuard(defaultModel: string | null): string |
   );
 }
 
+function shouldEnableDeferredMultilineSend(session: Session): boolean {
+  return session.platform === 'onebot' && session.isDirect === false && !!session.userId && session.userId !== session.bot?.selfId;
+}
+
 export function apply(ctx: Context): void {
   const inboundStrand = createKeyedStrandRunner();
   const sendStrand = createKeyedStrandRunner();
@@ -98,7 +103,18 @@ export function apply(ctx: Context): void {
       const strandKey = resolveSessionStrandKey(session);
       if (!strandKey) return next();
 
-      return inboundStrand.run(strandKey, async () => next());
+      return inboundStrand.run(strandKey, async () => {
+        if (!shouldEnableDeferredMultilineSend(session)) {
+          return next();
+        }
+
+        deferredMultilineSendSessions.add(session);
+        try {
+          return await next();
+        } finally {
+          deferredMultilineSendSessions.delete(session);
+        }
+      });
     },
     true,
   );
@@ -138,12 +154,22 @@ export function apply(ctx: Context): void {
       });
     };
 
-    if (strandKey) {
-      await sendStrand.run(strandKey, sendTask);
-    } else {
-      await sendTask();
+    const queuedSendTask = async () => {
+      if (strandKey) {
+        await sendStrand.run(strandKey, sendTask);
+      } else {
+        await sendTask();
+      }
+    };
+
+    if (strandKey && deferredMultilineSendSessions.has(session)) {
+      void queuedSendTask().catch((error) => {
+        logger.warn('deferred multiline send failed for %s: %s', strandKey, (error as Error).message);
+      });
+      return true;
     }
 
+    await queuedSendTask();
     return true;
   });
 
