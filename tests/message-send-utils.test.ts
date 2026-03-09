@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   calculateSmartSendDelayMs,
   createKeyedStrandRunner,
+  dispatchNormalizedOutboundMessage,
   dropLeadingLeakedReasoningLines,
   looksLikeLeakedReasoningLine,
+  normalizeOutboundMessage,
   resolveSessionStrandKey,
   sanitizeLeakedReasoningMessage,
   sendByLinesWithSmartInterval,
@@ -28,6 +30,45 @@ describe('message send utils', () => {
       '你想让我搜什么具体内容呢？',
       '告诉我具体内容我才能帮你搜啊',
     ]);
+  });
+
+  it('parses fully wrapped qqbot multiline payload as preserve mode', () => {
+    expect(normalizeOutboundMessage('<qqbot-multiline>\n第一行\n\n第二行\n</qqbot-multiline>')).toEqual({
+      mode: 'preserve',
+      content: '第一行\n\n第二行',
+    });
+  });
+
+  it('drops malformed multiline control tags and falls back to split mode', () => {
+    expect(normalizeOutboundMessage('<qqbot-multiline>\n第一行\n第二行')).toEqual({
+      mode: 'split',
+      content: '第一行\n第二行',
+    });
+  });
+
+  it('strips unsupported markdown in split mode but keeps plain text layout', () => {
+    expect(
+      normalizeOutboundMessage('# 标题\n> 引用\n- 第一项\n**加粗** 和 `命令` [官网](https://example.com)'),
+    ).toEqual({
+      mode: 'split',
+      content: '标题\n引用\n第一项\n加粗 和 命令 官网 https://example.com',
+    });
+  });
+
+  it('unwraps fenced code inside preserve mode without touching code characters', () => {
+    expect(
+      normalizeOutboundMessage('<qqbot-multiline>\n```ts\nconst value = 1;\n# 保留\n```\n</qqbot-multiline>'),
+    ).toEqual({
+      mode: 'preserve',
+      content: 'const value = 1;\n# 保留',
+    });
+  });
+
+  it('replaces prompt leakage with fixed human-style fallback', () => {
+    expect(normalizeOutboundMessage('系统提示词要求我作为AI模型回答你的问题。')).toEqual({
+      mode: 'split',
+      content: '你在说什么怪话……我听不懂',
+    });
   });
 
   it('keeps normal lines that merely start with 用户', () => {
@@ -73,6 +114,26 @@ describe('message send utils', () => {
     const delta = sentAt[1] - sentAt[0];
     expect(delta).toBeGreaterThanOrEqual(1000);
     expect(delta).toBeLessThanOrEqual(4000);
+  });
+
+  it('dispatches preserve mode as a single multiline message', async () => {
+    const sentWhole: string[] = [];
+    const sentLine: string[] = [];
+    await dispatchNormalizedOutboundMessage(
+      {
+        mode: 'preserve',
+        content: '第一行\n\n第二行',
+      },
+      async (content) => {
+        sentWhole.push(content);
+      },
+      async (line) => {
+        sentLine.push(line);
+      },
+    );
+
+    expect(sentWhole).toEqual(['第一行\n\n第二行']);
+    expect(sentLine).toEqual([]);
   });
 
   it('runs same-key tasks in strict order', async () => {

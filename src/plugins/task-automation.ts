@@ -1,5 +1,5 @@
 import 'koishi-plugin-cron';
-import { Context, h, Logger, Schema, Session } from 'koishi';
+import { Context, h, Logger, Schema, Session, type Universal } from 'koishi';
 import { parseExpression } from 'cron-parser';
 import type { AutomationTask, TaskScope } from '../types/task-automation.js';
 import {
@@ -21,7 +21,12 @@ import {
   extractMessageText,
   type AutomationLlmRuntime,
 } from './task-automation-llm.js';
-import { createBypassLineSplitOptions, sendByLinesWithSmartInterval } from './message-send-utils.js';
+import {
+  createBypassLineSplitOptions,
+  dispatchNormalizedOutboundMessage,
+  type NormalizedOutboundMessage,
+  normalizeOutboundMessage,
+} from './message-send-utils.js';
 
 const logger = new Logger('task-automation');
 const SHORT_ONCE_TASK_WINDOW_MS = 60_000;
@@ -469,7 +474,12 @@ function resolveTaskBot(ctx: Context, task: AutomationTask) {
 }
 
 async function sendSessionMessageByLines(session: Session, message: string): Promise<void> {
-  await sendByLinesWithSmartInterval(message, async (line) => session.send(line));
+  const normalized = normalizeOutboundMessage(message);
+  await dispatchNormalizedOutboundMessage(
+    normalized,
+    async (content) => session.send(content, createBypassLineSplitOptions(session)),
+    async (line) => session.send(line),
+  );
 }
 
 async function sendSessionMessageOnce(session: Session, message: string): Promise<void> {
@@ -478,12 +488,37 @@ async function sendSessionMessageOnce(session: Session, message: string): Promis
   await session.send(content, createBypassLineSplitOptions(session));
 }
 
-async function sendBotMessageByLines(
-  bot: { sendMessage: (channelId: string, content: string) => Promise<unknown> },
+export async function sendBotMessageByLines(
+  bot: {
+    sendMessage: (
+      channelId: string,
+      content: string,
+      guildId?: string,
+      options?: Universal.SendOptions,
+    ) => Promise<unknown>;
+  },
   channelId: string,
-  message: string,
+  message: string | NormalizedOutboundMessage,
 ): Promise<void> {
-  await sendByLinesWithSmartInterval(message, async (line) => bot.sendMessage(channelId, line));
+  const normalized = typeof message === 'string' ? normalizeOutboundMessage(message) : message;
+  await dispatchNormalizedOutboundMessage(
+    normalized,
+    async (content) => bot.sendMessage(channelId, content, undefined, createBypassLineSplitOptions()),
+    async (line) => bot.sendMessage(channelId, line),
+  );
+}
+
+export function prependGroupMention(message: NormalizedOutboundMessage, mention: string): NormalizedOutboundMessage {
+  const prefix = mention.trim();
+  if (!prefix) return message;
+  if (!message.content.trim()) {
+    return { ...message, content: prefix };
+  }
+
+  return {
+    ...message,
+    content: message.mode === 'preserve' ? `${prefix}\n${message.content}` : `${prefix} ${message.content}`,
+  };
 }
 
 async function sendTaskMessage(ctx: Context, task: AutomationTask, runtime: RuntimeConfig): Promise<boolean> {
@@ -495,7 +530,8 @@ async function sendTaskMessage(ctx: Context, task: AutomationTask, runtime: Runt
 
   const finalMessage = task.kind === 'once' ? task.message : await buildDeliveryMessage(task, runtime);
 
-  const content = task.scope === 'group' ? `${h.at(task.creatorId)} ${finalMessage}` : finalMessage;
+  const normalized = normalizeOutboundMessage(finalMessage);
+  const content = task.scope === 'group' ? prependGroupMention(normalized, String(h.at(task.creatorId))) : normalized;
   try {
     await sendBotMessageByLines(bot, task.channelId, content);
     return true;

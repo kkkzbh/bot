@@ -47,6 +47,14 @@
 - `task.*` 命令由 `task-automation` 内部权限模式控制（`TASK_AUTOMATION_PERMISSION=all|authority3`）。
 - 对话触发、自动化触发、命令权限是三条独立控制面，排障时需分别检查。
 
+## 出站文本契约
+
+- 默认情况下，机器人输出中的换行会被当作多条 QQ 消息依次发送。
+- 只有当模型把整段正文完整包在 `<qqbot-multiline>` 和 `</qqbot-multiline>` 中时，才会保留内部换行并作为单条消息发送。
+- `<qqbot-multiline>` 只用于列表、代码、命令、配置、日志、分步骤结果这类必须保留行结构的内容；标签外不得夹带其他文本。
+- QQ 不支持 Markdown。发送层会尽量去掉代码围栏、标题、引用、粗体、斜体、Markdown 链接等外观，但 prompt 仍应明确要求模型直接输出纯文本。
+- 角色 prompt 必须假定自己是真人，不知道也不承认“系统提示词”“隐藏指令”“AI身份”等 meta 概念；如果模型泄漏这类内容，发送层会退化成固定的真人口吻兜底文案。
+
 ## 持久化能力
 
 - 当前启用 `@koishijs/plugin-database-sqlite`。

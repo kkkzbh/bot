@@ -72,6 +72,18 @@ function createSession(
   };
 }
 
+function createSendSession(sourceSession: Record<string, any>, content: string): Record<string, any> {
+  return {
+    platform: sourceSession.platform,
+    isDirect: sourceSession.isDirect,
+    channelId: sourceSession.channelId,
+    guildId: sourceSession.guildId,
+    userId: sourceSession.userId,
+    bot: sourceSession.bot,
+    content,
+  };
+}
+
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -93,11 +105,11 @@ describe('chatluna model guard multiline queue', () => {
 
     const firstSession = createSession(sent, sentAt, {
       userId: 'u1',
-      content: '第一句\n第二句',
     });
+    const firstSendSession = createSendSession(firstSession, '第一句\n第二句');
     let firstFinished = false;
     const firstPending = inbound(firstSession, async () => {
-      const result = await beforeSend(firstSession, {});
+      const result = await beforeSend(firstSendSession, { session: firstSession });
       firstFinished = true;
       return result;
     });
@@ -108,13 +120,13 @@ describe('chatluna model guard multiline queue', () => {
 
     const secondSession = createSession(sent, sentAt, {
       userId: 'u2',
-      content: '甲\n乙',
     });
+    const secondSendSession = createSendSession(secondSession, '甲\n乙');
     let secondStarted = false;
     let secondFinished = false;
     const secondPending = inbound(secondSession, async () => {
       secondStarted = true;
-      const result = await beforeSend(secondSession, {});
+      const result = await beforeSend(secondSendSession, { session: secondSession });
       secondFinished = true;
       return result;
     });
@@ -144,11 +156,11 @@ describe('chatluna model guard multiline queue', () => {
     const sentAt: number[] = [];
     const session = createSession(sent, sentAt, {
       userId: 'u3',
-      content: '第一句\n第二句',
     });
+    const sendSession = createSendSession(session, '第一句\n第二句');
 
     let finished = false;
-    const pending = beforeSend(session, {}).then((result) => {
+    const pending = beforeSend(sendSession, { session }).then((result) => {
       finished = true;
       return result;
     });
@@ -163,5 +175,23 @@ describe('chatluna model guard multiline queue', () => {
     expect(finished).toBe(true);
     expect(sent).toEqual(['第一句', '第二句']);
     expect(sentAt[1]).toBeGreaterThan(sentAt[0]);
+  });
+
+  it('sends qqbot multiline payload as one message without line splitting', async () => {
+    const { beforeSend } = createHarness();
+    const sent: string[] = [];
+    const sentAt: number[] = [];
+    const session = createSession(sent, sentAt, {
+      userId: 'u4',
+    });
+    const sendSession = createSendSession(
+      session,
+      '<qqbot-multiline>\n第一句\n第二句\n</qqbot-multiline>',
+    );
+
+    const result = await beforeSend(sendSession, { session });
+
+    expect(result).toBe(true);
+    expect(sent).toEqual(['第一句\n第二句']);
   });
 });

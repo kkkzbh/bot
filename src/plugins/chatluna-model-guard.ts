@@ -3,10 +3,9 @@ import { injectUserStampedPrompt } from './chat-time-context.js';
 import {
   createKeyedStrandRunner,
   createBypassLineSplitOptions,
-  dropLeadingLeakedReasoningLines,
+  dispatchNormalizedOutboundMessage,
+  normalizeOutboundMessage,
   resolveSessionStrandKey,
-  sanitizeLeakedReasoningMessage,
-  sendByLinesWithSmartInterval,
   shouldBypassLineSplit,
   splitMessageByLines,
 } from './message-send-utils.js';
@@ -124,34 +123,30 @@ export function apply(ctx: Context): void {
     if (session.platform !== 'onebot') return;
     if (!session.channelId || !session.content) return;
 
-    const sanitizedContent = sanitizeLeakedReasoningMessage(session.content);
-    if (sanitizedContent && sanitizedContent !== session.content) {
-      session.content = sanitizedContent;
-      logger.warn('sanitized leaked reasoning output for onebot reply.');
+    const normalized = normalizeOutboundMessage(session.content);
+    if (normalized.content !== session.content) {
+      session.content = normalized.content;
+      logger.warn('normalized outbound onebot reply for qq-safe plain text delivery.');
     }
 
-    if (!session.content.includes('\n')) return;
-
     const channelId = session.channelId;
-    const rawLines = splitMessageByLines(session.content);
-    if (rawLines.length <= 1) return;
-    const lines = dropLeadingLeakedReasoningLines(rawLines);
-    const shouldIntercept = lines.length !== rawLines.length || lines.length > 1;
+    const splitLineCount = normalized.mode === 'split' ? splitMessageByLines(session.content).length : 1;
+    const shouldIntercept = normalized.mode === 'preserve' || splitLineCount > 1;
     if (!shouldIntercept) return;
 
     const strandKey = resolveSessionStrandKey(session);
     const sendTask = async () => {
-      if (!lines.length) return;
-      if (lines.length === 1) {
-        const lineOptions = createBypassLineSplitOptions(session);
-        await session.bot.sendMessage(channelId, lines[0], undefined, lineOptions);
-        return;
-      }
-
-      await sendByLinesWithSmartInterval(lines.join('\n'), async (line) => {
-        const lineOptions = createBypassLineSplitOptions(session);
-        await session.bot.sendMessage(channelId, line, undefined, lineOptions);
-      });
+      await dispatchNormalizedOutboundMessage(
+        normalized,
+        async (content) => {
+          const lineOptions = createBypassLineSplitOptions(session);
+          await session.bot.sendMessage(channelId, content, undefined, lineOptions);
+        },
+        async (line) => {
+          const lineOptions = createBypassLineSplitOptions(session);
+          await session.bot.sendMessage(channelId, line, undefined, lineOptions);
+        },
+      );
     };
 
     const queuedSendTask = async () => {
@@ -162,7 +157,8 @@ export function apply(ctx: Context): void {
       }
     };
 
-    if (strandKey && deferredMultilineSendSessions.has(session)) {
+    const sourceSession = (options.session as Session | undefined) ?? session;
+    if (strandKey && deferredMultilineSendSessions.has(sourceSession) && normalized.mode === 'split' && splitLineCount > 1) {
       void queuedSendTask().catch((error) => {
         logger.warn('deferred multiline send failed for %s: %s', strandKey, (error as Error).message);
       });
