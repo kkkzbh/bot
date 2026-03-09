@@ -1,4 +1,7 @@
+import type { CallbackManagerForToolRun } from '@langchain/core/callbacks/manager';
+import { StructuredTool, type ToolRunnableConfig } from '@langchain/core/tools';
 import { Context, Logger, Schema } from 'koishi';
+import { z } from 'zod';
 import {
   dedupeSearchResults,
   looksLikeDuckDuckGoLiteAnomalyPage,
@@ -164,6 +167,35 @@ function extractSearchQueryInput(input: unknown, depth = 0): string {
 
   return '';
 }
+
+function summarizeToolInput(input: unknown): string {
+  if (typeof input === 'string') return normalizeText(input);
+  try {
+    const serialized = JSON.stringify(input);
+    if (!serialized) return String(input);
+    return serialized.length > 400 ? `${serialized.slice(0, 400)}...` : serialized;
+  } catch {
+    return String(input);
+  }
+}
+
+const WEB_SEARCH_INPUT_SCHEMA = z.object({
+  query: z.string().optional().describe('The natural-language search query from the user.'),
+  input: z.string().optional().describe('Fallback field for the natural-language search query.'),
+  text: z.string().optional(),
+  keyword: z.string().optional(),
+  keywords: z.union([z.string(), z.array(z.string())]).optional(),
+  q: z.string().optional(),
+  search: z.string().optional(),
+  search_query: z.union([z.string(), z.array(z.string())]).optional(),
+  args: z.unknown().optional(),
+  arguments: z.unknown().optional(),
+  params: z.unknown().optional(),
+  payload: z.unknown().optional(),
+  data: z.unknown().optional(),
+}).passthrough();
+
+type WebSearchToolInput = z.infer<typeof WEB_SEARCH_INPUT_SCHEMA>;
 
 function normalizeBaseURL(raw: string): string {
   return raw.trim().replace(/\/+$/, '');
@@ -649,16 +681,31 @@ async function executeSearchPlan(
   return [...merged, ...(await Promise.all(followUpTasks)).flat()];
 }
 
-class StableWebSearchTool {
+class StableWebSearchTool extends StructuredTool<
+  typeof WEB_SEARCH_INPUT_SCHEMA,
+  WebSearchToolInput,
+  WebSearchToolInput,
+  string
+> {
   name = 'web_search';
   description =
     'A reliable web search tool for current questions. It returns concise summary text with source links, and falls back to JSON results when summary fails.';
+  schema = WEB_SEARCH_INPUT_SCHEMA;
 
-  constructor(private runtime: RuntimeConfig) {}
+  constructor(private runtime: RuntimeConfig) {
+    super();
+  }
 
-  async invoke(input: unknown): Promise<string> {
+  protected async _call(
+    input: WebSearchToolInput,
+    _runManager?: CallbackManagerForToolRun,
+    _parentConfig?: ToolRunnableConfig,
+  ): Promise<string> {
     const originalQuery = extractSearchQueryInput(input);
-    if (!originalQuery) return '[]';
+    if (!originalQuery) {
+      logger.warn('web_search received empty or unparseable input: %s', summarizeToolInput(input));
+      return '[]';
+    }
 
     const sanitizedQuery = sanitizeSearchQueryInput(originalQuery);
     const fallbackPlan = parseQueryPlan('', sanitizedQuery);

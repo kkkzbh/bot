@@ -118,7 +118,10 @@ function createMediaWikiExtractPayload(pages: Array<{ title: string; extract: st
   };
 }
 
-function createTool(overrides: Record<string, unknown> = {}): { invoke: (input: unknown) => Promise<string> } {
+function createTool(overrides: Record<string, unknown> = {}): {
+  invoke: (input: unknown) => Promise<string>;
+  schema?: { shape?: Record<string, unknown> };
+} {
   const readyHandlers: Array<() => void> = [];
   const registerTool = vi.fn();
   const ctx = {
@@ -139,7 +142,14 @@ function createTool(overrides: Record<string, unknown> = {}): { invoke: (input: 
   });
   readyHandlers[0]();
   const [, descriptor] = registerTool.mock.calls[0] as [string, { createTool: (params: unknown) => unknown }];
-  return descriptor.createTool({}) as { invoke: (input: unknown) => Promise<string> };
+  const tool = descriptor.createTool({}) as {
+    invoke: (input: unknown) => Promise<string>;
+    schema?: { shape?: Record<string, unknown> };
+  };
+  return {
+    ...tool,
+    invoke: (input: unknown) => tool.invoke(typeof input === 'string' ? { input } : input),
+  };
 }
 
 describe('chatluna-search-hotfix', () => {
@@ -490,6 +500,62 @@ describe('chatluna-search-hotfix', () => {
     expect(output.top_results[0].url).toBe('https://example.com/moe');
     expect(requestedTerms).toContain('彩叶和辉夜是谁');
     expect(requestedTerms).not.toContain('[object Object]');
+  });
+
+  it('exposes object schema fields for the agent prompt renderer', () => {
+    const tool = createTool() as {
+      schema?: { shape?: Record<string, unknown> };
+    };
+
+    expect(tool.schema?.shape).toBeTruthy();
+    expect(tool.schema?.shape).toHaveProperty('query');
+    expect(tool.schema?.shape).toHaveProperty('input');
+  });
+
+  it('accepts openai tool-style input payloads with input field', async () => {
+    const tool = createTool();
+    const requestedTerms: string[] = [];
+
+    fetchMock.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('lite.duckduckgo.com/lite/')) {
+        requestedTerms.push(new URL(url).searchParams.get('q') ?? '');
+        return new Response(
+          createDuckDuckGoLiteHtml([
+            {
+              title: '超时空辉夜姬! - 萌娘百科',
+              url: 'https://example.com/moe',
+              description: '酒寄彩叶与辉夜是该作品主要角色',
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (url.includes('cn.bing.com/search')) {
+        return new Response(createBingHtml([]), { status: 200 });
+      }
+      if (url.includes('wikipedia.org/w/api.php')) {
+        return createJsonResponse(['彩叶', [], [], []]);
+      }
+      if (url.includes('mzh.moegirl.org.cn/api.php')) {
+        if (url.includes('action=query')) return createJsonResponse(createMediaWikiExtractPayload([]));
+        return createJsonResponse(['', [], [], []]);
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    const output = JSON.parse(
+      await tool.invoke({
+        input: '查一下彩叶和辉夜是谁？',
+      }),
+    ) as {
+      normalized_query: string;
+      top_results: Array<{ url: string }>;
+    };
+
+    expect(output.normalized_query).toBe('彩叶和辉夜是谁');
+    expect(output.top_results[0].url).toBe('https://example.com/moe');
+    expect(requestedTerms).toContain('彩叶和辉夜是谁');
   });
 
   it('returns structured observation from multi-source results even when bing drifts badly', async () => {
