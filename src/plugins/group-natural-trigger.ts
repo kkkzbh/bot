@@ -85,6 +85,10 @@ interface ModelDecisionResponse {
   confidence?: number;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function extractJsonObject(raw: string): string | null {
   const fenced = raw.match(/```json\s*([\s\S]*?)```/i) ?? raw.match(/```\s*([\s\S]*?)```/);
   if (fenced?.[1]) return fenced[1].trim();
@@ -216,12 +220,25 @@ async function shouldTriggerByModel(content: string, runtime: RuntimeConfig): Pr
 }
 
 function buildSpamKey(session: Session): string {
-  return `${session.channelId ?? ''}:${session.userId ?? ''}`;
+  return `${buildGroupScopeKey(session) ?? session.channelId ?? ''}:${session.userId ?? ''}`;
+}
+
+function resolveGroupId(session: Session): string | null {
+  return normalizeGroupId(session.guildId) ?? normalizeGroupId(session.channelId);
+}
+
+function buildGroupScopeKey(session: Session): string | null {
+  const groupId = resolveGroupId(session);
+  if (!groupId) return null;
+
+  const platform = session.platform?.trim() || 'default-platform';
+  const botSelfId = session.bot?.selfId?.trim() || 'default-bot';
+  return `${platform}:${botSelfId}:group:${groupId}`;
 }
 
 function shouldHandleGroup(session: Session, runtime: RuntimeConfig): boolean {
   if (session.isDirect) return false;
-  const groupId = normalizeGroupId(session.guildId) ?? normalizeGroupId(session.channelId);
+  const groupId = resolveGroupId(session);
   if (!groupId) return false;
   if (!runtime.enabledGroups.size) return true;
   return runtime.enabledGroups.has(groupId);
@@ -231,7 +248,7 @@ export function apply(ctx: Context, config: Config): void {
   const runtime = toRuntimeConfig(config);
   const focusExpires = new Map<string, number>();
   const spamStates = new Map<string, SpamState>();
-  let lastReplyAt = 0;
+  const nextReplyAt = new Map<string, number>();
 
   ctx.middleware(async (session, next) => {
     if (!runtime.enabled) return next();
@@ -243,6 +260,8 @@ export function apply(ctx: Context, config: Config): void {
 
     const now = Date.now();
     const spamKey = buildSpamKey(session);
+    const groupScopeKey = buildGroupScopeKey(session);
+    if (!groupScopeKey) return next();
     const spamState = spamStates.get(spamKey) ?? createEmptySpamState();
     const spamResult = recordSpamMessage(spamState, now, {
       windowMs: runtime.spamWindowMs,
@@ -259,7 +278,7 @@ export function apply(ctx: Context, config: Config): void {
     }
 
     const directHit = Math.random() < runtime.directTriggerProbability;
-    const focusUntil = focusExpires.get(spamKey) ?? 0;
+    const focusUntil = focusExpires.get(groupScopeKey) ?? 0;
     const inFocus = focusUntil > now;
 
     let shouldTrigger = directHit;
@@ -276,12 +295,14 @@ export function apply(ctx: Context, config: Config): void {
 
     if (!shouldTrigger) return next();
 
-    if (now - lastReplyAt < runtime.replyIntervalMs) {
-      return;
+    const replyReadyAt = nextReplyAt.get(groupScopeKey) ?? 0;
+    if (replyReadyAt > now) {
+      await sleep(replyReadyAt - now);
     }
 
-    lastReplyAt = now;
-    focusExpires.set(spamKey, now + runtime.focusWindowMs);
+    const handlingAt = Date.now();
+    nextReplyAt.set(groupScopeKey, handlingAt + runtime.replyIntervalMs);
+    focusExpires.set(groupScopeKey, handlingAt + runtime.focusWindowMs);
 
     const triggerName = runtime.aliases[0] ?? '祥子';
     const originalContent = session.content;

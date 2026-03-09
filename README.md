@@ -109,8 +109,8 @@ session key quotas on the host.
 - 群聊可自然触发，无需 `@` 或句首昵称：
   - 任意消息有 `25%` 概率直接触发对话。
   - 否则走“规则 + 模型”触发判定。
-  - 会话焦点窗口 `5` 分钟（同用户连续聊天更自然）。
-  - 机器人最小回复间隔 `2s`。
+  - 会话焦点窗口 `5` 分钟（同群共享、群间隔离）。
+  - 机器人最小回复间隔 `2s`（同群串行等待，不丢消息）。
   - 反刷屏：同一用户 `10s` 内 `10` 条消息，`3` 分钟内忽略该用户。
 - 昵称触发保留，默认别名包含：
   - `祥子`、`祥`、`丰川`、`丰川祥子`、`saki`、`saki酱`、`sakiko`。
@@ -163,8 +163,8 @@ session key quotas on the host.
 - `CHAT_NATURAL_TRIGGER_GROUPS`：自然触发生效群（逗号分隔，空表示所有群）。
 - `CHAT_NATURAL_TRIGGER_ALIASES`：别名列表（逗号分隔）。
 - `CHAT_NATURAL_TRIGGER_DIRECT_PROBABILITY`：任意消息直接触发概率（默认 `0.25`）。
-- `CHAT_NATURAL_TRIGGER_FOCUS_WINDOW_MS`：会话焦点窗口（默认 `300000`）。
-- `CHAT_NATURAL_TRIGGER_REPLY_INTERVAL_MS`：机器人最小回复间隔（默认 `2000`）。
+- `CHAT_NATURAL_TRIGGER_FOCUS_WINDOW_MS`：会话焦点窗口（默认 `300000`，同群共享）。
+- `CHAT_NATURAL_TRIGGER_REPLY_INTERVAL_MS`：机器人最小回复间隔（默认 `2000`，同群串行等待）。
 - `CHAT_NATURAL_TRIGGER_SPAM_WINDOW_MS`：刷屏判定窗口（默认 `10000`）。
 - `CHAT_NATURAL_TRIGGER_SPAM_THRESHOLD`：刷屏判定阈值（默认 `10`）。
 - `CHAT_NATURAL_TRIGGER_SPAM_MUTE_MS`：刷屏忽略时长（默认 `180000`）。
