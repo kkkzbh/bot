@@ -558,6 +558,57 @@ describe('chatluna-search-hotfix', () => {
     expect(requestedTerms).toContain('彩叶和辉夜是谁');
   });
 
+  it('falls back to per-entity bing searches for ambiguous multi-name queries', async () => {
+    const tool = createTool();
+    const requestedTerms: string[] = [];
+
+    fetchMock.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('lite.duckduckgo.com/lite/')) {
+        requestedTerms.push(new URL(url).searchParams.get('q') ?? '');
+        return new Response(createDuckDuckGoAnomalyHtml(), { status: 202 });
+      }
+      if (url.includes('cn.bing.com/search')) {
+        const term = new URL(url).searchParams.get('q') ?? '';
+        requestedTerms.push(term);
+        if (term === '辉夜') {
+          return new Response(
+            createBingHtml([
+              {
+                title: '如何评价Netflix的《超时空辉夜姬！》? - 知乎',
+                url: 'https://example.com/kaguya',
+                description: '故事设定在近未来，东京高中生酒寄彩叶偶然发现一个宝宝，成长后成为辉夜姬。',
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        return new Response(createBingHtml([]), { status: 200 });
+      }
+      if (url.includes('wikipedia.org/w/api.php')) {
+        return createJsonResponse(['辉夜', [], [], []]);
+      }
+      if (url.includes('mzh.moegirl.org.cn/api.php')) {
+        return createJsonResponse(['', [], [], []], 403);
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    const output = JSON.parse(
+      await tool.invoke({
+        query: '查一下彩叶和辉夜是谁？',
+      }),
+    ) as {
+      status: string;
+      top_results: Array<{ url: string }>;
+    };
+
+    expect(output.status).toBe('resolved');
+    expect(output.top_results[0].url).toBe('https://example.com/kaguya');
+    expect(requestedTerms).toContain('辉夜');
+    expect(requestedTerms).toContain('彩叶和辉夜是谁');
+  });
+
   it('returns structured observation from multi-source results even when bing drifts badly', async () => {
     const tool = createTool({
       queryRewriteApiKey: 'test-key',
@@ -710,8 +761,8 @@ describe('chatluna-search-hotfix', () => {
     expect(output.status).toBe('resolved');
     expect(output.top_results[0].url).toBe('https://example.com/moe');
     expect(requestedSearchTerms).toContain('彩叶和辉夜是谁');
-    expect(requestedSearchTerms).not.toContain('彩叶');
-    expect(requestedSearchTerms).not.toContain('辉夜');
+    expect(requestedSearchTerms).toContain('彩叶');
+    expect(requestedSearchTerms).toContain('辉夜');
     expect(requestedWikipediaUrls).toHaveLength(0);
   });
 

@@ -609,6 +609,7 @@ async function executeSearchPlan(
   sanitizedQuery: string,
   runtime: RuntimeConfig,
 ): Promise<SearchProviderResult[]> {
+  const isAmbiguousMultiEntityQuery = plan.primaryEntities.length >= 2 && plan.relatedWorks.length === 0;
   const searchTasks: Array<Promise<SearchProviderResult[]>> = [];
   for (const term of buildSearchQueries(plan, runtime, sanitizedQuery)) {
     searchTasks.push(
@@ -623,6 +624,21 @@ async function executeSearchPlan(
         return [] as SearchProviderResult[];
       }),
     );
+  }
+
+  if (isAmbiguousMultiEntityQuery) {
+    const entityBingTerms = takeUnique(
+      plan.primaryEntities.flatMap((entity) => [entity, `${entity} 角色`]),
+      Math.min(plan.primaryEntities.length * 2, runtime.queryRewriteMaxTerms),
+    );
+    for (const term of entityBingTerms) {
+      searchTasks.push(
+        searchByBingWeb(term, runtime.topK, runtime.timeoutMs).catch((error) => {
+          logger.warn('bing entity fallback failed (term=%s): %s', term, (error as Error).message);
+          return [] as SearchProviderResult[];
+        }),
+      );
+    }
   }
 
   const moegirlSeeds = takeUnique(
