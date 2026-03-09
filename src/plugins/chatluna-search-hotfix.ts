@@ -104,6 +104,67 @@ function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isBogusQuery(value: string): boolean {
+  return /^\[object\s+object\]$/i.test(normalizeText(value));
+}
+
+function extractSearchQueryInput(input: unknown, depth = 0): string {
+  if (depth > 4 || input == null) return '';
+
+  if (typeof input === 'string') {
+    const normalized = normalizeText(input);
+    if (!normalized || isBogusQuery(normalized)) return '';
+
+    if (
+      (normalized.startsWith('{') && normalized.endsWith('}')) ||
+      (normalized.startsWith('[') && normalized.endsWith(']'))
+    ) {
+      try {
+        const parsed = JSON.parse(normalized) as unknown;
+        const extracted = extractSearchQueryInput(parsed, depth + 1);
+        if (extracted) return extracted;
+      } catch {}
+    }
+
+    return normalized;
+  }
+
+  if (typeof input === 'number' || typeof input === 'boolean' || typeof input === 'bigint') {
+    return String(input);
+  }
+
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      const extracted = extractSearchQueryInput(item, depth + 1);
+      if (extracted) return extracted;
+    }
+    return '';
+  }
+
+  if (!isRecord(input)) return '';
+
+  for (const key of ['query', 'input', 'text', 'keyword', 'keywords', 'q', 'search', 'search_query']) {
+    const extracted = extractSearchQueryInput(input[key], depth + 1);
+    if (extracted) return extracted;
+  }
+
+  for (const key of ['args', 'arguments', 'params', 'payload', 'data']) {
+    const extracted = extractSearchQueryInput(input[key], depth + 1);
+    if (extracted) return extracted;
+  }
+
+  const entries = Object.entries(input).filter(([, value]) => value != null);
+  if (entries.length === 1) {
+    return extractSearchQueryInput(entries[0][1], depth + 1);
+  }
+
+  return '';
+}
+
 function normalizeBaseURL(raw: string): string {
   return raw.trim().replace(/\/+$/, '');
 }
@@ -596,7 +657,7 @@ class StableWebSearchTool {
   constructor(private runtime: RuntimeConfig) {}
 
   async invoke(input: unknown): Promise<string> {
-    const originalQuery = normalizeText(typeof input === 'string' ? input : String(input ?? ''));
+    const originalQuery = extractSearchQueryInput(input);
     if (!originalQuery) return '[]';
 
     const sanitizedQuery = sanitizeSearchQueryInput(originalQuery);

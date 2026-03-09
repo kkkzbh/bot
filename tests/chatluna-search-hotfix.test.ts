@@ -445,6 +445,53 @@ describe('chatluna-search-hotfix', () => {
     expect(requestedModels).toEqual([]);
   });
 
+  it('extracts the real query from structured tool-call input objects', async () => {
+    const tool = createTool();
+    const requestedTerms: string[] = [];
+
+    fetchMock.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('lite.duckduckgo.com/lite/')) {
+        requestedTerms.push(new URL(url).searchParams.get('q') ?? '');
+        return new Response(
+          createDuckDuckGoLiteHtml([
+            {
+              title: '超时空辉夜姬! - 萌娘百科',
+              url: 'https://example.com/moe',
+              description: '酒寄彩叶与辉夜是该作品主要角色',
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (url.includes('cn.bing.com/search')) {
+        return new Response(createBingHtml([]), { status: 200 });
+      }
+      if (url.includes('wikipedia.org/w/api.php')) {
+        return createJsonResponse(['彩叶', [], [], []]);
+      }
+      if (url.includes('mzh.moegirl.org.cn/api.php')) {
+        if (url.includes('action=query')) return createJsonResponse(createMediaWikiExtractPayload([]));
+        return createJsonResponse(['', [], [], []]);
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    const output = JSON.parse(
+      await tool.invoke({
+        query: '查一下彩叶和辉夜是谁？',
+      }),
+    ) as {
+      normalized_query: string;
+      top_results: Array<{ url: string }>;
+    };
+
+    expect(output.normalized_query).toBe('彩叶和辉夜是谁');
+    expect(output.top_results[0].url).toBe('https://example.com/moe');
+    expect(requestedTerms).toContain('彩叶和辉夜是谁');
+    expect(requestedTerms).not.toContain('[object Object]');
+  });
+
   it('returns structured observation from multi-source results even when bing drifts badly', async () => {
     const tool = createTool({
       queryRewriteApiKey: 'test-key',
