@@ -82,6 +82,7 @@ plugins:
       isNickname: true
       isNickNameWithContent: true
       allowAtReply: true
+      sendThinkingMessage: false
       defaultPreset: sakiko
       defaultChatMode: plugin
       defaultModel: >-
