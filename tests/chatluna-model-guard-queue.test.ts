@@ -84,6 +84,13 @@ function createSendSession(sourceSession: Record<string, any>, content: string):
   };
 }
 
+function cloneSourceSession(sourceSession: Record<string, any>): Record<string, any> {
+  return {
+    ...sourceSession,
+    bot: sourceSession.bot,
+  };
+}
+
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -107,9 +114,10 @@ describe('chatluna model guard multiline queue', () => {
       userId: 'u1',
     });
     const firstSendSession = createSendSession(firstSession, '第一句\n第二句');
+    const firstSourceSession = cloneSourceSession(firstSession);
     let firstFinished = false;
     const firstPending = inbound(firstSession, async () => {
-      const result = await beforeSend(firstSendSession, { session: firstSession });
+      const result = await beforeSend(firstSendSession, { session: firstSourceSession });
       firstFinished = true;
       return result;
     });
@@ -122,11 +130,12 @@ describe('chatluna model guard multiline queue', () => {
       userId: 'u2',
     });
     const secondSendSession = createSendSession(secondSession, '甲\n乙');
+    const secondSourceSession = cloneSourceSession(secondSession);
     let secondStarted = false;
     let secondFinished = false;
     const secondPending = inbound(secondSession, async () => {
       secondStarted = true;
-      const result = await beforeSend(secondSendSession, { session: secondSession });
+      const result = await beforeSend(secondSendSession, { session: secondSourceSession });
       secondFinished = true;
       return result;
     });

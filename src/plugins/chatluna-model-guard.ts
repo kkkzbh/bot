@@ -57,7 +57,29 @@ type MiddlewareContextLike = {
 
 const logger = new Logger(name);
 const LLM_MODEL_TYPE = ChatLunaPlatformTypes.ModelType?.llm ?? 1;
-const deferredMultilineSendSessions = new WeakSet<object>();
+const deferredMultilineSendKeys = new Map<string, number>();
+
+function markDeferredMultilineSendKeyActive(strandKey: string): () => void {
+  deferredMultilineSendKeys.set(strandKey, (deferredMultilineSendKeys.get(strandKey) ?? 0) + 1);
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+
+    const nextCount = (deferredMultilineSendKeys.get(strandKey) ?? 0) - 1;
+    if (nextCount > 0) {
+      deferredMultilineSendKeys.set(strandKey, nextCount);
+      return;
+    }
+
+    deferredMultilineSendKeys.delete(strandKey);
+  };
+}
+
+function isDeferredMultilineSendKeyActive(strandKey: string): boolean {
+  return (deferredMultilineSendKeys.get(strandKey) ?? 0) > 0;
+}
 
 function listAllLlmModels(chatluna: ChatLunaLike): string[] {
   try {
@@ -107,11 +129,11 @@ export function apply(ctx: Context): void {
           return next();
         }
 
-        deferredMultilineSendSessions.add(session);
+        const releaseDeferredKey = markDeferredMultilineSendKeyActive(strandKey);
         try {
           return await next();
         } finally {
-          deferredMultilineSendSessions.delete(session);
+          releaseDeferredKey();
         }
       });
     },
@@ -157,8 +179,7 @@ export function apply(ctx: Context): void {
       }
     };
 
-    const sourceSession = (options.session as Session | undefined) ?? session;
-    if (strandKey && deferredMultilineSendSessions.has(sourceSession) && normalized.mode === 'split' && splitLineCount > 1) {
+    if (strandKey && isDeferredMultilineSendKeyActive(strandKey) && normalized.mode === 'split' && splitLineCount > 1) {
       void queuedSendTask().catch((error) => {
         logger.warn('deferred multiline send failed for %s: %s', strandKey, (error as Error).message);
       });
