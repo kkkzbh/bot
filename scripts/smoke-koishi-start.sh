@@ -12,6 +12,8 @@ export OPENAI_API_KEY="${OPENAI_API_KEY:-sk-ci-smoke}"
 export OPENAI_MODEL="${OPENAI_MODEL:-deepseek/deepseek-chat}"
 export TASK_AUTOMATION_INTENT_ENABLED="${TASK_AUTOMATION_INTENT_ENABLED:-false}"
 export POKEMON_BATTLE_ENABLED="${POKEMON_BATTLE_ENABLED:-false}"
+export WEB_SEARCH_LLM_PLANNER_ENABLED="${WEB_SEARCH_LLM_PLANNER_ENABLED:-false}"
+export WEB_SEARCH_LLM_RERANK_ENABLED="${WEB_SEARCH_LLM_RERANK_ENABLED:-false}"
 
 LOG_FILE="$(mktemp)"
 TMP_KOISHI_YML="$(mktemp "$ROOT_DIR/koishi-smoke-XXXXXX.yml")"
@@ -22,6 +24,37 @@ cleanup() {
 trap cleanup EXIT
 
 cp koishi.yml "$TMP_KOISHI_YML"
+
+node --input-type=module - "$TMP_KOISHI_YML" <<'NODE'
+import { readFileSync, writeFileSync } from 'node:fs';
+import YAML from 'yaml';
+
+const filePath = process.argv[2];
+const config = YAML.parse(readFileSync(filePath, 'utf8'));
+const entry = config?.plugins?.['group:entry'];
+
+if (!entry || typeof entry !== 'object') {
+  throw new Error('Invalid koishi.yml: missing plugins.group:entry');
+}
+
+const keep = new Set([
+  'database-sqlite:8jr5yp',
+  'cron:task',
+  './dist/plugins/task-automation:automation',
+  'chatluna:0qm1bk',
+  './dist/plugins/web-search:search',
+  './dist/plugins/chatluna-sticker:sticker',
+  './dist/plugins/chatluna-model-guard:mjddgg',
+]);
+
+for (const key of Object.keys(entry)) {
+  if (!keep.has(key)) {
+    delete entry[key];
+  }
+}
+
+writeFileSync(filePath, YAML.stringify(config), 'utf8');
+NODE
 
 set +e
 timeout 25s pnpm exec koishi start "$TMP_KOISHI_YML" >"$LOG_FILE" 2>&1
@@ -46,8 +79,18 @@ if ! grep -F "loader apply plugin ./dist/plugins/task-automation" "$LOG_FILE" >/
   exit 1
 fi
 
+if ! grep -F "loader apply plugin ./dist/plugins/web-search:search" "$LOG_FILE" >/dev/null; then
+  echo "Koishi smoke startup did not load web-search plugin." >&2
+  exit 1
+fi
+
 if ! grep -F "loader apply plugin ./dist/plugins/chatluna-model-guard" "$LOG_FILE" >/dev/null; then
   echo "Koishi smoke startup did not load chatluna-model-guard plugin." >&2
+  exit 1
+fi
+
+if grep -nE "loader apply plugin adapter-onebot:onebot|loader apply plugin server:|loader apply plugin console:|loader apply plugin chatluna-deepseek-adapter:|loader apply plugin chatluna-ollama-adapter:" "$LOG_FILE" >/dev/null; then
+  echo "Koishi smoke startup unexpectedly loaded external dependency plugins." >&2
   exit 1
 fi
 
