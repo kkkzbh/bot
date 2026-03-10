@@ -64,18 +64,18 @@ describe('message send utils', () => {
     });
   });
 
-  it('auto preserves unwrapped multiline code as one qq message', () => {
+  it('keeps unwrapped multiline code in split mode without explicit wrapper', () => {
     expect(
       normalizeOutboundMessage('#include <iostream>\n\nint main() {\n  std::cout << "Hello";\n  return 0;\n}'),
     ).toEqual({
-      mode: 'preserve',
-      content: '#include <iostream>\n\nint main() {\n  std::cout << "Hello";\n  return 0;\n}',
+      mode: 'split',
+      content: '#include <iostream>\nint main() {\n  std::cout << "Hello";\n  return 0;\n}',
     });
   });
 
-  it('auto preserves unwrapped multiline lists as one qq message', () => {
+  it('keeps unwrapped multiline lists in split mode without explicit wrapper', () => {
     expect(normalizeOutboundMessage('1. 第一项\n2. 第二项\n3. 第三项')).toEqual({
-      mode: 'preserve',
+      mode: 'split',
       content: '1. 第一项\n2. 第二项\n3. 第三项',
     });
   });
@@ -84,6 +84,16 @@ describe('message send utils', () => {
     expect(normalizeOutboundMessage('知道了\n晚点再说\n别急')).toEqual({
       mode: 'split',
       content: '知道了\n晚点再说\n别急',
+    });
+  });
+
+  it('keeps qqbot-multiline wrapped conversational text in preserve mode', () => {
+    const chatWrapped =
+      '<qqbot-multiline>\n春天和秋天啊……\n都挺好的呢\n春天有樱花，天气温暖\n秋天有枫叶，空气清爽\n非要选的话我更喜欢秋天\n</qqbot-multiline>';
+
+    expect(normalizeOutboundMessage(chatWrapped)).toEqual({
+      mode: 'preserve',
+      content: '春天和秋天啊……\n都挺好的呢\n春天有樱花，天气温暖\n秋天有枫叶，空气清爽\n非要选的话我更喜欢秋天',
     });
   });
 
@@ -299,20 +309,20 @@ describe('message send utils', () => {
     });
   });
 
-  it('auto preserves SQL multi-line query', () => {
+  it('keeps unwrapped SQL multi-line query in split mode without explicit wrapper', () => {
     expect(
       normalizeOutboundMessage('SELECT id, name\nFROM users\nWHERE age > 18'),
     ).toEqual({
-      mode: 'preserve',
+      mode: 'split',
       content: 'SELECT id, name\nFROM users\nWHERE age > 18',
     });
   });
 
-  it('auto preserves HTML fragments', () => {
+  it('keeps unwrapped HTML fragments in split mode without explicit wrapper', () => {
     expect(
       normalizeOutboundMessage('<div class="container">\n  <p>Hello World</p>\n</div>'),
     ).toEqual({
-      mode: 'preserve',
+      mode: 'split',
       content: '<div class="container">\n  <p>Hello World</p>\n</div>',
     });
   });

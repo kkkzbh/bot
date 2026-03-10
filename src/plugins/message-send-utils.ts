@@ -27,16 +27,6 @@ const ALT_EMPHASIS_PATTERN = /(^|[^\w])_([^_\n]+)_(?=[^\w]|$)/g;
 const HEADING_PREFIX_PATTERN = /^\s{0,3}#{1,6}\s+/;
 const BLOCKQUOTE_PREFIX_PATTERN = /^\s{0,3}>\s?/;
 const UNORDERED_LIST_PREFIX_PATTERN = /^(\s*)[-*+]\s+/;
-const ORDERED_LIST_PREFIX_PATTERN = /^\s*(?:\d+[.)、]|[一二三四五六七八九十]+[、.．])\s+\S/;
-const COMMAND_LINE_PATTERN =
-  /^\s*(?:[$#]\s*)?(?:git|pnpm|npm|yarn|node|python|python3|pip|docker|kubectl|ssh|curl|wget|ls|cd|cp|mv|rm|mkdir|touch|cat|grep|sed|awk|find|ps|kill|systemctl|journalctl|tail|head|tsc|npx)\b/i;
-const CONFIG_LINE_PATTERN =
-  /^\s*(?:[A-Za-z_][\w.-]*\s*[:=]\s*\S.+|"[^"\n]+"\s*:\s*.+|\[[^\]\n]+\]|\w+\s*\{\s*|\}\s*$)/;
-const CODE_LINE_PATTERN =
-  /^\s*(?:#include\b|using\s+namespace\b|import(?=\s+[A-Za-z_"'{])|from\b.+\bimport\b|export(?=\s+[A-Za-z_*{]|\s*$)|const(?=\s+[A-Za-z_$])|let(?=\s+[A-Za-z_$])|var(?=\s+[A-Za-z_$])|function(?=\s+[A-Za-z_$]|\s*[(])|class(?=\s+[A-Za-z_$<]|\s*[{(<])|interface(?=\s+[A-Za-z_$]|\s*[{<])|type(?=\s+[A-Za-z_$<{]|\s*[<{])|enum(?=\s+[A-Za-z_$]|\s*[{])|if(?=\s*[(])|else(?=\s*[{]|\s+if\b)|for(?=\s*[(])|while(?=\s*[(])|switch(?=\s*[(])|case\s+|return(?=\s+\S|\s*[;]|\s*$)|try(?=\s*[{])|catch(?=\s*[(])|finally(?=\s*[{])|public(?=\s+)|private(?=\s+)|protected(?=\s+)|static(?=\s+)|async(?=\s+[A-Za-z_(]|\s*[(])|await(?=\s+)|def(?=\s+[A-Za-z_])|print\s*\(|console\.(?:log|error|warn)\s*\(|std::|printf\s*\(|cout\b|cin\b|int\s+main\s*\()/i;
-const SQL_KEYWORD_PATTERN =
-  /^\s*(?:SELECT\b|INSERT\s+INTO\b|UPDATE\b|DELETE\s+FROM\b|CREATE\s+(?:TABLE|INDEX|VIEW|DATABASE)\b|DROP\s+(?:TABLE|INDEX|VIEW|DATABASE)\b|ALTER\s+TABLE\b|FROM\b|WHERE\b|(?:LEFT\s+|INNER\s+|RIGHT\s+|OUTER\s+)?JOIN\b|ORDER\s+BY\b|GROUP\s+BY\b|HAVING\b|LIMIT\b|UNION\b)/;
-const HTML_TAG_PATTERN = /^\s*<\/?[A-Za-z][A-Za-z0-9]*(?:\s[^>]*)?\s*\/?>/;
 
 type AsyncTask<T> = () => Promise<T>;
 
@@ -176,75 +166,6 @@ function stripPreserveModeMarkdown(message: string): string {
   return trimPreservedContent(unwrapFencedCodeBlock(message));
 }
 
-function hasDominantCJK(text: string): boolean {
-  const cjkCount = (text.match(/[\u2e80-\u9fff\uf900-\ufaff]/g) ?? []).length;
-  const latinCount = (text.match(/[A-Za-z]/g) ?? []).length;
-  return cjkCount > 0 && cjkCount > latinCount;
-}
-
-function looksLikeListLine(line: string): boolean {
-  return ORDERED_LIST_PREFIX_PATTERN.test(line) || UNORDERED_LIST_PREFIX_PATTERN.test(line);
-}
-
-function looksLikeCodeLine(line: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed) return false;
-  if (CODE_LINE_PATTERN.test(trimmed)) return true;
-  if (SQL_KEYWORD_PATTERN.test(trimmed)) return true;
-  if (HTML_TAG_PATTERN.test(trimmed)) return true;
-  if (/^[{}[\]()]+[;,]?$/.test(trimmed)) return true;
-  if (/^\s{2,}\S/.test(line) && !hasDominantCJK(trimmed)) return true;
-  if (/[{};]/.test(trimmed) && /[A-Za-z_]/.test(trimmed)) {
-    const cjkCount = (trimmed.match(/[\u2e80-\u9fff\uf900-\ufaff]/g) ?? []).length;
-    if (cjkCount === 0) return true;
-    const latinCount = (trimmed.match(/[A-Za-z]/g) ?? []).length;
-    if (cjkCount <= latinCount && /[()\[\]]/.test(trimmed) && /[=+\-*/<>!&|]/.test(trimmed)) return true;
-  }
-  if (/[)\w]\s*=>/.test(trimmed) && !hasDominantCJK(trimmed)) return true;
-  if (/[A-Za-z_]::|::[A-Za-z_]/.test(trimmed)) return true;
-  return false;
-}
-
-function isRealConfigLine(line: string): boolean {
-  if (!CONFIG_LINE_PATTERN.test(line)) return false;
-  if (/^\s*"[^"\n]+"\s*:/.test(line)) return true;
-  if (/^\s*\[[^\]\n]+\]\s*$/.test(line)) return true;
-  if (/\w+\s*\{\s*$/.test(line.trim())) return true;
-  if (/^\s*\}/.test(line)) return true;
-  const match = line.match(/^\s*[A-Za-z_][\w.-]*\s*[:=]\s*(.+)$/);
-  if (!match) return false;
-  return !hasDominantCJK(match[1].trim());
-}
-
-function shouldAutoPreserveStructuredMultiline(message: string): boolean {
-  const normalized = normalizeLineEndings(message).trim();
-  if (!normalized.includes('\n')) return false;
-  if (FENCED_CODE_BLOCK_PATTERN.test(normalized)) return true;
-
-  const lines = normalized.split('\n').filter((line) => line.trim().length > 0);
-  if (lines.length < 2) return false;
-
-  const listCount = lines.filter((line) => looksLikeListLine(line)).length;
-  if (listCount >= 2 && listCount >= Math.ceil(lines.length / 2)) {
-    return true;
-  }
-
-  const commandCount = lines.filter((line) => COMMAND_LINE_PATTERN.test(line)).length;
-  if (commandCount >= 2) {
-    return true;
-  }
-
-  const configCount = lines.filter((line) => isRealConfigLine(line)).length;
-  if (configCount >= 2 && lines.length <= 12) {
-    return true;
-  }
-
-  const codeCount = lines.filter((line) => looksLikeCodeLine(line)).length;
-  const hasBraceOnlyLine = lines.some((line) => /^[{}[\]()]+[;,]?$/.test(line.trim()));
-  const hasIndentedLine = lines.some((line) => /^\s{2,}\S/.test(line) && !hasDominantCJK(line.trim()));
-  return codeCount >= 2 && (lines.length >= 3 || hasBraceOnlyLine || hasIndentedLine);
-}
-
 function sanitizePromptLeakMessage(message: string): string {
   const normalized = normalizeLineEndings(message).trim();
   if (!normalized) return normalized;
@@ -340,13 +261,6 @@ export function sanitizeLeakedReasoningMessage(message: string): string {
 export function normalizeOutboundMessage(message: string): NormalizedOutboundMessage {
   const parsed = parseOutboundMessageControl(message);
   if (parsed.mode === 'preserve') {
-    return {
-      mode: 'preserve',
-      content: sanitizePromptLeakMessage(stripPreserveModeMarkdown(parsed.content)),
-    };
-  }
-
-  if (shouldAutoPreserveStructuredMultiline(parsed.content)) {
     return {
       mode: 'preserve',
       content: sanitizePromptLeakMessage(stripPreserveModeMarkdown(parsed.content)),

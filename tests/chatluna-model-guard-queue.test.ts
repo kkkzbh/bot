@@ -207,7 +207,30 @@ describe('chatluna model guard multiline queue', () => {
     expect(sent).toEqual(['第一句\n第二句']);
   });
 
-  it('auto preserves detected code blocks as one message without explicit wrapper', async () => {
+  it('keeps conversational qqbot multiline payload as one wrapped send', async () => {
+    const { beforeSend } = createHarness();
+    const sent: string[] = [];
+    const sentAt: number[] = [];
+    const session = createSession(sent, sentAt, {
+      userId: 'u6',
+    });
+    const sendSession = createSendSession(
+      session,
+      '<qqbot-multiline>\n春天和秋天啊……\n都挺好的呢\n春天有樱花，天气温暖\n秋天有枫叶，空气清爽\n非要选的话我更喜欢秋天\n</qqbot-multiline>',
+    );
+
+    const result = await beforeSend(sendSession, { session });
+
+    expect(result).toBe(true);
+    expect(sent).toEqual([
+      '春天和秋天啊……\n都挺好的呢\n春天有樱花，天气温暖\n秋天有枫叶，空气清爽\n非要选的话我更喜欢秋天',
+    ]);
+  });
+
+  it('splits unwrapped code blocks line by line without explicit wrapper', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-09T20:10:00+08:00'));
+
     const { beforeSend } = createHarness();
     const sent: string[] = [];
     const sentAt: number[] = [];
@@ -219,9 +242,25 @@ describe('chatluna model guard multiline queue', () => {
       '#include <iostream>\n\nint main() {\n  std::cout << "Hello World!";\n  return 0;\n}',
     );
 
-    const result = await beforeSend(sendSession, { session });
+    let finished = false;
+    const pending = beforeSend(sendSession, { session }).then((result) => {
+      finished = true;
+      return result;
+    });
 
-    expect(result).toBe(true);
-    expect(sent).toEqual(['#include <iostream>\n\nint main() {\n  std::cout << "Hello World!";\n  return 0;\n}']);
+    await flushMicrotasks();
+    expect(finished).toBe(false);
+    expect(sent).toEqual(['#include <iostream>']);
+
+    await vi.runAllTimersAsync();
+    await pending;
+
+    expect(sent).toEqual([
+      '#include <iostream>',
+      'int main() {',
+      '  std::cout << "Hello World!";',
+      '  return 0;',
+      '}',
+    ]);
   });
 });
