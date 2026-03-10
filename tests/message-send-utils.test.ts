@@ -316,13 +316,4 @@ describe('message send utils', () => {
       content: '<div class="container">\n  <p>Hello World</p>\n</div>',
     });
   });
-
-  it('forces conversational split when qqbot-multiline wraps pure CJK chat lines', () => {
-    const chatWrapped =
-      '<qqbot-multiline>\n春天和秋天啊……\n都挺好的呢\n春天有樱花，天气温暖\n秋天有枫叶，空气清爽\n非要选的话我更喜欢秋天\n</qqbot-multiline>';
-    expect(normalizeOutboundMessage(chatWrapped)).toEqual({
-      mode: 'split',
-      content: '春天和秋天啊……\n都挺好的呢\n春天有樱花，天气温暖\n秋天有枫叶，空气清爽\n非要选的话我更喜欢秋天',
-    });
-  });
 });

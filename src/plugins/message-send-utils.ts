@@ -337,34 +337,12 @@ export function sanitizeLeakedReasoningMessage(message: string): string {
     : '你再具体说一下，我好准确回复你';
 }
 
-function shouldForceConversationalSplit(content: string): boolean {
-  const normalized = normalizeLineEndings(content).trim();
-  if (!normalized.includes('\n')) return false;
-  const lines = normalized.split('\n').filter((line) => line.trim().length > 0);
-  if (lines.length < 4) return false;
-  for (const line of lines) {
-    if (looksLikeCodeLine(line)) return false;
-    if (looksLikeListLine(line)) return false;
-    if (COMMAND_LINE_PATTERN.test(line)) return false;
-    if (isRealConfigLine(line)) return false;
-  }
-  const cjkDominantCount = lines.filter((line) => hasDominantCJK(line.trim())).length;
-  return cjkDominantCount >= Math.ceil(lines.length * 0.7);
-}
-
 export function normalizeOutboundMessage(message: string): NormalizedOutboundMessage {
   const parsed = parseOutboundMessageControl(message);
   if (parsed.mode === 'preserve') {
-    const preserveContent = sanitizePromptLeakMessage(stripPreserveModeMarkdown(parsed.content));
-    if (shouldForceConversationalSplit(preserveContent)) {
-      return {
-        mode: 'split',
-        content: preserveContent,
-      };
-    }
     return {
       mode: 'preserve',
-      content: preserveContent,
+      content: sanitizePromptLeakMessage(stripPreserveModeMarkdown(parsed.content)),
     };
   }
 
