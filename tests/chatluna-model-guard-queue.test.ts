@@ -206,4 +206,22 @@ describe('chatluna model guard multiline queue', () => {
     expect(result).toBe(true);
     expect(sent).toEqual(['第一句\n第二句']);
   });
+
+  it('auto preserves detected code blocks as one message without explicit wrapper', async () => {
+    const { beforeSend } = createHarness();
+    const sent: string[] = [];
+    const sentAt: number[] = [];
+    const session = createSession(sent, sentAt, {
+      userId: 'u5',
+    });
+    const sendSession = createSendSession(
+      session,
+      '#include <iostream>\n\nint main() {\n  std::cout << "Hello World!";\n  return 0;\n}',
+    );
+
+    const result = await beforeSend(sendSession, { session });
+
+    expect(result).toBe(true);
+    expect(sent).toEqual(['#include <iostream>\n\nint main() {\n  std::cout << "Hello World!";\n  return 0;\n}']);
+  });
 });

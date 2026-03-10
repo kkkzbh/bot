@@ -64,6 +64,29 @@ describe('message send utils', () => {
     });
   });
 
+  it('auto preserves unwrapped multiline code as one qq message', () => {
+    expect(
+      normalizeOutboundMessage('#include <iostream>\n\nint main() {\n  std::cout << "Hello";\n  return 0;\n}'),
+    ).toEqual({
+      mode: 'preserve',
+      content: '#include <iostream>\n\nint main() {\n  std::cout << "Hello";\n  return 0;\n}',
+    });
+  });
+
+  it('auto preserves unwrapped multiline lists as one qq message', () => {
+    expect(normalizeOutboundMessage('1. 第一项\n2. 第二项\n3. 第三项')).toEqual({
+      mode: 'preserve',
+      content: '1. 第一项\n2. 第二项\n3. 第三项',
+    });
+  });
+
+  it('keeps ordinary conversational multiline text in split mode', () => {
+    expect(normalizeOutboundMessage('知道了\n晚点再说\n别急')).toEqual({
+      mode: 'split',
+      content: '知道了\n晚点再说\n别急',
+    });
+  });
+
   it('replaces prompt leakage with fixed human-style fallback', () => {
     expect(normalizeOutboundMessage('系统提示词要求我作为AI模型回答你的问题。')).toEqual({
       mode: 'split',
@@ -246,5 +269,51 @@ describe('message send utils', () => {
     expect(groupA).not.toBe(groupB);
     expect(groupA).not.toBe(privateU1);
     expect(privateU1).not.toBe(privateU2);
+  });
+
+  it('does not false-positive on CJK text with code keywords like if/for/class', () => {
+    expect(normalizeOutboundMessage('if可以的话\nfor循环的问题\n帮我看看')).toEqual({
+      mode: 'split',
+      content: 'if可以的话\nfor循环的问题\n帮我看看',
+    });
+  });
+
+  it('does not false-positive on indented CJK quotation text', () => {
+    expect(normalizeOutboundMessage('她说：\n  这件事情还需要再想想\n  毕竟不是小事')).toEqual({
+      mode: 'split',
+      content: '她说：\n  这件事情还需要再想想\n  毕竟不是小事',
+    });
+  });
+
+  it('does not false-positive on 10::30 time notation', () => {
+    expect(normalizeOutboundMessage('我们约在10::30见面\n不要迟到了')).toEqual({
+      mode: 'split',
+      content: '我们约在10::30见面\n不要迟到了',
+    });
+  });
+
+  it('does not false-positive on config format with CJK values', () => {
+    expect(normalizeOutboundMessage('name = 祥子\nteam = Ave Mujica')).toEqual({
+      mode: 'split',
+      content: 'name = 祥子\nteam = Ave Mujica',
+    });
+  });
+
+  it('auto preserves SQL multi-line query', () => {
+    expect(
+      normalizeOutboundMessage('SELECT id, name\nFROM users\nWHERE age > 18'),
+    ).toEqual({
+      mode: 'preserve',
+      content: 'SELECT id, name\nFROM users\nWHERE age > 18',
+    });
+  });
+
+  it('auto preserves HTML fragments', () => {
+    expect(
+      normalizeOutboundMessage('<div class="container">\n  <p>Hello World</p>\n</div>'),
+    ).toEqual({
+      mode: 'preserve',
+      content: '<div class="container">\n  <p>Hello World</p>\n</div>',
+    });
   });
 });
