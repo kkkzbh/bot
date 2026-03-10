@@ -15,7 +15,7 @@ const RERANK_SYSTEM_PROMPT = [
   '你是搜索结果重排器。',
   '你只输出 JSON，不要解释。',
   '输出格式固定为 {"ordered_urls":[]}。',
-  '只根据 query 和 candidates 判断相关性；优先保留包含核心实体、能直接回答问题、歧义更小的结果。',
+  '只根据 query 和 candidates 判断相关性；优先保留包含核心实体、能直接回答问题、歧义更小、正文信息更充分的结果。',
   '如果拿不准，就保持当前顺序。',
 ].join('\n');
 
@@ -36,8 +36,10 @@ function scoreCandidate(candidate: SearchCandidate, plan: SearchPlan): SearchCan
   const entityTokens = plan.entities.map((entity) => entity.toLowerCase());
   const titleMatches = countMatches(candidate.title, queryTokens);
   const descriptionMatches = countMatches(candidate.description, queryTokens);
+  const contentMatches = countMatches(candidate.content ?? '', queryTokens);
   const entityTitleMatches = countMatches(candidate.title, entityTokens);
   const entityDescriptionMatches = countMatches(candidate.description, entityTokens);
+  const entityContentMatches = countMatches(candidate.content ?? '', entityTokens);
 
   const evidence: string[] = [];
   let score = 0;
@@ -55,6 +57,10 @@ function scoreCandidate(candidate: SearchCandidate, plan: SearchPlan): SearchCan
     score += descriptionMatches * 2;
     evidence.push(`description:${descriptionMatches}`);
   }
+  if (contentMatches) {
+    score += contentMatches * 2;
+    evidence.push(`content:${contentMatches}`);
+  }
   if (entityTitleMatches) {
     score += entityTitleMatches * 4;
     evidence.push(`entity-title:${entityTitleMatches}`);
@@ -62,6 +68,14 @@ function scoreCandidate(candidate: SearchCandidate, plan: SearchPlan): SearchCan
   if (entityDescriptionMatches) {
     score += entityDescriptionMatches * 2;
     evidence.push(`entity-description:${entityDescriptionMatches}`);
+  }
+  if (entityContentMatches) {
+    score += entityContentMatches * 3;
+    evidence.push(`entity-content:${entityContentMatches}`);
+  }
+  if (candidate.opened && candidate.content) {
+    score += Math.min(Math.floor(candidate.content.length / 240), 4);
+    evidence.push('page-opened');
   }
   if (plan.domain === 'acgn' && candidate.source === 'moegirl') {
     score += 4;
@@ -124,10 +138,11 @@ export async function rerankCandidatesWithLLM(
       RERANK_SYSTEM_PROMPT,
       JSON.stringify({
         query: plan.normalizedQuery,
-        candidates: results.slice(0, 8).map(({ title, url, description, source, score }) => ({
+        candidates: results.slice(0, 8).map(({ title, url, description, content, source, score }) => ({
           title,
           url,
           description,
+          content_excerpt: content ? content.slice(0, 600) : '',
           source,
           score,
         })),

@@ -101,6 +101,22 @@ function createDuckDuckGoAnomalyHtml(): string {
   `;
 }
 
+function createArticleHtml(options: { title: string; description?: string; paragraphs: string[] }): string {
+  return `
+    <html>
+      <head>
+        <title>${options.title}</title>
+        <meta name="description" content="${options.description ?? ''}">
+      </head>
+      <body>
+        <main>
+          ${options.paragraphs.map((paragraph) => `<p>${paragraph}</p>`).join('\n')}
+        </main>
+      </body>
+    </html>
+  `;
+}
+
 function createMediaWikiExtractPayload(pages: Array<{ title: string; extract: string }>): Record<string, unknown> {
   return {
     query: {
@@ -250,6 +266,30 @@ describe('web-search', () => {
       },
     ]);
     expect(looksLikeDuckDuckGoLiteAnomalyPage(createDuckDuckGoAnomalyHtml())).toBe(true);
+  });
+
+  it('unwraps scheme-relative duckduckgo redirect urls', () => {
+    expect(
+      parseDuckDuckGoLiteResults(
+        `
+          <table>
+            <tr>
+              <td><a href="//duckduckgo.com/l/?uddg=${encodeURIComponent('https://example.com/article')}" class="result-link">示例结果</a></td>
+            </tr>
+            <tr>
+              <td class="result-snippet">示例摘要</td>
+            </tr>
+          </table>
+        `,
+        5,
+      ),
+    ).toEqual([
+      {
+        title: '示例结果',
+        url: 'https://example.com/article',
+        description: '示例摘要',
+      },
+    ]);
   });
 
   it('parses mediawiki open search payload', () => {
@@ -472,6 +512,127 @@ describe('web-search', () => {
 
     expect(output[0].url).toBe('https://example.com/moe');
     expect(requestedTerms).toContain('丰川祥子是谁');
+  });
+
+  it('opens result pages and includes detailed content in output', async () => {
+    fetchMock.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('lite.duckduckgo.com/lite/')) return new Response(createDuckDuckGoLiteHtml([]), { status: 200 });
+      if (url.includes('cn.bing.com/search')) {
+        return new Response(
+          createBingHtml([
+            {
+              title: '丰川祥子',
+              url: 'https://example.com/sakiko',
+              description: 'BanG Dream! 角色',
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (url.includes('wikipedia.org/w/api.php')) {
+        return createJsonResponse(['祥子', [], [], []]);
+      }
+      if (url === 'https://example.com/sakiko') {
+        return new Response(
+          createArticleHtml({
+            title: '丰川祥子',
+            description: '祥子角色词条',
+            paragraphs: [
+              '丰川祥子是《BanG Dream! Ave Mujica》相关作品的重要角色，常以冷静、自律和强烈目标感作为人物印象。',
+              '在作品剧情里，她与乐队成员之间的关系、家庭背景以及对舞台与自我认同的追问，构成了角色讨论的核心信息。',
+              '这类正文信息明显比搜索结果页摘要更完整，可供模型直接组织最终回答。',
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+        );
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    const tool = createTool();
+    const output = JSON.parse(await tool.invoke('丰川祥子是谁')) as Array<{ content?: string; opened?: boolean }>;
+
+    expect(output[0].opened).toBe(true);
+    expect(output[0].content).toContain('丰川祥子是《BanG Dream! Ave Mujica》相关作品的重要角色');
+  });
+
+  it('stops opening more pages once enough content is collected', async () => {
+    const openedUrls: string[] = [];
+    fetchMock.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('lite.duckduckgo.com/lite/')) return new Response(createDuckDuckGoLiteHtml([]), { status: 200 });
+      if (url.includes('cn.bing.com/search')) {
+        return new Response(
+          createBingHtml([
+            { title: '丰川祥子 A', url: 'https://example.com/a', description: '结果 A' },
+            { title: '丰川祥子 B', url: 'https://example.com/b', description: '结果 B' },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (url.includes('wikipedia.org/w/api.php')) {
+        return createJsonResponse(['祥子', [], [], []]);
+      }
+      if (url === 'https://example.com/a' || url === 'https://example.com/b') {
+        openedUrls.push(url);
+        return new Response(
+          createArticleHtml({
+            title: '丰川祥子',
+            description: '角色正文',
+            paragraphs: [
+              '丰川祥子是作品中的关键人物，角色经历、乐队经历、家庭背景、人格特征与剧情转折都可以从正文直接获取，这一段先提供基础设定和人物定位。',
+              '这一页继续补充她和乐队成员之间的互动、舞台表现、角色冲突与成长脉络，并明确说明这些细节已经足够支持一个 lookup 查询形成较完整的最终回答，而不需要再去打开第二个页面。',
+              '如果深读策略生效，抓完这一页之后就应当停止，因为人物介绍、剧情背景、关键关系和讨论重点都已经在同一页里给全了。',
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+        );
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    const tool = createTool();
+    await tool.invoke('丰川祥子是谁');
+    expect(openedUrls).toEqual(['https://example.com/a']);
+  });
+
+  it('never opens more than ten result pages', async () => {
+    const openedUrls: string[] = [];
+    fetchMock.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('lite.duckduckgo.com/lite/')) return new Response(createDuckDuckGoLiteHtml([]), { status: 200 });
+      if (url.includes('cn.bing.com/search')) {
+        return new Response(
+          createBingHtml(
+            Array.from({ length: 12 }, (_, index) => ({
+              title: `结果 ${index + 1}`,
+              url: `https://example.com/page-${index + 1}`,
+              description: '简短摘要',
+            })),
+          ),
+          { status: 200 },
+        );
+      }
+      if (url.includes('wikipedia.org/w/api.php')) {
+        return createJsonResponse(['query', [], [], []]);
+      }
+      if (url.startsWith('https://example.com/page-')) {
+        openedUrls.push(url);
+        return new Response(
+          createArticleHtml({
+            title: '普通页面',
+            paragraphs: ['信息不足。'],
+          }),
+          { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+        );
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    const tool = createTool({ topK: 10 });
+    await tool.invoke('查询一个没有足够细节的主题');
+    expect(openedUrls).toHaveLength(10);
   });
 
   it('survives partial provider failures and still returns results', async () => {

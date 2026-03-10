@@ -150,11 +150,23 @@ export function buildFallbackQueries(query: string, entities: string[], needsDis
 }
 
 export function canonicalizeUrl(raw: string): string {
-  const normalized = normalizeText(raw);
+  let normalized = normalizeText(raw);
   if (!normalized) return '';
+
+  if (normalized.startsWith('//')) {
+    normalized = `https:${normalized}`;
+  }
+
+  if (normalized.startsWith('/l/?uddg=')) {
+    normalized = `https://duckduckgo.com${normalized}`;
+  }
 
   try {
     const url = new URL(normalized);
+    const duckRedirectTarget = url.searchParams.get('uddg');
+    if (/duckduckgo\.com$/i.test(url.hostname) && url.pathname === '/l/' && duckRedirectTarget) {
+      return canonicalizeUrl(decodeURIComponent(duckRedirectTarget));
+    }
     for (const key of [...url.searchParams.keys()]) {
       if (/^(utm_|spm|from|src|source|ref|refer|ved|form|dc)$/i.test(key)) {
         url.searchParams.delete(key);

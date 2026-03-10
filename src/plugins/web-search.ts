@@ -108,10 +108,14 @@ function toRuntimeConfig(config: Config): SearchRuntimeConfig {
 
 function formatToolResults(results: SearchResult[]): string {
   return JSON.stringify(
-    results.map(({ title, url, description }) => ({
+    results.map(({ title, url, description, content, source, evidence, opened }) => ({
       title,
       url,
       description,
+      ...(content ? { content } : {}),
+      ...(source ? { source } : {}),
+      ...(evidence?.length ? { evidence } : {}),
+      ...(opened ? { opened } : {}),
     })),
     null,
     2,
@@ -120,7 +124,8 @@ function formatToolResults(results: SearchResult[]): string {
 
 class WebSearchTool extends StructuredTool<typeof WEB_SEARCH_INPUT_SCHEMA, WebSearchToolInput, WebSearchToolInput, string> {
   name = 'web_search';
-  description = 'A reliable web search tool that returns a JSON array of search results with title, url, and description.';
+  description =
+    'A reliable web search tool that can search, open result pages, read page content, and return a JSON array with title, url, description, and optional content.';
   schema = WEB_SEARCH_INPUT_SCHEMA;
 
   constructor(private runtime: SearchRuntimeConfig) {

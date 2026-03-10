@@ -1,4 +1,5 @@
 import { isLowConfidence, rankCandidates, rerankCandidatesWithLLM } from './ranker.js';
+import { enrichCandidatesWithPageContent } from './reader.js';
 import type { SearchCandidate, SearchPlan, SearchProvider, SearchProviderId, SearchRuntimeConfig } from './types.js';
 import { takeUnique } from './utils.js';
 
@@ -70,6 +71,12 @@ export async function runSearch(
       ranked = rankCandidates([...coreResults, ...extensionResults], plan, runtime.topK * 3);
     }
   }
+
+  if (plan.needsDisambiguation || isLowConfidence(ranked, plan)) {
+    ranked = await rerankCandidatesWithLLM(ranked, plan, runtime, signal);
+  }
+
+  ranked = rankCandidates(await enrichCandidatesWithPageContent(ranked, plan, runtime, signal), plan, runtime.topK * 3);
 
   if (plan.needsDisambiguation || isLowConfidence(ranked, plan)) {
     ranked = await rerankCandidatesWithLLM(ranked, plan, runtime, signal);

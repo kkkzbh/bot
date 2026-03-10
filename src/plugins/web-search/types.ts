@@ -23,9 +23,12 @@ export type SearchCandidate = {
   score: number;
   tags: string[];
   evidence: string[];
+  content?: string;
+  opened?: boolean;
 };
 
-export type SearchResult = Pick<SearchCandidate, 'title' | 'url' | 'description'>;
+export type SearchResult = Pick<SearchCandidate, 'title' | 'url' | 'description'> &
+  Partial<Pick<SearchCandidate, 'content' | 'source' | 'evidence' | 'opened'>>;
 
 export type SearchRequest = {
   query: string;
