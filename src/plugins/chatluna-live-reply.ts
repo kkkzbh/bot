@@ -88,7 +88,7 @@ export interface StoredMessageRecord {
   additional_kwargs?: string | null;
   additional_kwargs_binary?: unknown;
   tool_call_id?: string | null;
-  tool_calls?: string | null;
+  tool_calls?: unknown;
   name?: string | null;
   rawId?: string | null;
   text?: string | null;
@@ -132,12 +132,27 @@ function serializeStoredStringContent(text: string): ArrayBuffer {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
+function hasStructuredToolCalls(value: unknown): boolean {
+  if (value == null) return false;
+
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    return normalized !== '' && normalized !== '{}' && normalized !== '[]' && normalized !== 'null';
+  }
+
+  if (Array.isArray(value)) return value.length > 0;
+  if (value instanceof ArrayBuffer) return value.byteLength > 0;
+  if (ArrayBuffer.isView(value)) return value.byteLength > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+
+  return Boolean(value);
+}
+
 function isToolTail(message: StoredMessageRecord): boolean {
-  const toolCallId = message.tool_call_id?.trim();
+  const toolCallId = typeof message.tool_call_id === 'string' ? message.tool_call_id.trim() : '';
   if (toolCallId) return true;
 
-  const toolCalls = message.tool_calls?.trim();
-  return !!toolCalls && toolCalls !== '{}' && toolCalls !== '[]' && toolCalls !== 'null';
+  return hasStructuredToolCalls(message.tool_calls);
 }
 
 function createDecisionPromise(): LiveReplyDecisionPromise {
@@ -427,7 +442,14 @@ export class LiveReplyCoordinator {
 
       if (!scope.collectTimer) {
         scope.collectTimer = setTimeout(() => {
-          void this.finalizeCollection(scopeKey);
+          void this.finalizeCollection(scopeKey).catch(async (error) => {
+            this.logger.warn(
+              'live reply finalize failed for %s: %s',
+              scopeKey,
+              error instanceof Error ? error.message : String(error),
+            );
+            await this.resolveCollectionAsQueue(scopeKey);
+          });
         }, this.runtime.collectWindowMs);
       }
     });

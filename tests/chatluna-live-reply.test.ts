@@ -159,7 +159,7 @@ function seedConversation(database: MemoryDatabase, conversationId: string, assi
   latestRole?: string;
   assistantId?: string;
   assistantParentRole?: string;
-  toolCalls?: string;
+  toolCalls?: unknown;
 } = {}): void {
   const humanId = 'human-1';
   const parentRole = options.assistantParentRole ?? 'human';
@@ -307,6 +307,30 @@ describe('live reply conversation rewrite', () => {
     });
     expect(logger.warn).toHaveBeenCalled();
   });
+
+  it('treats empty structured tool_calls metadata as a normal ai tail', async () => {
+    const database = new MemoryDatabase();
+    seedConversation(database, 'conv-empty-tool-calls', '已发前缀\n未发尾部', {
+      toolCalls: [],
+    });
+
+    const result = await rewriteConversationTailForLiveReply({
+      database,
+      conversationId: 'conv-empty-tool-calls',
+      committedText: '已发前缀',
+      logger: { warn: vi.fn() },
+    });
+
+    expect(result).toEqual({
+      kind: 'truncated',
+      latestId: 'ai-1',
+      messageId: 'ai-1',
+      text: '已发前缀',
+    });
+    await expect(database.get('chathub_message', { id: 'ai-1' })).resolves.toEqual([
+      expect.objectContaining({ text: '已发前缀' }),
+    ]);
+  });
 });
 
 describe('live reply gate + drain', () => {
@@ -318,7 +342,9 @@ describe('live reply gate + drain', () => {
     vi.useFakeTimers();
 
     const { inbound, beforeSend, gate, database, clearCache, inject } = createHarness();
-    seedConversation(database, 'conv-live-1', '第一句\n第二句\n第三句');
+    seedConversation(database, 'conv-live-1', '第一句\n第二句\n第三句', {
+      toolCalls: [],
+    });
     const room = { roomId: 1, conversationId: 'conv-live-1', model: 'deepseek/deepseek-chat' };
     const sent: string[] = [];
 
@@ -385,6 +411,58 @@ describe('live reply gate + drain', () => {
     await expect(database.get('chathub_message', { id: 'ai-1' })).resolves.toEqual([
       expect.objectContaining({ text: '第一句' }),
     ]);
+  });
+
+  it('falls back to queue instead of hanging when rewrite throws unexpectedly', async () => {
+    vi.useFakeTimers();
+
+    const harness = createHarness();
+    seedConversation(harness.database, 'conv-live-error', '第一句\n第二句\n第三句');
+    const room = { roomId: 1, conversationId: 'conv-live-error', model: 'deepseek/deepseek-chat' };
+    const sent: string[] = [];
+
+    const originalGet = harness.database.get.bind(harness.database);
+    harness.database.get = vi.fn(async (table: string, query: Record<string, unknown>) => {
+      if (table === 'chathub_conversation') {
+        throw new Error('boom');
+      }
+      return originalGet(table, query);
+    });
+
+    const firstSession = createSession(sent, {
+      userId: 'u1',
+      username: '甲',
+      author: { name: '甲' },
+      content: '原始提问',
+    });
+    const firstSendSession = createSendSession(firstSession, '第一句\n第二句\n第三句');
+
+    await harness.inbound(firstSession, async () => {
+      await harness.gate(firstSession, createGateContext(room, 'msg-live-error-1', '原始提问'));
+      return harness.beforeSend(firstSendSession, {});
+    });
+
+    await flushMicrotasks();
+    expect(sent).toEqual(['第一句']);
+
+    const interruptSession = createSession(sent, {
+      userId: 'u2',
+      username: '乙',
+      author: { name: '乙' },
+      content: '打断一下',
+    });
+
+    const interruptPending = harness.inbound(interruptSession, async () =>
+      harness.gate(interruptSession, createGateContext(room, 'msg-live-error-2', '打断一下')),
+    );
+
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(600);
+    await expect(interruptPending).resolves.toBe(2);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sent).toEqual(['第一句', '第二句', '第三句']);
+    expect(harness.clearCache).not.toHaveBeenCalled();
   });
 
   it('keeps private sessions isolated by peer', async () => {
