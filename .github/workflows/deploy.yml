@@ -121,6 +121,18 @@ jobs:
               ./data/chathub/presets/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_APP_DIR}/data/chathub/presets/"
           fi
 
+      - name: Sync sticker files
+        run: |
+          set -euo pipefail
+          if [ -d "./data/chathub/stickers" ]; then
+            ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              "mkdir -p '${DEPLOY_APP_DIR}/data/chathub/stickers'"
+            rsync -az \
+              -e "ssh -p ${DEPLOY_PORT}" \
+              ./data/chathub/stickers/ \
+              "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_APP_DIR}/data/chathub/stickers/"
+          fi
+
       - name: Sync runtime .env
         run: |
           set -euo pipefail
