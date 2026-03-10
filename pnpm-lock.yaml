@@ -59,9 +59,6 @@ importers:
       koishi-plugin-chatluna-plugin-common:
         specifier: ^1.3.4
         version: 1.3.4(koishi-plugin-chatluna-storage-service@1.0.3(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi-plugin-chatluna@1.3.25(koishi-plugin-chatluna-storage-service@1.0.3(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
-      koishi-plugin-chatluna-search-service:
-        specifier: ^1.3.3
-        version: 1.3.3(koishi-plugin-chatluna@1.3.25(koishi-plugin-chatluna-storage-service@1.0.3(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
       koishi-plugin-chatluna-storage-service:
         specifier: ^1.0.3
         version: 1.0.3(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))
@@ -2322,9 +2319,6 @@ packages:
   hookable@5.5.3:
     resolution: {integrity: sha512-Yc+BQe8SvoXH1643Qez1zqLRmbA5rCL+sSmk6TVos0LWVfNIB7PGncdlId77WzLGSIB5KaWgTaNTs2lNVEI6VQ==}
 
-  html-entities@2.6.0:
-    resolution: {integrity: sha512-kig+rMn/QOVRvr7c86gQ8lWXq+Hkv6CbAH1hLu+RG338StTpE8Z0b44SDVaqVu7HGKf27frdmUYEs9hTUX/cLQ==}
-
   html-void-elements@3.0.0:
     resolution: {integrity: sha512-bEqo66MRXsUGxWHV5IP0PUiAWwoEjba4VCzg0LjFJBpchPaTfyfCKTG6bc5F8ucKec3q5y6qOdGyYTSBEvhCrg==}
 
@@ -2542,13 +2536,6 @@ packages:
     peerDependenciesMeta:
       koishi-plugin-chatluna-storage-service:
         optional: true
-
-  koishi-plugin-chatluna-search-service@1.3.3:
-    resolution: {integrity: sha512-PtwULK0DuhPVTzNd2k8gIUr7QtAgQkrPklnapZbYzBnadWRj33NuH0ElbBxtGXes2npKxupyDI7LxM49fmLeDg==}
-    engines: {node: '>=18.0.0'}
-    peerDependencies:
-      koishi: ^4.18.9
-      koishi-plugin-chatluna: ^1.3.23
 
   koishi-plugin-chatluna-storage-service@1.0.3:
     resolution: {integrity: sha512-mdj8Zxzqvr16nc4dQuMWTuuY24jB0cujTc+SaemQHTy+01IiQXMfLJX1D2tMVmNwk+qfgWWYACT5o6GeZxG4Qw==}
@@ -5614,8 +5601,6 @@ snapshots:
 
   hookable@5.5.3: {}
 
-  html-entities@2.6.0: {}
-
   html-void-elements@3.0.0: {}
 
   http-assert@1.5.0:
@@ -5918,21 +5903,6 @@ snapshots:
       zod: 3.25.76
     optionalDependencies:
       koishi-plugin-chatluna-storage-service: 1.0.3(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - '@opentelemetry/exporter-trace-otlp-proto'
-      - '@opentelemetry/sdk-trace-base'
-      - openai
-
-  koishi-plugin-chatluna-search-service@1.3.3(koishi-plugin-chatluna@1.3.25(koishi-plugin-chatluna-storage-service@1.0.3(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76)):
-    dependencies:
-      '@langchain/core': 0.3.80(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
-      '@langchain/textsplitters': 0.1.0(@langchain/core@0.3.80(openai@5.23.2(ws@8.19.0)(zod@3.25.76)))
-      html-entities: 2.6.0
-      koishi: 4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)
-      koishi-plugin-chatluna: 1.3.25(koishi-plugin-chatluna-storage-service@1.0.3(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
-      lru-cache: 11.2.6
-      zod: 3.25.76
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@opentelemetry/exporter-trace-otlp-proto'

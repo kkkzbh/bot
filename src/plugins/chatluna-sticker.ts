@@ -214,7 +214,7 @@ class SendStickerTool extends StructuredTool<
 }
 
 // ---------------------------------------------------------------------------
-// Platform registration types (same pattern as chatluna-search-hotfix)
+// Platform registration types (same pattern as local web-search tool registration)
 // ---------------------------------------------------------------------------
 
 type HotfixToolDescriptor = {

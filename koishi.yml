@@ -104,23 +104,17 @@ plugins:
           - ${{ env.CHATLUNA_OLLAMA_ENABLED !== 'false' }}
       keepAlive: ${{ env.CHATLUNA_OLLAMA_KEEP_ALIVE !== 'false' }}
     puppeteer:0vx5c7: {}
-    chatluna-search-service:3p16t2:
-      searchEngine:
-        - bing-web
-        - duckduckgo-lite
-        - wikipedia
-      topK: ${{ +env.CHATLUNA_SEARCH_TOPK || 5 }}
-      summaryType: ${{ env.CHATLUNA_SEARCH_SUMMARY_TYPE || 'speed' }}
-      summaryModel: >-
-        ${{ env.CHATLUNA_SEARCH_SUMMARY_MODEL || env.OPENAI_MODEL ||
-        'deepseek/deepseek-chat' }}
-      multiSourceMode: ${{ env.CHATLUNA_SEARCH_MULTI_SOURCE_MODE || 'average' }}
-      contextualCompression: ${{ env.CHATLUNA_SEARCH_CONTEXTUAL_COMPRESSION === 'true' }}
-      serperApiKey: ${{ env.CHATLUNA_SERPER_API_KEY || '' }}
-      tavilyApiKey: ${{ env.CHATLUNA_TAVILY_API_KEY || '' }}
-      bingSearchApiKey: ${{ env.CHATLUNA_BING_SEARCH_API_KEY || '' }}
-      searxngBaseURL: ${{ env.CHATLUNA_SEARXNG_BASE_URL || 'https://paulgo.io' }}
-    ./dist/plugins/chatluna-search-hotfix:8u12rm: {}
+    ./dist/plugins/web-search:search:
+      enabled: ${{ env.WEB_SEARCH_ENABLED !== 'false' }}
+      topK: ${{ +env.WEB_SEARCH_TOPK || 5 }}
+      timeoutMs: ${{ +env.WEB_SEARCH_TIMEOUT_MS || 12000 }}
+      providers: ${{ env.WEB_SEARCH_PROVIDERS || 'bing-web,duckduckgo-lite,wikipedia' }}
+      llmBaseURL: ${{ env.WEB_SEARCH_LLM_BASE_URL || '' }}
+      llmApiKey: ${{ env.WEB_SEARCH_LLM_API_KEY || '' }}
+      llmModel: ${{ env.WEB_SEARCH_LLM_MODEL || '' }}
+      plannerEnabled: ${{ env.WEB_SEARCH_LLM_PLANNER_ENABLED !== 'false' }}
+      rerankEnabled: ${{ env.WEB_SEARCH_LLM_RERANK_ENABLED !== 'false' }}
+      acgnExtensionEnabled: ${{ env.WEB_SEARCH_ACGN_EXTENSION_ENABLED === 'true' }}
     ./dist/plugins/chatluna-sticker:sticker:
       stickerDir: ${{ env.CHATLUNA_STICKER_DIR || './data/chathub/stickers' }}
     chatluna-plugin-common:qf1a6x:

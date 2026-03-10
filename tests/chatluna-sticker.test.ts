@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { extractStickerTag, loadStickerIndex, type StickerEntry } from '../src/plugins/chatluna-sticker.js';
 
 // ---------------------------------------------------------------------------
-// Mock koishi (same pattern as chatluna-search-hotfix.test.ts)
+// Mock koishi (same pattern as web-search.test.ts)
 // ---------------------------------------------------------------------------
 
 vi.mock('koishi', () => {
