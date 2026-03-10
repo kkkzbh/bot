@@ -1,4 +1,10 @@
 import { type Context, Logger, type Session } from 'koishi';
+import {
+  type LiveReplyConfig,
+  type LiveReplyDatabaseLike,
+  LiveReplyCoordinator,
+  resolveLiveReplyRuntimeConfig,
+} from './chatluna-live-reply.js';
 import { injectUserStampedPrompt } from './chat-time-context.js';
 import {
   createKeyedStrandRunner,
@@ -22,25 +28,42 @@ const ChatLunaPlatformTypes = require('koishi-plugin-chatluna/llm-core/platform/
 };
 
 export const name = 'chatluna-model-guard';
-export const inject = ['chatluna'];
+export const inject = ['chatluna', 'database'];
+
+export interface Config extends LiveReplyConfig {}
+
+type ChainHookBuilder = {
+  after: (name: string) => ChainHookBuilder;
+  before: (name: string) => ChainHookBuilder;
+};
 
 type ChatLunaLike = {
   awaitLoadPlatform?: (platform: string, timeout?: number) => Promise<void>;
+  clearCache?: (room: unknown) => Promise<boolean>;
   platform?: {
     listAllModels?: (type: number) => { value?: Array<{ toModelName?: () => string; platform?: string; name?: string }> };
   };
+  contextManager?: {
+    inject: (options: {
+      name: string;
+      value: unknown;
+      once?: boolean;
+      conversationId?: string;
+      stage?: string;
+    }) => void;
+  };
   chatChain?: {
-    middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => {
-      after: (name: string) => { before: (name: string) => unknown };
-    };
+    middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => ChainHookBuilder;
   };
 };
 
-type ContextWithChatLuna = Context & { chatluna?: ChatLunaLike };
+type ContextServices = { chatluna?: ChatLunaLike; database?: LiveReplyDatabaseLike };
 
 type RoomLike = {
   roomId?: number | string;
+  conversationId?: string;
   model?: string;
+  [key: string]: unknown;
 };
 
 type MiddlewareContextLike = {
@@ -49,6 +72,7 @@ type MiddlewareContextLike = {
   send?: (message: string) => Promise<void>;
   options?: {
     room?: RoomLike;
+    messageId?: string;
     inputMessage?: {
       content?: unknown;
     };
@@ -108,13 +132,60 @@ function resolvePreferredPlatformForGuard(defaultModel: string | null): string |
   );
 }
 
-function shouldEnableDeferredMultilineSend(session: Session): boolean {
-  return session.platform === 'onebot' && session.isDirect === false && !!session.userId && session.userId !== session.bot?.selfId;
+function shouldEnableDeferredReplyDrain(session: Session, liveReplyEnabled: boolean): boolean {
+  if (session.platform !== 'onebot') return false;
+  if (!session.userId || session.userId === session.bot?.selfId) return false;
+  if (!session.isDirect) return true;
+  return liveReplyEnabled;
 }
 
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: Config = {}): void {
+  const services = ctx as unknown as ContextServices;
+  const database = services.database;
+  const chatlunaService = services.chatluna;
   const inboundStrand = createKeyedStrandRunner();
   const sendStrand = createKeyedStrandRunner();
+  const liveReplyRuntime = resolveLiveReplyRuntimeConfig(config);
+  const liveReplyCoordinator =
+    liveReplyRuntime.enabled && database
+      ? new LiveReplyCoordinator({
+          runtime: liveReplyRuntime,
+          database: database as LiveReplyDatabaseLike,
+          clearCache: async (room) => {
+            await chatlunaService?.clearCache?.(room as never);
+          },
+          inject: ({ conversationId, instruction }) => {
+            chatlunaService?.contextManager?.inject({
+              name: 'qqbot_live_reply_continuation',
+              value: instruction,
+              once: true,
+              conversationId,
+              stage: 'after_scratchpad',
+            });
+          },
+          logger,
+        })
+      : null;
+
+  if (liveReplyRuntime.enabled && !liveReplyCoordinator) {
+    logger.warn('live reply is enabled but database service is unavailable, falling back to queue-only behavior.');
+  }
+
+  const runWithDeferredKey = async <T>(session: Session, next: () => Promise<T>): Promise<T> => {
+    if (!shouldEnableDeferredReplyDrain(session, liveReplyRuntime.enabled)) {
+      return next();
+    }
+
+    const strandKey = resolveSessionStrandKey(session);
+    if (!strandKey) return next();
+
+    const releaseDeferredKey = markDeferredMultilineSendKeyActive(strandKey);
+    try {
+      return await next();
+    } finally {
+      releaseDeferredKey();
+    }
+  };
 
   ctx.middleware(
     async (session, next) => {
@@ -124,17 +195,12 @@ export function apply(ctx: Context): void {
       const strandKey = resolveSessionStrandKey(session);
       if (!strandKey) return next();
 
-      return inboundStrand.run(strandKey, async () => {
-        if (!shouldEnableDeferredMultilineSend(session)) {
-          return next();
-        }
+      if (liveReplyCoordinator?.shouldIntercept(strandKey)) {
+        return runWithDeferredKey(session, next);
+      }
 
-        const releaseDeferredKey = markDeferredMultilineSendKeyActive(strandKey);
-        try {
-          return await next();
-        } finally {
-          releaseDeferredKey();
-        }
+      return inboundStrand.run(strandKey, async () => {
+        return runWithDeferredKey(session, next);
       });
     },
     true,
@@ -157,18 +223,21 @@ export function apply(ctx: Context): void {
     if (!shouldIntercept) return;
 
     const strandKey = resolveSessionStrandKey(session);
+    const sendWhole = async (content: string) => {
+      const lineOptions = createBypassLineSplitOptions(session);
+      await session.bot.sendMessage(channelId, content, undefined, lineOptions);
+    };
+    const sendLine = async (line: string) => {
+      const lineOptions = createBypassLineSplitOptions(session);
+      await session.bot.sendMessage(channelId, line, undefined, lineOptions);
+    };
     const sendTask = async () => {
-      await dispatchNormalizedOutboundMessage(
-        normalized,
-        async (content) => {
-          const lineOptions = createBypassLineSplitOptions(session);
-          await session.bot.sendMessage(channelId, content, undefined, lineOptions);
-        },
-        async (line) => {
-          const lineOptions = createBypassLineSplitOptions(session);
-          await session.bot.sendMessage(channelId, line, undefined, lineOptions);
-        },
-      );
+      if (strandKey && liveReplyCoordinator && liveReplyRuntime.enabled) {
+        await liveReplyCoordinator.drainDraft(strandKey, normalized, sendWhole, sendLine);
+        return;
+      }
+
+      await dispatchNormalizedOutboundMessage(normalized, sendWhole, sendLine);
     };
 
     const queuedSendTask = async () => {
@@ -179,7 +248,12 @@ export function apply(ctx: Context): void {
       }
     };
 
-    if (strandKey && isDeferredMultilineSendKeyActive(strandKey) && normalized.mode === 'split' && splitLineCount > 1) {
+    const shouldDeferSend =
+      !!strandKey &&
+      isDeferredMultilineSendKeyActive(strandKey) &&
+      ((liveReplyRuntime.enabled && shouldIntercept) || (normalized.mode === 'split' && splitLineCount > 1));
+
+    if (shouldDeferSend) {
       void queuedSendTask().catch((error) => {
         logger.warn('deferred multiline send failed for %s: %s', strandKey, (error as Error).message);
       });
@@ -191,11 +265,46 @@ export function apply(ctx: Context): void {
   });
 
   ctx.on('ready', () => {
-    const chatluna = (ctx as ContextWithChatLuna).chatluna;
+    const chatluna = services.chatluna;
     const chain = chatluna?.chatChain;
     if (!chatluna || !chain) {
       logger.warn('chatluna service is not available, skip model guard middleware.');
       return;
+    }
+
+    if (liveReplyCoordinator && liveReplyRuntime.enabled) {
+      chain
+        .middleware('qqbot_live_replan_gate', async (rawSession, rawContext) => {
+          const session = rawSession as Session;
+          const context = rawContext as MiddlewareContextLike;
+          if (session.platform !== 'onebot') return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+          if (!session.userId || session.userId === session.bot?.selfId) {
+            return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+          }
+
+          const room = context.options?.room;
+          const strandKey = resolveSessionStrandKey(session);
+          if (!room || !strandKey) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+
+          if (!liveReplyCoordinator.shouldIntercept(strandKey, room)) {
+            liveReplyCoordinator.bindScope(strandKey, room, context.options?.messageId);
+            return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+          }
+
+          const decision = await liveReplyCoordinator.waitForInterrupt(
+            strandKey,
+            session,
+            room,
+            context.options?.messageId,
+          );
+
+          return decision === 'stop'
+            ? ChatLunaChains.ChainMiddlewareRunStatus.STOP
+            : ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        })
+        .after('chatluna_time_context')
+        .after('read_chat_message')
+        .before('message_delay');
     }
 
     chain

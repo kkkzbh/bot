@@ -264,7 +264,11 @@ plugins:
       hippoExtractModel: >-
         ${{ env.CHATLUNA_HIPPO_EXTRACT_MODEL || env.OPENAI_MODEL ||
         'deepseek/deepseek-chat' }}
-    ./dist/plugins/chatluna-model-guard:mjddgg: {}
+    ./dist/plugins/chatluna-model-guard:mjddgg:
+      liveReplyEnabled: ${{ env.QQBOT_LIVE_REPLY_ENABLED === 'true' }}
+      liveReplyCollectWindowMs: ${{ +env.QQBOT_LIVE_REPLY_COLLECT_WINDOW_MS || 600 }}
+      liveReplyMaxPendingMessages: ${{ +env.QQBOT_LIVE_REPLY_MAX_PENDING_MESSAGES || 8 }}
+      liveReplyHistoryRewriteFallback: ${{ env.QQBOT_LIVE_REPLY_HISTORY_REWRITE_FALLBACK || 'queue' }}
     commands:qp6oxu:
       chatluna:
         config:
