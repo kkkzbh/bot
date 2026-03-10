@@ -30,6 +30,22 @@ describe('task automation intent rule parsing', () => {
     expect(intent?.message).toBe('开会');
   });
 
+  it('parses once intent from chinese numeral relative time', () => {
+    const base = new Date('2026-03-01T08:00:00+08:00').getTime();
+    const intent = parseAutomationIntentByRule('四分钟后提醒我吃泡面', base);
+    expect(intent?.action).toBe('create-once');
+    expect(intent?.runAt).toBe(base + 4 * 60 * 1000);
+    expect(intent?.message).toBe('吃泡面');
+  });
+
+  it('parses once intent from compound chinese numeral relative time', () => {
+    const base = new Date('2026-03-01T08:00:00+08:00').getTime();
+    const intent = parseAutomationIntentByRule('十五分钟后提醒我开会', base);
+    expect(intent?.action).toBe('create-once');
+    expect(intent?.runAt).toBe(base + 15 * 60 * 1000);
+    expect(intent?.message).toBe('开会');
+  });
+
   it('parses once intent from second-based relative time', () => {
     const base = new Date('2026-03-01T08:00:00+08:00').getTime();
     const intent = parseAutomationIntentByRule('10s后给我打招呼', base);
@@ -102,6 +118,7 @@ describe('task automation helpers', () => {
   it('checks candidate text for automation intent', () => {
     expect(shouldTryAutomationIntent('明天提醒我拿快递')).toBe(true);
     expect(shouldTryAutomationIntent('10s后给我打招呼')).toBe(true);
+    expect(shouldTryAutomationIntent('四分钟后提醒我吃泡面')).toBe(true);
     expect(shouldTryAutomationIntent('10s后 回复我一条消息！')).toBe(true);
     expect(shouldTryAutomationIntent('请在16:38给我发消息')).toBe(true);
     expect(shouldTryAutomationIntent('半小时后叫我开会')).toBe(true);

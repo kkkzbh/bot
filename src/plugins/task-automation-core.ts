@@ -18,7 +18,15 @@ const MANAGEMENT_PATTERNS = {
 
 const ABSOLUTE_DATE_PATTERN = /(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/;
 const RELATIVE_DAY_PATTERN = /(今天|明天|后天|今晚)/;
-const RELATIVE_OFFSET_PATTERN = /(\d+)\s*(秒钟|秒|s|sec|分钟|分|min|mins|小时|h|hr|hrs|天|d)\s*(?:后|以后|之后)/i;
+const RELATIVE_NUMBER_TOKEN = String.raw`(?:\d+|[零〇一二两俩三四五六七八九十百千]+)`;
+const RELATIVE_OFFSET_PATTERN = new RegExp(
+  `(${RELATIVE_NUMBER_TOKEN})\\s*(秒钟|秒|s|sec|分钟|分|min|mins|小时|h|hr|hrs|天|d)\\s*(?:后|以后|之后)`,
+  'i',
+);
+const RELATIVE_OFFSET_REMOVABLE_PATTERN = new RegExp(
+  `${RELATIVE_NUMBER_TOKEN}\\s*(?:秒钟|秒|s|sec|min|mins|分钟|分|小时|h|hr|hrs|天|d)\\s*(?:后|以后|之后)`,
+  'gi',
+);
 const NAMED_RELATIVE_OFFSET_PATTERNS: Array<{ pattern: RegExp; deltaMs: number }> = [
   { pattern: /半(?:个)?小时(?:后|以后|之后)/, deltaMs: 30 * 60 * 1000 },
   { pattern: /一刻钟(?:后|以后|之后)/, deltaMs: 15 * 60 * 1000 },
@@ -43,9 +51,56 @@ const FIXED_TIMEZONE = 'Asia/Shanghai';
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const COMPLEX_REASONER_HINT =
   /(分析|推理|证明|解释|归纳|总结|比较|方案|计划|提纲|润色|改写|翻译|算法|代码|脚本|sql|正则|多步骤|详细)/i;
+const CHINESE_NUMBER_DIGIT_MAP: Record<string, number> = {
+  零: 0,
+  〇: 0,
+  一: 1,
+  二: 2,
+  两: 2,
+  俩: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+};
+const CHINESE_NUMBER_UNIT_MAP: Record<string, number> = {
+  十: 10,
+  百: 100,
+  千: 1000,
+};
 
 function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+function parseNumberToken(raw: string): number | null {
+  const token = raw.trim();
+  if (!token) return null;
+  if (/^\d+$/.test(token)) return Number(token);
+  if (/^[零〇一二两俩三四五六七八九]+$/.test(token)) {
+    const normalized = [...token].map((char) => CHINESE_NUMBER_DIGIT_MAP[char]).join('');
+    const value = Number(normalized);
+    return Number.isFinite(value) ? value : null;
+  }
+  if (!/^[零〇一二两俩三四五六七八九十百千]+$/.test(token)) return null;
+
+  let total = 0;
+  let pending = 0;
+  for (const char of token) {
+    const digit = CHINESE_NUMBER_DIGIT_MAP[char];
+    if (digit !== undefined) {
+      pending = digit;
+      continue;
+    }
+    const unit = CHINESE_NUMBER_UNIT_MAP[char];
+    if (!unit) return null;
+    total += (pending || 1) * unit;
+    pending = 0;
+  }
+  return total + pending;
 }
 
 function clampHour(raw: number): number {
@@ -114,8 +169,8 @@ function parseAbsoluteTime(text: string): number | null {
 function parseRelativeOffsetTime(text: string, now: number): number | null {
   const m = text.match(RELATIVE_OFFSET_PATTERN);
   if (!m) return null;
-  const value = Number(m[1]);
-  if (!Number.isFinite(value) || value <= 0) return null;
+  const value = parseNumberToken(m[1]);
+  if (value === null || !Number.isFinite(value) || value <= 0) return null;
 
   const unit = m[2].toLowerCase();
   let deltaMs = 0;
@@ -349,7 +404,7 @@ function extractReminderMessage(text: string): string {
     /每(?:天|日)/g,
     /每月\d{1,2}[号日]?/g,
     /每隔\d+(?:分钟|小时|天)/g,
-    /\d+\s*(?:秒钟|秒|s|sec|min|mins|分钟|分|小时|h|hr|hrs|天|d)\s*(?:后|以后|之后)/gi,
+    RELATIVE_OFFSET_REMOVABLE_PATTERN,
     /半(?:个)?小时(?:后|以后|之后)/g,
     /[一两]刻钟(?:后|以后|之后)/g,
     /半天(?:后|以后|之后)/g,
