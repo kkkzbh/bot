@@ -2,6 +2,7 @@ numpy<2.0
 scipy
 tensorboard
 librosa==0.10.2
+matplotlib
 numba
 pytorch-lightning>=2.4
 ffmpeg-python

@@ -41,8 +41,13 @@ TTS_PARALLEL_INFER = os.getenv("VOICE_TTS_PARALLEL_INFER", "false").strip().lowe
 MODEL_ROOT = Path(os.getenv("VOICE_TTS_MODEL_ROOT", "/data/voice/tts/models"))
 PRETRAINED_ROOT = Path(os.getenv("VOICE_TTS_PRETRAINED_ROOT", "/data/voice/tts/pretrained_models"))
 REFERENCE_ROOT = Path(os.getenv("VOICE_TTS_REFERENCE_ROOT", "/data/voice/tts/references"))
+UPSTREAM_PRETRAINED_ROOTS = [
+    UPSTREAM_ROOT / "pretrained_models",
+    UPSTREAM_ROOT / "GPT_SoVITS" / "pretrained_models",
+]
 GPT_WEIGHTS_PATH = Path(os.getenv("VOICE_TTS_GPT_WEIGHTS", str(MODEL_ROOT / "sakiko_v2pp-e15.ckpt")))
 SOVITS_WEIGHTS_PATH = Path(os.getenv("VOICE_TTS_SOVITS_WEIGHTS", str(MODEL_ROOT / "sakiko_v2pp_e8_s520.pth")))
+SV_WEIGHTS_PATH = PRETRAINED_ROOT / "sv" / "pretrained_eres2netv2w24s4ep4.ckpt"
 BERT_BASE_PATH = Path(
     os.getenv(
         "VOICE_TTS_BERT_BASE",
@@ -94,6 +99,7 @@ def required_paths() -> list[Path]:
         UPSTREAM_API_PATH,
         GPT_WEIGHTS_PATH,
         SOVITS_WEIGHTS_PATH,
+        SV_WEIGHTS_PATH,
         BERT_BASE_PATH,
         CNHUBERT_BASE_PATH,
         style_config("white").ref_audio_path,
@@ -101,8 +107,28 @@ def required_paths() -> list[Path]:
     ]
 
 
+def path_is_ready(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def missing_paths() -> list[str]:
-    return [str(path) for path in required_paths() if not path.exists()]
+    return [str(path) for path in required_paths() if not path_is_ready(path)]
+
+
+def ensure_upstream_pretrained_links() -> None:
+    if not path_is_ready(PRETRAINED_ROOT):
+        return
+
+    for upstream_root in UPSTREAM_PRETRAINED_ROOTS:
+        upstream_root.mkdir(parents=True, exist_ok=True)
+        for source_path in PRETRAINED_ROOT.iterdir():
+            target_path = upstream_root / source_path.name
+            if target_path.exists() or target_path.is_symlink():
+                continue
+            target_path.symlink_to(source_path, target_is_directory=source_path.is_dir())
 
 
 def write_upstream_config() -> None:
@@ -151,6 +177,7 @@ class UpstreamProcess:
             self.last_error = "missing required assets: " + ", ".join(unresolved)
             return
 
+        ensure_upstream_pretrained_links()
         write_upstream_config()
         self.process = subprocess.Popen(
             [
