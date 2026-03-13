@@ -21,7 +21,10 @@ APP = FastAPI(title="qqbot-voice-asr", version="0.1.0")
 MODEL_NAME = os.getenv("VOICE_ASR_MODEL", "small")
 MODEL_DEVICE = os.getenv("VOICE_ASR_DEVICE", "cpu")
 MODEL_COMPUTE_TYPE = os.getenv("VOICE_ASR_COMPUTE_TYPE", "int8")
-MODEL_CACHE_DIR = os.getenv("VOICE_ASR_MODEL_CACHE_DIR", "/data/voice/asr/cache")
+MODEL_CACHE_DIR = os.getenv(
+    "VOICE_ASR_MODEL_CACHE_DIR",
+    os.getenv("VOICE_ASR_CACHE_DIR", "/data/voice/asr/cache"),
+)
 MAX_DURATION_SECONDS = int(os.getenv("VOICE_ASR_MAX_SECONDS", "60"))
 BEAM_SIZE = int(os.getenv("VOICE_ASR_BEAM_SIZE", "5"))
 VAD_FILTER = env_bool("VOICE_ASR_VAD_FILTER", True)

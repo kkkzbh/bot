@@ -17,6 +17,6 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 
 COPY app.py /app/app.py
 
-EXPOSE 8091
+EXPOSE 8080
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8091"]
+CMD ["uvicorn", "app:APP", "--host", "0.0.0.0", "--port", "8080"]
