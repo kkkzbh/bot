@@ -41,6 +41,15 @@ export interface NormalizedOutboundMessage {
   content: string;
 }
 
+export type BotMessageSender = {
+  sendMessage: (
+    channelId: string,
+    content: string,
+    guildId?: string,
+    options?: Universal.SendOptions,
+  ) => Promise<unknown>;
+};
+
 export type SessionStrandLike = {
   platform?: string;
   isDirect?: boolean;
@@ -120,6 +129,20 @@ export function createBypassLineSplitOptions(session?: Session): Universal.SendO
 
 export function shouldBypassLineSplit(options: Universal.SendOptions): boolean {
   return bypassSplitOptions.has(options);
+}
+
+export function createBotMessageDispatchers(
+  bot: BotMessageSender,
+  channelId: string,
+  session?: Session,
+): {
+  sendWhole: (content: string) => Promise<unknown>;
+  sendLine: (line: string) => Promise<unknown>;
+} {
+  return {
+    sendWhole: async (content: string) => bot.sendMessage(channelId, content, undefined, createBypassLineSplitOptions(session)),
+    sendLine: async (line: string) => bot.sendMessage(channelId, line, undefined, createBypassLineSplitOptions(session)),
+  };
 }
 
 function normalizeLineEndings(message: string): string {
@@ -329,4 +352,15 @@ export async function dispatchNormalizedOutboundMessage(
   }
 
   await sendByLinesWithSmartInterval(lines.join('\n'), sendLine);
+}
+
+export async function sendBotMessageByNormalizedContent(
+  bot: BotMessageSender,
+  channelId: string,
+  message: string | NormalizedOutboundMessage,
+  session?: Session,
+): Promise<void> {
+  const normalized = typeof message === 'string' ? normalizeOutboundMessage(message) : message;
+  const { sendWhole, sendLine } = createBotMessageDispatchers(bot, channelId, session);
+  await dispatchNormalizedOutboundMessage(normalized, sendWhole, sendLine);
 }

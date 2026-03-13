@@ -71,15 +71,17 @@ Long-memory uses the configured vector store plus embeddings instead.
 ## 4. Start LLBot stack (Podman)
 
 ```bash
-podman compose pull
-podman compose up -d ollama pmhq llbot
+podman compose pull ollama pmhq llbot
+podman compose up -d --build
 ```
 
-Official docker mode uses three services:
+Official compose mode uses five services:
 
 - `ollama`: local embedding service for ChatLuna long-memory (`nomic-embed-text:latest` by default)
 - `pmhq`: QQ client runtime and login session
 - `llbot`: OneBot + WebUI
+- `voice-asr`: `faster-whisper small/int8 + ffmpeg` HTTP service for QQ voice transcription
+- `voice-tts`: GPT-SoVITS `v2ProPlus` CPU HTTP gateway for optional QQ voice replies
 - Compose defaults to fully-qualified images (`docker.io/linyuchen/...`) to avoid Fedora short-name prompt issues.
 
 Watch login logs (QR code / login progress):
@@ -102,6 +104,27 @@ serve on `11434` and pre-pull the configured embedding model on startup.
 `qqbot-stack.service` also exports a dedicated Podman `containers.conf` with
 `keyring = false` to avoid rootless `runc` startup failures caused by exhausted
 session key quotas on the host.
+
+### 4.1 QQ voice services (server-local CPU inference)
+
+- Koishi talks to the bundled voice services over loopback by default:
+  - `QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161`
+  - `QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162`
+- Voice model assets are intentionally kept under `./data/voice/**` so deploy rsync does not overwrite them.
+- Expected server-local asset paths:
+  - `./data/voice/asr/cache/` for Whisper cache
+  - `./data/voice/tts/models/sakiko_v2pp-e15.ckpt`
+  - `./data/voice/tts/models/sakiko_v2pp_e8_s520.pth`
+  - `./data/voice/tts/references/white_sakiko.wav`
+  - `./data/voice/tts/references/black_sakiko.wav`
+  - `./data/voice/tts/pretrained_models/chinese-roberta-wwm-ext-large`
+  - `./data/voice/tts/pretrained_models/chinese-hubert-base`
+- Local source mapping confirmed from `/home/kkkzbh/data/下载/DSakiko2.6/`:
+  - custom weights: `reference_audio/sakiko/GPT-SoVITS_models/`
+  - reference audio: `reference_audio/sakiko/white_sakiko.wav` and `reference_audio/sakiko/black_sakiko.wav`
+  - reference text: `reference_audio/sakiko/reference_text_white_sakiko.txt` and `reference_audio/sakiko/reference_text_black_sakiko.txt`
+  - pretrained base models: `GPT_SoVITS/pretrained_models/`
+- First local build is heavier than the existing stack because `voice-asr` / `voice-tts` are built from local Dockerfiles.
 
 ## 5. Trigger contract
 
@@ -211,6 +234,27 @@ session key quotas on the host.
   - 仅处理“发送期重规划”，不处理模型仍在生成中的中断。
   - 历史修复仅覆盖普通 `human -> ai` 尾部；遇到 tool/function 尾链会自动回退到现有串行队列。
 
+### QQ voice environment variables
+
+- `QQ_VOICE_ENABLED`：是否启用语音插件总开关（默认 `true`）。
+- `QQ_VOICE_INPUT_ENABLED`：是否允许 QQ 语音转写输入（默认 `true`）。
+- `QQ_VOICE_OUTPUT_ENABLED`：是否允许可选语音回复（默认 `true`）。
+- `QQ_VOICE_ASR_BASE_URL` / `QQ_VOICE_ASR_API_KEY`：Koishi 访问本机 ASR 服务的地址与 token。
+- `QQ_VOICE_TTS_BASE_URL` / `QQ_VOICE_TTS_API_KEY`：Koishi 访问本机 TTS 服务的地址与 token。
+- `QQ_VOICE_INPUT_MAX_SECONDS`：单条入站语音最大时长（默认 `60` 秒）。
+- `QQ_VOICE_OUTPUT_MAX_CHARS`：单条语音回复最大文本长度（默认 `80` 个汉字）。
+- `QQ_VOICE_TRANSCRIBE_TIMEOUT_MS`：ASR 请求超时（默认 `45000` 毫秒）。
+- `QQ_VOICE_SYNTH_TIMEOUT_MS`：TTS 请求超时（默认 `90000` 毫秒）。
+- Compose service env:
+  - `VOICE_ASR_PORT` / `VOICE_ASR_MODEL` / `VOICE_ASR_COMPUTE_TYPE`
+  - `VOICE_TTS_PORT` / `VOICE_TTS_VERSION`
+  - `VOICE_TTS_GPT_WEIGHTS` / `VOICE_TTS_SOVITS_WEIGHTS`
+  - `VOICE_TTS_BERT_BASE` / `VOICE_TTS_HUBERT_BASE`
+  - `VOICE_TTS_REF_WHITE` / `VOICE_TTS_REF_BLACK`
+  - `VOICE_TTS_PROMPT_TEXT_WHITE` / `VOICE_TTS_PROMPT_TEXT_BLACK`
+- Quick rollback:
+  - set `QQ_VOICE_INPUT_ENABLED=false` and/or `QQ_VOICE_OUTPUT_ENABLED=false`, then restart `qqbot.target`.
+
 ## 12. Pokemon battle plugin
 
 - `koishi-plugin-pokemon-battle` is loaded through local bridge plugin `./dist/plugins/pokemon-battle-bridge`.
@@ -235,7 +279,7 @@ session key quotas on the host.
   - image load failure/timeouts: switch `POKEMON_BATTLE_IMAGE_SOURCE` to gitee source:
     `https://gitee.com/maikama/pokemon-fusion-image/raw/master`.
 - Deploy note:
-  - `Deploy` workflow always overwrites server `.env` from secret `QQBOT_DOTENV`, so update this secret after changing pokemon env vars.
+  - `Deploy` workflow always overwrites server `.env` from secret `QQBOT_DOTENV`, so update this secret after changing pokemon or voice env vars.
 
 ## 13. Quality checks
 
@@ -275,6 +319,11 @@ pnpm build
 - Command denied:
   - `chatluna.*`：确认账号 authority >= `CHATLUNA_COMMAND_AUTHORITY`。
   - `task.*`：若 `TASK_AUTOMATION_PERMISSION=authority3`，确认账号 authority >= 3。
+- QQ 语音不可用：
+  - 确认 `voice-asr` / `voice-tts` 容器已启动并健康：`podman compose ps`
+  - 确认 `QQ_VOICE_*` 地址与 token 和 `.env` 一致
+  - 确认 `./data/voice/tts/**` 下模型、参考音频、预训练底模已就位
+  - 只想回退文本时，直接关闭 `QQ_VOICE_INPUT_ENABLED` 或 `QQ_VOICE_OUTPUT_ENABLED`
 
 ## 16. Run as `systemd --user` (recommended)
 
@@ -286,7 +335,7 @@ Installed unit files:
 - `/home/kkkzbh/.config/systemd/user/qqbot-koishi.service`
 - `/home/kkkzbh/.config/systemd/user/qqbot.target`
 
-`qqbot-stack.service` starts/stops Podman compose services `pmhq` and `llbot`.
+`qqbot-stack.service` starts/stops the full Podman compose stack defined in `compose.yaml`.
 `qqbot-koishi.service` runs Koishi on host with `/home/kkkzbh/code/qqbot/.env`.
 It sets `NODE_USE_ENV_PROXY=1` and proxy variables to match `~/.zshrc`:
 `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy`
@@ -362,6 +411,7 @@ Behavior:
 - `CI` runs on every `push` / `pull_request` (`pnpm typecheck`, `pnpm test`, `pnpm build`).
 - `Deploy` runs on `push` to `main` (or manual `workflow_dispatch`).
 - `Deploy` SSHes to your server, `rsync`s project files, then runs `pnpm install`, `pnpm build`, and restarts `qqbot.target`.
+- The generated `qqbot-stack.service` now runs `podman-compose up -d --build`, so local voice service images are rebuilt on deploy together with the rest of the stack.
 
 ### 18.1 GitHub Actions secrets (required)
 
@@ -441,5 +491,7 @@ GitHub repo -> `Actions` -> `Deploy` -> `Run workflow`.
   - install Node.js/corepack on server, or ensure `pnpm` is in the deploy user's `PATH`.
 - `podman-compose is not installed on target host`:
   - install Podman and `podman-compose` on server.
+- voice containers fail during startup:
+  - confirm `./data/voice/**` exists on server and contains the required models/reference audio before restarting `qqbot.target`.
 - SSH failure:
   - verify `QQBOT_*` secrets and `known_hosts` content.

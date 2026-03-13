@@ -181,7 +181,7 @@ jobs:
 
             cat > "${USER_SYSTEMD_DIR}/qqbot-stack.service" <<UNIT
           [Unit]
-          Description=QQBot Podman Compose Stack (ollama + pmhq + llbot)
+          Description=QQBot Podman Compose Stack
           After=network-online.target
           Wants=network-online.target
           PartOf=qqbot.target
@@ -190,8 +190,8 @@ jobs:
           Type=oneshot
           WorkingDirectory=${APP_DIR}
           Environment=CONTAINERS_CONF=${APP_DIR}/config/podman/containers.conf
-          ExecStart=/usr/bin/podman-compose -f ${APP_DIR}/compose.yaml up -d ollama pmhq llbot
-          ExecStop=/usr/bin/podman-compose -f ${APP_DIR}/compose.yaml stop ollama pmhq llbot
+          ExecStart=/usr/bin/podman-compose -f ${APP_DIR}/compose.yaml up -d --build
+          ExecStop=/usr/bin/podman-compose -f ${APP_DIR}/compose.yaml stop
           RemainAfterExit=yes
 
           [Install]

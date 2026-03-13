@@ -26,6 +26,7 @@ import {
   dispatchNormalizedOutboundMessage,
   type NormalizedOutboundMessage,
   normalizeOutboundMessage,
+  sendBotMessageByNormalizedContent,
 } from './message-send-utils.js';
 
 const logger = new Logger('task-automation');
@@ -500,12 +501,7 @@ export async function sendBotMessageByLines(
   channelId: string,
   message: string | NormalizedOutboundMessage,
 ): Promise<void> {
-  const normalized = typeof message === 'string' ? normalizeOutboundMessage(message) : message;
-  await dispatchNormalizedOutboundMessage(
-    normalized,
-    async (content) => bot.sendMessage(channelId, content, undefined, createBypassLineSplitOptions()),
-    async (line) => bot.sendMessage(channelId, line),
-  );
+  await sendBotMessageByNormalizedContent(bot, channelId, message);
 }
 
 export function prependGroupMention(message: NormalizedOutboundMessage, mention: string): NormalizedOutboundMessage {

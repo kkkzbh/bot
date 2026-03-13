@@ -8,13 +8,14 @@ import {
 import { injectUserStampedPrompt } from './chat-time-context.js';
 import {
   createKeyedStrandRunner,
-  createBypassLineSplitOptions,
+  createBotMessageDispatchers,
   dispatchNormalizedOutboundMessage,
   normalizeOutboundMessage,
   resolveSessionStrandKey,
   shouldBypassLineSplit,
   splitMessageByLines,
 } from './message-send-utils.js';
+import { containsVoiceReplyControl } from './qq-voice-core.js';
 import { inferPlatformFromBaseUrl, normalizeRawModelName, resolvePlatform } from './model-utils.js';
 import { resolveSessionDisplayName } from './session-user-name.js';
 
@@ -210,6 +211,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (shouldBypassLineSplit(options)) return;
     if (session.platform !== 'onebot') return;
     if (!session.channelId || !session.content) return;
+    if (containsVoiceReplyControl(session.content)) return;
 
     const normalized = normalizeOutboundMessage(session.content);
     if (normalized.content !== session.content) {
@@ -223,14 +225,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (!shouldIntercept) return;
 
     const strandKey = resolveSessionStrandKey(session);
-    const sendWhole = async (content: string) => {
-      const lineOptions = createBypassLineSplitOptions(session);
-      await session.bot.sendMessage(channelId, content, undefined, lineOptions);
-    };
-    const sendLine = async (line: string) => {
-      const lineOptions = createBypassLineSplitOptions(session);
-      await session.bot.sendMessage(channelId, line, undefined, lineOptions);
-    };
+    const { sendWhole, sendLine } = createBotMessageDispatchers(session.bot, channelId, session);
     const sendTask = async () => {
       if (strandKey && liveReplyCoordinator && liveReplyRuntime.enabled) {
         await liveReplyCoordinator.drainDraft(strandKey, normalized, sendWhole, sendLine);

@@ -6,6 +6,8 @@ dist
 .idea
 koishi-runtime.log
 *.log
+__pycache__/
+*.pyc
 data/llonebot
 data/koishi.db
 data/chathub/presets/*.yml

@@ -14,6 +14,7 @@ export TASK_AUTOMATION_INTENT_ENABLED="${TASK_AUTOMATION_INTENT_ENABLED:-false}"
 export POKEMON_BATTLE_ENABLED="${POKEMON_BATTLE_ENABLED:-false}"
 export WEB_SEARCH_LLM_PLANNER_ENABLED="${WEB_SEARCH_LLM_PLANNER_ENABLED:-false}"
 export WEB_SEARCH_LLM_RERANK_ENABLED="${WEB_SEARCH_LLM_RERANK_ENABLED:-false}"
+export QQ_VOICE_ENABLED="${QQ_VOICE_ENABLED:-false}"
 
 LOG_FILE="$(mktemp)"
 TMP_KOISHI_YML="$(mktemp "$ROOT_DIR/koishi-smoke-XXXXXX.yml")"
@@ -41,6 +42,7 @@ const keep = new Set([
   'database-sqlite:8jr5yp',
   'cron:task',
   './dist/plugins/task-automation:automation',
+  './dist/plugins/qq-voice:voice',
   'chatluna:0qm1bk',
   './dist/plugins/web-search:search',
   './dist/plugins/chatluna-sticker:sticker',
@@ -76,6 +78,11 @@ fi
 
 if ! grep -F "loader apply plugin ./dist/plugins/task-automation" "$LOG_FILE" >/dev/null; then
   echo "Koishi smoke startup did not load task-automation plugin." >&2
+  exit 1
+fi
+
+if ! grep -F "loader apply plugin ./dist/plugins/qq-voice:voice" "$LOG_FILE" >/dev/null; then
+  echo "Koishi smoke startup did not load qq-voice plugin." >&2
   exit 1
 fi
 
