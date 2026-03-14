@@ -160,6 +160,7 @@ describe('qq voice core', () => {
 
   it('removes text lines that only repeat the voice payload', () => {
     expect(removeDuplicatedVoiceText('好的，再说一句。', '好的 再说一句')).toBe('');
+    expect(removeDuplicatedVoiceText('好的 再说一句♪', '好的，再说一句。')).toBe('');
     expect(removeDuplicatedVoiceText('前一句\n晚安。', '晚安')).toBe('前一句');
     expect(removeDuplicatedVoiceText('前一句', '晚安')).toBe('前一句');
   });

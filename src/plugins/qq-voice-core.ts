@@ -32,7 +32,7 @@ const EXPLICIT_VOICE_REQUEST_PATTERNS = [
   /想听你(?:说|讲|念|读)/,
 ];
 const WHITESPACE_PATTERN = /\s+/g;
-const VOICE_DEDUP_PUNCTUATION_PATTERN = /[，。！？、；：,.!?;:~～…·"'`“”‘’「」『』（）()《》〈〉【】\[\]{}\-—_]/g;
+const VOICE_DEDUP_NOISE_PATTERN = /[\s\p{P}\p{S}\p{M}]+/gu;
 
 export interface IncomingVoiceElement {
   src?: string;
@@ -107,7 +107,7 @@ export function parseVoiceReplyControl(message: unknown): ParsedVoiceReplyContro
 }
 
 function buildVoiceDedupKey(text: string): string {
-  return text.replace(/\r\n?/g, '\n').replace(WHITESPACE_PATTERN, '').replace(VOICE_DEDUP_PUNCTUATION_PATTERN, '').trim();
+  return text.normalize('NFKC').replace(/\r\n?/g, '\n').replace(VOICE_DEDUP_NOISE_PATTERN, '').trim();
 }
 
 export function removeDuplicatedVoiceText(text: string, voiceText: string | null): string {
