@@ -92,6 +92,8 @@ type OneBotInternalLike = {
   _request?: (action: string, params?: Record<string, unknown>) => Promise<unknown>;
   canSendRecord?: () => Promise<boolean>;
   getRecord?: (file: string, format: 'wav', fullPath?: boolean) => Promise<{ file?: string }>;
+  sendPrivateMsg?: (...args: unknown[]) => Promise<unknown>;
+  sendGroupMsg?: (...args: unknown[]) => Promise<unknown>;
 };
 
 type OneBotBotLike = {
@@ -472,6 +474,15 @@ async function ensureCanSendRecord(
   try {
     result = (await bot.internal?.canSendRecord?.()) ?? false;
   } catch (error) {
+    if (
+      /_request is not a function/i.test((error as Error).message) &&
+      (typeof bot.internal?.sendPrivateMsg === 'function' || typeof bot.internal?.sendGroupMsg === 'function')
+    ) {
+      logger.warn('canSendRecord probe is broken for %s, fallback to optimistic record support.', cacheKey);
+      capabilityCache.set(cacheKey, true);
+      return true;
+    }
+
     logger.warn('canSendRecord failed for %s: %s', cacheKey, (error as Error).message);
     capabilityCache.delete(cacheKey);
     return false;

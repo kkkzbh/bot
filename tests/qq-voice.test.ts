@@ -119,6 +119,8 @@ function createHarness(overrides: {
         return overrides.canSendRecord ?? true;
       }),
       getRecord: vi.fn(async (file: string) => ({ file })),
+      sendPrivateMsg: vi.fn(async () => 'msg-id'),
+      sendGroupMsg: vi.fn(async () => 'msg-id'),
     },
     sendMessage: vi.fn(async () => ['msg-id']),
   };
@@ -353,7 +355,7 @@ describe('qq voice plugin', () => {
     });
   });
 
-  it('retries canSendRecord after early ready-time probe failure', async () => {
+  it('caches optimistic record support after early ready-time probe failure', async () => {
     let attempt = 0;
     const { ready, beforeSend, bot } = createHarness({
       canSendRecordImpl: async () => {
@@ -383,7 +385,36 @@ describe('qq voice plugin', () => {
 
     await beforeSend(session, {});
     const calls = bot.sendMessage.mock.calls as Array<any[]>;
-    expect(bot.internal.canSendRecord).toHaveBeenCalledTimes(2);
+    expect(bot.internal.canSendRecord).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[1]).toBe('普通文本');
+    expect(String(calls[1]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
+  });
+
+  it('falls back to optimistic record support when onebot canSendRecord probe is broken', async () => {
+    const { beforeSend, bot } = createHarness({
+      canSendRecordImpl: async () => {
+        throw new Error('this._request is not a function');
+      },
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz' && (init?.method === 'GET' || !init?.method)) {
+        return new Response('ok', { status: 200 });
+      }
+      if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
+        return new Response(Uint8Array.from([82, 73, 70, 70]), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const session = createSession(bot, {
+      content: '普通文本\n<qqbot-voice>\n附带语音\n</qqbot-voice>',
+    });
+
+    await beforeSend(session, {});
+    const calls = bot.sendMessage.mock.calls as Array<any[]>;
     expect(calls).toHaveLength(2);
     expect(calls[0]?.[1]).toBe('普通文本');
     expect(String(calls[1]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
