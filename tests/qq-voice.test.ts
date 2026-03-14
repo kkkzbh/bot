@@ -85,6 +85,20 @@ import { apply } from '../src/plugins/qq-voice.js';
 
 type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
 type EventHandler = (...args: any[]) => Promise<unknown> | unknown;
+type ChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;
+
+function createChainBuilder(store: Map<string, ChainMiddleware>) {
+  return {
+    middleware: (name: string, middleware: ChainMiddleware) => {
+      store.set(name, middleware);
+      const builder = {
+        after: () => builder,
+        before: () => builder,
+      };
+      return builder;
+    },
+  };
+}
 
 function createHarness(overrides: {
   canSendRecord?: boolean;
@@ -92,6 +106,8 @@ function createHarness(overrides: {
 } = {}) {
   const middlewares: Middleware[] = [];
   const events = new Map<string, EventHandler[]>();
+  const chainMiddlewares = new Map<string, ChainMiddleware>();
+  const inject = vi.fn();
   const bot = {
     platform: 'onebot',
     selfId: 'bot-1',
@@ -104,6 +120,13 @@ function createHarness(overrides: {
 
   const ctx = {
     bots: [bot],
+    get: vi.fn((name: string) => {
+      if (name !== 'chatluna') return undefined;
+      return {
+        contextManager: { inject },
+        chatChain: createChainBuilder(chainMiddlewares),
+      };
+    }),
     middleware: vi.fn((handler: Middleware) => {
       middlewares.push(handler);
     }),
@@ -131,6 +154,8 @@ function createHarness(overrides: {
     inbound: middlewares[0],
     beforeSend: (events.get('before-send') ?? [])[0],
     ready: (events.get('ready') ?? [])[0],
+    getOutputHint: () => chainMiddlewares.get('qqbot_voice_output_hint'),
+    inject,
     bot,
   };
 }
@@ -224,6 +249,9 @@ describe('qq voice plugin', () => {
     const { beforeSend, bot } = createHarness();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz' && (init?.method === 'GET' || !init?.method)) {
+        return new Response('ok', { status: 200 });
+      }
       if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
         return new Response(Uint8Array.from([82, 73, 70, 70]), { status: 200 });
       }
@@ -248,6 +276,9 @@ describe('qq voice plugin', () => {
     const { beforeSend, bot } = createHarness();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz' && (init?.method === 'GET' || !init?.method)) {
+        return new Response('ok', { status: 200 });
+      }
       if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
         return new Response(Uint8Array.from([82, 73, 70, 70]), { status: 200 });
       }
@@ -273,10 +304,46 @@ describe('qq voice plugin', () => {
     const result = await beforeSend(session, {});
     const calls = bot.sendMessage.mock.calls as Array<any[]>;
     expect(result).toBe(true);
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(2);
     expect(calls[0]?.[1]).toBe('晚安');
-    expect(calls[1]?.[1]).toBe('晚安');
-    expect(String(calls[2]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
+    expect(String(calls[1]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
+  });
+
+  it('injects unavailable hint when explicit voice request is made but TTS is unreachable', async () => {
+    const { ready, getOutputHint, inject, bot } = createHarness();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz') {
+        throw new Error('connect timeout');
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await ready();
+    const outputHint = getOutputHint();
+    expect(outputHint).toBeTypeOf('function');
+
+    const session = createSession(bot, {
+      content: '请发一条语音给我听',
+      strippedContent: '请发一条语音给我听',
+    });
+    const context = {
+      options: {
+        room: {
+          conversationId: 'conv-1',
+        },
+      },
+    };
+
+    await outputHint?.(session, context);
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject.mock.calls[0]?.[0]).toMatchObject({
+      name: 'qqbot_voice_output_unavailable',
+      conversationId: 'conv-1',
+      once: true,
+      stage: 'after_scratchpad',
+    });
   });
 
   it('degrades to text-only when record sending is unavailable', async () => {

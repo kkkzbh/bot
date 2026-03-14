@@ -86,10 +86,20 @@ export function parseVoiceReplyControl(message: unknown): ParsedVoiceReplyContro
   let text = normalized.replace(/<qqbot-voice>([\s\S]*?)<\/qqbot-voice>/gi, (_matched, inner: string) => {
     const trimmed = inner.trim();
     blocks.push(trimmed);
-    return trimmed;
+    return `__QQBOT_VOICE_BLOCK_${blocks.length - 1}__`;
   });
 
-  text = text.replace(/<\/?qqbot-voice>/gi, '').trim();
+  const hasPlainTextOutsideVoiceBlocks = text.replace(/__QQBOT_VOICE_BLOCK_\d+__/g, '').trim().length > 0;
+  if (hasPlainTextOutsideVoiceBlocks) {
+    text = text
+      .split('\n')
+      .filter((line) => !/^__QQBOT_VOICE_BLOCK_\d+__$/.test(line.trim()))
+      .join('\n');
+  }
+
+  text = text.replace(/__QQBOT_VOICE_BLOCK_(\d+)__/g, (_matched, index: string) => blocks[Number(index)] ?? '');
+
+  text = text.replace(/<\/?qqbot-voice>/gi, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
   return {
     text,

@@ -144,6 +144,11 @@ interface AsrResponse {
   durationMs: number;
 }
 
+interface CachedProbeResult {
+  ok: boolean;
+  expiresAt: number;
+}
+
 function normalizeBaseUrl(input: string): string {
   return input.trim().replace(/\/+$/, '');
 }
@@ -359,6 +364,45 @@ async function synthesizeVoice(runtime: RuntimeConfig, text: string, style: 'whi
   }
 }
 
+async function ensureTtsHealthy(
+  runtime: RuntimeConfig,
+  healthCache: Map<string, CachedProbeResult>,
+  force = false,
+): Promise<boolean> {
+  if (!runtime.ttsBaseUrl) return false;
+
+  const cacheKey = runtime.ttsBaseUrl;
+  const now = Date.now();
+  const cached = healthCache.get(cacheKey);
+  if (!force && cached && cached.expiresAt > now) {
+    return cached.ok;
+  }
+
+  let ok = false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.min(runtime.synthTimeoutMs, 5_000));
+
+  try {
+    const response = await fetch(`${runtime.ttsBaseUrl}/healthz`, {
+      method: 'GET',
+      headers: createAuthHeaders(runtime.ttsApiKey),
+      signal: controller.signal,
+    });
+    ok = response.ok;
+  } catch (error) {
+    logger.warn('tts health probe failed: %s', (error as Error).message);
+    ok = false;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  healthCache.set(cacheKey, {
+    ok,
+    expiresAt: now + (ok ? 30_000 : 10_000),
+  });
+  return ok;
+}
+
 function createAudioDataUri(bytes: Uint8Array): string {
   return `data:audio/wav;base64,${Buffer.from(bytes).toString('base64')}`;
 }
@@ -419,6 +463,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
   const sendStrand = createKeyedStrandRunner();
   const canSendRecordCache = new Map<string, boolean>();
+  const ttsHealthCache = new Map<string, CachedProbeResult>();
 
   ctx.middleware(
     async (rawSession, next) => {
@@ -485,6 +530,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (!isVoiceOutputConfigured(runtime)) return;
       if (voiceText.length > runtime.outputMaxChars) return;
       if (!(await ensureCanSendRecord(bot, canSendRecordCache))) return;
+      if (!(await ensureTtsHealthy(runtime, ttsHealthCache))) return;
 
       try {
         const wav = await synthesizeVoice(runtime, voiceText, pickVoiceStyle(voiceText));
@@ -514,6 +560,9 @@ export function apply(ctx: Context, config: Config = {}): void {
         .filter((bot) => bot.platform === 'onebot')
         .map(async (bot) => ensureCanSendRecord(bot as unknown as OneBotBotLike, canSendRecordCache, true)),
     );
+    if (isVoiceOutputConfigured(runtime)) {
+      await ensureTtsHealthy(runtime, ttsHealthCache, true);
+    }
 
     const chatluna = ctx.get('chatluna') as ChatLunaLike | undefined;
     const chain = chatluna?.chatChain;
@@ -529,7 +578,11 @@ export function apply(ctx: Context, config: Config = {}): void {
         const context = rawContext as MiddlewareContextLike;
         if (session.platform !== 'onebot') return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         if (!shouldExplainVoiceUnavailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        if (isVoiceOutputConfigured(runtime) && (await ensureCanSendRecord(session.bot as OneBotBotLike, canSendRecordCache))) {
+        if (
+          isVoiceOutputConfigured(runtime) &&
+          (await ensureCanSendRecord(session.bot as OneBotBotLike, canSendRecordCache)) &&
+          (await ensureTtsHealthy(runtime, ttsHealthCache))
+        ) {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
 

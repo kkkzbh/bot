@@ -133,7 +133,25 @@ describe('qq voice core', () => {
 
     expect(containsVoiceReplyControl(structured)).toBe(true);
     expect(parseVoiceReplyControl(structured)).toEqual({
-      text: '晚安\n\n晚安',
+      text: '晚安',
+      voiceText: '晚安',
+      voiceTagCount: 1,
+    });
+  });
+
+  it('keeps inline voice blocks in text but removes standalone voice-only lines', () => {
+    expect(parseVoiceReplyControl('普通文本<qqbot-voice>附带语音</qqbot-voice>')).toEqual({
+      text: '普通文本附带语音',
+      voiceText: '附带语音',
+      voiceTagCount: 1,
+    });
+    expect(parseVoiceReplyControl('正文\n<qqbot-voice>晚安</qqbot-voice>')).toEqual({
+      text: '正文',
+      voiceText: '晚安',
+      voiceTagCount: 1,
+    });
+    expect(parseVoiceReplyControl('<qqbot-voice>晚安</qqbot-voice>')).toEqual({
+      text: '晚安',
       voiceText: '晚安',
       voiceTagCount: 1,
     });
