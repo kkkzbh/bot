@@ -69,13 +69,19 @@ function flattenMessageText(content: unknown): string {
   return `${ownText}${childText}`;
 }
 
+function decodeVoiceControlEntities(message: string): string {
+  return message
+    .replace(/&lt;(\/?)qqbot-voice&gt;/gi, '<$1qqbot-voice>')
+    .replace(/&#60;(\/?)qqbot-voice&#62;/gi, '<$1qqbot-voice>');
+}
+
 export function containsVoiceReplyControl(message: unknown): boolean {
-  const flattened = flattenMessageText(message);
+  const flattened = decodeVoiceControlEntities(flattenMessageText(message));
   return flattened.includes(QQBOT_VOICE_OPEN_TAG) || flattened.includes(QQBOT_VOICE_CLOSE_TAG);
 }
 
 export function parseVoiceReplyControl(message: unknown): ParsedVoiceReplyControl {
-  const normalized = flattenMessageText(message).replace(/\r\n?/g, '\n');
+  const normalized = decodeVoiceControlEntities(flattenMessageText(message)).replace(/\r\n?/g, '\n');
   const blocks: string[] = [];
   let text = normalized.replace(/<qqbot-voice>([\s\S]*?)<\/qqbot-voice>/gi, (_matched, inner: string) => {
     const trimmed = inner.trim();

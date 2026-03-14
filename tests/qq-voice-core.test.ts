@@ -109,6 +109,12 @@ describe('qq voice core', () => {
       voiceTagCount: 1,
     });
     expect(containsVoiceReplyControl('<qqbot-voice>test</qqbot-voice>')).toBe(true);
+    expect(containsVoiceReplyControl('&lt;qqbot-voice&gt;test&lt;/qqbot-voice&gt;')).toBe(true);
+    expect(parseVoiceReplyControl('&lt;qqbot-voice&gt;晚安&lt;/qqbot-voice&gt;')).toEqual({
+      text: '晚安',
+      voiceText: '晚安',
+      voiceTagCount: 1,
+    });
   });
 
   it('parses qqbot voice reply blocks from structured rich-text content', () => {
