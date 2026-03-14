@@ -103,27 +103,33 @@ function createChainBuilder(store: Map<string, ChainMiddleware>) {
 function createHarness(overrides: {
   canSendRecord?: boolean;
   canSendRecordImpl?: () => Promise<boolean>;
+  includeInternalRequest?: boolean;
   pluginConfig?: Record<string, unknown>;
 } = {}) {
   const middlewares: Middleware[] = [];
   const events = new Map<string, EventHandler[]>();
   const chainMiddlewares = new Map<string, ChainMiddleware>();
   const inject = vi.fn();
+  const internal: Record<string, any> = {
+    canSendRecord: vi.fn(async () => {
+      if (overrides.canSendRecordImpl) return overrides.canSendRecordImpl();
+      return overrides.canSendRecord ?? true;
+    }),
+    getRecord: vi.fn(async (file: string) => ({ file })),
+    sendPrivateMsg: vi.fn(async () => 'msg-id'),
+    sendGroupMsg: vi.fn(async () => 'msg-id'),
+  };
+
   const bot = {
     platform: 'onebot',
     selfId: 'bot-1',
-    internal: {
-      _request: vi.fn(async () => ({ retcode: 0, data: { yes: true } })),
-      canSendRecord: vi.fn(async () => {
-        if (overrides.canSendRecordImpl) return overrides.canSendRecordImpl();
-        return overrides.canSendRecord ?? true;
-      }),
-      getRecord: vi.fn(async (file: string) => ({ file })),
-      sendPrivateMsg: vi.fn(async () => 'msg-id'),
-      sendGroupMsg: vi.fn(async () => 'msg-id'),
-    },
+    internal,
     sendMessage: vi.fn(async () => ['msg-id']),
   };
+
+  if (overrides.includeInternalRequest !== false) {
+    bot.internal._request = vi.fn(async () => ({ retcode: 0, data: { yes: true } }));
+  }
 
   const ctx = {
     bots: [bot],
@@ -478,6 +484,33 @@ describe('qq voice plugin', () => {
       canSendRecordImpl: async () => {
         throw new Error('this._request is not a function');
       },
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz' && (init?.method === 'GET' || !init?.method)) {
+        return new Response('ok', { status: 200 });
+      }
+      if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
+        return new Response(Uint8Array.from([82, 73, 70, 70]), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const session = createSession(bot, {
+      content: '普通文本\n<qqbot-voice>\n附带语音\n</qqbot-voice>',
+    });
+
+    await beforeSend(session, {});
+    const calls = bot.sendMessage.mock.calls as Array<any[]>;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[1]).toBe('普通文本');
+    expect(String(calls[1]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
+  });
+
+  it('falls back to optimistic record support when internal _request is absent entirely', async () => {
+    const { beforeSend, bot } = createHarness({
+      includeInternalRequest: false,
     });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

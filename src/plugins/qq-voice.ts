@@ -467,6 +467,15 @@ async function ensureCanSendRecord(
   }
 
   if (typeof bot.internal?._request !== 'function') {
+    if (
+      typeof bot.internal?.sendPrivateMsg === 'function' ||
+      typeof bot.internal?.sendGroupMsg === 'function'
+    ) {
+      logger.warn('internal._request is unavailable for %s, fallback to optimistic record support.', cacheKey);
+      capabilityCache.set(cacheKey, true);
+      return true;
+    }
+
     capabilityCache.delete(cacheKey);
     return false;
   }
