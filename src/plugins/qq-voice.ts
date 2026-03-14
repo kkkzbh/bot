@@ -720,15 +720,13 @@ export function apply(ctx: Context, config: Config = {}): void {
           (await ensureTtsHealthy(runtime, ttsHealthCache));
 
         if (voiceAvailable) {
-          if (!session.isDirect) {
-            contextManager.inject({
-              name: 'qqbot_voice_output_requested',
-              value: buildVoiceRequestedInstruction(false),
-              once: true,
-              conversationId,
-              stage: 'after_scratchpad',
-            });
-          }
+          contextManager.inject({
+            name: 'qqbot_voice_output_requested',
+            value: buildVoiceRequestedInstruction(!!session.isDirect),
+            once: true,
+            conversationId,
+            stage: 'after_scratchpad',
+          });
 
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }

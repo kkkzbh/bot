@@ -392,6 +392,49 @@ describe('qq voice plugin', () => {
       stage: 'after_scratchpad',
     });
     expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('当前是群聊');
+    expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('你必须输出且只输出一个 <qqbot-voice> 块');
+  });
+
+  it('injects private voice hint when explicit voice request is made and TTS is available', async () => {
+    const { ready, getOutputHint, inject, bot } = createHarness();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz') {
+        return new Response('ok', { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await ready();
+    const outputHint = getOutputHint();
+    expect(outputHint).toBeTypeOf('function');
+
+    const session = createSession(bot, {
+      content: '请用语音回我一句晚安',
+      strippedContent: '请用语音回我一句晚安',
+      isDirect: true,
+      channelId: 'private-u1',
+      guildId: undefined,
+    });
+    const context = {
+      options: {
+        room: {
+          conversationId: 'conv-private-voice',
+        },
+      },
+    };
+
+    await outputHint?.(session, context);
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject.mock.calls[0]?.[0]).toMatchObject({
+      name: 'qqbot_voice_output_requested',
+      conversationId: 'conv-private-voice',
+      once: true,
+      stage: 'after_scratchpad',
+    });
+    expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('当前是私聊');
+    expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('你必须输出且只输出一个 <qqbot-voice> 块');
   });
 
   it('caches optimistic record support after early ready-time probe failure', async () => {
