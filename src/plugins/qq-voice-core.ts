@@ -1,7 +1,6 @@
 import { h } from 'koishi';
+import { hasVoiceSegments, parseOutboundMessagePlan } from './message-send-utils.js';
 
-const QQBOT_VOICE_OPEN_TAG = '<qqbot-voice>';
-const QQBOT_VOICE_CLOSE_TAG = '</qqbot-voice>';
 const NEGATIVE_STYLE_KEYWORDS = [
   '与你无关',
   '请别问了',
@@ -47,61 +46,20 @@ export interface ParsedVoiceReplyControl {
 
 export type VoiceStyle = 'white' | 'black';
 
-function flattenMessageText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) return content.map((part) => flattenMessageText(part)).join('');
-  if (!content || typeof content !== 'object') return '';
-
-  const node = content as {
-    type?: string;
-    content?: unknown;
-    attrs?: { content?: unknown };
-    children?: unknown[];
-  };
-
-  const ownText =
-    typeof node.attrs?.content === 'string'
-      ? node.attrs.content
-      : typeof node.content === 'string'
-        ? node.content
-        : '';
-  const childText = Array.isArray(node.children) ? node.children.map((child) => flattenMessageText(child)).join('') : '';
-  return `${ownText}${childText}`;
-}
-
-function decodeVoiceControlEntities(message: string): string {
-  return message
-    .replace(/&lt;(\/?)qqbot-voice&gt;/gi, '<$1qqbot-voice>')
-    .replace(/&#60;(\/?)qqbot-voice&#62;/gi, '<$1qqbot-voice>');
-}
-
 export function containsVoiceReplyControl(message: unknown): boolean {
-  const flattened = decodeVoiceControlEntities(flattenMessageText(message));
-  return flattened.includes(QQBOT_VOICE_OPEN_TAG) || flattened.includes(QQBOT_VOICE_CLOSE_TAG);
+  return hasVoiceSegments(parseOutboundMessagePlan(message));
 }
 
 export function parseVoiceReplyControl(message: unknown): ParsedVoiceReplyControl {
-  const normalized = decodeVoiceControlEntities(flattenMessageText(message)).replace(/\r\n?/g, '\n');
-  const blocks: string[] = [];
-  let text = normalized.replace(/<qqbot-voice>([\s\S]*?)<\/qqbot-voice>/gi, (_matched, inner: string) => {
-    const trimmed = inner.trim();
-    blocks.push(trimmed);
-    return `__QQBOT_VOICE_BLOCK_${blocks.length - 1}__`;
-  });
-
-  text = text
-    .replace(/__QQBOT_VOICE_BLOCK_\d+__/g, '')
-    .replace(/<\/?qqbot-voice>/gi, '')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n[ \t]+/g, '\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  const plan = parseOutboundMessagePlan(message);
+  const voiceSegments = plan.segments.filter((segment) => segment.kind === 'voice-block');
+  const textSegments = plan.segments.filter((segment) => segment.kind !== 'voice-block');
+  const text = textSegments.map((segment) => segment.content).join('\n').trim();
 
   return {
     text,
-    voiceText: blocks.find(Boolean) ?? null,
-    voiceTagCount: blocks.length,
+    voiceText: voiceSegments[0]?.content ?? null,
+    voiceTagCount: voiceSegments.length,
   };
 }
 

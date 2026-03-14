@@ -1,6 +1,11 @@
 import { gzipSync } from 'node:zlib';
 import type { Session } from 'koishi';
-import { calculateSmartSendDelayMs, splitMessageByLines } from './message-send-utils.js';
+import {
+  calculateSmartSendDelayMs,
+  renderOutboundMessageSegmentsRaw,
+  type OutboundMessagePlan,
+  type OutboundMessageSegment,
+} from './message-send-utils.js';
 import { resolveSessionDisplayName } from './session-user-name.js';
 
 export interface LiveReplyConfig {
@@ -64,13 +69,13 @@ interface LiveReplyScopeState {
   room?: LiveReplyRoomLike;
   conversationId?: string;
   activeMessageId?: string;
-  committedChunks: string[];
-  draftChunks: string[];
-  draftMode?: 'split' | 'preserve';
+  committedSegments: OutboundMessageSegment[];
+  draftSegments: OutboundMessageSegment[];
   pendingInterrupts: LiveReplyInterrupt[];
   collectTimer?: NodeJS.Timeout;
   carrierWaiters: LiveReplyWaiter[];
   decision?: LiveReplyDecisionPromise;
+  cancelDraft?: () => void;
 }
 
 export interface StoredConversationRecord {
@@ -110,6 +115,13 @@ export interface LiveReplyCoordinatorOptions {
   inject: (options: { conversationId: string; instruction: string }) => void;
   logger: LiveReplyLoggerLike;
 }
+
+export interface LiveReplyDraftRunOptions {
+  cancelDraft?: () => void;
+  abortSignal?: AbortSignal;
+}
+
+const coordinatorRegistry = new WeakMap<object, LiveReplyCoordinator>();
 
 function clampToNatural(value: unknown, fallback: number, min = 1): number {
   const parsed = Number(value);
@@ -191,9 +203,9 @@ function buildContinuationInstruction(committedText: string, interrupts: LiveRep
 }
 
 function resetScopeDraft(scope: LiveReplyScopeState): void {
-  scope.committedChunks = [];
-  scope.draftChunks = [];
-  scope.draftMode = undefined;
+  scope.committedSegments = [];
+  scope.draftSegments = [];
+  scope.cancelDraft = undefined;
 }
 
 function clearCollectionTimer(scope: LiveReplyScopeState): void {
@@ -216,13 +228,26 @@ function getOrCreateScope(scopes: Map<string, LiveReplyScopeState>, scopeKey: st
 
   const created: LiveReplyScopeState = {
     status: 'idle',
-    committedChunks: [],
-    draftChunks: [],
+    committedSegments: [],
+    draftSegments: [],
     pendingInterrupts: [],
     carrierWaiters: [],
   };
   scopes.set(scopeKey, created);
   return created;
+}
+
+export function registerLiveReplyCoordinator(owner: object, coordinator: LiveReplyCoordinator | null): void {
+  if (coordinator) {
+    coordinatorRegistry.set(owner, coordinator);
+    return;
+  }
+
+  coordinatorRegistry.delete(owner);
+}
+
+export function getLiveReplyCoordinator(owner: object): LiveReplyCoordinator | null {
+  return coordinatorRegistry.get(owner) ?? null;
 }
 
 export function resolveLiveReplyRuntimeConfig(config: LiveReplyConfig = {}): LiveReplyRuntimeConfig {
@@ -261,14 +286,9 @@ export function createLiveReplyInterrupt(session: Session): LiveReplyInterrupt {
 }
 
 export function readCommittedDraftText(scope: {
-  committedChunks: string[];
-  draftMode?: 'split' | 'preserve';
+  committedSegments: OutboundMessageSegment[];
 }): string {
-  if (scope.draftMode === 'preserve') {
-    return scope.committedChunks[0] ?? '';
-  }
-
-  return scope.committedChunks.join('\n');
+  return renderOutboundMessageSegmentsRaw(scope.committedSegments);
 }
 
 export async function rewriteConversationTailForLiveReply(args: {
@@ -455,11 +475,11 @@ export class LiveReplyCoordinator {
     });
   }
 
-  async drainDraft(
+  async drainDraftPlan(
     scopeKey: string,
-    draft: { mode: 'split' | 'preserve'; content: string },
-    sendWhole: (content: string) => Promise<unknown>,
-    sendLine: (line: string) => Promise<unknown>,
+    draft: OutboundMessagePlan,
+    sendSegment: (segment: OutboundMessageSegment) => Promise<unknown>,
+    options: LiveReplyDraftRunOptions = {},
   ): Promise<void> {
     const scope = getOrCreateScope(this.scopes, scopeKey);
     clearCollectionTimer(scope);
@@ -467,13 +487,11 @@ export class LiveReplyCoordinator {
     scope.carrierWaiters = [];
     scope.decision = undefined;
     scope.status = 'draining';
-    scope.draftMode = draft.mode;
-    scope.committedChunks = [];
-    scope.draftChunks = draft.mode === 'preserve' ? [draft.content] : splitMessageByLines(draft.content);
+    scope.cancelDraft = options.cancelDraft;
+    scope.committedSegments = [];
+    scope.draftSegments = [...draft.segments];
 
-    const sender = draft.mode === 'preserve' ? sendWhole : sendLine;
-
-    while (scope.draftChunks.length > 0) {
+    while (scope.draftSegments.length > 0) {
       const currentDecision = scope.decision as LiveReplyDecisionPromise | undefined;
       if (currentDecision) {
         const decision = await currentDecision.promise;
@@ -488,21 +506,35 @@ export class LiveReplyCoordinator {
         scope.decision = undefined;
       }
 
-      const nextChunk = scope.draftChunks.shift();
-      if (!nextChunk) break;
+      if (options.abortSignal?.aborted) {
+        resetScopeDraft(scope);
+        scope.status = 'idle';
+        scope.decision = undefined;
+        return;
+      }
 
-      await sender(nextChunk);
-      scope.committedChunks.push(nextChunk);
+      const nextSegment = scope.draftSegments.shift();
+      if (!nextSegment) break;
 
-      if (scope.draftChunks.length === 0) {
+      await sendSegment(nextSegment);
+      if (options.abortSignal?.aborted) {
+        resetScopeDraft(scope);
+        scope.status = 'idle';
+        scope.decision = undefined;
+        return;
+      }
+
+      scope.committedSegments.push(nextSegment);
+
+      if (scope.draftSegments.length === 0) {
         if (isCollectingScope(scope)) {
           await this.resolveCollectionAsQueue(scopeKey);
         }
         break;
       }
 
-      if (draft.mode === 'split') {
-        await sleep(calculateSmartSendDelayMs(nextChunk));
+      if (nextSegment.kind === 'text-line') {
+        await sleep(calculateSmartSendDelayMs(nextSegment.content));
       }
     }
 
@@ -531,7 +563,7 @@ export class LiveReplyCoordinator {
     const conversationId = scope.conversationId?.trim();
     const room = scope.room;
     const committedText = readCommittedDraftText(scope);
-    if (!conversationId || !room || scope.draftChunks.length < 1) {
+    if (!conversationId || !room || scope.draftSegments.length < 1) {
       await this.resolveCollectionAsQueue(scopeKey);
       return;
     }
@@ -555,6 +587,7 @@ export class LiveReplyCoordinator {
       conversationId,
       instruction: buildContinuationInstruction(committedText, pendingInterrupts.slice(0, -1)),
     });
+    scope.cancelDraft?.();
 
     scope.status = 'queueing';
     scope.room = carrier.room;

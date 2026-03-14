@@ -103,14 +103,14 @@ describe('qq voice core', () => {
   });
 
   it('parses qqbot voice reply blocks into text plus first voice text', () => {
-    expect(parseVoiceReplyControl('外层<qqbot-voice>附带语音</qqbot-voice>结尾')).toEqual({
-      text: '外层结尾',
+    expect(parseVoiceReplyControl('正文\n<qqbot-voice>\n附带语音\n</qqbot-voice>\n结尾')).toEqual({
+      text: '正文\n结尾',
       voiceText: '附带语音',
       voiceTagCount: 1,
     });
-    expect(containsVoiceReplyControl('<qqbot-voice>test</qqbot-voice>')).toBe(true);
-    expect(containsVoiceReplyControl('&lt;qqbot-voice&gt;test&lt;/qqbot-voice&gt;')).toBe(true);
-    expect(parseVoiceReplyControl('&lt;qqbot-voice&gt;晚安&lt;/qqbot-voice&gt;')).toEqual({
+    expect(containsVoiceReplyControl('<qqbot-voice>\ntest\n</qqbot-voice>')).toBe(true);
+    expect(containsVoiceReplyControl('&lt;qqbot-voice&gt;\ntest\n&lt;/qqbot-voice&gt;')).toBe(true);
+    expect(parseVoiceReplyControl('&lt;qqbot-voice&gt;\n晚安\n&lt;/qqbot-voice&gt;')).toEqual({
       text: '',
       voiceText: '晚安',
       voiceTagCount: 1,
@@ -125,7 +125,9 @@ describe('qq voice core', () => {
         attrs: {},
         children: [
           { type: 'text', attrs: { content: '<qqbot-voice>' }, children: [] },
+          { type: 'text', attrs: { content: '\n' }, children: [] },
           { type: 'text', attrs: { content: '晚安' }, children: [] },
+          { type: 'text', attrs: { content: '\n' }, children: [] },
           { type: 'text', attrs: { content: '</qqbot-voice>' }, children: [] },
         ],
       },
@@ -139,18 +141,18 @@ describe('qq voice core', () => {
     });
   });
 
-  it('keeps inline voice blocks in text but removes standalone voice-only lines', () => {
+  it('only recognizes standalone-line voice tags and leaves inline tags untouched', () => {
     expect(parseVoiceReplyControl('普通文本<qqbot-voice>附带语音</qqbot-voice>')).toEqual({
-      text: '普通文本',
-      voiceText: '附带语音',
-      voiceTagCount: 1,
+      text: '普通文本<qqbot-voice>附带语音</qqbot-voice>',
+      voiceText: null,
+      voiceTagCount: 0,
     });
-    expect(parseVoiceReplyControl('正文\n<qqbot-voice>晚安</qqbot-voice>')).toEqual({
+    expect(parseVoiceReplyControl('正文\n<qqbot-voice>\n晚安\n</qqbot-voice>')).toEqual({
       text: '正文',
       voiceText: '晚安',
       voiceTagCount: 1,
     });
-    expect(parseVoiceReplyControl('<qqbot-voice>晚安</qqbot-voice>')).toEqual({
+    expect(parseVoiceReplyControl('<qqbot-voice>\n晚安\n</qqbot-voice>')).toEqual({
       text: '',
       voiceText: '晚安',
       voiceTagCount: 1,

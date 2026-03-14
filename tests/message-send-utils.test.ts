@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   calculateSmartSendDelayMs,
   createKeyedStrandRunner,
+  dispatchOutboundMessagePlan,
   dispatchNormalizedOutboundMessage,
   dropLeadingLeakedReasoningLines,
   looksLikeLeakedReasoningLine,
   normalizeOutboundMessage,
+  parseOutboundMessagePlan,
   resolveSessionStrandKey,
   sanitizeLeakedReasoningMessage,
   sendByLinesWithSmartInterval,
@@ -42,7 +44,55 @@ describe('message send utils', () => {
   it('drops malformed multiline control tags and falls back to split mode', () => {
     expect(normalizeOutboundMessage('<qqbot-multiline>\n第一行\n第二行')).toEqual({
       mode: 'split',
-      content: '第一行\n第二行',
+      content: '<qqbot-multiline>\n第一行\n第二行',
+    });
+  });
+
+  it('parses local qqbot multiline and voice blocks in strict source order', () => {
+    expect(
+      parseOutboundMessagePlan(
+        'x\ny\n<qqbot-multiline>\n哈哈\n你好\n</qqbot-multiline>\n我\n<qqbot-voice>\n我说话\n</qqbot-voice>\n你',
+      ),
+    ).toEqual({
+      segments: [
+        { kind: 'text-line', content: 'x', raw: 'x' },
+        { kind: 'text-line', content: 'y', raw: 'y' },
+        {
+          kind: 'multiline-block',
+          content: '哈哈\n你好',
+          raw: '<qqbot-multiline>\n哈哈\n你好\n</qqbot-multiline>',
+        },
+        { kind: 'text-line', content: '我', raw: '我' },
+        {
+          kind: 'voice-block',
+          content: '我说话',
+          raw: '<qqbot-voice>\n我说话\n</qqbot-voice>',
+        },
+        { kind: 'text-line', content: '你', raw: '你' },
+      ],
+    });
+  });
+
+  it('treats non-standalone or nested control tags as ordinary text', () => {
+    expect(parseOutboundMessagePlan('普通文本<qqbot-voice>晚安</qqbot-voice>')).toEqual({
+      segments: [
+        {
+          kind: 'text-line',
+          content: '普通文本<qqbot-voice>晚安</qqbot-voice>',
+          raw: '普通文本<qqbot-voice>晚安</qqbot-voice>',
+        },
+      ],
+    });
+
+    expect(parseOutboundMessagePlan('<qqbot-multiline>\n一\n<qqbot-voice>\n二\n</qqbot-voice>\n</qqbot-multiline>')).toEqual({
+      segments: [
+        { kind: 'text-line', content: '<qqbot-multiline>', raw: '<qqbot-multiline>' },
+        { kind: 'text-line', content: '一', raw: '一' },
+        { kind: 'text-line', content: '<qqbot-voice>', raw: '<qqbot-voice>' },
+        { kind: 'text-line', content: '二', raw: '二' },
+        { kind: 'text-line', content: '</qqbot-voice>', raw: '</qqbot-voice>' },
+        { kind: 'text-line', content: '</qqbot-multiline>', raw: '</qqbot-multiline>' },
+      ],
     });
   });
 
@@ -167,6 +217,26 @@ describe('message send utils', () => {
 
     expect(sentWhole).toEqual(['第一行\n\n第二行']);
     expect(sentLine).toEqual([]);
+  });
+
+  it('dispatches ordered plan segments sequentially and keeps multiline atomic', async () => {
+    vi.useFakeTimers();
+    const sent: string[] = [];
+    const pending = dispatchOutboundMessagePlan(
+      parseOutboundMessagePlan('第一句\n<qqbot-multiline>\n整块一\n整块二\n</qqbot-multiline>\n第二句'),
+      async (segment) => {
+        sent.push(`${segment.kind}:${segment.content}`);
+      },
+    );
+
+    await vi.runAllTimersAsync();
+    await pending;
+
+    expect(sent).toEqual([
+      'text-line:第一句',
+      'multiline-block:整块一\n整块二',
+      'text-line:第二句',
+    ]);
   });
 
   it('runs same-key tasks in strict order', async () => {

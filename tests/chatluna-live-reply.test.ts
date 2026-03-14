@@ -16,11 +16,13 @@ vi.mock('koishi', () => {
 
 import { apply } from '../src/plugins/chatluna-model-guard.js';
 import {
+  LiveReplyCoordinator,
   rewriteConversationTailForLiveReply,
   type LiveReplyDatabaseLike,
   type StoredConversationRecord,
   type StoredMessageRecord,
 } from '../src/plugins/chatluna-live-reply.js';
+import { parseOutboundMessagePlan } from '../src/plugins/message-send-utils.js';
 
 type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
 type BeforeSendHandler = (session: Record<string, any>, options: Record<string, any>) => Promise<boolean | void>;
@@ -585,6 +587,74 @@ describe('live reply gate + drain', () => {
     expect(harness.clearCache).not.toHaveBeenCalled();
     await expect(harness.database.get('chathub_message', { id: 'ai-1' })).resolves.toEqual([
       expect.objectContaining({ text: '整块一\n整块二' }),
+    ]);
+  });
+
+  it('preserves committed voice tags in continuation text and drops unsent tail after rewrite', async () => {
+    vi.useFakeTimers();
+
+    const database = new MemoryDatabase();
+    seedConversation(database, 'conv-voice-tail', '<qqbot-voice>\n先发语音\n</qqbot-voice>\n尾句\n<qqbot-voice>\n后发语音\n</qqbot-voice>');
+    const clearCache = vi.fn(async () => true);
+    const inject = vi.fn();
+    const coordinator = new LiveReplyCoordinator({
+      runtime: {
+        enabled: true,
+        collectWindowMs: 600,
+        maxPendingMessages: 8,
+        historyRewriteFallback: 'queue',
+      },
+      database,
+      clearCache,
+      inject,
+      logger: { warn: vi.fn() },
+    });
+
+    const room = { roomId: 1, conversationId: 'conv-voice-tail', model: 'deepseek/deepseek-chat' };
+    coordinator.bindScope('scope-voice-tail', room, 'msg-voice-1');
+
+    const sent: string[] = [];
+    const plan = parseOutboundMessagePlan('<qqbot-voice>\n先发语音\n</qqbot-voice>\n尾句\n<qqbot-voice>\n后发语音\n</qqbot-voice>');
+    const drainPending = coordinator.drainDraftPlan('scope-voice-tail', plan, async (segment) => {
+      if (segment.kind === 'voice-block') {
+        if (segment.content === '先发语音') {
+          sent.push(`voice:${segment.content}`);
+        }
+        return;
+      }
+
+      sent.push(`text:${segment.content}`);
+    });
+
+    await flushMicrotasks();
+    expect(sent).toEqual(['voice:先发语音', 'text:尾句']);
+
+    const interruptPending = coordinator.waitForInterrupt(
+      'scope-voice-tail',
+      createSession([], {
+        userId: 'u9',
+        username: '丁',
+        author: { name: '丁' },
+        content: '插话',
+      }) as never,
+      room,
+      'msg-voice-2',
+    );
+
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(600);
+    await expect(interruptPending).resolves.toBe('continue');
+    await vi.runAllTimersAsync();
+    await drainPending;
+
+    expect(sent).toEqual(['voice:先发语音', 'text:尾句']);
+    expect(clearCache).toHaveBeenCalledTimes(1);
+    expect(String(inject.mock.calls[0]?.[0]?.instruction ?? inject.mock.calls[0]?.[0]?.value ?? '')).toContain(
+      '<qqbot-voice>\n先发语音\n</qqbot-voice>',
+    );
+    expect(String(inject.mock.calls[0]?.[0]?.instruction ?? inject.mock.calls[0]?.[0]?.value ?? '')).toContain('尾句');
+    await expect(database.get('chathub_message', { id: 'ai-1' })).resolves.toEqual([
+      expect.objectContaining({ text: '<qqbot-voice>\n先发语音\n</qqbot-voice>\n尾句' }),
     ]);
   });
 });

@@ -265,7 +265,7 @@ describe('qq voice plugin', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const session = createSession(bot, {
-      content: '普通文本<qqbot-voice>附带语音</qqbot-voice>',
+      content: '普通文本\n<qqbot-voice>\n附带语音\n</qqbot-voice>',
     });
 
     const result = await beforeSend(session, {});
@@ -299,7 +299,9 @@ describe('qq voice plugin', () => {
           attrs: {},
           children: [
             { type: 'text', attrs: { content: '<qqbot-voice>' }, children: [] },
+            { type: 'text', attrs: { content: '\n' }, children: [] },
             { type: 'text', attrs: { content: '晚安' }, children: [] },
+            { type: 'text', attrs: { content: '\n' }, children: [] },
             { type: 'text', attrs: { content: '</qqbot-voice>' }, children: [] },
           ],
         },
@@ -376,7 +378,7 @@ describe('qq voice plugin', () => {
 
     await ready();
     const session = createSession(bot, {
-      content: '普通文本<qqbot-voice>附带语音</qqbot-voice>',
+      content: '普通文本\n<qqbot-voice>\n附带语音\n</qqbot-voice>',
     });
 
     await beforeSend(session, {});
@@ -393,7 +395,7 @@ describe('qq voice plugin', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const session = createSession(bot, {
-      content: '普通文本<qqbot-voice>附带语音</qqbot-voice>',
+      content: '普通文本\n<qqbot-voice>\n附带语音\n</qqbot-voice>',
     });
 
     await beforeSend(session, {});
@@ -418,7 +420,7 @@ describe('qq voice plugin', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const session = createSession(bot, {
-      content: '这是补充文本。\n<qqbot-voice>晚安</qqbot-voice>',
+      content: '这是补充文本。\n<qqbot-voice>\n晚安\n</qqbot-voice>',
     });
 
     await beforeSend(session, {});
@@ -426,5 +428,35 @@ describe('qq voice plugin', () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.[1]).toBe('这是补充文本。');
     expect(String(calls[1]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
+  });
+
+  it('respects original segment order for local multiline and voice blocks', async () => {
+    const { beforeSend, bot } = createHarness();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz' && (init?.method === 'GET' || !init?.method)) {
+        return new Response('ok', { status: 200 });
+      }
+      if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
+        return new Response(Uint8Array.from([82, 73, 70, 70]), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const session = createSession(bot, {
+      content: 'x\ny\n<qqbot-multiline>\n哈哈\n你好\n</qqbot-multiline>\n我\n<qqbot-voice>\n我说话\n</qqbot-voice>\n你',
+    });
+
+    await beforeSend(session, {});
+    const calls = bot.sendMessage.mock.calls as Array<any[]>;
+    expect(calls.map((call) => String(call[1] ?? ''))).toEqual([
+      'x',
+      'y',
+      '哈哈\n你好',
+      '我',
+      expect.stringContaining('<audio src="data:audio/wav;base64,'),
+      '你',
+    ]);
   });
 });

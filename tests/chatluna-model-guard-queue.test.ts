@@ -227,6 +227,24 @@ describe('chatluna model guard multiline queue', () => {
     ]);
   });
 
+  it('keeps local qqbot multiline blocks atomic while preserving surrounding order', async () => {
+    const { beforeSend } = createHarness();
+    const sent: string[] = [];
+    const sentAt: number[] = [];
+    const session = createSession(sent, sentAt, {
+      userId: 'u7',
+    });
+    const sendSession = createSendSession(
+      session,
+      '前缀\n<qqbot-multiline>\n第一行\n第二行\n</qqbot-multiline>\n后缀',
+    );
+
+    const result = await beforeSend(sendSession, { session });
+
+    expect(result).toBe(true);
+    expect(sent).toEqual(['前缀', '第一行\n第二行', '后缀']);
+  });
+
   it('splits unwrapped code blocks line by line without explicit wrapper', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-09T20:10:00+08:00'));

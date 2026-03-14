@@ -4,6 +4,8 @@ const MIN_SMART_SEND_DELAY_MS = 1000;
 const MAX_SMART_SEND_DELAY_MS = 4000;
 const QQBOT_MULTILINE_OPEN_TAG = '<qqbot-multiline>';
 const QQBOT_MULTILINE_CLOSE_TAG = '</qqbot-multiline>';
+const QQBOT_VOICE_OPEN_TAG = '<qqbot-voice>';
+const QQBOT_VOICE_CLOSE_TAG = '</qqbot-voice>';
 const META_LEAK_FALLBACK_TEXT = '你在说什么怪话……我听不懂';
 const bypassSplitOptions = new WeakSet<Universal.SendOptions>();
 const LEAKED_REASONING_LINE_PATTERN =
@@ -39,6 +41,27 @@ export type OutboundMessageMode = 'split' | 'preserve';
 export interface NormalizedOutboundMessage {
   mode: OutboundMessageMode;
   content: string;
+}
+
+export type OutboundMessageSegment =
+  | {
+      kind: 'text-line';
+      content: string;
+      raw: string;
+    }
+  | {
+      kind: 'multiline-block';
+      content: string;
+      raw: string;
+    }
+  | {
+      kind: 'voice-block';
+      content: string;
+      raw: string;
+    };
+
+export interface OutboundMessagePlan {
+  segments: OutboundMessageSegment[];
 }
 
 export type BotMessageSender = {
@@ -153,6 +176,41 @@ function stripMultilineControlTags(message: string): string {
   return message.replaceAll(QQBOT_MULTILINE_OPEN_TAG, '').replaceAll(QQBOT_MULTILINE_CLOSE_TAG, '');
 }
 
+function flattenMessageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map((part) => flattenMessageText(part)).join('');
+  if (!content || typeof content !== 'object') return '';
+
+  const node = content as {
+    type?: string;
+    content?: unknown;
+    attrs?: { content?: unknown };
+    children?: unknown[];
+  };
+
+  const ownText =
+    typeof node.attrs?.content === 'string'
+      ? node.attrs.content
+      : typeof node.content === 'string'
+        ? node.content
+        : '';
+  const childText = Array.isArray(node.children) ? node.children.map((child) => flattenMessageText(child)).join('') : '';
+  const combined = `${ownText}${childText}`;
+  if (!combined) return '';
+  if (node.type && node.type !== 'text' && node.type !== 'span') {
+    return `${combined}\n`;
+  }
+  return combined;
+}
+
+function decodeControlEntities(message: string): string {
+  return message
+    .replace(/&lt;(\/?)qqbot-voice&gt;/gi, '<$1qqbot-voice>')
+    .replace(/&#60;(\/?)qqbot-voice&#62;/gi, '<$1qqbot-voice>')
+    .replace(/&lt;(\/?)qqbot-multiline&gt;/gi, '<$1qqbot-multiline>')
+    .replace(/&#60;(\/?)qqbot-multiline&#62;/gi, '<$1qqbot-multiline>');
+}
+
 function trimPreservedContent(content: string): string {
   const normalized = normalizeLineEndings(content);
   return normalized.replace(/^\n/, '').replace(/\n$/, '').trimEnd();
@@ -226,6 +284,179 @@ function parseOutboundMessageControl(message: string): NormalizedOutboundMessage
   };
 }
 
+function isStandaloneTagLine(line: string, tag: string): boolean {
+  return line.trim() === tag;
+}
+
+function tryParseTaggedBlock(
+  lines: string[],
+  startIndex: number,
+  openTag: string,
+  closeTag: string,
+): { valid: true; endIndex: number; inner: string } | { valid: false; endIndex: number } {
+  const innerLines: string[] = [];
+
+  for (let index = startIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (trimmed === closeTag) {
+      return {
+        valid: true,
+        endIndex: index,
+        inner: innerLines.join('\n'),
+      };
+    }
+
+    if (
+      trimmed === QQBOT_MULTILINE_OPEN_TAG ||
+      trimmed === QQBOT_MULTILINE_CLOSE_TAG ||
+      trimmed === QQBOT_VOICE_OPEN_TAG ||
+      trimmed === QQBOT_VOICE_CLOSE_TAG
+    ) {
+      for (let fallbackIndex = index + 1; fallbackIndex < lines.length; fallbackIndex += 1) {
+        if (lines[fallbackIndex].trim() === closeTag) {
+          return {
+            valid: false,
+            endIndex: fallbackIndex,
+          };
+        }
+      }
+
+      return {
+        valid: false,
+        endIndex: lines.length - 1,
+      };
+    }
+
+    innerLines.push(line);
+  }
+
+  return {
+    valid: false,
+    endIndex: lines.length - 1,
+  };
+}
+
+function normalizeSplitChunkToSegments(rawChunk: string): OutboundMessageSegment[] {
+  const markdownStripped = stripSplitModeMarkdown(rawChunk);
+  const reasoningSanitized = sanitizeLeakedReasoningMessage(markdownStripped);
+  const promptSanitized = sanitizePromptLeakMessage(reasoningSanitized);
+  const lines = dropLeadingLeakedReasoningLines(splitMessageByLines(promptSanitized));
+
+  return lines.map((line) => ({
+    kind: 'text-line' as const,
+    content: line,
+    raw: line,
+  }));
+}
+
+function normalizePreservedBlockContent(rawContent: string): string {
+  return sanitizePromptLeakMessage(stripPreserveModeMarkdown(rawContent));
+}
+
+function createWrappedRawSegment(openTag: string, closeTag: string, content: string): string {
+  return `${openTag}\n${content}\n${closeTag}`;
+}
+
+export function parseOutboundMessagePlan(message: unknown): OutboundMessagePlan {
+  const flattened = decodeControlEntities(flattenMessageText(message));
+  const normalized = normalizeLineEndings(flattened);
+  const lines = normalized.split('\n');
+  const segments: OutboundMessageSegment[] = [];
+  const textBuffer: string[] = [];
+
+  const flushTextBuffer = () => {
+    if (!textBuffer.length) return;
+    const chunk = textBuffer.join('\n');
+    textBuffer.length = 0;
+    segments.push(...normalizeSplitChunkToSegments(chunk));
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+
+    if (isStandaloneTagLine(line, QQBOT_MULTILINE_OPEN_TAG)) {
+      const parsed = tryParseTaggedBlock(lines, index, QQBOT_MULTILINE_OPEN_TAG, QQBOT_MULTILINE_CLOSE_TAG);
+      if (!parsed.valid) {
+        textBuffer.push(...lines.slice(index, parsed.endIndex + 1));
+        index = parsed.endIndex;
+        continue;
+      }
+
+      flushTextBuffer();
+      const content = normalizePreservedBlockContent(parsed.inner);
+      if (content.trim()) {
+        segments.push({
+          kind: 'multiline-block',
+          content,
+          raw: createWrappedRawSegment(QQBOT_MULTILINE_OPEN_TAG, QQBOT_MULTILINE_CLOSE_TAG, content),
+        });
+      }
+      index = parsed.endIndex;
+      continue;
+    }
+
+    if (isStandaloneTagLine(line, QQBOT_VOICE_OPEN_TAG)) {
+      const parsed = tryParseTaggedBlock(lines, index, QQBOT_VOICE_OPEN_TAG, QQBOT_VOICE_CLOSE_TAG);
+      if (!parsed.valid) {
+        textBuffer.push(...lines.slice(index, parsed.endIndex + 1));
+        index = parsed.endIndex;
+        continue;
+      }
+
+      flushTextBuffer();
+      const content = normalizePreservedBlockContent(parsed.inner);
+      if (content.trim()) {
+        segments.push({
+          kind: 'voice-block',
+          content,
+          raw: createWrappedRawSegment(QQBOT_VOICE_OPEN_TAG, QQBOT_VOICE_CLOSE_TAG, content),
+        });
+      }
+      index = parsed.endIndex;
+      continue;
+    }
+
+    textBuffer.push(line);
+  }
+
+  flushTextBuffer();
+
+  return { segments };
+}
+
+export function renderOutboundMessagePlanRaw(plan: OutboundMessagePlan): string {
+  return renderOutboundMessageSegmentsRaw(plan.segments);
+}
+
+export function renderOutboundMessageSegmentsRaw(segments: OutboundMessageSegment[]): string {
+  return segments.map((segment) => segment.raw).join('\n');
+}
+
+export function hasVoiceSegments(plan: OutboundMessagePlan): boolean {
+  return plan.segments.some((segment) => segment.kind === 'voice-block');
+}
+
+export async function dispatchOutboundMessagePlan(
+  plan: OutboundMessagePlan,
+  sendSegment: (segment: OutboundMessageSegment) => Promise<unknown>,
+  options: { abortSignal?: AbortSignal } = {},
+): Promise<void> {
+  for (let index = 0; index < plan.segments.length; index += 1) {
+    if (options.abortSignal?.aborted) return;
+    const segment = plan.segments[index];
+    await sendSegment(segment);
+    if (options.abortSignal?.aborted) return;
+
+    const nextSegment = plan.segments[index + 1];
+    if (!nextSegment) continue;
+    if (segment.kind !== 'text-line') continue;
+
+    await sleep(calculateSmartSendDelayMs(segment.content));
+  }
+}
+
 export function splitMessageByLines(message: string): string[] {
   const normalized = normalizeLineEndings(message);
   const lines = normalized.split('\n').filter((line) => line.trim().length > 0);
@@ -282,22 +513,18 @@ export function sanitizeLeakedReasoningMessage(message: string): string {
 }
 
 export function normalizeOutboundMessage(message: string): NormalizedOutboundMessage {
-  const parsed = parseOutboundMessageControl(message);
-  if (parsed.mode === 'preserve') {
+  const plan = parseOutboundMessagePlan(message);
+  const nonVoiceSegments = plan.segments.filter((segment) => segment.kind !== 'voice-block');
+  if (nonVoiceSegments.length === 1 && nonVoiceSegments[0].kind === 'multiline-block') {
     return {
       mode: 'preserve',
-      content: sanitizePromptLeakMessage(stripPreserveModeMarkdown(parsed.content)),
+      content: nonVoiceSegments[0].content,
     };
   }
 
-  const markdownStripped = stripSplitModeMarkdown(parsed.content);
-  const reasoningSanitized = sanitizeLeakedReasoningMessage(markdownStripped);
-  const promptSanitized = sanitizePromptLeakMessage(reasoningSanitized);
-  const lines = dropLeadingLeakedReasoningLines(splitMessageByLines(promptSanitized));
-
   return {
     mode: 'split',
-    content: lines.length ? lines.join('\n') : promptSanitized.trim(),
+    content: nonVoiceSegments.map((segment) => segment.content).join('\n').trim(),
   };
 }
 

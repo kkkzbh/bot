@@ -3,19 +3,20 @@ import {
   type LiveReplyConfig,
   type LiveReplyDatabaseLike,
   LiveReplyCoordinator,
+  registerLiveReplyCoordinator,
   resolveLiveReplyRuntimeConfig,
 } from './chatluna-live-reply.js';
 import { injectUserStampedPrompt } from './chat-time-context.js';
 import {
   createKeyedStrandRunner,
   createBotMessageDispatchers,
-  dispatchNormalizedOutboundMessage,
-  normalizeOutboundMessage,
+  dispatchOutboundMessagePlan,
+  hasVoiceSegments,
+  parseOutboundMessagePlan,
   resolveSessionStrandKey,
   shouldBypassLineSplit,
-  splitMessageByLines,
+  type OutboundMessageSegment,
 } from './message-send-utils.js';
-import { containsVoiceReplyControl } from './qq-voice-core.js';
 import { inferPlatformFromBaseUrl, normalizeRawModelName, resolvePlatform } from './model-utils.js';
 import { resolveSessionDisplayName } from './session-user-name.js';
 
@@ -167,6 +168,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           logger,
         })
       : null;
+  registerLiveReplyCoordinator(ctx as object, liveReplyCoordinator);
 
   if (liveReplyRuntime.enabled && !liveReplyCoordinator) {
     logger.warn('live reply is enabled but database service is unavailable, falling back to queue-only behavior.');
@@ -211,28 +213,33 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (shouldBypassLineSplit(options)) return;
     if (session.platform !== 'onebot') return;
     if (!session.channelId || !session.content) return;
-    if (containsVoiceReplyControl(session.content)) return;
-
-    const normalized = normalizeOutboundMessage(session.content);
-    if (normalized.content !== session.content) {
-      session.content = normalized.content;
-      logger.warn('normalized outbound onebot reply for qq-safe plain text delivery.');
-    }
+    const plan = parseOutboundMessagePlan(session.content);
+    if (hasVoiceSegments(plan)) return;
+    if (!plan.segments.length) return;
 
     const channelId = session.channelId;
-    const splitLineCount = normalized.mode === 'split' ? splitMessageByLines(session.content).length : 1;
-    const shouldIntercept = normalized.mode === 'preserve' || splitLineCount > 1;
+    const shouldIntercept =
+      plan.segments.length > 1 || plan.segments.some((segment) => segment.kind === 'multiline-block');
     if (!shouldIntercept) return;
 
     const strandKey = resolveSessionStrandKey(session);
     const { sendWhole, sendLine } = createBotMessageDispatchers(session.bot, channelId, session);
-    const sendTask = async () => {
-      if (strandKey && liveReplyCoordinator && liveReplyRuntime.enabled) {
-        await liveReplyCoordinator.drainDraft(strandKey, normalized, sendWhole, sendLine);
+    const sendSegment = async (segment: OutboundMessageSegment) => {
+      if (segment.kind === 'multiline-block') {
+        await sendWhole(segment.content);
         return;
       }
 
-      await dispatchNormalizedOutboundMessage(normalized, sendWhole, sendLine);
+      await sendLine(segment.content);
+    };
+
+    const sendTask = async () => {
+      if (strandKey && liveReplyCoordinator && liveReplyRuntime.enabled) {
+        await liveReplyCoordinator.drainDraftPlan(strandKey, plan, sendSegment);
+        return;
+      }
+
+      await dispatchOutboundMessagePlan(plan, sendSegment);
     };
 
     const queuedSendTask = async () => {
@@ -246,7 +253,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const shouldDeferSend =
       !!strandKey &&
       isDeferredMultilineSendKeyActive(strandKey) &&
-      ((liveReplyRuntime.enabled && shouldIntercept) || (normalized.mode === 'split' && splitLineCount > 1));
+      (shouldIntercept || plan.segments.length > 1);
 
     if (shouldDeferSend) {
       void queuedSendTask().catch((error) => {

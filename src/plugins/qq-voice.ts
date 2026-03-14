@@ -9,19 +9,22 @@ import {
   extractTextContentWithoutVoice,
   mergeVoiceInputText,
   normalizeVoiceSynthesisText,
-  parseVoiceReplyControl,
   pickVoiceStyle,
 } from './qq-voice-core.js';
 import {
   createBypassLineSplitOptions,
   createBotMessageDispatchers,
   createKeyedStrandRunner,
-  dispatchNormalizedOutboundMessage,
-  normalizeOutboundMessage,
+  dispatchOutboundMessagePlan,
+  hasVoiceSegments,
+  parseOutboundMessagePlan,
   resolveSessionStrandKey,
   sendBotMessageByNormalizedContent,
   shouldBypassLineSplit,
+  type OutboundMessagePlan,
+  type OutboundMessageSegment,
 } from './message-send-utils.js';
+import { getLiveReplyCoordinator } from './chatluna-live-reply.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -148,6 +151,19 @@ interface AsrResponse {
 interface CachedProbeResult {
   ok: boolean;
   expiresAt: number;
+}
+
+interface PreparedVoiceSegment {
+  segment: OutboundMessageSegment & { kind: 'voice-block' };
+  text: string;
+  style: 'white' | 'black';
+  promise: Promise<Uint8Array | null>;
+}
+
+interface VoicePrefetchBatch {
+  revisionId: string;
+  abortController: AbortController;
+  preparedByRaw: Map<string, PreparedVoiceSegment>;
 }
 
 function normalizeBaseUrl(input: string): string {
@@ -331,12 +347,19 @@ async function transcribeAudio(runtime: RuntimeConfig, audio: DownloadedAudioPay
   }
 }
 
-async function synthesizeVoice(runtime: RuntimeConfig, text: string, style: 'white' | 'black'): Promise<Uint8Array> {
+async function synthesizeVoice(
+  runtime: RuntimeConfig,
+  text: string,
+  style: 'white' | 'black',
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
   if (!runtime.ttsBaseUrl) {
     throw new Error('missing TTS base url');
   }
 
   const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
   const timer = setTimeout(() => controller.abort(), runtime.synthTimeoutMs);
 
   try {
@@ -362,6 +385,7 @@ async function synthesizeVoice(runtime: RuntimeConfig, text: string, style: 'whi
     return new Uint8Array(await response.arrayBuffer());
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
   }
 }
 
@@ -466,11 +490,61 @@ function shouldExplainVoiceUnavailable(session: SessionWithVoiceState): boolean 
   return containsExplicitVoiceRequest(getTextInputContent(session));
 }
 
+function buildVoiceRevisionId(scopeKey: string | null, revisionCounter: Map<string, number>): string {
+  const scope = scopeKey ?? 'standalone';
+  const next = (revisionCounter.get(scope) ?? 0) + 1;
+  revisionCounter.set(scope, next);
+  return `${scope}:${next}`;
+}
+
+async function createVoicePrefetchBatch(args: {
+  runtime: RuntimeConfig;
+  plan: OutboundMessagePlan;
+  bot: OneBotBotLike;
+  canSendRecordCache: Map<string, boolean>;
+  ttsHealthCache: Map<string, CachedProbeResult>;
+  revisionId: string;
+}): Promise<VoicePrefetchBatch | null> {
+  const { runtime, plan, bot, canSendRecordCache, ttsHealthCache, revisionId } = args;
+  if (!isVoiceOutputConfigured(runtime)) return null;
+  if (!hasVoiceSegments(plan)) return null;
+  if (!(await ensureCanSendRecord(bot, canSendRecordCache))) return null;
+  if (!(await ensureTtsHealthy(runtime, ttsHealthCache))) return null;
+
+  const abortController = new AbortController();
+  const preparedByRaw = new Map<string, PreparedVoiceSegment>();
+
+  for (const segment of plan.segments) {
+    if (segment.kind !== 'voice-block') continue;
+    const text = normalizeVoiceSynthesisText(segment.content);
+    if (!text || text.length > runtime.outputMaxChars) continue;
+    const style = pickVoiceStyle(text);
+    preparedByRaw.set(segment.raw, {
+      segment,
+      text,
+      style,
+      promise: synthesizeVoice(runtime, text, style, abortController.signal).catch((error) => {
+        if (abortController.signal.aborted) return null;
+        logger.warn('voice prefetch failed for %s: %s', revisionId, (error as Error).message);
+        return null;
+      }),
+    });
+  }
+
+  return {
+    revisionId,
+    abortController,
+    preparedByRaw,
+  };
+}
+
 export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
   const sendStrand = createKeyedStrandRunner();
   const canSendRecordCache = new Map<string, boolean>();
   const ttsHealthCache = new Map<string, CachedProbeResult>();
+  const voiceRevisionCounter = new Map<string, number>();
+  const activeVoicePrefetches = new Map<string, VoicePrefetchBatch>();
 
   ctx.middleware(
     async (rawSession, next) => {
@@ -524,31 +598,71 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (!session.channelId || !session.content) return;
     if (!containsVoiceReplyControl(session.content)) return;
 
-    const parsed = parseVoiceReplyControl(session.content);
-    const normalized = normalizeOutboundMessage(parsed.text);
+    const plan = parseOutboundMessagePlan(session.content);
+    if (!hasVoiceSegments(plan)) return;
     const bot = session.bot as OneBotBotLike;
     const strandKey = resolveSessionStrandKey(session);
+    const liveReplyCoordinator = strandKey ? getLiveReplyCoordinator(ctx as object) : null;
     const sendTask = async () => {
       const { sendWhole, sendLine } = createBotMessageDispatchers(bot, session.channelId!, session);
-      await dispatchNormalizedOutboundMessage(normalized, sendWhole, sendLine);
+      const revisionId = buildVoiceRevisionId(strandKey, voiceRevisionCounter);
+      const batch = await createVoicePrefetchBatch({
+        runtime,
+        plan,
+        bot,
+        canSendRecordCache,
+        ttsHealthCache,
+        revisionId,
+      });
+      if (strandKey) {
+        activeVoicePrefetches.get(strandKey)?.abortController.abort();
+      }
+      if (strandKey && batch) {
+        activeVoicePrefetches.set(strandKey, batch);
+      }
 
-      const voiceText = normalizeVoiceSynthesisText(parsed.voiceText ?? normalized.content);
-      if (!voiceText) return;
-      if (!isVoiceOutputConfigured(runtime)) return;
-      if (voiceText.length > runtime.outputMaxChars) return;
-      if (!(await ensureCanSendRecord(bot, canSendRecordCache))) return;
-      if (!(await ensureTtsHealthy(runtime, ttsHealthCache))) return;
+      const sendSegment = async (segment: OutboundMessageSegment) => {
+        if (segment.kind === 'multiline-block') {
+          await sendWhole(segment.content);
+          return;
+        }
 
-      try {
-        const wav = await synthesizeVoice(runtime, voiceText, pickVoiceStyle(voiceText));
+        if (segment.kind === 'text-line') {
+          await sendLine(segment.content);
+          return;
+        }
+
+        if (!batch || batch.abortController.signal.aborted) return;
+        const prepared = batch.preparedByRaw.get(segment.raw);
+        if (!prepared) return;
+
+        const wav = await prepared.promise;
+        if (!wav || batch.abortController.signal.aborted) return;
+
         await bot.sendMessage(
           session.channelId!,
           String(h.audio(createAudioDataUri(wav))),
           undefined,
           createBypassLineSplitOptions(session),
         );
-      } catch (error) {
-        logger.warn('voice synthesis/send failed: %s', (error as Error).message);
+      };
+
+      try {
+        if (strandKey && liveReplyCoordinator) {
+          await liveReplyCoordinator.drainDraftPlan(strandKey, plan, sendSegment, {
+            cancelDraft: () => batch?.abortController.abort(),
+            abortSignal: batch?.abortController.signal,
+          });
+          return;
+        }
+
+        await dispatchOutboundMessagePlan(plan, sendSegment, {
+          abortSignal: batch?.abortController.signal,
+        });
+      } finally {
+        if (batch && strandKey && activeVoicePrefetches.get(strandKey)?.revisionId === batch.revisionId) {
+          activeVoicePrefetches.delete(strandKey);
+        }
       }
     };
 
