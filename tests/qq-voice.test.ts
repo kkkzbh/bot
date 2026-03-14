@@ -157,9 +157,9 @@ function createHarness(overrides: {
     asrBaseUrl: 'http://127.0.0.1:8081',
     ttsBaseUrl: 'http://127.0.0.1:8082',
     inputMaxSeconds: 60,
-    outputMaxChars: 120,
+    outputMaxChars: 30,
     transcribeTimeoutMs: 30_000,
-    synthTimeoutMs: 90_000,
+    synthTimeoutMs: 180_000,
     ...overrides.pluginConfig,
   });
 
@@ -398,7 +398,7 @@ describe('qq voice plugin', () => {
       stage: 'after_scratchpad',
     });
     expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('当前是群聊');
-    expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('你必须输出且只输出一个 <qqbot-voice> 块');
+    expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('你必须输出一个或多个 <qqbot-voice> 块');
   });
 
   it('injects private voice hint when explicit voice request is made and TTS is available', async () => {
@@ -440,7 +440,8 @@ describe('qq voice plugin', () => {
       stage: 'after_scratchpad',
     });
     expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('当前是私聊');
-    expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('你必须输出且只输出一个 <qqbot-voice> 块');
+    expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('你必须输出一个或多个 <qqbot-voice> 块');
+    expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('30 个字以内');
   });
 
   it('caches optimistic record support after early ready-time probe failure', async () => {
@@ -546,9 +547,83 @@ describe('qq voice plugin', () => {
 
     await beforeSend(session, {});
     const calls = bot.sendMessage.mock.calls as Array<any[]>;
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(3);
     expect(calls[0]?.[1]).toBe('普通文本');
+    expect(calls[1]?.[1]).toBe('……今天不想发语音，直接说吧');
+    expect(calls[2]?.[1]).toBe('附带语音');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to persona text when TTS synthesis times out', async () => {
+    vi.useFakeTimers();
+    const { beforeSend, bot } = createHarness({
+      pluginConfig: {
+        synthTimeoutMs: 10,
+      },
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz' && (init?.method === 'GET' || !init?.method)) {
+        return Promise.resolve(new Response('ok', { status: 200 }));
+      }
+      if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => reject(new Error('This operation was aborted')),
+            { once: true },
+          );
+        });
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const session = createSession(bot, {
+      content: '<qqbot-voice>\n附带语音\n</qqbot-voice>',
+    });
+
+    const pending = beforeSend(session, {});
+    await vi.advanceTimersByTimeAsync(20);
+    await pending;
+
+    const calls = bot.sendMessage.mock.calls as Array<any[]>;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[1]).toBe('……今天不想发语音，直接说吧');
+    expect(calls[1]?.[1]).toBe('附带语音');
+  });
+
+  it('falls back segment-by-segment for multiple voice blocks while sending hint only once', async () => {
+    const { beforeSend, bot } = createHarness({
+      pluginConfig: {
+        outputMaxChars: 30,
+      },
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz' && (init?.method === 'GET' || !init?.method)) {
+        return new Response('ok', { status: 200 });
+      }
+      if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
+        return new Response(Uint8Array.from([82, 73, 70, 70]), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const session = createSession(bot, {
+      content:
+        '<qqbot-voice>\n第一段语音不用回退\n</qqbot-voice>\n<qqbot-voice>\n这一段语音明显超过三十个字所以应该直接回退成文本而不是继续合成发送\n</qqbot-voice>',
+    });
+
+    await beforeSend(session, {});
+
+    const calls = bot.sendMessage.mock.calls as Array<any[]>;
+    expect(calls.map((call) => String(call[1] ?? ''))).toEqual([
+      expect.stringContaining('<audio src="data:audio/wav;base64,'),
+      '……今天不想发语音，直接说吧',
+      '这一段语音明显超过三十个字所以应该直接回退成文本而不是继续合成发送',
+    ]);
   });
 
   it('keeps distinct text outside the voice tag and sends one extra audio payload', async () => {

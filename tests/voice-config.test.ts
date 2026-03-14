@@ -66,7 +66,8 @@ describe('qq voice config wiring', () => {
 
     expect(content).toContain('## 语音附加规则');
     expect(content).toContain('默认只发文本，不要主动使用语音标签');
-    expect(content).toContain('一次回复里最多只能出现一个 `<qqbot-voice>` 块');
+    expect(content).toContain('允许在一条回复里输出多个 `<qqbot-voice>` 块');
+    expect(content).toContain('每个块内部正文都必须控制在 30 个字以内');
     expect(content).toContain('标签外默认什么都不要写');
     expect(content).toContain('错误示例：');
   });

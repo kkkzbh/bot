@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
 import {
+  buildVoiceFallbackReply,
   buildVoiceFailureReply,
   buildVoiceRequestedInstruction,
   buildVoiceUnavailableInstruction,
@@ -58,9 +59,9 @@ export const Config: Schema<Config> = Schema.object({
   ttsBaseUrl: Schema.string().role('link').description('TTS HTTP 服务地址（默认复用 QQ_VOICE_TTS_BASE_URL）。'),
   ttsApiKey: Schema.string().role('secret').description('TTS HTTP 服务鉴权 token。'),
   inputMaxSeconds: Schema.natural().default(60).description('单条入站语音最大时长（秒）。'),
-  outputMaxChars: Schema.natural().default(120).description('单条语音回复最大字符数（默认适配约 30-60 秒语速）。'),
+  outputMaxChars: Schema.natural().default(30).description('单个 <qqbot-voice> 块最大字符数。'),
   transcribeTimeoutMs: Schema.natural().role('time').default(30000).description('ASR 请求超时（毫秒）。'),
-  synthTimeoutMs: Schema.natural().role('time').default(90000).description('TTS 请求超时（毫秒）。'),
+  synthTimeoutMs: Schema.natural().role('time').default(180000).description('TTS 请求超时（毫秒）。'),
 });
 
 interface RuntimeConfig {
@@ -189,12 +190,12 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
     ttsBaseUrl: normalizeBaseUrl(config.ttsBaseUrl ?? process.env.QQ_VOICE_TTS_BASE_URL ?? 'http://127.0.0.1:8082'),
     ttsApiKey: config.ttsApiKey ?? process.env.QQ_VOICE_TTS_API_KEY ?? '',
     inputMaxSeconds: clampNatural(config.inputMaxSeconds ?? process.env.QQ_VOICE_INPUT_MAX_SECONDS, 60),
-    outputMaxChars: clampNatural(config.outputMaxChars ?? process.env.QQ_VOICE_OUTPUT_MAX_CHARS, 120),
+    outputMaxChars: clampNatural(config.outputMaxChars ?? process.env.QQ_VOICE_OUTPUT_MAX_CHARS, 30),
     transcribeTimeoutMs: clampNatural(
       config.transcribeTimeoutMs ?? process.env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS,
       30_000,
     ),
-    synthTimeoutMs: clampNatural(config.synthTimeoutMs ?? process.env.QQ_VOICE_SYNTH_TIMEOUT_MS, 90_000),
+    synthTimeoutMs: clampNatural(config.synthTimeoutMs ?? process.env.QQ_VOICE_SYNTH_TIMEOUT_MS, 180_000),
   };
 }
 
@@ -641,6 +642,17 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (strandKey && batch) {
         activeVoicePrefetches.set(strandKey, batch);
       }
+      let voiceFallbackHintSent = false;
+
+      const sendVoiceFallback = async (text: string) => {
+        const normalized = normalizeVoiceSynthesisText(text);
+        if (!normalized) return;
+        if (!voiceFallbackHintSent) {
+          voiceFallbackHintSent = true;
+          await sendLine(buildVoiceFallbackReply());
+        }
+        await sendLine(normalized);
+      };
 
       const sendSegment = async (segment: OutboundMessageSegment) => {
         if (segment.kind === 'multiline-block') {
@@ -653,19 +665,37 @@ export function apply(ctx: Context, config: Config = {}): void {
           return;
         }
 
-        if (!batch || batch.abortController.signal.aborted) return;
+        const fallbackText = normalizeVoiceSynthesisText(segment.content);
+        if (!batch) {
+          await sendVoiceFallback(fallbackText);
+          return;
+        }
+        if (batch.abortController.signal.aborted) return;
         const prepared = batch.preparedByRaw.get(segment.raw);
-        if (!prepared) return;
+        if (!prepared) {
+          await sendVoiceFallback(fallbackText);
+          return;
+        }
 
         const wav = await prepared.promise;
-        if (!wav || batch.abortController.signal.aborted) return;
+        if (batch.abortController.signal.aborted) return;
+        if (!wav) {
+          await sendVoiceFallback(prepared.text);
+          return;
+        }
 
-        await bot.sendMessage(
-          session.channelId!,
-          String(h.audio(createAudioDataUri(wav))),
-          undefined,
-          createBypassLineSplitOptions(session),
-        );
+        try {
+          await bot.sendMessage(
+            session.channelId!,
+            String(h.audio(createAudioDataUri(wav))),
+            undefined,
+            createBypassLineSplitOptions(session),
+          );
+        } catch (error) {
+          if (batch.abortController.signal.aborted) return;
+          logger.warn('voice send failed for %s: %s', revisionId, (error as Error).message);
+          await sendVoiceFallback(prepared.text);
+        }
       };
 
       try {

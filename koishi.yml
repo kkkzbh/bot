@@ -15,7 +15,7 @@ plugins:
     database-sqlite:8jr5yp:
       path: ${{ env.SQLITE_PATH || './data/koishi.db' }}
     canvas:pokemon: {}
-    downloads:pokemon:
+    downloads:g1u6o5:
       output: ${{ env.POKEMON_DOWNLOADS_OUTPUT || './downloads' }}
     cron:task: {}
     ./dist/plugins/pokemon-battle-bridge:pokemon-battle:
@@ -60,9 +60,9 @@ plugins:
       ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || 'http://127.0.0.1:5162' }}
       ttsApiKey: ${{ env.QQ_VOICE_TTS_API_KEY || '' }}
       inputMaxSeconds: ${{ +env.QQ_VOICE_INPUT_MAX_SECONDS || 60 }}
-      outputMaxChars: ${{ +env.QQ_VOICE_OUTPUT_MAX_CHARS || 80 }}
+      outputMaxChars: ${{ +env.QQ_VOICE_OUTPUT_MAX_CHARS || 30 }}
       transcribeTimeoutMs: ${{ +env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS || 45000 }}
-      synthTimeoutMs: ${{ +env.QQ_VOICE_SYNTH_TIMEOUT_MS || 90000 }}
+      synthTimeoutMs: ${{ +env.QQ_VOICE_SYNTH_TIMEOUT_MS || 180000 }}
     ./dist/plugins/group-natural-trigger:natural-trigger:
       enabled: ${{ env.CHAT_NATURAL_TRIGGER_ENABLED !== 'false' }}
       enabledGroups: ${{ env.CHAT_NATURAL_TRIGGER_GROUPS || '' }}
@@ -77,7 +77,9 @@ plugins:
       decisionBaseUrl: >-
         ${{ env.CHAT_NATURAL_TRIGGER_DECISION_BASE_URL || env.OPENAI_BASE_URL ||
         'https://api.deepseek.com/v1' }}
-      decisionApiKey: ${{ env.CHAT_NATURAL_TRIGGER_DECISION_API_KEY || env.OPENAI_API_KEY || '' }}
+      decisionApiKey: >-
+        ${{ env.CHAT_NATURAL_TRIGGER_DECISION_API_KEY || env.OPENAI_API_KEY ||
+        '' }}
       decisionModel: ${{ env.CHAT_NATURAL_TRIGGER_DECISION_MODEL || env.OPENAI_MODEL || '' }}
       decisionTimeoutMs: ${{ +env.CHAT_NATURAL_TRIGGER_DECISION_TIMEOUT_MS || 4000 }}
       decisionMinConfidence: ${{ +env.CHAT_NATURAL_TRIGGER_DECISION_MIN_CONFIDENCE || 0.62 }}
@@ -98,13 +100,13 @@ plugins:
       defaultPreset: sakiko
       defaultChatMode: plugin
       defaultModel: >-
-        ${{
-        env.CHATLUNA_DEFAULT_MODEL || (env.OPENAI_MODEL && env.OPENAI_MODEL.includes('/') ?
-        env.OPENAI_MODEL : 'deepseek/' + (env.OPENAI_MODEL || 'deepseek-chat')) }}
+        ${{ env.CHATLUNA_DEFAULT_MODEL || (env.OPENAI_MODEL &&
+        env.OPENAI_MODEL.includes('/') ? env.OPENAI_MODEL : 'deepseek/' +
+        (env.OPENAI_MODEL || 'deepseek-chat')) }}
       defaultEmbeddings: >-
-        ${{ !env.CHATLUNA_DEFAULT_EMBEDDINGS || env.CHATLUNA_DEFAULT_EMBEDDINGS === '无' ||
-        env.CHATLUNA_DEFAULT_EMBEDDINGS === 'deepseek/deepseek-embedding' ? '无' :
-        env.CHATLUNA_DEFAULT_EMBEDDINGS }}
+        ${{ !env.CHATLUNA_DEFAULT_EMBEDDINGS || env.CHATLUNA_DEFAULT_EMBEDDINGS
+        === '无' || env.CHATLUNA_DEFAULT_EMBEDDINGS ===
+        'deepseek/deepseek-embedding' ? '无' : env.CHATLUNA_DEFAULT_EMBEDDINGS }}
       defaultVectorStore: ${{ env.CHATLUNA_DEFAULT_VECTOR_STORE || 'luna-vdb' }}
     chatluna-deepseek-adapter:0o3zho:
       apiKeys:

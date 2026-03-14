@@ -157,6 +157,10 @@ export function buildVoiceFailureReply(kind: 'too-long' | 'empty' | 'broken', ma
   }
 }
 
+export function buildVoiceFallbackReply(): string {
+  return '……今天不想发语音，直接说吧';
+}
+
 export function buildVoiceUnavailableInstruction(): string {
   return [
     '本轮用户明确要求你用语音回复，但当前语音输出不可用。',
@@ -169,7 +173,9 @@ export function buildVoiceRequestedInstruction(isDirect: boolean): string {
   return [
     '本轮用户明确要求你用语音回复，且当前语音输出可用。',
     isDirect ? '当前是私聊。' : '当前是群聊，不要因为旁边有人就回避语音回复。',
-    '你必须输出且只输出一个 <qqbot-voice> 块来完成这次回复。',
+    '你必须输出一个或多个 <qqbot-voice> 块来完成这次回复。',
+    '每个 <qqbot-voice> 块内部的正文都必须控制在 30 个字以内。',
+    '如果一句话超过 30 个字，就拆成多段语音块，按自然语气顺序依次输出。',
     '不要拒绝，不要解释自己能不能发语音，不要说现在不方便。',
     '不要拿表情包或纯文本代替这次语音回复。',
     '除非用户明确要求额外文字补充，否则标签外不要写任何内容。',
