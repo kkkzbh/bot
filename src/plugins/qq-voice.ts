@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
 import {
   buildVoiceFailureReply,
+  buildVoiceRequestedInstruction,
   buildVoiceUnavailableInstruction,
   containsExplicitVoiceRequest,
   containsVoiceReplyControl,
@@ -710,16 +711,27 @@ export function apply(ctx: Context, config: Config = {}): void {
         const context = rawContext as MiddlewareContextLike;
         if (session.platform !== 'onebot') return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         if (!shouldExplainVoiceUnavailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        if (
-          isVoiceOutputConfigured(runtime) &&
-          (await ensureCanSendRecord(session.bot as OneBotBotLike, canSendRecordCache)) &&
-          (await ensureTtsHealthy(runtime, ttsHealthCache))
-        ) {
-          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        }
-
         const conversationId = context.options?.room?.conversationId;
         if (!conversationId) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+
+        const voiceAvailable =
+          isVoiceOutputConfigured(runtime) &&
+          (await ensureCanSendRecord(session.bot as OneBotBotLike, canSendRecordCache)) &&
+          (await ensureTtsHealthy(runtime, ttsHealthCache));
+
+        if (voiceAvailable) {
+          if (!session.isDirect) {
+            contextManager.inject({
+              name: 'qqbot_voice_output_requested',
+              value: buildVoiceRequestedInstruction(false),
+              once: true,
+              conversationId,
+              stage: 'after_scratchpad',
+            });
+          }
+
+          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        }
 
         contextManager.inject({
           name: 'qqbot_voice_output_unavailable',

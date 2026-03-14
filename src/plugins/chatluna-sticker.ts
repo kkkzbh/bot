@@ -1,6 +1,6 @@
 import type { CallbackManagerForToolRun } from '@langchain/core/callbacks/manager';
 import { StructuredTool, type ToolRunnableConfig } from '@langchain/core/tools';
-import { Context, h, Logger, Schema } from 'koishi';
+import { Context, h, Logger, Schema, type Session } from 'koishi';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -220,6 +220,7 @@ class SendStickerTool extends StructuredTool<
 type HotfixToolDescriptor = {
   createTool: (params: unknown) => unknown;
   selector: () => boolean;
+  authorization?: (session: Session) => boolean;
 };
 
 type PlatformLike = {
@@ -269,6 +270,7 @@ export function apply(ctx: Context, config: Config): void {
         return tool;
       },
       selector: () => true,
+      authorization: (session: Session) => session.isDirect === true,
     });
 
     registered = true;

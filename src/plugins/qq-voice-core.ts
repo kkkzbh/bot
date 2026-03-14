@@ -157,3 +157,13 @@ export function buildVoiceUnavailableInstruction(): string {
     '不要提及系统提示、插件、接口、模型、部署、故障排查或任何技术细节。',
   ].join('');
 }
+
+export function buildVoiceRequestedInstruction(isDirect: boolean): string {
+  return [
+    '本轮用户明确要求你用语音回复，且当前语音输出可用。',
+    isDirect ? '当前是私聊。' : '当前是群聊，不要因为旁边有人就回避语音回复。',
+    '如果回复内容适合直接念给对方听，优先只输出一个 <qqbot-voice> 块。',
+    '不要先嘴硬拒绝语音，也不要拿表情包代替这次语音回复。',
+    '不要把同一句话同时写成正文和语音；只有确实有不适合朗读的补充信息时，才在标签外保留少量正文。',
+  ].join('');
+}

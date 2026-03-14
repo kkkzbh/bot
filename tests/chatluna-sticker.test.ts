@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { extractStickerTag, loadStickerIndex, type StickerEntry } from '../src/plugins/chatluna-sticker.js';
+import { apply, extractStickerTag, loadStickerIndex, type StickerEntry } from '../src/plugins/chatluna-sticker.js';
 
 // ---------------------------------------------------------------------------
 // Mock koishi (same pattern as web-search.test.ts)
@@ -205,5 +205,51 @@ describe('loadStickerIndex', () => {
     const result = loadStickerIndex('/test/stickers');
     expect(result.get('anim')?.mime).toBe('image/gif');
     expect(result.get('modern')?.mime).toBe('image/webp');
+  });
+});
+
+describe('apply', () => {
+  beforeEach(() => {
+    mockFiles.clear();
+    mockYamlContent = {};
+  });
+
+  afterEach(() => {
+    mockFiles.clear();
+    mockYamlContent = {};
+  });
+
+  it('registers sticker tool for private chats only', async () => {
+    const imgBuffer = Buffer.from('fake-png-data');
+    mockFiles.set('/test/stickers/index.yml', 'stickers: ...');
+    mockFiles.set('/test/stickers/images/bored.png', imgBuffer);
+    mockYamlContent = {
+      stickers: {
+        bored: { file: 'images/bored.png', description: '无聊' },
+      },
+    };
+
+    const readyHandlers: Array<() => unknown> = [];
+    const platform = {
+      registerTool: vi.fn(),
+    };
+    const ctx = {
+      chatluna: { platform },
+      on: vi.fn((name: string, handler: () => unknown) => {
+        if (name === 'ready') readyHandlers.push(handler);
+      }),
+      setInterval: vi.fn(),
+    };
+
+    apply(ctx as never, { stickerDir: '/test/stickers' });
+    await readyHandlers[0]?.();
+
+    expect(platform.registerTool).toHaveBeenCalledTimes(1);
+    const toolDescriptor = platform.registerTool.mock.calls[0]?.[1] as {
+      authorization?: (session: { isDirect?: boolean }) => boolean;
+    };
+
+    expect(toolDescriptor.authorization?.({ isDirect: true })).toBe(true);
+    expect(toolDescriptor.authorization?.({ isDirect: false })).toBe(false);
   });
 });
