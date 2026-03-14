@@ -149,7 +149,7 @@ function createHarness(overrides: {
     asrBaseUrl: 'http://127.0.0.1:8081',
     ttsBaseUrl: 'http://127.0.0.1:8082',
     inputMaxSeconds: 60,
-    outputMaxChars: 80,
+    outputMaxChars: 120,
     transcribeTimeoutMs: 30_000,
     synthTimeoutMs: 90_000,
     ...overrides.pluginConfig,

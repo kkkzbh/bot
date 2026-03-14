@@ -55,7 +55,7 @@ export const Config: Schema<Config> = Schema.object({
   ttsBaseUrl: Schema.string().role('link').description('TTS HTTP 服务地址（默认复用 QQ_VOICE_TTS_BASE_URL）。'),
   ttsApiKey: Schema.string().role('secret').description('TTS HTTP 服务鉴权 token。'),
   inputMaxSeconds: Schema.natural().default(60).description('单条入站语音最大时长（秒）。'),
-  outputMaxChars: Schema.natural().default(80).description('单条语音回复最大字符数。'),
+  outputMaxChars: Schema.natural().default(120).description('单条语音回复最大字符数（默认适配约 30-60 秒语速）。'),
   transcribeTimeoutMs: Schema.natural().role('time').default(30000).description('ASR 请求超时（毫秒）。'),
   synthTimeoutMs: Schema.natural().role('time').default(90000).description('TTS 请求超时（毫秒）。'),
 });
@@ -171,7 +171,7 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
     ttsBaseUrl: normalizeBaseUrl(config.ttsBaseUrl ?? process.env.QQ_VOICE_TTS_BASE_URL ?? 'http://127.0.0.1:8082'),
     ttsApiKey: config.ttsApiKey ?? process.env.QQ_VOICE_TTS_API_KEY ?? '',
     inputMaxSeconds: clampNatural(config.inputMaxSeconds ?? process.env.QQ_VOICE_INPUT_MAX_SECONDS, 60),
-    outputMaxChars: clampNatural(config.outputMaxChars ?? process.env.QQ_VOICE_OUTPUT_MAX_CHARS, 80),
+    outputMaxChars: clampNatural(config.outputMaxChars ?? process.env.QQ_VOICE_OUTPUT_MAX_CHARS, 120),
     transcribeTimeoutMs: clampNatural(
       config.transcribeTimeoutMs ?? process.env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS,
       30_000,

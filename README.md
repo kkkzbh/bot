@@ -285,7 +285,7 @@ systemctl --user enable --now qqbot-voice-tts.service
 - `QQ_VOICE_ASR_BASE_URL` / `QQ_VOICE_ASR_API_KEY`：Koishi 访问本机 ASR 服务的地址与 token。
 - `QQ_VOICE_TTS_BASE_URL` / `QQ_VOICE_TTS_API_KEY`：Koishi 访问笔记本 Tailscale TTS 网关的地址与 token。
 - `QQ_VOICE_INPUT_MAX_SECONDS`：单条入站语音最大时长（默认 `60` 秒）。
-- `QQ_VOICE_OUTPUT_MAX_CHARS`：单条语音回复最大文本长度（默认 `80` 个汉字）。
+- `QQ_VOICE_OUTPUT_MAX_CHARS`：单条语音回复最大文本长度（默认 `120` 个汉字，按当前语速大致对应约 `30-60` 秒）。
 - `QQ_VOICE_TRANSCRIBE_TIMEOUT_MS`：ASR 请求超时（默认 `45000` 毫秒）。
 - `QQ_VOICE_SYNTH_TIMEOUT_MS`：TTS 请求超时（默认 `90000` 毫秒）。
 - Server compose env:
