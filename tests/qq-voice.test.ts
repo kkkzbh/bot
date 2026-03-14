@@ -102,6 +102,7 @@ function createChainBuilder(store: Map<string, ChainMiddleware>) {
 
 function createHarness(overrides: {
   canSendRecord?: boolean;
+  canSendRecordImpl?: () => Promise<boolean>;
   pluginConfig?: Record<string, unknown>;
 } = {}) {
   const middlewares: Middleware[] = [];
@@ -112,7 +113,11 @@ function createHarness(overrides: {
     platform: 'onebot',
     selfId: 'bot-1',
     internal: {
-      canSendRecord: vi.fn(async () => overrides.canSendRecord ?? true),
+      _request: vi.fn(async () => ({ retcode: 0, data: { yes: true } })),
+      canSendRecord: vi.fn(async () => {
+        if (overrides.canSendRecordImpl) return overrides.canSendRecordImpl();
+        return overrides.canSendRecord ?? true;
+      }),
       getRecord: vi.fn(async (file: string) => ({ file })),
     },
     sendMessage: vi.fn(async () => ['msg-id']),
@@ -344,6 +349,41 @@ describe('qq voice plugin', () => {
       once: true,
       stage: 'after_scratchpad',
     });
+  });
+
+  it('retries canSendRecord after early ready-time probe failure', async () => {
+    let attempt = 0;
+    const { ready, beforeSend, bot } = createHarness({
+      canSendRecordImpl: async () => {
+        attempt += 1;
+        if (attempt === 1) {
+          throw new Error('this._request is not a function');
+        }
+        return true;
+      },
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz' && (init?.method === 'GET' || !init?.method)) {
+        return new Response('ok', { status: 200 });
+      }
+      if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
+        return new Response(Uint8Array.from([82, 73, 70, 70]), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await ready();
+    const session = createSession(bot, {
+      content: '普通文本<qqbot-voice>附带语音</qqbot-voice>',
+    });
+
+    await beforeSend(session, {});
+    const calls = bot.sendMessage.mock.calls as Array<any[]>;
+    expect(bot.internal.canSendRecord).toHaveBeenCalledTimes(2);
+    expect(calls).toHaveLength(2);
+    expect(String(calls[1]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
   });
 
   it('degrades to text-only when record sending is unavailable', async () => {

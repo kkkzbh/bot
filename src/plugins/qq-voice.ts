@@ -86,6 +86,7 @@ type SessionWithVoiceState = Session & {
 };
 
 type OneBotInternalLike = {
+  _request?: (action: string, params?: Record<string, unknown>) => Promise<unknown>;
   canSendRecord?: () => Promise<boolean>;
   getRecord?: (file: string, format: 'wav', fullPath?: boolean) => Promise<{ file?: string }>;
 };
@@ -438,12 +439,18 @@ async function ensureCanSendRecord(
     return capabilityCache.get(cacheKey) ?? false;
   }
 
+  if (typeof bot.internal?._request !== 'function') {
+    capabilityCache.delete(cacheKey);
+    return false;
+  }
+
   let result = false;
   try {
     result = (await bot.internal?.canSendRecord?.()) ?? false;
   } catch (error) {
     logger.warn('canSendRecord failed for %s: %s', cacheKey, (error as Error).message);
-    result = false;
+    capabilityCache.delete(cacheKey);
+    return false;
   }
 
   capabilityCache.set(cacheKey, result);
