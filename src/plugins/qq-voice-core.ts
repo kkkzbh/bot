@@ -32,7 +32,6 @@ const EXPLICIT_VOICE_REQUEST_PATTERNS = [
   /想听你(?:说|讲|念|读)/,
 ];
 const WHITESPACE_PATTERN = /\s+/g;
-const VOICE_DEDUP_NOISE_PATTERN = /[\s\p{P}\p{S}\p{M}]+/gu;
 
 export interface IncomingVoiceElement {
   src?: string;
@@ -104,33 +103,6 @@ export function parseVoiceReplyControl(message: unknown): ParsedVoiceReplyContro
     voiceText: blocks.find(Boolean) ?? null,
     voiceTagCount: blocks.length,
   };
-}
-
-function buildVoiceDedupKey(text: string): string {
-  return text.normalize('NFKC').replace(/\r\n?/g, '\n').replace(VOICE_DEDUP_NOISE_PATTERN, '').trim();
-}
-
-export function removeDuplicatedVoiceText(text: string, voiceText: string | null): string {
-  const voice = voiceText?.trim();
-  if (!voice) return text.trim();
-
-  const voiceKey = buildVoiceDedupKey(voice);
-  if (!voiceKey) return text.trim();
-
-  const lines = text
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (!lines.length) return '';
-  if (buildVoiceDedupKey(lines.join('\n')) === voiceKey) return '';
-
-  return lines
-    .filter((line) => buildVoiceDedupKey(line) !== voiceKey)
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 export function extractFirstIncomingVoice(content: string): IncomingVoiceElement | null {

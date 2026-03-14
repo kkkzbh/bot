@@ -80,7 +80,6 @@ import {
   normalizeVoiceSynthesisText,
   parseVoiceReplyControl,
   pickVoiceStyle,
-  removeDuplicatedVoiceText,
 } from '../src/plugins/qq-voice-core.js';
 
 describe('qq voice core', () => {
@@ -156,13 +155,6 @@ describe('qq voice core', () => {
       voiceText: '晚安',
       voiceTagCount: 1,
     });
-  });
-
-  it('removes text lines that only repeat the voice payload', () => {
-    expect(removeDuplicatedVoiceText('好的，再说一句。', '好的 再说一句')).toBe('');
-    expect(removeDuplicatedVoiceText('好的 再说一句♪', '好的，再说一句。')).toBe('');
-    expect(removeDuplicatedVoiceText('前一句\n晚安。', '晚安')).toBe('前一句');
-    expect(removeDuplicatedVoiceText('前一句', '晚安')).toBe('前一句');
   });
 
   it('detects explicit voice request and chooses negative voice style', () => {

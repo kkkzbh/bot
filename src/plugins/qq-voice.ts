@@ -11,7 +11,6 @@ import {
   normalizeVoiceSynthesisText,
   parseVoiceReplyControl,
   pickVoiceStyle,
-  removeDuplicatedVoiceText,
 } from './qq-voice-core.js';
 import {
   createBypassLineSplitOptions,
@@ -526,7 +525,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (!containsVoiceReplyControl(session.content)) return;
 
     const parsed = parseVoiceReplyControl(session.content);
-    const normalized = normalizeOutboundMessage(removeDuplicatedVoiceText(parsed.text, parsed.voiceText));
+    const normalized = normalizeOutboundMessage(parsed.text);
     const bot = session.bot as OneBotBotLike;
     const strandKey = resolveSessionStrandKey(session);
     const sendTask = async () => {
