@@ -30,6 +30,12 @@ const EXPLICIT_VOICE_REQUEST_PATTERNS = [
   /直接语音/,
   /想听你(?:说|讲|念|读)/,
 ];
+const NEGATED_VOICE_REQUEST_PATTERNS = [
+  /(?:不要|别|不用|不必|先别)(?:发|回|用|录)?(?:一条|个|段)?语音/,
+  /(?:不要|别|不用|不必|先别)用语音(?:回|回复|说|讲|读|念)/,
+  /(?:不要|别|不用|不必|先别)语音(?:回|回复|说|讲|读|念)/,
+  /(?:不要|别|不用|不必|先别)(?:说|念|读)给我听/,
+];
 const WHITESPACE_PATTERN = /\s+/g;
 
 export interface IncomingVoiceElement {
@@ -126,6 +132,7 @@ export function mergeVoiceInputText(originalText: string, transcript: string): s
 export function containsExplicitVoiceRequest(text: string): boolean {
   const normalized = text.replace(WHITESPACE_PATTERN, '');
   if (!normalized) return false;
+  if (NEGATED_VOICE_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized))) return false;
   return EXPLICIT_VOICE_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 

@@ -161,7 +161,11 @@ describe('qq voice core', () => {
 
   it('detects explicit voice request and chooses negative voice style', () => {
     expect(containsExplicitVoiceRequest('请发一条语音给我听')).toBe(true);
+    expect(containsExplicitVoiceRequest('请用语音回我一句晚安')).toBe(true);
     expect(containsExplicitVoiceRequest('普通闲聊一下')).toBe(false);
+    expect(containsExplicitVoiceRequest('请不要发语音')).toBe(false);
+    expect(containsExplicitVoiceRequest('别用语音回复我')).toBe(false);
+    expect(containsExplicitVoiceRequest('不要说给我听，直接打字')).toBe(false);
     expect(pickVoiceStyle('……与你无关')).toBe('black');
     expect(pickVoiceStyle('晚安吧')).toBe('white');
   });
