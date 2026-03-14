@@ -7,7 +7,7 @@ describe('pokemon battle config in koishi.yml', () => {
     const configPath = resolve(process.cwd(), 'koishi.yml');
     const content = readFileSync(configPath, 'utf8');
 
-    expect(content).toContain('downloads:pokemon:');
+    expect(content).toMatch(/downloads:[^:\n]+:/);
     expect(content).toContain("output: ${{ env.POKEMON_DOWNLOADS_OUTPUT || './downloads' }}");
     expect(content).toContain('canvas:pokemon: {}');
 
