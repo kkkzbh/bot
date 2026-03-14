@@ -75,13 +75,12 @@ podman compose pull ollama pmhq llbot
 podman compose up -d --build
 ```
 
-Official compose mode uses five services:
+Official compose mode uses four services:
 
 - `ollama`: local embedding service for ChatLuna long-memory (`nomic-embed-text:latest` by default)
 - `pmhq`: QQ client runtime and login session
 - `llbot`: OneBot + WebUI
 - `voice-asr`: `faster-whisper small/int8 + ffmpeg` HTTP service for QQ voice transcription
-- `voice-tts`: GPT-SoVITS `v2ProPlus` CPU HTTP gateway for optional QQ voice replies
 - Compose defaults to fully-qualified images (`docker.io/linyuchen/...`) to avoid Fedora short-name prompt issues.
 
 Watch login logs (QR code / login progress):
@@ -105,26 +104,70 @@ serve on `11434` and pre-pull the configured embedding model on startup.
 `keyring = false` to avoid rootless `runc` startup failures caused by exhausted
 session key quotas on the host.
 
-### 4.1 QQ voice services (server-local CPU inference)
+### 4.1 QQ voice services (server ASR + laptop TTS over Tailscale)
 
-- Koishi talks to the bundled voice services over loopback by default:
+- The server compose stack keeps only ASR on loopback:
   - `QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161`
-  - `QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162`
-- Voice model assets are intentionally kept under `./data/voice/**` so deploy rsync does not overwrite them.
-- Expected server-local asset paths:
-  - `./data/voice/asr/cache/` for Whisper cache
-  - `./data/voice/tts/models/sakiko_v2pp-e15.ckpt`
-  - `./data/voice/tts/models/sakiko_v2pp_e8_s520.pth`
-  - `./data/voice/tts/references/white_sakiko.wav`
-  - `./data/voice/tts/references/black_sakiko.wav`
-  - `./data/voice/tts/pretrained_models/chinese-roberta-wwm-ext-large`
-  - `./data/voice/tts/pretrained_models/chinese-hubert-base`
-- Local source mapping confirmed from `/home/kkkzbh/data/下载/DSakiko2.6/`:
-  - custom weights: `reference_audio/sakiko/GPT-SoVITS_models/`
-  - reference audio: `reference_audio/sakiko/white_sakiko.wav` and `reference_audio/sakiko/black_sakiko.wav`
-  - reference text: `reference_audio/sakiko/reference_text_white_sakiko.txt` and `reference_audio/sakiko/reference_text_black_sakiko.txt`
-  - pretrained base models: `GPT_SoVITS/pretrained_models/`
-- First local build is heavier than the existing stack because `voice-asr` / `voice-tts` are built from local Dockerfiles.
+  - `./data/voice/asr/cache/` stores the Whisper cache on the server
+- Optional voice replies now come from your laptop over Tailscale:
+  - set `QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162` in the server `.env`
+  - keep `QQ_VOICE_TTS_API_KEY` identical on the server and in the laptop-local TTS env file
+- The laptop-local runtime now lives entirely under this repo:
+  - upstream wrapper code: `/home/kkkzbh/code/qqbot/.runtime/gpt-sovits-upstream`
+  - copied model assets: `/home/kkkzbh/code/qqbot/data/voice/tts-local`
+- This repository ships the laptop-local TTS templates:
+  - `config/voice-tts.local.example`
+  - `config/systemd/qqbot-voice-tts.service.example`
+  - `scripts/run-voice-tts-local.sh`
+  - `scripts/setup-voice-tts-local-runtime.sh`
+
+### 4.2 Start laptop-local TTS gateway
+
+1. Copy `config/voice-tts.local.example` to `config/voice-tts.local.env`.
+   Keep `VOICE_TTS_PROMPT_LANG=all_ja` for the bundled Sakiko reference audio and `VOICE_TTS_TEXT_LANG=all_zh` for Chinese bot replies unless you intentionally replace the reference set.
+2. Populate the repo-local TTS runtime and copied assets:
+
+```bash
+cd /home/kkkzbh/code/qqbot
+scripts/setup-voice-tts-local-runtime.sh \
+  --source-pretrained-root /path/to/pretrained_models \
+  --source-model-root /path/to/GPT-SoVITS_models \
+  --source-reference-root /path/to/reference_audio/sakiko
+```
+
+3. Create a dedicated virtual environment for the laptop-local TTS gateway:
+
+```bash
+cd /home/kkkzbh/code/qqbot
+uv venv --python 3.12 .venv-voice-tts
+uv pip install --python .venv-voice-tts/bin/python --index-url https://download.pytorch.org/whl/cu124 \
+  torch==2.5.1 torchaudio==2.5.1
+```
+
+4. Install the gateway and GPT-SoVITS deps into that interpreter:
+
+```bash
+uv pip install --python /home/kkkzbh/code/qqbot/.venv-voice-tts/bin/python \
+  -r /home/kkkzbh/code/qqbot/docker/voice-tts/requirements-gateway.txt \
+  -r /home/kkkzbh/code/qqbot/docker/voice-tts/requirements-upstream.txt
+```
+
+5. Smoke test the laptop-local gateway before enabling systemd:
+
+```bash
+QQBOT_VOICE_TTS_ENV_FILE=/home/kkkzbh/code/qqbot/config/voice-tts.local.env \
+  /home/kkkzbh/code/qqbot/scripts/run-voice-tts-local.sh
+```
+
+6. Install the user unit after the manual smoke test passes:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp /home/kkkzbh/code/qqbot/config/systemd/qqbot-voice-tts.service.example \
+  ~/.config/systemd/user/qqbot-voice-tts.service
+systemctl --user daemon-reload
+systemctl --user enable --now qqbot-voice-tts.service
+```
 
 ## 5. Trigger contract
 
@@ -240,18 +283,16 @@ session key quotas on the host.
 - `QQ_VOICE_INPUT_ENABLED`：是否允许 QQ 语音转写输入（默认 `true`）。
 - `QQ_VOICE_OUTPUT_ENABLED`：是否允许可选语音回复（默认 `true`）。
 - `QQ_VOICE_ASR_BASE_URL` / `QQ_VOICE_ASR_API_KEY`：Koishi 访问本机 ASR 服务的地址与 token。
-- `QQ_VOICE_TTS_BASE_URL` / `QQ_VOICE_TTS_API_KEY`：Koishi 访问本机 TTS 服务的地址与 token。
+- `QQ_VOICE_TTS_BASE_URL` / `QQ_VOICE_TTS_API_KEY`：Koishi 访问笔记本 Tailscale TTS 网关的地址与 token。
 - `QQ_VOICE_INPUT_MAX_SECONDS`：单条入站语音最大时长（默认 `60` 秒）。
 - `QQ_VOICE_OUTPUT_MAX_CHARS`：单条语音回复最大文本长度（默认 `80` 个汉字）。
 - `QQ_VOICE_TRANSCRIBE_TIMEOUT_MS`：ASR 请求超时（默认 `45000` 毫秒）。
 - `QQ_VOICE_SYNTH_TIMEOUT_MS`：TTS 请求超时（默认 `90000` 毫秒）。
-- Compose service env:
+- Server compose env:
   - `VOICE_ASR_PORT` / `VOICE_ASR_MODEL` / `VOICE_ASR_COMPUTE_TYPE`
-  - `VOICE_TTS_PORT` / `VOICE_TTS_VERSION`
-  - `VOICE_TTS_GPT_WEIGHTS` / `VOICE_TTS_SOVITS_WEIGHTS`
-  - `VOICE_TTS_BERT_BASE` / `VOICE_TTS_HUBERT_BASE`
-  - `VOICE_TTS_REF_WHITE` / `VOICE_TTS_REF_BLACK`
-  - `VOICE_TTS_PROMPT_TEXT_WHITE` / `VOICE_TTS_PROMPT_TEXT_BLACK`
+- Laptop-local TTS env:
+  - see `config/voice-tts.local.example`
+  - key knobs are `VOICE_TTS_PYTHON_BIN`, `VOICE_TTS_HOST`, `VOICE_TTS_DEVICE`, `VOICE_TTS_IS_HALF`, `VOICE_TTS_UPSTREAM_ROOT`, `VOICE_TTS_PRETRAINED_ROOT`, `VOICE_TTS_MODEL_ROOT`, and `VOICE_TTS_REFERENCE_ROOT`
 - Quick rollback:
   - set `QQ_VOICE_INPUT_ENABLED=false` and/or `QQ_VOICE_OUTPUT_ENABLED=false`, then restart `qqbot.target`.
 
@@ -320,9 +361,12 @@ pnpm build
   - `chatluna.*`：确认账号 authority >= `CHATLUNA_COMMAND_AUTHORITY`。
   - `task.*`：若 `TASK_AUTOMATION_PERMISSION=authority3`，确认账号 authority >= 3。
 - QQ 语音不可用：
-  - 确认 `voice-asr` / `voice-tts` 容器已启动并健康：`podman compose ps`
+  - 确认服务器 `voice-asr` 容器已启动并健康：`podman compose ps`
+  - 确认笔记本 `qqbot-voice-tts.service` 已启动：`systemctl --user status qqbot-voice-tts.service`
+  - 确认笔记本 TTS 可以在 tailnet 内访问：`curl -H "Authorization: Bearer $QQ_VOICE_TTS_API_KEY" http://<laptop-tailnet-host>:5162/healthz`
   - 确认 `QQ_VOICE_*` 地址与 token 和 `.env` 一致
-  - 确认 `./data/voice/tts/**` 下模型、参考音频、预训练底模已就位
+  - 确认 `config/voice-tts.local.env` 中仓库内 `data/voice/tts-local/**` 路径有效
+  - 若声音几乎无声，先检查 `VOICE_TTS_PROMPT_LANG` 是否与参考音频一致；当前仓库内 Sakiko 参考音频应为 `all_ja`
   - 只想回退文本时，直接关闭 `QQ_VOICE_INPUT_ENABLED` 或 `QQ_VOICE_OUTPUT_ENABLED`
 
 ## 16. Run as `systemd --user` (recommended)
@@ -383,6 +427,12 @@ Follow Koishi logs:
 journalctl --user -u qqbot-koishi.service -f
 ```
 
+Follow laptop-local TTS logs:
+
+```bash
+journalctl --user -u qqbot-voice-tts.service -f
+```
+
 Follow container login logs:
 
 ```bash
@@ -411,7 +461,8 @@ Behavior:
 - `CI` runs on every `push` / `pull_request` (`pnpm typecheck`, `pnpm test`, `pnpm build`).
 - `Deploy` runs on `push` to `main` (or manual `workflow_dispatch`).
 - `Deploy` SSHes to your server, `rsync`s project files, then runs `pnpm install`, `pnpm build`, and restarts `qqbot.target`.
-- The generated `qqbot-stack.service` now runs `podman-compose up -d --build`, so local voice service images are rebuilt on deploy together with the rest of the stack.
+- The generated `qqbot-stack.service` now runs `podman-compose up -d --build`, so server-local images (including `voice-asr`) are rebuilt on deploy together with the rest of the stack.
+- Laptop-local `qqbot-voice-tts.service` is not managed by GitHub Actions and must be updated separately on your own machine.
 
 ### 18.1 GitHub Actions secrets (required)
 

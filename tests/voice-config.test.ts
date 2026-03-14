@@ -22,11 +22,10 @@ describe('qq voice config wiring', () => {
     const content = readFileSync(resolve(process.cwd(), 'compose.yaml'), 'utf8');
 
     expect(content).toContain('voice-asr:');
-    expect(content).toContain('voice-tts:');
     expect(content).toContain('"127.0.0.1:${VOICE_ASR_PORT:-5161}:8080"');
-    expect(content).toContain('"127.0.0.1:${VOICE_TTS_PORT:-5162}:8080"');
     expect(content).toContain('./data/voice/asr:/data/voice/asr:Z');
-    expect(content).toContain('./data/voice/tts:/data/voice/tts:Z');
+    expect(content).not.toContain('voice-tts:');
+    expect(content).not.toContain('"127.0.0.1:${VOICE_TTS_PORT:-5162}:8080"');
   });
 
   it('documents voice env vars in .env.example', () => {
@@ -34,9 +33,32 @@ describe('qq voice config wiring', () => {
 
     expect(content).toContain('QQ_VOICE_ENABLED=true');
     expect(content).toContain('QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161');
-    expect(content).toContain('QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162');
-    expect(content).toContain('VOICE_TTS_GPT_WEIGHTS=/data/voice/tts/models/sakiko_v2pp-e15.ckpt');
-    expect(content).toContain('VOICE_TTS_REF_BLACK=/data/voice/tts/references/black_sakiko.wav');
+    expect(content).toContain('QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162');
+    expect(content).not.toContain('VOICE_TTS_GPT_WEIGHTS=/data/voice/tts/models/sakiko_v2pp-e15.ckpt');
+    expect(content).not.toContain('VOICE_TTS_REF_BLACK=/data/voice/tts/references/black_sakiko.wav');
+  });
+
+  it('ships a laptop-local TTS env template and user service example', () => {
+    const envTemplate = readFileSync(resolve(process.cwd(), 'config/voice-tts.local.example'), 'utf8');
+    const serviceTemplate = readFileSync(
+      resolve(process.cwd(), 'config/systemd/qqbot-voice-tts.service.example'),
+      'utf8',
+    );
+
+    expect(envTemplate).toContain('VOICE_TTS_DEVICE=cuda');
+    expect(envTemplate).toContain('VOICE_TTS_UPSTREAM_ROOT=/home/kkkzbh/code/qqbot/.runtime/gpt-sovits-upstream');
+    expect(envTemplate).toContain(
+      'VOICE_TTS_GPT_WEIGHTS=/home/kkkzbh/code/qqbot/data/voice/tts-local/models/sakiko_v2pp-e15.ckpt',
+    );
+    expect(envTemplate).toContain(
+      'VOICE_TTS_REF_BLACK=/home/kkkzbh/code/qqbot/data/voice/tts-local/references/black_sakiko.wav',
+    );
+    expect(envTemplate).toContain('VOICE_TTS_PROMPT_LANG=all_ja');
+    expect(envTemplate).toContain('VOICE_TTS_TEXT_LANG=all_zh');
+    expect(serviceTemplate).toContain(
+      'Environment=QQBOT_VOICE_TTS_ENV_FILE=/home/kkkzbh/code/qqbot/config/voice-tts.local.env',
+    );
+    expect(serviceTemplate).toContain('ExecStart=/home/kkkzbh/code/qqbot/scripts/run-voice-tts-local.sh');
   });
 
   it('adds qqbot voice tag contract to the sakiko preset', () => {

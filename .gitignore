@@ -1,5 +1,7 @@
 node_modules
 .env
+.venv-voice-tts
+.runtime/
 .pnpm-store
 coverage
 dist
@@ -9,9 +11,11 @@ koishi-runtime.log
 __pycache__/
 *.pyc
 data/llonebot
+data/voice/tts-local/
 data/koishi.db
 data/chathub/presets/*.yml
 !data/chathub/presets/sakiko.yml
+config/voice-tts.local.env
 web/.vitepress/dist
 web/.vitepress/cache
 .codex/

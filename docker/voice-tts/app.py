@@ -11,7 +11,7 @@ from typing import Literal
 
 import httpx
 import yaml
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,13 @@ def env_int(name: str, default: int) -> int:
     return int(raw)
 
 
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 UPSTREAM_ROOT = Path(os.getenv("VOICE_TTS_UPSTREAM_ROOT", "/opt/gpt-sovits"))
 UPSTREAM_API_PATH = UPSTREAM_ROOT / "api_v2.py"
 UPSTREAM_HOST = os.getenv("VOICE_TTS_INTERNAL_HOST", os.getenv("VOICE_TTS_UPSTREAM_HOST", "127.0.0.1"))
@@ -31,7 +38,9 @@ CONFIG_PATH = Path(os.getenv("VOICE_TTS_CONFIG_PATH", "/tmp/tts_infer.yaml"))
 LAUNCH_TIMEOUT_SECONDS = env_int("VOICE_TTS_LAUNCH_TIMEOUT_SECONDS", 180)
 REQUEST_TIMEOUT_SECONDS = env_int("VOICE_TTS_REQUEST_TIMEOUT_SECONDS", 180)
 MAX_TEXT_CHARS = env_int("VOICE_TTS_MAX_TEXT_CHARS", 80)
-TEXT_LANG = os.getenv("VOICE_TTS_TEXT_LANG", "zh")
+RUNTIME_DEVICE = os.getenv("VOICE_TTS_DEVICE", "cpu").strip() or "cpu"
+RUNTIME_IS_HALF = env_bool("VOICE_TTS_IS_HALF", False)
+TEXT_LANG = os.getenv("VOICE_TTS_TEXT_LANG", "all_zh")
 TEXT_SPLIT_METHOD = os.getenv("VOICE_TTS_SPLIT_METHOD", os.getenv("VOICE_TTS_TEXT_SPLIT_METHOD", "cut5"))
 MEDIA_FORMAT = os.getenv("VOICE_TTS_MEDIA_TYPE", os.getenv("VOICE_TTS_MEDIA_FORMAT", "wav"))
 TTS_VERSION = os.getenv("VOICE_TTS_VERSION", "v2ProPlus")
@@ -60,6 +69,29 @@ CNHUBERT_BASE_PATH = Path(
         os.getenv("VOICE_TTS_CNHUBERT_BASE_PATH", str(PRETRAINED_ROOT / "chinese-hubert-base")),
     )
 )
+REFERENCE_AUDIO_LANGUAGE_PATH = Path(
+    os.getenv("VOICE_TTS_REFERENCE_AUDIO_LANGUAGE_PATH", str(REFERENCE_ROOT / "reference_audio_language.txt"))
+)
+REFERENCE_TEXT_WHITE_PATH = Path(
+    os.getenv("VOICE_TTS_PROMPT_TEXT_WHITE_FILE", str(REFERENCE_ROOT / "reference_text_white_sakiko.txt"))
+)
+REFERENCE_TEXT_BLACK_PATH = Path(
+    os.getenv("VOICE_TTS_PROMPT_TEXT_BLACK_FILE", str(REFERENCE_ROOT / "reference_text_black_sakiko.txt"))
+)
+
+REFERENCE_LANGUAGE_MAP = {
+    "1": "all_zh",
+    "2": "en",
+    "3": "all_ja",
+    "4": "all_yue",
+    "5": "all_ko",
+    "6": "zh",
+    "7": "ja",
+    "8": "yue",
+    "9": "ko",
+    "10": "auto",
+    "11": "auto_yue",
+}
 
 
 @dataclass(frozen=True)
@@ -69,8 +101,27 @@ class StyleConfig:
     prompt_lang: str
 
 
+def read_text_if_exists(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def resolve_prompt_lang(*env_names: str) -> str:
+    for env_name in env_names:
+        raw = os.getenv(env_name)
+        if raw and raw.strip():
+            return raw.strip()
+
+    reference_language = read_text_if_exists(REFERENCE_AUDIO_LANGUAGE_PATH)
+    if reference_language:
+        return REFERENCE_LANGUAGE_MAP.get(reference_language, reference_language)
+
+    return "all_ja"
+
+
 def style_config(style: Literal["white", "black"]) -> StyleConfig:
-    prompt_lang = os.getenv("VOICE_TTS_PROMPT_LANG", "zh")
     if style == "black":
         return StyleConfig(
             ref_audio_path=Path(
@@ -79,8 +130,12 @@ def style_config(style: Literal["white", "black"]) -> StyleConfig:
                     os.getenv("VOICE_TTS_BLACK_REF_AUDIO", str(REFERENCE_ROOT / "black_sakiko.wav")),
                 )
             ),
-            prompt_text=os.getenv("VOICE_TTS_PROMPT_TEXT_BLACK", os.getenv("VOICE_TTS_BLACK_PROMPT_TEXT", "")),
-            prompt_lang=prompt_lang,
+            prompt_text=(
+                os.getenv("VOICE_TTS_PROMPT_TEXT_BLACK")
+                or os.getenv("VOICE_TTS_BLACK_PROMPT_TEXT")
+                or read_text_if_exists(REFERENCE_TEXT_BLACK_PATH)
+            ),
+            prompt_lang=resolve_prompt_lang("VOICE_TTS_PROMPT_LANG_BLACK", "VOICE_TTS_BLACK_PROMPT_LANG", "VOICE_TTS_PROMPT_LANG"),
         )
     return StyleConfig(
         ref_audio_path=Path(
@@ -89,8 +144,12 @@ def style_config(style: Literal["white", "black"]) -> StyleConfig:
                 os.getenv("VOICE_TTS_WHITE_REF_AUDIO", str(REFERENCE_ROOT / "white_sakiko.wav")),
             )
         ),
-        prompt_text=os.getenv("VOICE_TTS_PROMPT_TEXT_WHITE", os.getenv("VOICE_TTS_WHITE_PROMPT_TEXT", "")),
-        prompt_lang=prompt_lang,
+        prompt_text=(
+            os.getenv("VOICE_TTS_PROMPT_TEXT_WHITE")
+            or os.getenv("VOICE_TTS_WHITE_PROMPT_TEXT")
+            or read_text_if_exists(REFERENCE_TEXT_WHITE_PATH)
+        ),
+        prompt_lang=resolve_prompt_lang("VOICE_TTS_PROMPT_LANG_WHITE", "VOICE_TTS_WHITE_PROMPT_LANG", "VOICE_TTS_PROMPT_LANG"),
     )
 
 
@@ -135,8 +194,8 @@ def write_upstream_config() -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "custom": {
-            "device": "cpu",
-            "is_half": False,
+            "device": RUNTIME_DEVICE,
+            "is_half": RUNTIME_IS_HALF,
             "version": TTS_VERSION,
             "t2s_weights_path": str(GPT_WEIGHTS_PATH),
             "vits_weights_path": str(SOVITS_WEIGHTS_PATH),
@@ -220,6 +279,16 @@ class SynthesizeRequest(BaseModel):
     format: Literal["wav"] = MEDIA_FORMAT
 
 
+API_KEY = os.getenv("VOICE_TTS_API_KEY", "").strip()
+
+
+def require_api_key(authorization: str | None) -> None:
+    if not API_KEY:
+        return
+    if authorization != f"Bearer {API_KEY}":
+        raise HTTPException(status_code=401, detail="invalid authorization")
+
+
 APP = FastAPI(title="qqbot-voice-tts", version="0.1.0")
 PROCESS = UpstreamProcess()
 SYNTH_LOCK = asyncio.Lock()
@@ -245,6 +314,8 @@ async def healthz() -> Response:
         "upstreamPort": UPSTREAM_PORT,
         "configPath": str(CONFIG_PATH),
         "lastError": PROCESS.last_error,
+        "device": RUNTIME_DEVICE,
+        "isHalf": RUNTIME_IS_HALF,
     }
     if PROCESS.running:
         return JSONResponse(payload)
@@ -252,7 +323,8 @@ async def healthz() -> Response:
 
 
 @APP.post("/synthesize")
-async def synthesize(request: SynthesizeRequest) -> Response:
+async def synthesize(request: SynthesizeRequest, authorization: str | None = Header(default=None)) -> Response:
+    require_api_key(authorization)
     if request.speaker != "sakiko":
         raise HTTPException(status_code=400, detail="unsupported speaker")
     if len(request.text.strip()) > MAX_TEXT_CHARS:

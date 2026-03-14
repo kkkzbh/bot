@@ -99,49 +99,6 @@ services:
       retries: 3
       start_period: 60s
 
-  voice-tts:
-    build:
-      context: ./docker/voice-tts
-    image: qqbot-voice-tts:local
-    container_name: qqbot-voice-tts
-    environment:
-      VOICE_TTS_HOST: 0.0.0.0
-      VOICE_TTS_PORT: 8080
-      VOICE_TTS_INTERNAL_HOST: 127.0.0.1
-      VOICE_TTS_INTERNAL_PORT: 9880
-      VOICE_TTS_API_KEY: ${QQ_VOICE_TTS_API_KEY:-}
-      VOICE_TTS_DATA_DIR: /data/voice/tts
-      VOICE_TTS_CONFIG_PATH: /data/voice/tts/configs/tts_infer.yaml
-      VOICE_TTS_VERSION: ${VOICE_TTS_VERSION:-v2ProPlus}
-      VOICE_TTS_GPT_WEIGHTS: ${VOICE_TTS_GPT_WEIGHTS:-/data/voice/tts/models/sakiko_v2pp-e15.ckpt}
-      VOICE_TTS_SOVITS_WEIGHTS: ${VOICE_TTS_SOVITS_WEIGHTS:-/data/voice/tts/models/sakiko_v2pp_e8_s520.pth}
-      VOICE_TTS_BERT_BASE: ${VOICE_TTS_BERT_BASE:-/data/voice/tts/pretrained_models/chinese-roberta-wwm-ext-large}
-      VOICE_TTS_HUBERT_BASE: ${VOICE_TTS_HUBERT_BASE:-/data/voice/tts/pretrained_models/chinese-hubert-base}
-      VOICE_TTS_REF_WHITE: ${VOICE_TTS_REF_WHITE:-/data/voice/tts/references/white_sakiko.wav}
-      VOICE_TTS_REF_BLACK: ${VOICE_TTS_REF_BLACK:-/data/voice/tts/references/black_sakiko.wav}
-      VOICE_TTS_PROMPT_TEXT_WHITE: ${VOICE_TTS_PROMPT_TEXT_WHITE:-请慢慢说，别着急。}
-      VOICE_TTS_PROMPT_TEXT_BLACK: ${VOICE_TTS_PROMPT_TEXT_BLACK:-我的私事，与您无关。}
-      VOICE_TTS_PROMPT_LANG: ${VOICE_TTS_PROMPT_LANG:-zh}
-      VOICE_TTS_TEXT_LANG: ${VOICE_TTS_TEXT_LANG:-zh}
-      VOICE_TTS_MEDIA_TYPE: ${VOICE_TTS_MEDIA_TYPE:-wav}
-      VOICE_TTS_SPLIT_METHOD: ${VOICE_TTS_SPLIT_METHOD:-cut5}
-      VOICE_TTS_BATCH_SIZE: ${VOICE_TTS_BATCH_SIZE:-1}
-      VOICE_TTS_PARALLEL_INFER: ${VOICE_TTS_PARALLEL_INFER:-false}
-      TZ: ${TZ:-Asia/Shanghai}
-    ports:
-      - "127.0.0.1:${VOICE_TTS_PORT:-5162}:8080"
-    volumes:
-      - ./data/voice/tts:/data/voice/tts:Z
-    networks:
-      - app_network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5).read()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-
 volumes:
   qq_volume:
   ollama_data:

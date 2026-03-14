@@ -6,7 +6,7 @@ import wave
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from faster_whisper import WhisperModel
 
 
@@ -25,6 +25,7 @@ MODEL_CACHE_DIR = os.getenv(
     "VOICE_ASR_MODEL_CACHE_DIR",
     os.getenv("VOICE_ASR_CACHE_DIR", "/data/voice/asr/cache"),
 )
+API_KEY = os.getenv("VOICE_ASR_API_KEY", "").strip()
 MAX_DURATION_SECONDS = int(os.getenv("VOICE_ASR_MAX_SECONDS", "60"))
 BEAM_SIZE = int(os.getenv("VOICE_ASR_BEAM_SIZE", "5"))
 VAD_FILTER = env_bool("VOICE_ASR_VAD_FILTER", True)
@@ -71,6 +72,13 @@ def read_duration_ms(wav_path: Path) -> int:
     return round(frame_count / frame_rate * 1000)
 
 
+def require_api_key(authorization: str | None) -> None:
+    if not API_KEY:
+        return
+    if authorization != f"Bearer {API_KEY}":
+        raise HTTPException(status_code=401, detail="invalid authorization")
+
+
 @APP.get("/healthz")
 async def healthz() -> dict[str, object]:
     return {
@@ -88,7 +96,9 @@ async def healthz() -> dict[str, object]:
 async def transcribe(
     file: UploadFile = File(...),
     language: str | None = Form(default=None),
+    authorization: str | None = Header(default=None),
 ) -> dict[str, object]:
+    require_api_key(authorization)
     suffix = Path(file.filename or "audio.bin").suffix or ".bin"
     with tempfile.TemporaryDirectory(prefix="qqbot-asr-") as temp_dir:
         temp_root = Path(temp_dir)
