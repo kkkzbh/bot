@@ -136,7 +136,7 @@ function createHarness(overrides: {
 }
 
 function createSession(bot: Record<string, any>, overrides: Record<string, unknown> = {}): Record<string, any> {
-  const content = String(overrides.content ?? '');
+  const content = overrides.content ?? '';
   return {
     platform: 'onebot',
     channelId: 'group-100',
@@ -242,6 +242,41 @@ describe('qq voice plugin', () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.[1]).toBe('普通文本附带语音');
     expect(String(calls[1]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
+  });
+
+  it('extracts qqbot voice replies from structured rich-text outbound content', async () => {
+    const { beforeSend, bot } = createHarness();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
+        return new Response(Uint8Array.from([82, 73, 70, 70]), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const session = createSession(bot, {
+      content: [
+        '晚安\n\n',
+        {
+          type: 'p',
+          attrs: {},
+          children: [
+            { type: 'text', attrs: { content: '<qqbot-voice>' }, children: [] },
+            { type: 'text', attrs: { content: '晚安' }, children: [] },
+            { type: 'text', attrs: { content: '</qqbot-voice>' }, children: [] },
+          ],
+        },
+      ],
+    });
+
+    const result = await beforeSend(session, {});
+    const calls = bot.sendMessage.mock.calls as Array<any[]>;
+    expect(result).toBe(true);
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.[1]).toBe('晚安');
+    expect(calls[1]?.[1]).toBe('晚安');
+    expect(String(calls[2]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
   });
 
   it('degrades to text-only when record sending is unavailable', async () => {

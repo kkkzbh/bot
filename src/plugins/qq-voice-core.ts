@@ -47,12 +47,35 @@ export interface ParsedVoiceReplyControl {
 
 export type VoiceStyle = 'white' | 'black';
 
-export function containsVoiceReplyControl(message: string): boolean {
-  return message.includes(QQBOT_VOICE_OPEN_TAG) || message.includes(QQBOT_VOICE_CLOSE_TAG);
+function flattenMessageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map((part) => flattenMessageText(part)).join('');
+  if (!content || typeof content !== 'object') return '';
+
+  const node = content as {
+    type?: string;
+    content?: unknown;
+    attrs?: { content?: unknown };
+    children?: unknown[];
+  };
+
+  const ownText =
+    typeof node.attrs?.content === 'string'
+      ? node.attrs.content
+      : typeof node.content === 'string'
+        ? node.content
+        : '';
+  const childText = Array.isArray(node.children) ? node.children.map((child) => flattenMessageText(child)).join('') : '';
+  return `${ownText}${childText}`;
 }
 
-export function parseVoiceReplyControl(message: string): ParsedVoiceReplyControl {
-  const normalized = message.replace(/\r\n?/g, '\n');
+export function containsVoiceReplyControl(message: unknown): boolean {
+  const flattened = flattenMessageText(message);
+  return flattened.includes(QQBOT_VOICE_OPEN_TAG) || flattened.includes(QQBOT_VOICE_CLOSE_TAG);
+}
+
+export function parseVoiceReplyControl(message: unknown): ParsedVoiceReplyControl {
+  const normalized = flattenMessageText(message).replace(/\r\n?/g, '\n');
   const blocks: string[] = [];
   let text = normalized.replace(/<qqbot-voice>([\s\S]*?)<\/qqbot-voice>/gi, (_matched, inner: string) => {
     const trimmed = inner.trim();

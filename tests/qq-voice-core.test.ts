@@ -111,6 +111,28 @@ describe('qq voice core', () => {
     expect(containsVoiceReplyControl('<qqbot-voice>test</qqbot-voice>')).toBe(true);
   });
 
+  it('parses qqbot voice reply blocks from structured rich-text content', () => {
+    const structured = [
+      '晚安\n\n',
+      {
+        type: 'p',
+        attrs: {},
+        children: [
+          { type: 'text', attrs: { content: '<qqbot-voice>' }, children: [] },
+          { type: 'text', attrs: { content: '晚安' }, children: [] },
+          { type: 'text', attrs: { content: '</qqbot-voice>' }, children: [] },
+        ],
+      },
+    ];
+
+    expect(containsVoiceReplyControl(structured)).toBe(true);
+    expect(parseVoiceReplyControl(structured)).toEqual({
+      text: '晚安\n\n晚安',
+      voiceText: '晚安',
+      voiceTagCount: 1,
+    });
+  });
+
   it('detects explicit voice request and chooses negative voice style', () => {
     expect(containsExplicitVoiceRequest('请发一条语音给我听')).toBe(true);
     expect(containsExplicitVoiceRequest('普通闲聊一下')).toBe(false);
