@@ -273,7 +273,7 @@ describe('qq voice plugin', () => {
     expect(result).toBe(true);
     expect(bot.internal.canSendRecord).toHaveBeenCalledTimes(1);
     expect(calls).toHaveLength(2);
-    expect(calls[0]?.[1]).toBe('普通文本附带语音');
+    expect(calls[0]?.[1]).toBe('普通文本');
     expect(String(calls[1]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
   });
 
@@ -309,9 +309,8 @@ describe('qq voice plugin', () => {
     const result = await beforeSend(session, {});
     const calls = bot.sendMessage.mock.calls as Array<any[]>;
     expect(result).toBe(true);
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.[1]).toBe('晚安');
-    expect(String(calls[1]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
   });
 
   it('injects unavailable hint when explicit voice request is made but TTS is unreachable', async () => {
@@ -383,6 +382,7 @@ describe('qq voice plugin', () => {
     const calls = bot.sendMessage.mock.calls as Array<any[]>;
     expect(bot.internal.canSendRecord).toHaveBeenCalledTimes(2);
     expect(calls).toHaveLength(2);
+    expect(calls[0]?.[1]).toBe('普通文本');
     expect(String(calls[1]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
   });
 
@@ -398,7 +398,31 @@ describe('qq voice plugin', () => {
     await beforeSend(session, {});
     const calls = bot.sendMessage.mock.calls as Array<any[]>;
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.[1]).toBe('普通文本附带语音');
+    expect(calls[0]?.[1]).toBe('普通文本');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('suppresses text when it only repeats the voice payload', async () => {
+    const { beforeSend, bot } = createHarness();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz' && (init?.method === 'GET' || !init?.method)) {
+        return new Response('ok', { status: 200 });
+      }
+      if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
+        return new Response(Uint8Array.from([82, 73, 70, 70]), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const session = createSession(bot, {
+      content: '好的，再说一句。\n<qqbot-voice>好的 再说一句</qqbot-voice>',
+    });
+
+    await beforeSend(session, {});
+    const calls = bot.sendMessage.mock.calls as Array<any[]>;
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
   });
 });

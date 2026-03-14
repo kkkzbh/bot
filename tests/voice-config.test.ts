@@ -67,6 +67,7 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('## 语音附加规则');
     expect(content).toContain('默认只发文本，不要主动使用语音标签');
     expect(content).toContain('一次回复里最多只能出现一个 `<qqbot-voice>` 块');
+    expect(content).toContain('文本和语音不要说重复内容');
   });
 
   it('restarts the full compose stack during deploy instead of a hard-coded subset', () => {

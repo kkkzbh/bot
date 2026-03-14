@@ -80,6 +80,7 @@ import {
   normalizeVoiceSynthesisText,
   parseVoiceReplyControl,
   pickVoiceStyle,
+  removeDuplicatedVoiceText,
 } from '../src/plugins/qq-voice-core.js';
 
 describe('qq voice core', () => {
@@ -104,14 +105,14 @@ describe('qq voice core', () => {
 
   it('parses qqbot voice reply blocks into text plus first voice text', () => {
     expect(parseVoiceReplyControl('外层<qqbot-voice>附带语音</qqbot-voice>结尾')).toEqual({
-      text: '外层附带语音结尾',
+      text: '外层结尾',
       voiceText: '附带语音',
       voiceTagCount: 1,
     });
     expect(containsVoiceReplyControl('<qqbot-voice>test</qqbot-voice>')).toBe(true);
     expect(containsVoiceReplyControl('&lt;qqbot-voice&gt;test&lt;/qqbot-voice&gt;')).toBe(true);
     expect(parseVoiceReplyControl('&lt;qqbot-voice&gt;晚安&lt;/qqbot-voice&gt;')).toEqual({
-      text: '晚安',
+      text: '',
       voiceText: '晚安',
       voiceTagCount: 1,
     });
@@ -141,7 +142,7 @@ describe('qq voice core', () => {
 
   it('keeps inline voice blocks in text but removes standalone voice-only lines', () => {
     expect(parseVoiceReplyControl('普通文本<qqbot-voice>附带语音</qqbot-voice>')).toEqual({
-      text: '普通文本附带语音',
+      text: '普通文本',
       voiceText: '附带语音',
       voiceTagCount: 1,
     });
@@ -151,10 +152,16 @@ describe('qq voice core', () => {
       voiceTagCount: 1,
     });
     expect(parseVoiceReplyControl('<qqbot-voice>晚安</qqbot-voice>')).toEqual({
-      text: '晚安',
+      text: '',
       voiceText: '晚安',
       voiceTagCount: 1,
     });
+  });
+
+  it('removes text lines that only repeat the voice payload', () => {
+    expect(removeDuplicatedVoiceText('好的，再说一句。', '好的 再说一句')).toBe('');
+    expect(removeDuplicatedVoiceText('前一句\n晚安。', '晚安')).toBe('前一句');
+    expect(removeDuplicatedVoiceText('前一句', '晚安')).toBe('前一句');
   });
 
   it('detects explicit voice request and chooses negative voice style', () => {
