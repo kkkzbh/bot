@@ -131,7 +131,26 @@ export function createKeyedStrandRunner(): KeyedStrandRunner {
   };
 }
 
+function resolvePrefixedScope(idLike: string | undefined): string | null {
+  const normalized = idLike?.trim();
+  if (!normalized) return null;
+
+  const matched = normalized.match(/^(private|group):(.+)$/i);
+  if (!matched) return null;
+
+  const scope = matched[1]?.toLowerCase();
+  const id = matched[2]?.trim();
+  if (!scope || !id) return null;
+  return `${scope}:${id}`;
+}
+
 function resolveSessionStrandScope(session: SessionStrandLike): string | null {
+  const channelScope = resolvePrefixedScope(session.channelId);
+  if (channelScope) return channelScope;
+
+  const guildScope = resolvePrefixedScope(session.guildId);
+  if (guildScope) return guildScope;
+
   if (session.isDirect) {
     const privateId = session.channelId?.trim() || session.userId?.trim();
     return privateId ? `private:${privateId}` : null;

@@ -137,6 +137,27 @@ describe('message send utils', () => {
     });
   });
 
+  it('normalizes prefixed private channel ids into a stable strand key even without isDirect', () => {
+    expect(
+      resolveSessionStrandKey({
+        platform: 'onebot',
+        bot: { selfId: 'bot-1' },
+        isDirect: true,
+        channelId: 'private:1405359129',
+        userId: '1405359129',
+      }),
+    ).toBe('onebot:bot-1:private:1405359129');
+
+    expect(
+      resolveSessionStrandKey({
+        platform: 'onebot',
+        bot: { selfId: 'bot-1' },
+        channelId: 'private:1405359129',
+        userId: '1405359129',
+      }),
+    ).toBe('onebot:bot-1:private:1405359129');
+  });
+
   it('keeps qqbot-multiline wrapped conversational text in preserve mode', () => {
     const chatWrapped =
       '<qqbot-multiline>\n春天和秋天啊……\n都挺好的呢\n春天有樱花，天气温暖\n秋天有枫叶，空气清爽\n非要选的话我更喜欢秋天\n</qqbot-multiline>';

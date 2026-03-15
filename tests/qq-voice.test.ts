@@ -415,6 +415,10 @@ describe('qq voice plugin', () => {
     await flushMicrotasks();
 
     const originalSession = createSession(bot, {
+      isDirect: true,
+      channelId: 'private:90000123',
+      guildId: undefined,
+      userId: '90000123',
       state: {
         qqReplyTransport: {
           capabilitySnapshot: {
@@ -440,6 +444,9 @@ describe('qq voice plugin', () => {
     expect(bot.sendMessage.mock.calls).toHaveLength(1);
 
     const clonedSendSession = createSession(bot, {
+      channelId: 'private:90000123',
+      guildId: undefined,
+      userId: '90000123',
       content: '（语音已发送）',
       strippedContent: '（语音已发送）',
       state: {},
@@ -448,6 +455,45 @@ describe('qq voice plugin', () => {
     const suppressed = await beforeSend(clonedSendSession, {});
     expect(suppressed).toBe(true);
     expect(bot.sendMessage.mock.calls).toHaveLength(1);
+  });
+
+  it('reply_compose_with_voice authorization reuses the preloaded snapshot for private sessions even when tool auth sees no isDirect flag', async () => {
+    const { ready, capabilityMiddleware, tools, bot } = createHarness();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === 'http://127.0.0.1:8082/healthz') {
+          return new Response('ok', { status: 200 });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    await ready();
+    await flushMicrotasks();
+
+    const originalSession = createSession(bot, {
+      isDirect: true,
+      channelId: 'private:90000123',
+      guildId: undefined,
+      userId: '90000123',
+      content: '请用语音回我一句晚安',
+      strippedContent: '请用语音回我一句晚安',
+    });
+
+    await capabilityMiddleware?.(originalSession, async () => undefined);
+
+    const clonedSession = createSession(bot, {
+      channelId: 'private:90000123',
+      guildId: undefined,
+      userId: '90000123',
+      content: '请用语音回我一句晚安',
+      strippedContent: '请用语音回我一句晚安',
+      state: {},
+    });
+
+    expect(tools.get('reply_compose_with_voice')?.authorization?.(clonedSession)).toBe(true);
   });
 
   it('reply_compose_with_voice authorization follows the latest capability snapshot', async () => {
