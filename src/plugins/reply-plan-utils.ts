@@ -6,6 +6,7 @@ import {
 } from './message-send-utils.js';
 
 const JSON_FENCE_PATTERN = /```(?:json)?\s*([\s\S]*?)\s*```/i;
+const LEGACY_REPLY_TRANSPORT_TOOL_NAMES = new Set(['reply_compose', 'reply_compose_with_voice']);
 
 const REPLY_PLAN_SCHEMA = z.object({
   segments: z
@@ -82,6 +83,45 @@ export function parseReplyPlanFromModelOutput(raw: unknown): ReplyTransportPlan 
   } catch {
     return null;
   }
+}
+
+export function parseReplyPlanFromLegacyToolCalls(raw: unknown): ReplyTransportPlan | null {
+  let parsed = raw;
+
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!Array.isArray(parsed)) return null;
+
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object') continue;
+    const toolCall = item as { name?: unknown; args?: { segments?: unknown } };
+    if (!LEGACY_REPLY_TRANSPORT_TOOL_NAMES.has(String(toolCall.name ?? ''))) continue;
+
+    const result = REPLY_PLAN_SCHEMA.safeParse({ segments: toolCall.args?.segments });
+    if (!result.success) return null;
+
+    const segments = result.data.segments
+      .map((segment) => {
+        const content = sanitizeStructuredReplySegmentContent(segment.content);
+        if (!content.trim()) return null;
+        return {
+          kind: segment.kind,
+          content,
+        };
+      })
+      .filter(Boolean) as ReplyTransportPlan['segments'];
+
+    if (segments.length < 1) return null;
+    return { segments };
+  }
+
+  return null;
 }
 
 export function renderReplyPlanHistoryText(plan: ReplyTransportPlan): string {

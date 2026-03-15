@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 vi.mock('koishi-plugin-chatluna/chains', () => ({
   ChainMiddlewareRunStatus: { STOP: 1, CONTINUE: 0 },
@@ -105,6 +106,8 @@ function createHarness(overrides: {
   canSendRecordImpl?: () => Promise<boolean>;
   includeInternalRequest?: boolean;
   pluginConfig?: Record<string, unknown>;
+  databaseGetImpl?: (table: string, query: Record<string, unknown>) => Promise<any[]>;
+  databaseUpsertImpl?: (table: string, rows: any[]) => Promise<unknown>;
 } = {}) {
   const middlewares: Middleware[] = [];
   const events = new Map<string, EventHandler[]>();
@@ -113,6 +116,7 @@ function createHarness(overrides: {
 
   const database = {
     get: vi.fn(async (table: string, query: Record<string, unknown>) => {
+      if (overrides.databaseGetImpl) return overrides.databaseGetImpl(table, query);
       if (table === 'chathub_conversation') {
         return [{ id: query.id ?? 'conv-1', latestId: 'msg-ai-1' }];
       }
@@ -134,7 +138,10 @@ function createHarness(overrides: {
       }
       return [];
     }),
-    upsert: vi.fn(async () => undefined),
+    upsert: vi.fn(async (table: string, rows: any[]) => {
+      if (overrides.databaseUpsertImpl) return overrides.databaseUpsertImpl(table, rows);
+      return undefined;
+    }),
   };
 
   const internal: Record<string, any> = {
@@ -226,6 +233,15 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function encodeContent(value: unknown): ArrayBuffer {
+  return Uint8Array.from(gzipSync(Buffer.from(JSON.stringify(value)))).buffer;
+}
+
+function decodeContent(value: unknown): unknown {
+  if (!(value instanceof ArrayBuffer)) return value;
+  return JSON.parse(gunzipSync(Buffer.from(value)).toString('utf8'));
 }
 
 describe('qq voice plugin', () => {
@@ -337,6 +353,112 @@ describe('qq voice plugin', () => {
     expect(injectedPolicy).toContain('voice 段每段不超过 30 个字');
     expect(injectedPolicy).not.toContain('<qqbot-voice>');
     expect(injectedPolicy).not.toContain('reply_compose');
+  });
+
+  it('scrubs legacy reply transport tool history before entering the model', async () => {
+    const humanMessage = {
+      id: 'msg-human-1',
+      role: 'human',
+      content: encodeContent('之前的用户输入'),
+      parent: null,
+      name: null,
+      tool_calls: '{}',
+      tool_call_id: null,
+      additional_kwargs_binary: null,
+      rawId: null,
+      conversation: 'conv-legacy',
+    };
+    const aiLegacyToolCall = {
+      id: 'msg-ai-legacy',
+      role: 'ai',
+      content: encodeContent(''),
+      parent: 'msg-human-1',
+      name: null,
+      tool_calls:
+        '[{"id":"call_1","name":"reply_compose_with_voice","args":{"segments":[{"kind":"voice","content":"晚安。"}]}}]',
+      tool_call_id: null,
+      additional_kwargs_binary: null,
+      rawId: null,
+      conversation: 'conv-legacy',
+    };
+    const toolMessage = {
+      id: 'msg-tool-legacy',
+      role: 'tool',
+      content: encodeContent('reply_compose_with_voice is not a valid tool, try another one.'),
+      parent: 'msg-ai-legacy',
+      name: null,
+      tool_calls: '{}',
+      tool_call_id: 'call_1',
+      additional_kwargs_binary: null,
+      rawId: null,
+      conversation: 'conv-legacy',
+    };
+    const finalAiMessage = {
+      id: 'msg-ai-final',
+      role: 'ai',
+      content: encodeContent('（语音已发送）'),
+      parent: 'msg-tool-legacy',
+      name: null,
+      tool_calls: '[]',
+      tool_call_id: null,
+      additional_kwargs_binary: null,
+      rawId: null,
+      conversation: 'conv-legacy',
+    };
+
+    const { ready, getPolicy, inject, bot, database } = createHarness({
+      databaseGetImpl: async (table: string, query: Record<string, unknown>) => {
+        if (table === 'chathub_conversation') {
+          return [{ id: query.id ?? 'conv-legacy', latestId: 'msg-ai-final' }];
+        }
+        if (table === 'chathub_message' && 'conversation' in query) {
+          return [humanMessage, aiLegacyToolCall, toolMessage, finalAiMessage];
+        }
+        if (table === 'chathub_message' && 'id' in query) {
+          const byId: Record<string, any> = {
+            'msg-human-1': humanMessage,
+            'msg-ai-legacy': aiLegacyToolCall,
+            'msg-tool-legacy': toolMessage,
+            'msg-ai-final': finalAiMessage,
+          };
+          return [byId[String(query.id)]].filter(Boolean);
+        }
+        return [];
+      },
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === 'http://127.0.0.1:8082/healthz') {
+          return new Response('ok', { status: 200 });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    await ready();
+    await flushMicrotasks();
+
+    const policy = getPolicy();
+    const session = createSession(bot, {
+      content: '请用语音回我一句晚安',
+      strippedContent: '请用语音回我一句晚安',
+    });
+
+    await policy?.(session, { options: { room: { conversationId: 'conv-legacy' } } });
+
+    const messageUpsert = database.upsert.mock.calls.find((call: any[]) => call[0] === 'chathub_message');
+    expect(messageUpsert).toBeTruthy();
+    const updatedFinalAi = (messageUpsert?.[1] as Array<Record<string, unknown>>).find((row) => row.id === 'msg-ai-final');
+    expect(updatedFinalAi).toBeTruthy();
+    expect(updatedFinalAi?.parent).toBe('msg-human-1');
+    expect(updatedFinalAi?.tool_calls).toBe('[]');
+    expect(decodeContent(updatedFinalAi?.content)).toBe('晚安。');
+
+    const injectedPolicy = String(inject.mock.calls[0]?.[0]?.value ?? '');
+    expect(injectedPolicy).not.toContain('reply_compose_with_voice');
   });
 
   it('amortizes tts probing across turns and refreshes again on the 12th turn', async () => {
