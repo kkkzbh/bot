@@ -398,7 +398,8 @@ describe('qq voice plugin', () => {
       },
     );
 
-    expect(JSON.parse(result)).toEqual({ status: 'delivered' });
+    expect(result).toContain('reply tool 已成功把内容发给用户');
+    expect(result).toContain('不要输出“（语音已发送）”');
     expect(tool.returnDirect).not.toBe(true);
     expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['第一句', '第二行\n第三行']);
 
@@ -453,7 +454,8 @@ describe('qq voice plugin', () => {
       },
     );
 
-    expect(JSON.parse(result)).toEqual({ status: 'delivered' });
+    expect(result).toContain('reply tool 已成功把内容发给用户');
+    expect(result).toContain('不要输出“（语音已发送）”');
     expect(tool.returnDirect).not.toBe(true);
     expect(bot.sendMessage.mock.calls).toHaveLength(1);
 
@@ -667,7 +669,8 @@ describe('qq voice plugin', () => {
       },
     );
 
-    expect(JSON.parse(result)).toEqual({ status: 'delivered' });
+    expect(result).toContain('reply tool 已成功把内容发给用户');
+    expect(result).toContain('不要输出“（语音已发送）”');
     expect(tool.returnDirect).not.toBe(true);
     const calls = bot.sendMessage.mock.calls as Array<any[]>;
     expect(calls).toHaveLength(2);

@@ -35,6 +35,8 @@ const TTS_PROBE_TURN_INTERVAL = 12;
 const TTS_PROBE_TIME_INTERVAL_MS = 45_000;
 const TTS_PROBE_FAILURE_BACKOFF_MS = 10_000;
 const TTS_PROBE_TIMEOUT_MS = 5_000;
+const REPLY_TOOL_DELIVERED_OBSERVATION =
+  'reply tool 已成功把内容发给用户。本轮任务已经完成，立刻结束，不要再输出任何 assistant 正文、确认语、括号说明、总结、重复句子或收尾文本。不要输出“（语音已发送）”“已发送”“好了”“以上”“我继续说”“我来补充一下”。';
 
 const REPLY_COMPOSE_SCHEMA = z.object({
   segments: z
@@ -619,6 +621,9 @@ function consumePendingReplyToolDelivery(
 }
 
 function formatReplyToolResult(result: ReplyToolResult): string {
+  if (result.status === 'delivered') {
+    return REPLY_TOOL_DELIVERED_OBSERVATION;
+  }
   return JSON.stringify(result);
 }
 
