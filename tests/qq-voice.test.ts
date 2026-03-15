@@ -188,9 +188,10 @@ function createHarness(overrides: {
     asrBaseUrl: 'http://127.0.0.1:8081',
     ttsBaseUrl: 'http://127.0.0.1:8082',
     inputMaxSeconds: 60,
-    outputMaxChars: 30,
+    outputMaxWords: 80,
+    outputMaxSeconds: 45,
     transcribeTimeoutMs: 30_000,
-    synthTimeoutMs: 180_000,
+    synthTimeoutMs: 300_000,
     ...overrides.pluginConfig,
   });
 
@@ -282,7 +283,7 @@ describe('qq voice plugin', () => {
     expect(getExecutor()).toBeTypeOf('function');
   });
 
-  it('keeps policy free of voice instructions when TTS is down', async () => {
+  it('injects a text fallback persona line when TTS is down', async () => {
     const { ready, getPolicy, inject, bot } = createHarness();
     vi.stubGlobal(
       'fetch',
@@ -307,7 +308,7 @@ describe('qq voice plugin', () => {
     await policy?.(session, { options: { room: { conversationId: 'conv-1' } } });
     const injectedPolicy = String(inject.mock.calls[0]?.[0]?.value ?? '');
     expect(injectedPolicy).toContain('普通文本始终可用');
-    expect(injectedPolicy).not.toContain('voice 段');
+    expect(injectedPolicy).toContain('本轮不使用语音回复。若对方要求语音，就自然地告诉对方你现在不想发语音。');
     expect(injectedPolicy).not.toContain('<qqbot-voice>');
     expect(injectedPolicy).not.toContain('reply_compose');
   });
@@ -337,11 +338,12 @@ describe('qq voice plugin', () => {
     await policy?.(session, { options: { room: { conversationId: 'conv-voice' } } });
     const injectedPolicy = String(inject.mock.calls[0]?.[0]?.value ?? '');
     expect(injectedPolicy).toContain('如果你决定使用 ReplyPlan，就只输出 ReplyPlan JSON 对象本身，不要添加解释、前缀或代码块。');
-    expect(injectedPolicy).toContain('本轮语音回复可用。需要语音表达时，可以输出一个包含 voice 段的 ReplyPlan JSON 对象。');
+    expect(injectedPolicy).toContain('本轮语音回复可用。需要语音表达时，可以输出一个包含一个或多个 voice 段的 ReplyPlan JSON 对象。');
     expect(injectedPolicy).toContain('"kind":"voice"');
+    expect(injectedPolicy).toContain('80 词、45 秒');
     expect(injectedPolicy).toContain('多个 voice 段会按顺序发送');
     expect(injectedPolicy).toContain('较长内容请拆成多个 voice 段');
-    expect(injectedPolicy).toContain('多段 voice 示例：{"segments":[{"kind":"voice","content":"第一句简短语音"},{"kind":"voice","content":"第二句简短语音"}]}');
+    expect(injectedPolicy).toContain('多段 voice 示例：{"segments":[{"kind":"voice","content":"第一段语音内容"},{"kind":"voice","content":"第二段语音内容"}]}');
     expect(injectedPolicy).not.toContain('<qqbot-voice>');
     expect(injectedPolicy).not.toContain('reply_compose');
   });

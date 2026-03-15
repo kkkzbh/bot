@@ -34,6 +34,9 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('QQ_VOICE_ENABLED=true');
     expect(content).toContain('QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161');
     expect(content).toContain('QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162');
+    expect(content).toContain('QQ_VOICE_OUTPUT_MAX_WORDS=80');
+    expect(content).toContain('QQ_VOICE_OUTPUT_MAX_SECONDS=45');
+    expect(content).toContain('QQ_VOICE_SYNTH_TIMEOUT_MS=300000');
     expect(content).not.toContain('VOICE_TTS_GPT_WEIGHTS=/data/voice/tts/models/sakiko_v2pp-e15.ckpt');
     expect(content).not.toContain('VOICE_TTS_REF_BLACK=/data/voice/tts/references/black_sakiko.wav');
   });

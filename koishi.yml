@@ -60,9 +60,10 @@ plugins:
       ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || 'http://127.0.0.1:5162' }}
       ttsApiKey: ${{ env.QQ_VOICE_TTS_API_KEY || '' }}
       inputMaxSeconds: ${{ +env.QQ_VOICE_INPUT_MAX_SECONDS || 60 }}
-      outputMaxChars: ${{ +env.QQ_VOICE_OUTPUT_MAX_CHARS || 30 }}
+      outputMaxWords: ${{ +env.QQ_VOICE_OUTPUT_MAX_WORDS || +env.QQ_VOICE_OUTPUT_MAX_CHARS || 80 }}
+      outputMaxSeconds: ${{ +env.QQ_VOICE_OUTPUT_MAX_SECONDS || 45 }}
       transcribeTimeoutMs: ${{ +env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS || 45000 }}
-      synthTimeoutMs: ${{ +env.QQ_VOICE_SYNTH_TIMEOUT_MS || 180000 }}
+      synthTimeoutMs: ${{ +env.QQ_VOICE_SYNTH_TIMEOUT_MS || 300000 }}
     ./dist/plugins/group-natural-trigger:natural-trigger:
       enabled: ${{ env.CHAT_NATURAL_TRIGGER_ENABLED !== 'false' }}
       enabledGroups: ${{ env.CHAT_NATURAL_TRIGGER_GROUPS || '' }}

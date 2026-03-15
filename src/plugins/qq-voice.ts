@@ -32,6 +32,10 @@ const TTS_PROBE_TURN_INTERVAL = 12;
 const TTS_PROBE_TIME_INTERVAL_MS = 45_000;
 const TTS_PROBE_FAILURE_BACKOFF_MS = 10_000;
 const TTS_PROBE_TIMEOUT_MS = 5_000;
+const VOICE_WORD_SEGMENTER =
+  typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+    ? new Intl.Segmenter('zh', { granularity: 'word' })
+    : null;
 export const name = 'qq-voice';
 export const inject = ['chatluna', 'database'];
 
@@ -44,9 +48,11 @@ export interface Config {
   ttsBaseUrl?: string;
   ttsApiKey?: string;
   inputMaxSeconds?: number;
-  outputMaxChars?: number;
+  outputMaxWords?: number;
+  outputMaxSeconds?: number;
   transcribeTimeoutMs?: number;
   synthTimeoutMs?: number;
+  outputMaxChars?: number;
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -58,9 +64,10 @@ export const Config: Schema<Config> = Schema.object({
   ttsBaseUrl: Schema.string().role('link').description('TTS HTTP 服务地址（默认复用 QQ_VOICE_TTS_BASE_URL）。'),
   ttsApiKey: Schema.string().role('secret').description('TTS HTTP 服务鉴权 token。'),
   inputMaxSeconds: Schema.natural().default(60).description('单条入站语音最大时长（秒）。'),
-  outputMaxChars: Schema.natural().default(30).description('单个语音段最大字符数。'),
+  outputMaxWords: Schema.natural().default(80).description('单个语音段最大词数。'),
+  outputMaxSeconds: Schema.natural().default(45).description('单个语音段最大时长（秒）。'),
   transcribeTimeoutMs: Schema.natural().role('time').default(30000).description('ASR 请求超时（毫秒）。'),
-  synthTimeoutMs: Schema.natural().role('time').default(180000).description('TTS 请求超时（毫秒）。'),
+  synthTimeoutMs: Schema.natural().role('time').default(300000).description('TTS 请求超时（毫秒）。'),
 });
 
 interface RuntimeConfig {
@@ -72,7 +79,8 @@ interface RuntimeConfig {
   ttsBaseUrl: string;
   ttsApiKey: string;
   inputMaxSeconds: number;
-  outputMaxChars: number;
+  outputMaxWords: number;
+  outputMaxSeconds: number;
   transcribeTimeoutMs: number;
   synthTimeoutMs: number;
 }
@@ -202,6 +210,11 @@ function clampNatural(input: unknown, fallback: number): number {
 }
 
 function toRuntimeConfig(config: Config): RuntimeConfig {
+  const legacyOutputMaxChars = clampNatural(
+    config.outputMaxChars ?? process.env.QQ_VOICE_OUTPUT_MAX_CHARS,
+    80,
+  );
+
   return {
     enabled: config.enabled ?? String(process.env.QQ_VOICE_ENABLED ?? 'true').toLowerCase() !== 'false',
     inputEnabled: config.inputEnabled ?? String(process.env.QQ_VOICE_INPUT_ENABLED ?? 'true').toLowerCase() !== 'false',
@@ -212,12 +225,13 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
     ttsBaseUrl: normalizeBaseUrl(config.ttsBaseUrl ?? process.env.QQ_VOICE_TTS_BASE_URL ?? 'http://127.0.0.1:8082'),
     ttsApiKey: config.ttsApiKey ?? process.env.QQ_VOICE_TTS_API_KEY ?? '',
     inputMaxSeconds: clampNatural(config.inputMaxSeconds ?? process.env.QQ_VOICE_INPUT_MAX_SECONDS, 60),
-    outputMaxChars: clampNatural(config.outputMaxChars ?? process.env.QQ_VOICE_OUTPUT_MAX_CHARS, 30),
+    outputMaxWords: clampNatural(config.outputMaxWords ?? process.env.QQ_VOICE_OUTPUT_MAX_WORDS, legacyOutputMaxChars),
+    outputMaxSeconds: clampNatural(config.outputMaxSeconds ?? process.env.QQ_VOICE_OUTPUT_MAX_SECONDS, 45),
     transcribeTimeoutMs: clampNatural(
       config.transcribeTimeoutMs ?? process.env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS,
       30_000,
     ),
-    synthTimeoutMs: clampNatural(config.synthTimeoutMs ?? process.env.QQ_VOICE_SYNTH_TIMEOUT_MS, 180_000),
+    synthTimeoutMs: clampNatural(config.synthTimeoutMs ?? process.env.QQ_VOICE_SYNTH_TIMEOUT_MS, 300_000),
   };
 }
 
@@ -426,6 +440,47 @@ async function synthesizeVoice(
 
 function createAudioDataUri(bytes: Uint8Array): string {
   return `data:audio/wav;base64,${Buffer.from(bytes).toString('base64')}`;
+}
+
+function countVoiceWords(text: string): number {
+  const normalized = normalizeVoiceSynthesisText(text);
+  if (!normalized) return 0;
+
+  if (VOICE_WORD_SEGMENTER) {
+    let count = 0;
+    for (const segment of VOICE_WORD_SEGMENTER.segment(normalized)) {
+      if (segment.isWordLike) count += 1;
+    }
+    if (count > 0) return count;
+  }
+
+  return normalized.split(/\s+/).filter(Boolean).length;
+}
+
+function estimateWavDurationMs(bytes: Uint8Array): number | null {
+  if (bytes.byteLength < 44) return null;
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const readChunkId = (offset: number): string => Buffer.from(bytes.subarray(offset, offset + 4)).toString('ascii');
+
+  if (readChunkId(0) !== 'RIFF' || readChunkId(8) !== 'WAVE') {
+    return null;
+  }
+
+  const byteRate = view.getUint32(28, true);
+  if (!byteRate) return null;
+
+  let offset = 12;
+  while (offset + 8 <= bytes.byteLength) {
+    const chunkId = readChunkId(offset);
+    const chunkSize = view.getUint32(offset + 4, true);
+    if (chunkId === 'data') {
+      return Math.round((chunkSize / byteRate) * 1000);
+    }
+    offset += 8 + chunkSize + (chunkSize % 2);
+  }
+
+  return null;
 }
 
 function getTextInputContent(session: SessionWithVoiceState): string {
@@ -690,7 +745,7 @@ async function resolveReplyCapabilitySnapshot(args: {
   return snapshot;
 }
 
-function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot, outputMaxChars: number): string {
+function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot, outputMaxWords: number, outputMaxSeconds: number): string {
   const lines = [
     '当前回复能力：普通文本始终可用。普通闲聊、问答、安慰或解释时，直接输出自然文本。',
     '当你需要发送代码、命令、配置、日志、清单或分步骤结果时，可以直接输出一个 ReplyPlan JSON 对象。',
@@ -700,12 +755,14 @@ function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot, outputMaxC
 
   if (snapshot.canVoice) {
     lines.push(
-      `本轮语音回复可用。需要语音表达时，可以输出一个包含 voice 段的 ReplyPlan JSON 对象。voice 段每段不超过 ${outputMaxChars} 个字；多个 voice 段会按顺序发送；较长内容请拆成多个 voice 段。`,
+      `本轮语音回复可用。需要语音表达时，可以输出一个包含一个或多个 voice 段的 ReplyPlan JSON 对象。单个 voice 段上限约 ${outputMaxWords} 词、${outputMaxSeconds} 秒；多个 voice 段会按顺序发送；较长内容请拆成多个 voice 段。`,
     );
-    lines.push('voice 段格式：{"segments":[{"kind":"voice","content":"一句简短语音"}]}');
+    lines.push('voice 段格式：{"segments":[{"kind":"voice","content":"一段语音内容"}]}');
     lines.push(
-      '多段 voice 示例：{"segments":[{"kind":"voice","content":"第一句简短语音"},{"kind":"voice","content":"第二句简短语音"}]}',
+      '多段 voice 示例：{"segments":[{"kind":"voice","content":"第一段语音内容"},{"kind":"voice","content":"第二段语音内容"}]}',
     );
+  } else {
+    lines.push('本轮不使用语音回复。若对方要求语音，就自然地告诉对方你现在不想发语音。');
   }
 
   return lines.join('\n');
@@ -747,12 +804,17 @@ async function prepareVoiceDeliveries(args: {
         if (!text) {
           throw new Error('empty_voice_segment');
         }
-        if (text.length > runtime.outputMaxChars) {
-          throw new Error(`voice_segment_too_long:${runtime.outputMaxChars}`);
+        const wordCount = countVoiceWords(text);
+        if (wordCount > runtime.outputMaxWords) {
+          throw new Error(`voice_segment_too_many_words:${runtime.outputMaxWords}`);
         }
 
         const style = pickVoiceStyle(text);
         const wav = await synthesizeVoice(runtime, text, style);
+        const durationMs = estimateWavDurationMs(wav);
+        if (durationMs && durationMs > runtime.outputMaxSeconds * 1000) {
+          throw new Error(`voice_segment_too_long_duration:${runtime.outputMaxSeconds}`);
+        }
         return [segment.raw, { segment, text, style, wav }] as const;
       }),
     );
@@ -766,7 +828,11 @@ async function prepareVoiceDeliveries(args: {
   } catch (error) {
     updateTtsCapabilityObservation(ttsState, false);
     const reason = (error as Error).message;
-    if (reason.startsWith('voice_segment_too_long:') || reason === 'empty_voice_segment') {
+    if (
+      reason.startsWith('voice_segment_too_many_words:') ||
+      reason.startsWith('voice_segment_too_long_duration:') ||
+      reason === 'empty_voice_segment'
+    ) {
       return { preparedByRaw: new Map(), effectivePlan: downgradeVoiceSegmentsToText(plan) };
     }
     logger.warn('voice preflight failed: %s', reason);
@@ -976,7 +1042,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
         contextManager.inject({
           name: 'qqbot_reply_transport_policy',
-          value: buildReplyTransportPolicy(snapshot, runtime.outputMaxChars),
+          value: buildReplyTransportPolicy(snapshot, runtime.outputMaxWords, runtime.outputMaxSeconds),
           once: true,
           conversationId,
           stage: 'after_scratchpad',
