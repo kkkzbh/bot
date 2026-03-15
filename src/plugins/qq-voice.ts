@@ -747,7 +747,7 @@ async function resolveReplyCapabilitySnapshot(args: {
 
 function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot, outputMaxWords: number, outputMaxSeconds: number): string {
   const lines = [
-    '当前回复能力：普通文本始终可用。普通闲聊、问答、安慰或解释时，直接输出自然文本。',
+    '当前回复能力：普通文本始终可用。普通闲聊、问答、安慰或解释时，默认直接输出自然文本。',
     '当你需要发送代码、命令、配置、日志、清单或分步骤结果时，可以直接输出一个 ReplyPlan JSON 对象。',
     '如果你决定使用 ReplyPlan，就只输出 ReplyPlan JSON 对象本身，不要添加解释、前缀或代码块。',
     'ReplyPlan JSON 格式：{"segments":[{"kind":"multiline","content":"第一行\\n第二行"}]}',
@@ -755,7 +755,7 @@ function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot, outputMaxW
 
   if (snapshot.canVoice) {
     lines.push(
-      `本轮语音回复可用。需要语音表达时，可以输出一个包含一个或多个 voice 段的 ReplyPlan JSON 对象。单个 voice 段上限约 ${outputMaxWords} 词、${outputMaxSeconds} 秒；多个 voice 段会按顺序发送；较长内容请拆成多个 voice 段。`,
+      `本轮语音回复可用。如果对方希望你用语音回复，或者你判断语音更适合当前表达，就直接输出一个包含一个或多个 voice 段的 ReplyPlan JSON 对象。单个 voice 段上限约 ${outputMaxWords} 词、${outputMaxSeconds} 秒；多个 voice 段会按顺序发送；较长内容请拆成多个 voice 段。`,
     );
     lines.push('voice 段格式：{"segments":[{"kind":"voice","content":"一段语音内容"}]}');
     lines.push(
