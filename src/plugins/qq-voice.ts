@@ -700,9 +700,12 @@ function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot, outputMaxC
 
   if (snapshot.canVoice) {
     lines.push(
-      `本轮语音回复可用。需要语音表达时，可以输出一个包含 voice 段的 ReplyPlan JSON 对象。voice 段每段不超过 ${outputMaxChars} 个字；较长内容请拆成多个 voice 段。`,
+      `本轮语音回复可用。需要语音表达时，可以输出一个包含 voice 段的 ReplyPlan JSON 对象。voice 段每段不超过 ${outputMaxChars} 个字；多个 voice 段会按顺序发送；较长内容请拆成多个 voice 段。`,
     );
     lines.push('voice 段格式：{"segments":[{"kind":"voice","content":"一句简短语音"}]}');
+    lines.push(
+      '多段 voice 示例：{"segments":[{"kind":"voice","content":"第一句简短语音"},{"kind":"voice","content":"第二句简短语音"}]}',
+    );
   }
 
   return lines.join('\n');

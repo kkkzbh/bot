@@ -339,7 +339,9 @@ describe('qq voice plugin', () => {
     expect(injectedPolicy).toContain('如果你决定使用 ReplyPlan，就只输出 ReplyPlan JSON 对象本身，不要添加解释、前缀或代码块。');
     expect(injectedPolicy).toContain('本轮语音回复可用。需要语音表达时，可以输出一个包含 voice 段的 ReplyPlan JSON 对象。');
     expect(injectedPolicy).toContain('"kind":"voice"');
+    expect(injectedPolicy).toContain('多个 voice 段会按顺序发送');
     expect(injectedPolicy).toContain('较长内容请拆成多个 voice 段');
+    expect(injectedPolicy).toContain('多段 voice 示例：{"segments":[{"kind":"voice","content":"第一句简短语音"},{"kind":"voice","content":"第二句简短语音"}]}');
     expect(injectedPolicy).not.toContain('<qqbot-voice>');
     expect(injectedPolicy).not.toContain('reply_compose');
   });
