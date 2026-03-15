@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { gunzipSync, gzipSync } from 'node:zlib';
+import { gzipSync } from 'node:zlib';
 import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
 import {
   buildVoiceFailureReply,
@@ -22,11 +22,7 @@ import {
   type OutboundMessageSegment,
   type ReplyTransportPlan,
 } from './message-send-utils.js';
-import {
-  parseReplyPlanFromLegacyToolCalls,
-  parseReplyPlanFromModelOutput,
-  renderReplyPlanHistoryText,
-} from './reply-plan-utils.js';
+import { parseReplyPlanFromModelOutput, renderReplyPlanHistoryText } from './reply-plan-utils.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -37,8 +33,6 @@ const TTS_PROBE_TURN_INTERVAL = 12;
 const TTS_PROBE_TIME_INTERVAL_MS = 45_000;
 const TTS_PROBE_FAILURE_BACKOFF_MS = 10_000;
 const TTS_PROBE_TIMEOUT_MS = 5_000;
-const LEGACY_REPLY_TRANSPORT_PLACEHOLDER = '（语音已发送）';
-const LEGACY_REPLY_TRANSPORT_TOOL_NAMES = new Set(['reply_compose', 'reply_compose_with_voice']);
 export const name = 'qq-voice';
 
 export interface Config {
@@ -180,18 +174,6 @@ type ReplyPlanDeliveryResult =
   | { status: 'failed_before_send'; fallbackText: string; historyText: string }
   | { status: 'failed_after_partial_send'; historyText: string };
 
-type SerializedChatMessage = {
-  id: string;
-  parent?: string | null;
-  role?: string | null;
-  text?: string | null;
-  tool_calls?: string | null;
-  tool_call_id?: string | null;
-  content?: unknown;
-  additional_kwargs_binary?: unknown;
-  [key: string]: unknown;
-};
-
 type ChatLunaLike = {
   contextManager?: {
     inject: (options: {
@@ -257,117 +239,6 @@ function toOwnedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 function gzipJsonToArrayBuffer(value: string): ArrayBuffer {
   const compressed = gzipSync(Buffer.from(value));
   return toOwnedArrayBuffer(compressed);
-}
-
-function toBuffer(payload: unknown): Buffer | null {
-  if (!payload) return null;
-  if (Buffer.isBuffer(payload)) return payload;
-  if (payload instanceof ArrayBuffer) return Buffer.from(payload);
-  if (ArrayBuffer.isView(payload)) return Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
-  return null;
-}
-
-function decodeSerializedMessageContent(message: SerializedChatMessage): unknown {
-  const payload = toBuffer(message.content);
-  if (!payload) return typeof message.text === 'string' ? message.text : '';
-
-  try {
-    return JSON.parse(gunzipSync(payload).toString('utf8'));
-  } catch {
-    return typeof message.text === 'string' ? message.text : '';
-  }
-}
-
-function extractPlainTextContent(content: unknown): string {
-  return typeof content === 'string' ? content.trim() : '';
-}
-
-function containsLegacyReplyTransportToolCall(toolCallsRaw: string | null | undefined): boolean {
-  if (!toolCallsRaw) return false;
-
-  try {
-    const parsed = JSON.parse(toolCallsRaw) as unknown;
-    return Array.isArray(parsed)
-      && parsed.some((item) => {
-        if (!item || typeof item !== 'object') return false;
-        return LEGACY_REPLY_TRANSPORT_TOOL_NAMES.has(String((item as { name?: unknown }).name ?? ''));
-      });
-  } catch {
-    return false;
-  }
-}
-
-async function scrubLegacyReplyTransportHistory(args: {
-  ctx: Context;
-  conversationId: string | undefined;
-  scrubbedConversationLatestIds: Map<string, string>;
-}): Promise<void> {
-  const { ctx, conversationId, scrubbedConversationLatestIds } = args;
-  const database = (ctx as { database?: any }).database;
-  if (!conversationId || !database) return;
-
-  const [conversation] = await database.get('chathub_conversation', { id: conversationId });
-  const latestId = conversation?.latestId as string | undefined;
-  if (!latestId) return;
-  if (scrubbedConversationLatestIds.get(conversationId) === latestId) return;
-
-  const queriedMessages = (await database.get('chathub_message', { conversation: conversationId })) as SerializedChatMessage[];
-  if (!Array.isArray(queriedMessages) || queriedMessages.length < 1) {
-    scrubbedConversationLatestIds.set(conversationId, latestId);
-    return;
-  }
-
-  const messagesById = new Map(queriedMessages.map((message) => [message.id, message]));
-  const sorted: SerializedChatMessage[] = [];
-  const seen = new Set<string>();
-  let currentId: string | null | undefined = latestId;
-  while (currentId) {
-    if (seen.has(currentId)) break;
-    seen.add(currentId);
-    const current = messagesById.get(currentId);
-    if (!current) break;
-    sorted.unshift(current);
-    currentId = current.parent;
-  }
-
-  const updates: SerializedChatMessage[] = [];
-  for (let index = 0; index < sorted.length; index += 1) {
-    const aiMessage = sorted[index];
-    if (aiMessage.role !== 'ai' || !containsLegacyReplyTransportToolCall(aiMessage.tool_calls)) continue;
-
-    const toolMessage = sorted[index + 1];
-    const finalAiMessage =
-      toolMessage?.role === 'tool' && sorted[index + 2]?.role === 'ai' && sorted[index + 2]?.parent === toolMessage.id
-        ? sorted[index + 2]
-        : null;
-
-    const legacyPlan = parseReplyPlanFromLegacyToolCalls(aiMessage.tool_calls);
-    const derivedText = legacyPlan ? renderReplyPlanHistoryText(legacyPlan) : '';
-    const finalText = finalAiMessage ? extractPlainTextContent(decodeSerializedMessageContent(finalAiMessage)) : '';
-    const collapsedText =
-      finalText && finalText !== LEGACY_REPLY_TRANSPORT_PLACEHOLDER ? finalText : derivedText || finalText;
-
-    const terminalMessage = finalAiMessage ?? aiMessage;
-    const nextContent =
-      collapsedText && collapsedText !== extractPlainTextContent(decodeSerializedMessageContent(terminalMessage))
-        ? gzipJsonToArrayBuffer(JSON.stringify(collapsedText))
-        : terminalMessage.content;
-
-    updates.push({
-      ...terminalMessage,
-      parent: aiMessage.parent ?? null,
-      tool_calls: '[]',
-      tool_call_id: '',
-      content: nextContent,
-    });
-  }
-
-  if (updates.length > 0) {
-    await database.upsert('chathub_message', updates);
-    await database.upsert('chathub_conversation', [{ id: conversationId, latestId, updatedAt: new Date() }]);
-  }
-
-  scrubbedConversationLatestIds.set(conversationId, latestId);
 }
 
 function parseDataUri(uri: string): { bytes: Uint8Array; contentType: string } | null {
@@ -1010,7 +881,6 @@ export function apply(ctx: Context, config: Config = {}): void {
   const canSendRecordCache = new Map<string, boolean>();
   const ttsCapabilityStates = new Map<string, TtsCapabilityState>();
   const replyCapabilitySnapshots = new Map<string, ReplyCapabilitySnapshot>();
-  const scrubbedConversationLatestIds = new Map<string, string>();
 
   const resolveChatLunaService = (): ChatLunaLike | undefined => {
     const byGetter = typeof (ctx as { get?: (name: string) => unknown }).get === 'function'
@@ -1115,12 +985,6 @@ export function apply(ctx: Context, config: Config = {}): void {
 
         const conversationId = context.options?.room?.conversationId;
         if (!conversationId) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-
-        await scrubLegacyReplyTransportHistory({
-          ctx,
-          conversationId,
-          scrubbedConversationLatestIds,
-        });
 
         const snapshot =
           getAuthorizedReplyCapabilitySnapshot(session, replyCapabilitySnapshots) ??
