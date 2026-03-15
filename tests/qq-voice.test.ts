@@ -397,6 +397,59 @@ describe('qq voice plugin', () => {
     expect(bot.sendMessage.mock.calls).toHaveLength(2);
   });
 
+  it('suppresses the trailing assistant text after voice tool delivery even when before-send sees a cloned session', async () => {
+    const { ready, tools, beforeSend, bot } = createHarness();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'http://127.0.0.1:8082/healthz') {
+        return new Response('ok', { status: 200 });
+      }
+      if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
+        return new Response(Uint8Array.from([82, 73, 70, 70]), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await ready();
+    await flushMicrotasks();
+
+    const originalSession = createSession(bot, {
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: true,
+            source: 'forced',
+            refreshedAt: Date.now(),
+            explicitVoiceRequest: true,
+          },
+        },
+      },
+    });
+
+    const result = await invokeTool(
+      tools.get('reply_compose_with_voice')!,
+      {
+        segments: [{ kind: 'voice', content: '晚安' }],
+      },
+      originalSession,
+    );
+
+    expect(JSON.parse(result)).toEqual({ status: 'delivered' });
+    expect(bot.sendMessage.mock.calls).toHaveLength(1);
+
+    const clonedSendSession = createSession(bot, {
+      content: '（语音已发送）',
+      strippedContent: '（语音已发送）',
+      state: {},
+    });
+
+    const suppressed = await beforeSend(clonedSendSession, {});
+    expect(suppressed).toBe(true);
+    expect(bot.sendMessage.mock.calls).toHaveLength(1);
+  });
+
   it('reply_compose_with_voice authorization follows the latest capability snapshot', async () => {
     const { ready, capabilityMiddleware, tools, bot } = createHarness();
     const fetchMock = vi

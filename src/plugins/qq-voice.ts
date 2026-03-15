@@ -590,6 +590,34 @@ function consumeReplyToolDelivered(session: SessionWithVoiceState): boolean {
   return true;
 }
 
+function markPendingReplyToolDelivery(
+  session: SessionWithVoiceState,
+  pendingReplyToolDeliveries: Map<string, number>,
+): void {
+  const strandKey = resolveSessionStrandKey(session);
+  if (!strandKey) return;
+  pendingReplyToolDeliveries.set(strandKey, (pendingReplyToolDeliveries.get(strandKey) ?? 0) + 1);
+}
+
+function consumePendingReplyToolDelivery(
+  session: Session,
+  pendingReplyToolDeliveries: Map<string, number>,
+): boolean {
+  const strandKey = resolveSessionStrandKey(session);
+  if (!strandKey) return false;
+
+  const current = pendingReplyToolDeliveries.get(strandKey) ?? 0;
+  if (current < 1) return false;
+
+  if (current === 1) {
+    pendingReplyToolDeliveries.delete(strandKey);
+  } else {
+    pendingReplyToolDeliveries.set(strandKey, current - 1);
+  }
+
+  return true;
+}
+
 function formatReplyToolResult(result: ReplyToolResult): string {
   return JSON.stringify(result);
 }
@@ -837,8 +865,9 @@ async function deliverReplyPlan(args: {
   sendStrand: ReturnType<typeof createKeyedStrandRunner>;
   canSendRecordCache: Map<string, boolean>;
   ttsCapabilityStates: Map<string, TtsCapabilityState>;
+  pendingReplyToolDeliveries: Map<string, number>;
 }): Promise<ReplyToolResult> {
-  const { runtime, session, plan, sendStrand, canSendRecordCache, ttsCapabilityStates } = args;
+  const { runtime, session, plan, sendStrand, canSendRecordCache, ttsCapabilityStates, pendingReplyToolDeliveries } = args;
   if (session.platform !== 'onebot' || !session.channelId) {
     return createReplyToolPreflightFailure('qq_session_unavailable');
   }
@@ -911,6 +940,7 @@ async function deliverReplyPlan(args: {
   }
 
   markReplyToolDelivered(session);
+  markPendingReplyToolDelivery(session, pendingReplyToolDeliveries);
   return { status: 'delivered' };
 }
 
@@ -920,6 +950,7 @@ type ReplyToolDeps = {
   canSendRecordCache: Map<string, boolean>;
   ttsCapabilityStates: Map<string, TtsCapabilityState>;
   replyCapabilitySnapshots: Map<string, ReplyCapabilitySnapshot>;
+  pendingReplyToolDeliveries: Map<string, number>;
 };
 
 function isReplyToolSessionAvailable(session: Session): boolean {
@@ -1014,6 +1045,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const canSendRecordCache = new Map<string, boolean>();
   const ttsCapabilityStates = new Map<string, TtsCapabilityState>();
   const replyCapabilitySnapshots = new Map<string, ReplyCapabilitySnapshot>();
+  const pendingReplyToolDeliveries = new Map<string, number>();
   let toolsRegistered = false;
 
   const resolveChatLunaService = (): ChatLunaLike | undefined => {
@@ -1033,6 +1065,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         canSendRecordCache,
         ttsCapabilityStates,
         replyCapabilitySnapshots,
+        pendingReplyToolDeliveries,
       })
     ) {
       if (trigger === 'ready') {
@@ -1114,6 +1147,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (options && shouldBypassLineSplit(options)) return;
     if (session.platform !== 'onebot') return;
     if (consumeReplyToolDelivered(session)) return true;
+    if (consumePendingReplyToolDelivery(session, pendingReplyToolDeliveries)) return true;
   });
 
   ctx.on('ready', async () => {
