@@ -502,8 +502,11 @@ export class LiveReplyCoordinator {
           return;
         }
 
-        scope.status = 'queueing';
+        options.cancelDraft?.();
+        resetScopeDraft(scope);
+        scope.status = 'idle';
         scope.decision = undefined;
+        return;
       }
 
       if (options.abortSignal?.aborted) {
@@ -611,7 +614,10 @@ export class LiveReplyCoordinator {
 
     scope.status = 'queueing';
     const waiters = [...scope.carrierWaiters];
-    waiters.forEach((waiter) => waiter.resolve('continue'));
+    const carrier = waiters[waiters.length - 1];
+    waiters.slice(0, -1).forEach((waiter) => waiter.resolve('stop'));
+    carrier?.resolve('continue');
+    scope.cancelDraft?.();
     scope.pendingInterrupts = [];
     scope.carrierWaiters = [];
     scope.decision.resolve({ kind: 'queue' });
