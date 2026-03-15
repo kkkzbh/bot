@@ -3,7 +3,6 @@ import { gzipSync } from 'node:zlib';
 import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
 import {
   buildVoiceFailureReply,
-  containsExplicitVoiceRequest,
   extractFirstIncomingVoice,
   extractTextContentWithoutVoice,
   mergeVoiceInputText,
@@ -82,17 +81,15 @@ interface QqVoiceState {
   transcript: string;
   durationMs: number;
   source: string;
-  voiceReplyRequested: boolean;
 }
 
-type ReplyCapabilitySource = 'cached' | 'probed' | 'forced';
+type ReplyCapabilitySource = 'cached' | 'probed';
 
 interface ReplyCapabilitySnapshot {
   canMultiline: true;
   canVoice: boolean;
   source: ReplyCapabilitySource;
   refreshedAt: number;
-  explicitVoiceRequest: boolean;
 }
 
 interface ReplyTransportState {
@@ -663,15 +660,11 @@ async function resolveReplyCapabilitySnapshot(args: {
   ttsCapabilityStates: Map<string, TtsCapabilityState>;
 }): Promise<ReplyCapabilitySnapshot> {
   const { runtime, session, canSendRecordCache, ttsCapabilityStates } = args;
-  const explicitVoiceRequest =
-    session.state?.qqVoice?.voiceReplyRequested === true || containsExplicitVoiceRequest(getTextInputContent(session));
-
   const snapshot: ReplyCapabilitySnapshot = {
     canMultiline: true,
     canVoice: false,
     source: 'cached',
     refreshedAt: Date.now(),
-    explicitVoiceRequest,
   };
 
   if (!isVoiceOutputConfigured(runtime)) {
@@ -686,13 +679,6 @@ async function resolveReplyCapabilitySnapshot(args: {
   const ttsState = getTtsCapabilityState(runtime, ttsCapabilityStates);
   ttsState.turnCounter += 1;
   const due = isTtsProbeDue(ttsState, snapshot.refreshedAt);
-
-  if (explicitVoiceRequest && (ttsState.lastKnownHealthy !== true || due)) {
-    snapshot.canVoice = await runTtsHealthProbe(runtime, ttsState, true);
-    snapshot.source = 'forced';
-    snapshot.refreshedAt = Date.now();
-    return snapshot;
-  }
 
   if (due && snapshot.refreshedAt >= ttsState.failureBackoffUntil && !ttsState.pendingProbe) {
     void runTtsHealthProbe(runtime, ttsState).catch((error) => {
@@ -711,20 +697,11 @@ function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot, outputMaxC
     'ReplyPlan JSON 格式：{"segments":[{"kind":"multiline","content":"第一行\\n第二行"}]}',
   ];
 
-  if (snapshot.explicitVoiceRequest && snapshot.canVoice) {
+  if (snapshot.canVoice) {
     lines.push(
-      `本轮语音回复可用，且用户明确要求语音。请直接输出一个包含 voice 段的 ReplyPlan JSON 对象。voice 段每段不超过 ${outputMaxChars} 个字。`,
+      `本轮语音回复可用。需要语音表达时，可以输出一个包含 voice 段的 ReplyPlan JSON 对象。voice 段每段不超过 ${outputMaxChars} 个字；较长内容请拆成多个 voice 段。`,
     );
-    lines.push('示例：{"segments":[{"kind":"voice","content":"晚安"}]}');
-  } else if (snapshot.canVoice) {
-    lines.push(
-      `本轮语音回复可用。需要语音表达时，可以输出一个包含 voice 段的 ReplyPlan JSON 对象。voice 段每段不超过 ${outputMaxChars} 个字。`,
-    );
-    lines.push(
-      '混合示例：{"segments":[{"kind":"text","content":"先说结论。"},{"kind":"voice","content":"晚安"}]}',
-    );
-  } else if (snapshot.explicitVoiceRequest) {
-    lines.push('本轮语音回复不可用。请直接自然地用文字回答。');
+    lines.push('voice 段格式：{"segments":[{"kind":"voice","content":"一句简短语音"}]}');
   }
 
   return lines.join('\n');
@@ -915,13 +892,10 @@ export function apply(ctx: Context, config: Config = {}): void {
 
         const originalText = getTextInputContent(session);
         const merged = mergeVoiceInputText(originalText, transcript.text);
-        const voiceReplyRequested = containsExplicitVoiceRequest(merged);
-
         updateVoiceState(session, {
           transcript: transcript.text,
           durationMs: transcript.durationMs,
           source: downloaded.source,
-          voiceReplyRequested,
         });
 
         session.content = merged;

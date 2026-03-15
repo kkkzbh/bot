@@ -268,7 +268,6 @@ describe('qq voice plugin', () => {
       transcript: '转写内容',
       durationMs: 1_500,
       source: 'src',
-      voiceReplyRequested: false,
     });
   });
 
@@ -283,7 +282,7 @@ describe('qq voice plugin', () => {
     expect(getExecutor()).toBeTypeOf('function');
   });
 
-  it('injects a simple text-only policy when explicit voice request arrives and TTS is down', async () => {
+  it('keeps policy free of voice instructions when TTS is down', async () => {
     const { ready, getPolicy, inject, bot } = createHarness();
     vi.stubGlobal(
       'fetch',
@@ -307,12 +306,13 @@ describe('qq voice plugin', () => {
 
     await policy?.(session, { options: { room: { conversationId: 'conv-1' } } });
     const injectedPolicy = String(inject.mock.calls[0]?.[0]?.value ?? '');
-    expect(injectedPolicy).toContain('本轮语音回复不可用。请直接自然地用文字回答。');
+    expect(injectedPolicy).toContain('普通文本始终可用');
+    expect(injectedPolicy).not.toContain('voice 段');
     expect(injectedPolicy).not.toContain('<qqbot-voice>');
     expect(injectedPolicy).not.toContain('reply_compose');
   });
 
-  it('injects ReplyPlan policy when explicit voice request arrives and TTS is healthy', async () => {
+  it('injects the same voice capability policy whenever TTS is healthy', async () => {
     const { ready, getPolicy, inject, bot } = createHarness();
     vi.stubGlobal(
       'fetch',
@@ -330,15 +330,15 @@ describe('qq voice plugin', () => {
 
     const policy = getPolicy();
     const session = createSession(bot, {
-      content: '请用语音回我一句晚安',
-      strippedContent: '请用语音回我一句晚安',
+      content: '普通闲聊一下',
+      strippedContent: '普通闲聊一下',
     });
 
     await policy?.(session, { options: { room: { conversationId: 'conv-voice' } } });
     const injectedPolicy = String(inject.mock.calls[0]?.[0]?.value ?? '');
-    expect(injectedPolicy).toContain('包含 voice 段的 ReplyPlan JSON 对象');
+    expect(injectedPolicy).toContain('本轮语音回复可用。需要语音表达时，可以输出一个包含 voice 段的 ReplyPlan JSON 对象。');
     expect(injectedPolicy).toContain('"kind":"voice"');
-    expect(injectedPolicy).toContain('voice 段每段不超过 30 个字');
+    expect(injectedPolicy).toContain('较长内容请拆成多个 voice 段');
     expect(injectedPolicy).not.toContain('<qqbot-voice>');
     expect(injectedPolicy).not.toContain('reply_compose');
   });
@@ -426,9 +426,8 @@ describe('qq voice plugin', () => {
           capabilitySnapshot: {
             canMultiline: true,
             canVoice: true,
-            source: 'forced',
+            source: 'cached',
             refreshedAt: Date.now(),
-            explicitVoiceRequest: true,
           },
         },
       },
@@ -476,9 +475,8 @@ describe('qq voice plugin', () => {
           capabilitySnapshot: {
             canMultiline: true,
             canVoice: true,
-            source: 'forced',
+            source: 'cached',
             refreshedAt: Date.now(),
-            explicitVoiceRequest: true,
           },
         },
       },
