@@ -81,7 +81,7 @@ vi.mock('koishi', () => {
   };
 });
 
-import { apply } from '../src/plugins/qq-voice.js';
+import { apply, inject } from '../src/plugins/qq-voice.js';
 
 type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
 type EventHandler = (...args: any[]) => Promise<unknown> | unknown;
@@ -236,6 +236,10 @@ describe('qq voice plugin', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('declares required services so reply plan middleware can register on the live chat chain', () => {
+    expect(inject).toEqual(expect.arrayContaining(['chatluna', 'database']));
   });
 
   it('transcribes first incoming audio and merges it into session content', async () => {

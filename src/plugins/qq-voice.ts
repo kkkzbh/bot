@@ -34,6 +34,7 @@ const TTS_PROBE_TIME_INTERVAL_MS = 45_000;
 const TTS_PROBE_FAILURE_BACKOFF_MS = 10_000;
 const TTS_PROBE_TIMEOUT_MS = 5_000;
 export const name = 'qq-voice';
+export const inject = ['chatluna', 'database'];
 
 export interface Config {
   enabled?: boolean;
