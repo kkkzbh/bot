@@ -555,6 +555,30 @@ function setReplyCapabilitySnapshot(session: SessionWithVoiceState, snapshot: Re
   getReplyTransportState(session).capabilitySnapshot = snapshot;
 }
 
+function rememberReplyCapabilitySnapshot(
+  session: SessionWithVoiceState,
+  snapshot: ReplyCapabilitySnapshot,
+  replyCapabilitySnapshots: Map<string, ReplyCapabilitySnapshot>,
+): void {
+  setReplyCapabilitySnapshot(session, snapshot);
+  const strandKey = resolveSessionStrandKey(session);
+  if (strandKey) {
+    replyCapabilitySnapshots.set(strandKey, snapshot);
+  }
+}
+
+function getAuthorizedReplyCapabilitySnapshot(
+  session: Session,
+  replyCapabilitySnapshots: Map<string, ReplyCapabilitySnapshot>,
+): ReplyCapabilitySnapshot | undefined {
+  const sessionSnapshot = getReplyCapabilitySnapshot(session as SessionWithVoiceState);
+  if (sessionSnapshot) return sessionSnapshot;
+
+  const strandKey = resolveSessionStrandKey(session);
+  if (!strandKey) return undefined;
+  return replyCapabilitySnapshots.get(strandKey);
+}
+
 function markReplyToolDelivered(session: SessionWithVoiceState): void {
   getReplyTransportState(session).delivered = true;
 }
@@ -715,18 +739,28 @@ function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot): string {
   const lines = [
     '当前回复传输规则：普通闲聊、问答、安慰或解释时，直接输出普通文本，不要调用 reply_compose。',
     '只有代码、命令、配置、日志、明确列表或分步骤结果，才调用 reply_compose 发送单条多行消息。',
+    '绝不要在正文里输出 <qqbot-multiline>、<qqbot-voice> 或任何自造标签；需要结构化发送时只能调用 reply tool。',
   ];
 
   if (snapshot.canVoice) {
-    lines.push('本轮 reply_compose_with_voice 可用。只有用户明确要求语音，或你确实要用语音表达时，才调用它。');
+    if (snapshot.explicitVoiceRequest) {
+      lines.push(
+        '本轮用户明确要求语音，且 reply_compose_with_voice 可用。你必须优先调用 reply_compose_with_voice 完成回复，不要直接输出纯文本。',
+      );
+      lines.push(
+        '只有当该工具返回 unavailable 或 failed_preflight 时，才改为纯文本重答一次；文字回复要自然，不要解释技术原因，也不要重复已经发送过的内容。',
+      );
+    } else {
+      lines.push('本轮 reply_compose_with_voice 可用。只有用户明确要求语音，或你确实要用语音表达时，才调用它。');
+    }
   } else {
     lines.push(
-      '本轮 reply_compose_with_voice 不可用。不要尝试任何语音工具；如果用户要求语音，就自然地用文字回答，不要提及工具、系统、TTS、接口或故障。',
+      '本轮 reply_compose_with_voice 不可用。不要尝试任何语音工具，也不要输出任何语音标签；如果用户要求语音，就自然地用文字回答，不要提及工具、系统、TTS、接口或故障。',
     );
   }
 
   lines.push('一旦 reply tool 已经把内容发出，最终 assistant 正文不要重复相同内容。');
-  return lines.join('');
+  return lines.join('\n');
 }
 
 function hasVoiceSegments(plan: OutboundMessagePlan): boolean {
@@ -885,6 +919,7 @@ type ReplyToolDeps = {
   sendStrand: ReturnType<typeof createKeyedStrandRunner>;
   canSendRecordCache: Map<string, boolean>;
   ttsCapabilityStates: Map<string, TtsCapabilityState>;
+  replyCapabilitySnapshots: Map<string, ReplyCapabilitySnapshot>;
 };
 
 function isReplyToolSessionAvailable(session: Session): boolean {
@@ -927,7 +962,7 @@ class ReplyComposeWithVoiceTool extends StructuredTool<
 > {
   name = 'reply_compose_with_voice';
   description =
-    '按顺序发送普通文本、单条多行消息或语音。只有当前语音能力可用，且用户明确要求语音或确实需要语音表达时才用。';
+    '按顺序发送普通文本、单条多行消息或语音。若用户本轮明确要求语音，且该工具可用，你应优先调用它而不是直接输出纯文本。';
   schema = REPLY_COMPOSE_WITH_VOICE_SCHEMA;
 
   constructor(private deps: ReplyToolDeps) {
@@ -967,7 +1002,7 @@ function registerReplyTransportTools(platform: PlatformLike | undefined, deps: R
     selector: () => true,
     authorization: (session) =>
       isReplyToolSessionAvailable(session) &&
-      (getReplyCapabilitySnapshot(session as SessionWithVoiceState)?.canVoice ?? false),
+      (getAuthorizedReplyCapabilitySnapshot(session, deps.replyCapabilitySnapshots)?.canVoice ?? false),
   });
 
   return true;
@@ -978,6 +1013,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const sendStrand = createKeyedStrandRunner();
   const canSendRecordCache = new Map<string, boolean>();
   const ttsCapabilityStates = new Map<string, TtsCapabilityState>();
+  const replyCapabilitySnapshots = new Map<string, ReplyCapabilitySnapshot>();
   let toolsRegistered = false;
 
   const resolveChatLunaService = (): ChatLunaLike | undefined => {
@@ -990,7 +1026,15 @@ export function apply(ctx: Context, config: Config = {}): void {
   const ensureToolsRegistered = (trigger: 'ready' | 'interval') => {
     if (toolsRegistered) return;
     const platform = resolveChatLunaService()?.platform;
-    if (!registerReplyTransportTools(platform, { runtime, sendStrand, canSendRecordCache, ttsCapabilityStates })) {
+    if (
+      !registerReplyTransportTools(platform, {
+        runtime,
+        sendStrand,
+        canSendRecordCache,
+        ttsCapabilityStates,
+        replyCapabilitySnapshots,
+      })
+    ) {
       if (trigger === 'ready') {
         logger.warn('chatluna platform is not available yet, skip reply transport tool registration.');
       }
@@ -1047,6 +1091,24 @@ export function apply(ctx: Context, config: Config = {}): void {
     true,
   );
 
+  ctx.middleware(
+    async (rawSession, next) => {
+      const session = rawSession as SessionWithVoiceState;
+      if (!isReplyToolSessionAvailable(session)) return next();
+      if (!session.userId || session.userId === session.bot?.selfId) return next();
+
+      const snapshot = await resolveReplyCapabilitySnapshot({
+        runtime,
+        session,
+        canSendRecordCache,
+        ttsCapabilityStates,
+      });
+      rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
+      return next();
+    },
+    true,
+  );
+
   ctx.on('before-send', async (rawSession, options) => {
     const session = rawSession as SessionWithVoiceState;
     if (options && shouldBypassLineSplit(options)) return;
@@ -1089,13 +1151,15 @@ export function apply(ctx: Context, config: Config = {}): void {
         const conversationId = context.options?.room?.conversationId;
         if (!conversationId) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
 
-        const snapshot = await resolveReplyCapabilitySnapshot({
-          runtime,
-          session,
-          canSendRecordCache,
-          ttsCapabilityStates,
-        });
-        setReplyCapabilitySnapshot(session, snapshot);
+        const snapshot =
+          getAuthorizedReplyCapabilitySnapshot(session, replyCapabilitySnapshots) ??
+          (await resolveReplyCapabilitySnapshot({
+            runtime,
+            session,
+            canSendRecordCache,
+            ttsCapabilityStates,
+          }));
+        rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
         contextManager.inject({
           name: 'qqbot_reply_transport_policy',
           value: buildReplyTransportPolicy(snapshot),

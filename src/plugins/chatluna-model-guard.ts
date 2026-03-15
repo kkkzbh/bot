@@ -8,7 +8,6 @@ import {
 } from './chatluna-live-reply.js';
 import { injectUserStampedPrompt } from './chat-time-context.js';
 import {
-  containsDeprecatedReplyTransportTags,
   createTextOnlyOutboundMessagePlan,
   createKeyedStrandRunner,
   createBotMessageDispatchers,
@@ -226,12 +225,11 @@ export function apply(ctx: Context, config: Config = {}): void {
       return true;
     }
     if (!session.channelId || !session.content) return;
-    const hadDeprecatedTransportTags = containsDeprecatedReplyTransportTags(session.content);
     const plan = createTextOnlyOutboundMessagePlan(session.content);
     if (!plan.segments.length) return;
 
     const channelId = session.channelId;
-    const shouldIntercept = hadDeprecatedTransportTags || plan.segments.length > 1;
+    const shouldIntercept = plan.segments.length > 1;
     if (!shouldIntercept) return;
 
     const strandKey = resolveSessionStrandKey(session);

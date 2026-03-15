@@ -181,6 +181,7 @@ function createHarness(overrides: {
 
   return {
     inbound: middlewares[0],
+    capabilityMiddleware: middlewares[1],
     beforeSend: (events.get('before-send') ?? [])[0],
     ready: (events.get('ready') ?? [])[0],
     getPolicy: () => chainMiddlewares.get('qqbot_reply_transport_policy'),
@@ -332,11 +333,14 @@ describe('qq voice plugin', () => {
     });
 
     await policy?.(session, { options: { room: { conversationId: 'conv-voice' } } });
-    expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('reply_compose_with_voice 可用');
+    const injectedPolicy = String(inject.mock.calls[0]?.[0]?.value ?? '');
+    expect(injectedPolicy).toContain('reply_compose_with_voice 可用');
+    expect(injectedPolicy).toContain('必须优先调用 reply_compose_with_voice');
+    expect(injectedPolicy).toContain('不要直接输出纯文本');
   });
 
   it('amortizes tts probing across turns and refreshes again on the 12th turn', async () => {
-    const { ready, getPolicy, bot } = createHarness();
+    const { ready, capabilityMiddleware, bot } = createHarness();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === 'http://127.0.0.1:8082/healthz') {
@@ -348,18 +352,17 @@ describe('qq voice plugin', () => {
 
     await ready();
     await flushMicrotasks();
-    const policy = getPolicy();
     const session = createSession(bot, {
       content: '普通聊天',
       strippedContent: '普通聊天',
     });
 
     for (let index = 0; index < 11; index += 1) {
-      await policy?.(session, { options: { room: { conversationId: `conv-${index}` } } });
+      await capabilityMiddleware?.(session, async () => undefined);
     }
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    await policy?.(session, { options: { room: { conversationId: 'conv-12' } } });
+    await capabilityMiddleware?.(session, async () => undefined);
     await flushMicrotasks();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -395,7 +398,7 @@ describe('qq voice plugin', () => {
   });
 
   it('reply_compose_with_voice authorization follows the latest capability snapshot', async () => {
-    const { ready, getPolicy, tools, bot } = createHarness();
+    const { ready, capabilityMiddleware, tools, bot } = createHarness();
     const fetchMock = vi
       .fn(async () => new Response('ok', { status: 200 }))
       .mockRejectedValueOnce(new Error('down'))
@@ -411,13 +414,44 @@ describe('qq voice plugin', () => {
       content: '请发语音',
       strippedContent: '请发语音',
     });
-    const policy = getPolicy();
 
-    await policy?.(session, { options: { room: { conversationId: 'conv-down' } } });
+    await capabilityMiddleware?.(session, async () => undefined);
     expect(voiceTool.authorization?.(session)).toBe(false);
 
-    await policy?.(session, { options: { room: { conversationId: 'conv-up' } } });
+    await capabilityMiddleware?.(session, async () => undefined);
     expect(voiceTool.authorization?.(session)).toBe(true);
+  });
+
+  it('reply_compose_with_voice authorization can reuse the preloaded snapshot on a cloned session object', async () => {
+    const { ready, capabilityMiddleware, tools, bot } = createHarness();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === 'http://127.0.0.1:8082/healthz') {
+          return new Response('ok', { status: 200 });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    await ready();
+    await flushMicrotasks();
+
+    const originalSession = createSession(bot, {
+      content: '请用语音回我一句晚安',
+      strippedContent: '请用语音回我一句晚安',
+    });
+
+    await capabilityMiddleware?.(originalSession, async () => undefined);
+
+    const clonedSession = createSession(bot, {
+      content: '请用语音回我一句晚安',
+      strippedContent: '请用语音回我一句晚安',
+      state: {},
+    });
+
+    expect(tools.get('reply_compose_with_voice')?.authorization?.(clonedSession)).toBe(true);
   });
 
   it('reply_compose_with_voice returns structured failure without sending fallback text when preflight synthesis fails', async () => {

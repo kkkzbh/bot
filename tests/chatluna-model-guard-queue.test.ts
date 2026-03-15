@@ -273,24 +273,6 @@ describe('chatluna model guard multiline queue', () => {
     expect(sent).toEqual(['前缀', '第一行', '第二行', '后缀']);
   });
 
-  it('strips a single deprecated qqbot voice wrapper instead of leaking the raw tag text', async () => {
-    const { beforeSend } = createHarness();
-    const sent: string[] = [];
-    const sentAt: number[] = [];
-    const session = createSession(sent, sentAt, {
-      userId: 'u8',
-    });
-    const sendSession = createSendSession(
-      session,
-      '<qqbot-voice>\n收到\n</qqbot-voice>',
-    );
-
-    const result = await beforeSend(sendSession, { session });
-
-    expect(result).toBe(true);
-    expect(sent).toEqual(['收到']);
-  });
-
   it('splits unwrapped code blocks line by line without explicit wrapper', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-09T20:10:00+08:00'));
