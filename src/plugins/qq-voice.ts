@@ -619,6 +619,9 @@ function consumePendingReplyToolDelivery(
 }
 
 function formatReplyToolResult(result: ReplyToolResult): string {
+  if (result.status === 'delivered') {
+    return '';
+  }
   return JSON.stringify(result);
 }
 
@@ -981,6 +984,7 @@ class ReplyComposeTool extends StructuredTool<typeof REPLY_COMPOSE_SCHEMA, Reply
       session,
       plan: input as ReplyTransportPlan,
     });
+    this.returnDirect = result.status === 'delivered';
     return formatReplyToolResult(result);
   }
 }
@@ -1015,6 +1019,7 @@ class ReplyComposeWithVoiceTool extends StructuredTool<
       session,
       plan: input as ReplyTransportPlan,
     });
+    this.returnDirect = result.status === 'delivered';
     return formatReplyToolResult(result);
   }
 }

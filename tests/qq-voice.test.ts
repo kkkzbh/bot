@@ -225,6 +225,10 @@ async function invokeTool(
   })) as string;
 }
 
+function createToolInstance(descriptor: ToolDescriptor): any {
+  return descriptor.createTool({});
+}
+
 describe('qq voice plugin', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -378,18 +382,22 @@ describe('qq voice plugin', () => {
       content: '最终正文不该再发一次',
       strippedContent: '最终正文不该再发一次',
     });
-    const result = await invokeTool(
-      tools.get('reply_compose')!,
+    const tool = createToolInstance(tools.get('reply_compose')!);
+    const result = await tool._call(
       {
         segments: [
           { kind: 'text', content: '第一句' },
           { kind: 'multiline', content: '第二行\n第三行' },
         ],
       },
-      session,
+      undefined,
+      {
+        configurable: { session, conversationId: 'conv-1' },
+      },
     );
 
-    expect(JSON.parse(result)).toEqual({ status: 'delivered' });
+    expect(result).toBe('');
+    expect(tool.returnDirect).toBe(true);
     expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['第一句', '第二行\n第三行']);
 
     const suppressed = await beforeSend(session, {});
@@ -432,15 +440,19 @@ describe('qq voice plugin', () => {
       },
     });
 
-    const result = await invokeTool(
-      tools.get('reply_compose_with_voice')!,
+    const tool = createToolInstance(tools.get('reply_compose_with_voice')!);
+    const result = await tool._call(
       {
         segments: [{ kind: 'voice', content: '晚安' }],
       },
-      originalSession,
+      undefined,
+      {
+        configurable: { session: originalSession, conversationId: 'conv-1' },
+      },
     );
 
-    expect(JSON.parse(result)).toEqual({ status: 'delivered' });
+    expect(result).toBe('');
+    expect(tool.returnDirect).toBe(true);
     expect(bot.sendMessage.mock.calls).toHaveLength(1);
 
     const clonedSendSession = createSession(bot, {
@@ -586,12 +598,15 @@ describe('qq voice plugin', () => {
       },
     });
 
-    const result = await invokeTool(
-      tools.get('reply_compose_with_voice')!,
+    const tool = createToolInstance(tools.get('reply_compose_with_voice')!);
+    const result = await tool._call(
       {
         segments: [{ kind: 'voice', content: '晚安' }],
       },
-      session,
+      undefined,
+      {
+        configurable: { session, conversationId: 'conv-1' },
+      },
     );
 
     expect(JSON.parse(result)).toEqual({
@@ -600,6 +615,7 @@ describe('qq voice plugin', () => {
       retry: 'text_only',
       reason: 'tts_preflight_failed',
     });
+    expect(tool.returnDirect).toBe(false);
     expect(bot.sendMessage).not.toHaveBeenCalled();
     expect(result).not.toContain('今天不想发语音');
   });
@@ -635,18 +651,22 @@ describe('qq voice plugin', () => {
       },
     });
 
-    const result = await invokeTool(
-      tools.get('reply_compose_with_voice')!,
+    const tool = createToolInstance(tools.get('reply_compose_with_voice')!);
+    const result = await tool._call(
       {
         segments: [
           { kind: 'text', content: '这是补充文本。' },
           { kind: 'voice', content: '晚安' },
         ],
       },
-      session,
+      undefined,
+      {
+        configurable: { session, conversationId: 'conv-1' },
+      },
     );
 
-    expect(JSON.parse(result)).toEqual({ status: 'delivered' });
+    expect(result).toBe('');
+    expect(tool.returnDirect).toBe(true);
     const calls = bot.sendMessage.mock.calls as Array<any[]>;
     expect(calls).toHaveLength(2);
     expect(calls[0]?.[1]).toBe('这是补充文本。');
