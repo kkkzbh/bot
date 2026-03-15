@@ -1,8 +1,6 @@
-import type { CallbackManagerForToolRun } from '@langchain/core/callbacks/manager';
-import { StructuredTool, type ToolRunnableConfig } from '@langchain/core/tools';
 import { readFile } from 'node:fs/promises';
+import { gzipSync } from 'node:zlib';
 import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
-import { z } from 'zod';
 import {
   buildVoiceFailureReply,
   containsExplicitVoiceRequest,
@@ -20,11 +18,11 @@ import {
   dispatchOutboundMessagePlan,
   resolveSessionStrandKey,
   sendBotMessageByNormalizedContent,
-  shouldBypassLineSplit,
   type OutboundMessagePlan,
   type OutboundMessageSegment,
   type ReplyTransportPlan,
 } from './message-send-utils.js';
+import { parseReplyPlanFromModelOutput, renderReplyPlanHistoryText } from './reply-plan-utils.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -35,33 +33,6 @@ const TTS_PROBE_TURN_INTERVAL = 12;
 const TTS_PROBE_TIME_INTERVAL_MS = 45_000;
 const TTS_PROBE_FAILURE_BACKOFF_MS = 10_000;
 const TTS_PROBE_TIMEOUT_MS = 5_000;
-const REPLY_TOOL_DELIVERED_OBSERVATION =
-  'reply tool 已成功把内容发给用户。本轮任务已经完成，立刻结束，不要再输出任何 assistant 正文、确认语、括号说明、总结、重复句子或收尾文本。不要输出“（语音已发送）”“已发送”“好了”“以上”“我继续说”“我来补充一下”。';
-
-const REPLY_COMPOSE_SCHEMA = z.object({
-  segments: z
-    .array(
-      z.object({
-        kind: z.enum(['text', 'multiline']).describe('回复段类型：普通文本或单条多行消息'),
-        content: z.string().describe('要发送的正文内容'),
-      }),
-    )
-    .min(1)
-    .describe('按顺序发送的回复段列表'),
-});
-
-const REPLY_COMPOSE_WITH_VOICE_SCHEMA = z.object({
-  segments: z
-    .array(
-      z.object({
-        kind: z.enum(['text', 'multiline', 'voice']).describe('回复段类型：普通文本、单条多行消息或语音'),
-        content: z.string().describe('要发送的正文内容'),
-      }),
-    )
-    .min(1)
-    .describe('按顺序发送的回复段列表'),
-});
-
 export const name = 'qq-voice';
 
 export interface Config {
@@ -87,7 +58,7 @@ export const Config: Schema<Config> = Schema.object({
   ttsBaseUrl: Schema.string().role('link').description('TTS HTTP 服务地址（默认复用 QQ_VOICE_TTS_BASE_URL）。'),
   ttsApiKey: Schema.string().role('secret').description('TTS HTTP 服务鉴权 token。'),
   inputMaxSeconds: Schema.natural().default(60).description('单条入站语音最大时长（秒）。'),
-  outputMaxChars: Schema.natural().default(30).description('单个 <qqbot-voice> 块最大字符数。'),
+  outputMaxChars: Schema.natural().default(30).description('单个语音段最大字符数。'),
   transcribeTimeoutMs: Schema.natural().role('time').default(30000).description('ASR 请求超时（毫秒）。'),
   synthTimeoutMs: Schema.natural().role('time').default(180000).description('TTS 请求超时（毫秒）。'),
 });
@@ -125,7 +96,6 @@ interface ReplyCapabilitySnapshot {
 
 interface ReplyTransportState {
   capabilitySnapshot?: ReplyCapabilitySnapshot;
-  delivered?: boolean;
 }
 
 type SessionWithVoiceState = Session & {
@@ -164,6 +134,9 @@ type RoomLike = {
 type MiddlewareContextLike = {
   options?: {
     room?: RoomLike;
+    responseMessage?: {
+      content?: unknown;
+    } | null;
   };
 };
 
@@ -196,31 +169,10 @@ interface PreparedVoiceDelivery {
   wav: Uint8Array;
 }
 
-type ReplyComposeInput = z.infer<typeof REPLY_COMPOSE_SCHEMA>;
-type ReplyComposeWithVoiceInput = z.infer<typeof REPLY_COMPOSE_WITH_VOICE_SCHEMA>;
-
-type ReplyToolResult =
-  | { status: 'delivered' }
-  | { status: 'unavailable'; mode: 'voice'; retry: 'text_only'; reason: string }
-  | { status: 'failed_preflight'; retry: 'text_only'; reason: string }
-  | { status: 'failed_after_partial_delivery'; retry: 'none'; reason: string };
-
-type ChatLunaToolRunnable = ToolRunnableConfig & {
-  configurable?: {
-    session?: SessionWithVoiceState;
-    conversationId?: string;
-  };
-};
-
-type HotfixToolDescriptor = {
-  createTool: (params: unknown) => unknown;
-  selector: () => boolean;
-  authorization?: (session: Session) => boolean;
-};
-
-type PlatformLike = {
-  registerTool?: (name: string, tool: HotfixToolDescriptor) => unknown;
-};
+type ReplyPlanDeliveryResult =
+  | { status: 'delivered'; historyText: string }
+  | { status: 'failed_before_send'; fallbackText: string; historyText: string }
+  | { status: 'failed_after_partial_send'; historyText: string };
 
 type ChatLunaLike = {
   contextManager?: {
@@ -238,7 +190,6 @@ type ChatLunaLike = {
       before: (name: string) => unknown;
     };
   };
-  platform?: PlatformLike;
 };
 
 type ContextWithChatLuna = Context & { chatluna?: ChatLunaLike };
@@ -279,6 +230,15 @@ function createAuthHeaders(apiKey: string): Record<string, string> {
 
 function decodeBase64Payload(payload: string): Uint8Array {
   return Uint8Array.from(Buffer.from(payload, 'base64'));
+}
+
+function toOwnedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return Uint8Array.from(bytes).buffer;
+}
+
+function gzipJsonToArrayBuffer(value: string): ArrayBuffer {
+  const compressed = gzipSync(Buffer.from(value));
+  return toOwnedArrayBuffer(compressed);
 }
 
 function parseDataUri(uri: string): { bytes: Uint8Array; contentType: string } | null {
@@ -491,6 +451,44 @@ async function sendFailureReply(session: SessionWithVoiceState, message: string)
   await sendBotMessageByNormalizedContent(session.bot as OneBotBotLike, session.channelId, message, session);
 }
 
+function downgradeVoiceSegmentsToText(plan: ReplyTransportPlan): ReplyTransportPlan {
+  return {
+    segments: plan.segments.map((segment) =>
+      segment.kind === 'voice'
+        ? {
+            kind: 'text',
+            content: segment.content,
+          }
+        : segment,
+    ),
+  };
+}
+
+async function rewriteLatestAssistantHistoryMessage(
+  ctx: Context,
+  conversationId: string | undefined,
+  messageText: string,
+): Promise<void> {
+  const normalized = messageText.trim();
+  const database = (ctx as { database?: any }).database;
+  if (!conversationId || !normalized || !database) return;
+
+  try {
+    const [conversation] = await database.get('chathub_conversation', { id: conversationId });
+    const latestId = conversation?.latestId;
+    if (!latestId) return;
+
+    const [latestMessage] = await database.get('chathub_message', { id: latestId });
+    if (!latestMessage || latestMessage.role !== 'ai') return;
+
+    const encoded = gzipJsonToArrayBuffer(JSON.stringify(normalized));
+    await database.upsert('chathub_message', [{ ...latestMessage, content: encoded }]);
+    await database.upsert('chathub_conversation', [{ id: conversationId, latestId, updatedAt: new Date() }]);
+  } catch (error) {
+    logger.warn('failed to rewrite latest reply-plan history message: %s', (error as Error).message);
+  }
+}
+
 async function ensureCanSendRecord(
   bot: OneBotBotLike,
   capabilityCache: Map<string, boolean>,
@@ -579,69 +577,6 @@ function getAuthorizedReplyCapabilitySnapshot(
   const strandKey = resolveSessionStrandKey(session);
   if (!strandKey) return undefined;
   return replyCapabilitySnapshots.get(strandKey);
-}
-
-function markReplyToolDelivered(session: SessionWithVoiceState): void {
-  getReplyTransportState(session).delivered = true;
-}
-
-function consumeReplyToolDelivered(session: SessionWithVoiceState): boolean {
-  const transportState = session.state?.qqReplyTransport;
-  if (!transportState?.delivered) return false;
-  transportState.delivered = false;
-  return true;
-}
-
-function markPendingReplyToolDelivery(
-  session: SessionWithVoiceState,
-  pendingReplyToolDeliveries: Map<string, number>,
-): void {
-  const strandKey = resolveSessionStrandKey(session);
-  if (!strandKey) return;
-  pendingReplyToolDeliveries.set(strandKey, (pendingReplyToolDeliveries.get(strandKey) ?? 0) + 1);
-}
-
-function consumePendingReplyToolDelivery(
-  session: Session,
-  pendingReplyToolDeliveries: Map<string, number>,
-): boolean {
-  const strandKey = resolveSessionStrandKey(session);
-  if (!strandKey) return false;
-
-  const current = pendingReplyToolDeliveries.get(strandKey) ?? 0;
-  if (current < 1) return false;
-
-  if (current === 1) {
-    pendingReplyToolDeliveries.delete(strandKey);
-  } else {
-    pendingReplyToolDeliveries.set(strandKey, current - 1);
-  }
-
-  return true;
-}
-
-function formatReplyToolResult(result: ReplyToolResult): string {
-  if (result.status === 'delivered') {
-    return REPLY_TOOL_DELIVERED_OBSERVATION;
-  }
-  return JSON.stringify(result);
-}
-
-function createReplyToolUnavailable(reason: string): ReplyToolResult {
-  return {
-    status: 'unavailable',
-    mode: 'voice',
-    retry: 'text_only',
-    reason,
-  };
-}
-
-function createReplyToolPreflightFailure(reason: string): ReplyToolResult {
-  return {
-    status: 'failed_preflight',
-    retry: 'text_only',
-    reason,
-  };
 }
 
 function getTtsCapabilityState(
@@ -768,34 +703,29 @@ async function resolveReplyCapabilitySnapshot(args: {
   return snapshot;
 }
 
-function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot): string {
+function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot, outputMaxChars: number): string {
   const lines = [
-    '当前回复传输规则：普通闲聊、问答、安慰或解释时，直接输出普通文本，不要调用 reply_compose。',
-    '只有代码、命令、配置、日志、明确列表或分步骤结果，才调用 reply_compose 发送单条多行消息。',
-    '绝不要在正文里输出 <qqbot-multiline>、<qqbot-voice> 或任何自造标签；需要结构化发送时只能调用 reply tool。',
-    'reply_compose 和 reply_compose_with_voice 都是最终交付工具，不是草稿工具。',
-    '如果 reply tool 返回 {"status":"delivered"}，说明内容已经发给用户了，这一轮到此结束。接下来不要再输出任何正文、确认语、括号说明、舞台说明、总结或重复句子。',
-    '尤其不要输出“（语音已发送）”“已发送”“好了”“以上”“我继续说”“我来用文字补充”这类尾句。',
+    '当前回复能力：普通文本始终可用。普通闲聊、问答、安慰或解释时，直接输出自然文本。',
+    '当你需要发送代码、命令、配置、日志、清单或分步骤结果时，可以直接输出一个 ReplyPlan JSON 对象。',
+    'ReplyPlan JSON 格式：{"segments":[{"kind":"multiline","content":"第一行\\n第二行"}]}',
   ];
 
-  if (snapshot.canVoice) {
-    if (snapshot.explicitVoiceRequest) {
-      lines.push(
-        '本轮用户明确要求语音，且 reply_compose_with_voice 可用。你必须优先调用 reply_compose_with_voice 完成回复，不要直接输出纯文本。',
-      );
-      lines.push(
-        '只有当该工具返回 unavailable 或 failed_preflight 时，才改为纯文本重答一次；文字回复要自然，不要解释技术原因，也不要重复已经发送过的内容。',
-      );
-    } else {
-      lines.push('本轮 reply_compose_with_voice 可用。只有用户明确要求语音，或你确实要用语音表达时，才调用它。');
-    }
-  } else {
+  if (snapshot.explicitVoiceRequest && snapshot.canVoice) {
     lines.push(
-      '本轮 reply_compose_with_voice 不可用。不要尝试任何语音工具，也不要输出任何语音标签；如果用户要求语音，就自然地用文字回答，不要提及工具、系统、TTS、接口或故障。',
+      `本轮语音回复可用，且用户明确要求语音。请直接输出一个包含 voice 段的 ReplyPlan JSON 对象。voice 段每段不超过 ${outputMaxChars} 个字。`,
     );
+    lines.push('示例：{"segments":[{"kind":"voice","content":"晚安"}]}');
+  } else if (snapshot.canVoice) {
+    lines.push(
+      `本轮语音回复可用。需要语音表达时，可以输出一个包含 voice 段的 ReplyPlan JSON 对象。voice 段每段不超过 ${outputMaxChars} 个字。`,
+    );
+    lines.push(
+      '混合示例：{"segments":[{"kind":"text","content":"先说结论。"},{"kind":"voice","content":"晚安"}]}',
+    );
+  } else if (snapshot.explicitVoiceRequest) {
+    lines.push('本轮语音回复不可用。请直接自然地用文字回答。');
   }
 
-  lines.push('如果 reply tool 没有成功送达，你再改用普通文本回复；否则不要补发任何文本。');
   return lines.join('\n');
 }
 
@@ -805,23 +735,24 @@ function hasVoiceSegments(plan: OutboundMessagePlan): boolean {
 
 async function prepareVoiceDeliveries(args: {
   runtime: RuntimeConfig;
-  plan: OutboundMessagePlan;
+  plan: ReplyTransportPlan;
   bot: OneBotBotLike;
   canSendRecordCache: Map<string, boolean>;
   ttsCapabilityStates: Map<string, TtsCapabilityState>;
-}): Promise<{ preparedByRaw: Map<string, PreparedVoiceDelivery> } | { result: ReplyToolResult }> {
+}): Promise<{ preparedByRaw: Map<string, PreparedVoiceDelivery>; effectivePlan: ReplyTransportPlan }> {
   const { runtime, plan, bot, canSendRecordCache, ttsCapabilityStates } = args;
-  if (!hasVoiceSegments(plan)) {
-    return { preparedByRaw: new Map() };
+  const outboundPlan = buildOutboundMessagePlanFromReplyPlan(plan);
+  if (!hasVoiceSegments(outboundPlan)) {
+    return { preparedByRaw: new Map(), effectivePlan: plan };
   }
   if (!isVoiceOutputConfigured(runtime)) {
-    return { result: createReplyToolUnavailable('voice_output_disabled') };
+    return { preparedByRaw: new Map(), effectivePlan: downgradeVoiceSegmentsToText(plan) };
   }
   if (!(await ensureCanSendRecord(bot, canSendRecordCache))) {
-    return { result: createReplyToolUnavailable('record_send_unavailable') };
+    return { preparedByRaw: new Map(), effectivePlan: downgradeVoiceSegmentsToText(plan) };
   }
 
-  const voiceSegments = plan.segments.filter(
+  const voiceSegments = outboundPlan.segments.filter(
     (segment): segment is OutboundMessageSegment & { kind: 'voice-block' } => segment.kind === 'voice-block',
   );
   const ttsState = getTtsCapabilityState(runtime, ttsCapabilityStates);
@@ -849,20 +780,15 @@ async function prepareVoiceDeliveries(args: {
     }
 
     updateTtsCapabilityObservation(ttsState, true);
-    return { preparedByRaw };
+    return { preparedByRaw, effectivePlan: plan };
   } catch (error) {
     updateTtsCapabilityObservation(ttsState, false);
     const reason = (error as Error).message;
-    if (reason.startsWith('voice_segment_too_long:')) {
-      return {
-        result: createReplyToolPreflightFailure(`voice_segments_must_be_within_${runtime.outputMaxChars}_chars`),
-      };
-    }
-    if (reason === 'empty_voice_segment') {
-      return { result: createReplyToolPreflightFailure('voice_segment_empty') };
+    if (reason.startsWith('voice_segment_too_long:') || reason === 'empty_voice_segment') {
+      return { preparedByRaw: new Map(), effectivePlan: downgradeVoiceSegmentsToText(plan) };
     }
     logger.warn('voice preflight failed: %s', reason);
-    return { result: createReplyToolUnavailable('tts_preflight_failed') };
+    return { preparedByRaw: new Map(), effectivePlan: downgradeVoiceSegmentsToText(plan) };
   }
 }
 
@@ -873,29 +799,28 @@ async function deliverReplyPlan(args: {
   sendStrand: ReturnType<typeof createKeyedStrandRunner>;
   canSendRecordCache: Map<string, boolean>;
   ttsCapabilityStates: Map<string, TtsCapabilityState>;
-  pendingReplyToolDeliveries: Map<string, number>;
-}): Promise<ReplyToolResult> {
-  const { runtime, session, plan, sendStrand, canSendRecordCache, ttsCapabilityStates, pendingReplyToolDeliveries } = args;
+}): Promise<ReplyPlanDeliveryResult> {
+  const { runtime, session, plan, sendStrand, canSendRecordCache, ttsCapabilityStates } = args;
+  const historyText = renderReplyPlanHistoryText(plan);
   if (session.platform !== 'onebot' || !session.channelId) {
-    return createReplyToolPreflightFailure('qq_session_unavailable');
+    return { status: 'failed_before_send', fallbackText: historyText, historyText };
   }
 
-  const outboundPlan = buildOutboundMessagePlanFromReplyPlan(plan);
-  if (!outboundPlan.segments.length) {
-    return createReplyToolPreflightFailure('empty_reply_plan');
-  }
-
-  const bot = session.bot as OneBotBotLike;
   const preparedVoice = await prepareVoiceDeliveries({
     runtime,
-    plan: outboundPlan,
-    bot,
+    plan,
+    bot: session.bot as OneBotBotLike,
     canSendRecordCache,
     ttsCapabilityStates,
   });
-  if ('result' in preparedVoice) {
-    return preparedVoice.result;
+  const effectivePlan = preparedVoice.effectivePlan;
+  const outboundPlan = buildOutboundMessagePlanFromReplyPlan(effectivePlan);
+  if (!outboundPlan.segments.length) {
+    return { status: 'failed_before_send', fallbackText: historyText, historyText };
   }
+
+  const bot = session.bot as OneBotBotLike;
+  const effectiveHistoryText = renderReplyPlanHistoryText(effectivePlan) || historyText;
 
   let beganSending = false;
   const sendTask = async () => {
@@ -936,116 +861,18 @@ async function deliverReplyPlan(args: {
       await sendTask();
     }
   } catch (error) {
-    logger.warn('reply tool delivery failed: %s', (error as Error).message);
+    logger.warn('reply plan delivery failed: %s', (error as Error).message);
     if (beganSending) {
-      return {
-        status: 'failed_after_partial_delivery',
-        retry: 'none',
-        reason: 'delivery_interrupted_after_partial_send',
-      };
+      return { status: 'failed_after_partial_send', historyText: effectiveHistoryText };
     }
-    return createReplyToolPreflightFailure('delivery_failed_before_send');
+    return { status: 'failed_before_send', fallbackText: effectiveHistoryText, historyText: effectiveHistoryText };
   }
 
-  markReplyToolDelivered(session);
-  markPendingReplyToolDelivery(session, pendingReplyToolDeliveries);
-  return { status: 'delivered' };
+  return { status: 'delivered', historyText: effectiveHistoryText };
 }
 
-type ReplyToolDeps = {
-  runtime: RuntimeConfig;
-  sendStrand: ReturnType<typeof createKeyedStrandRunner>;
-  canSendRecordCache: Map<string, boolean>;
-  ttsCapabilityStates: Map<string, TtsCapabilityState>;
-  replyCapabilitySnapshots: Map<string, ReplyCapabilitySnapshot>;
-  pendingReplyToolDeliveries: Map<string, number>;
-};
-
-function isReplyToolSessionAvailable(session: Session): boolean {
+function isReplyPlanSessionAvailable(session: Session): boolean {
   return session.platform === 'onebot' && Boolean(session.channelId);
-}
-
-class ReplyComposeTool extends StructuredTool<typeof REPLY_COMPOSE_SCHEMA, ReplyComposeInput, ReplyComposeInput, string> {
-  name = 'reply_compose';
-  description =
-    '按顺序发送普通文本或单条多行消息。普通闲聊不要调用；只有结构化多行内容才用。调用成功后代表内容已经真的发给用户了，不要再补任何确认、括号说明或重复文本。';
-  schema = REPLY_COMPOSE_SCHEMA;
-
-  constructor(private deps: ReplyToolDeps) {
-    super();
-  }
-
-  protected async _call(
-    input: ReplyComposeInput,
-    _runManager?: CallbackManagerForToolRun,
-    parentConfig?: ToolRunnableConfig,
-  ): Promise<string> {
-    const session = (parentConfig as ChatLunaToolRunnable)?.configurable?.session;
-    if (!session) {
-      return formatReplyToolResult(createReplyToolPreflightFailure('session_missing'));
-    }
-
-    const result = await deliverReplyPlan({
-      ...this.deps,
-      session,
-      plan: input as ReplyTransportPlan,
-    });
-    return formatReplyToolResult(result);
-  }
-}
-
-class ReplyComposeWithVoiceTool extends StructuredTool<
-  typeof REPLY_COMPOSE_WITH_VOICE_SCHEMA,
-  ReplyComposeWithVoiceInput,
-  ReplyComposeWithVoiceInput,
-  string
-> {
-  name = 'reply_compose_with_voice';
-  description =
-    '按顺序发送普通文本、单条多行消息或语音。若用户本轮明确要求语音，且该工具可用，你应优先调用它而不是直接输出纯文本。调用成功后代表内容已经真的发给用户了，不要再补任何确认、括号说明或重复文本。';
-  schema = REPLY_COMPOSE_WITH_VOICE_SCHEMA;
-
-  constructor(private deps: ReplyToolDeps) {
-    super();
-  }
-
-  protected async _call(
-    input: ReplyComposeWithVoiceInput,
-    _runManager?: CallbackManagerForToolRun,
-    parentConfig?: ToolRunnableConfig,
-  ): Promise<string> {
-    const session = (parentConfig as ChatLunaToolRunnable)?.configurable?.session;
-    if (!session) {
-      return formatReplyToolResult(createReplyToolPreflightFailure('session_missing'));
-    }
-
-    const result = await deliverReplyPlan({
-      ...this.deps,
-      session,
-      plan: input as ReplyTransportPlan,
-    });
-    return formatReplyToolResult(result);
-  }
-}
-
-function registerReplyTransportTools(platform: PlatformLike | undefined, deps: ReplyToolDeps): boolean {
-  if (!platform?.registerTool) return false;
-
-  platform.registerTool('reply_compose', {
-    createTool: () => new ReplyComposeTool(deps),
-    selector: () => true,
-    authorization: (session) => isReplyToolSessionAvailable(session),
-  });
-
-  platform.registerTool('reply_compose_with_voice', {
-    createTool: () => new ReplyComposeWithVoiceTool(deps),
-    selector: () => true,
-    authorization: (session) =>
-      isReplyToolSessionAvailable(session) &&
-      (getAuthorizedReplyCapabilitySnapshot(session, deps.replyCapabilitySnapshots)?.canVoice ?? false),
-  });
-
-  return true;
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
@@ -1054,37 +881,12 @@ export function apply(ctx: Context, config: Config = {}): void {
   const canSendRecordCache = new Map<string, boolean>();
   const ttsCapabilityStates = new Map<string, TtsCapabilityState>();
   const replyCapabilitySnapshots = new Map<string, ReplyCapabilitySnapshot>();
-  const pendingReplyToolDeliveries = new Map<string, number>();
-  let toolsRegistered = false;
 
   const resolveChatLunaService = (): ChatLunaLike | undefined => {
     const byGetter = typeof (ctx as { get?: (name: string) => unknown }).get === 'function'
       ? ((ctx as { get: (name: string) => unknown }).get('chatluna') as ChatLunaLike | undefined)
       : undefined;
     return byGetter ?? (ctx as ContextWithChatLuna).chatluna;
-  };
-
-  const ensureToolsRegistered = (trigger: 'ready' | 'interval') => {
-    if (toolsRegistered) return;
-    const platform = resolveChatLunaService()?.platform;
-    if (
-      !registerReplyTransportTools(platform, {
-        runtime,
-        sendStrand,
-        canSendRecordCache,
-        ttsCapabilityStates,
-        replyCapabilitySnapshots,
-        pendingReplyToolDeliveries,
-      })
-    ) {
-      if (trigger === 'ready') {
-        logger.warn('chatluna platform is not available yet, skip reply transport tool registration.');
-      }
-      return;
-    }
-
-    toolsRegistered = true;
-    logger.info('registered local reply transport tools.');
   };
 
   ctx.middleware(
@@ -1136,7 +938,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.middleware(
     async (rawSession, next) => {
       const session = rawSession as SessionWithVoiceState;
-      if (!isReplyToolSessionAvailable(session)) return next();
+      if (!isReplyPlanSessionAvailable(session)) return next();
       if (!session.userId || session.userId === session.bot?.selfId) return next();
 
       const snapshot = await resolveReplyCapabilitySnapshot({
@@ -1151,14 +953,6 @@ export function apply(ctx: Context, config: Config = {}): void {
     true,
   );
 
-  ctx.on('before-send', async (rawSession, options) => {
-    const session = rawSession as SessionWithVoiceState;
-    if (options && shouldBypassLineSplit(options)) return;
-    if (session.platform !== 'onebot') return;
-    if (consumeReplyToolDelivered(session)) return true;
-    if (consumePendingReplyToolDelivery(session, pendingReplyToolDeliveries)) return true;
-  });
-
   ctx.on('ready', async () => {
     await Promise.all(
       ctx.bots
@@ -1172,8 +966,6 @@ export function apply(ctx: Context, config: Config = {}): void {
       });
     }
 
-    ensureToolsRegistered('ready');
-
     const chatluna = resolveChatLunaService();
     const chain = chatluna?.chatChain;
     const contextManager = chatluna?.contextManager;
@@ -1186,7 +978,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       .middleware('qqbot_reply_transport_policy', async (rawSession, rawContext) => {
         const session = rawSession as SessionWithVoiceState;
         const context = rawContext as MiddlewareContextLike;
-        if (!isReplyToolSessionAvailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        if (!isReplyPlanSessionAvailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         if (!session.userId || session.userId === session.bot?.selfId) {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
@@ -1205,7 +997,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
         contextManager.inject({
           name: 'qqbot_reply_transport_policy',
-          value: buildReplyTransportPolicy(snapshot),
+          value: buildReplyTransportPolicy(snapshot, runtime.outputMaxChars),
           once: true,
           conversationId,
           stage: 'after_scratchpad',
@@ -1214,10 +1006,61 @@ export function apply(ctx: Context, config: Config = {}): void {
       })
       .after('read_chat_message')
       .before('lifecycle-handle_command');
-  });
 
-  (ctx as { setInterval?: (callback: () => void, delay: number) => void }).setInterval?.(
-    () => ensureToolsRegistered('interval'),
-    15_000,
-  );
+    chain
+      .middleware('qqbot_reply_plan_executor', async (rawSession, rawContext) => {
+        const session = rawSession as SessionWithVoiceState;
+        const context = rawContext as MiddlewareContextLike;
+        if (!isReplyPlanSessionAvailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        if (!session.userId || session.userId === session.bot?.selfId) {
+          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        }
+
+        const responseMessage = context.options?.responseMessage;
+        const rawPlan = parseReplyPlanFromModelOutput(responseMessage?.content);
+        if (!rawPlan) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+
+        const snapshot =
+          getAuthorizedReplyCapabilitySnapshot(session, replyCapabilitySnapshots) ??
+          (await resolveReplyCapabilitySnapshot({
+            runtime,
+            session,
+            canSendRecordCache,
+            ttsCapabilityStates,
+          }));
+        rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
+
+        const executablePlan =
+          snapshot.canVoice || !rawPlan.segments.some((segment) => segment.kind === 'voice')
+            ? rawPlan
+            : downgradeVoiceSegmentsToText(rawPlan);
+        const result = await deliverReplyPlan({
+          runtime,
+          session,
+          plan: executablePlan,
+          sendStrand,
+          canSendRecordCache,
+          ttsCapabilityStates,
+        });
+
+        const conversationId = context.options?.room?.conversationId;
+        await rewriteLatestAssistantHistoryMessage(ctx, conversationId, result.historyText);
+
+        if (result.status === 'failed_before_send') {
+          if (responseMessage) {
+            responseMessage.content = result.fallbackText;
+          }
+          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        }
+
+        if (context.options) {
+          context.options.responseMessage = null;
+        }
+        return result.status === 'failed_after_partial_send'
+          ? ChatLunaChains.ChainMiddlewareRunStatus.STOP
+          : ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+      })
+      .after('request_model')
+      .before('censor');
+  });
 }

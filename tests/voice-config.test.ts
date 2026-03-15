@@ -65,10 +65,9 @@ describe('qq voice config wiring', () => {
     const content = readFileSync(resolve(process.cwd(), 'data/chathub/presets/sakiko.yml'), 'utf8');
 
     expect(content).toContain('# 回复组织原则');
-    expect(content).toContain('系统当前提供了结构化发送工具');
-    expect(content).toContain('系统当前明确提供可用语音工具');
-    expect(content).toContain('回复工具一旦成功');
-    expect(content).toContain('特别不要输出“（语音已发送）”');
+    expect(content).toContain('默认直接像普通聊天一样说话，优先输出自然的纯文本');
+    expect(content).toContain('按系统给出的 ReplyPlan 结构输出');
+    expect(content).toContain('用户明确要求语音且系统当前告知语音可用时');
     expect(content).not.toContain('<qqbot-multiline>');
     expect(content).not.toContain('<qqbot-voice>');
   });

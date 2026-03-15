@@ -86,11 +86,6 @@ import { apply } from '../src/plugins/qq-voice.js';
 type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
 type EventHandler = (...args: any[]) => Promise<unknown> | unknown;
 type ChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;
-type ToolDescriptor = {
-  createTool: (params: unknown) => any;
-  selector: () => boolean;
-  authorization?: (session: Record<string, any>) => boolean;
-};
 
 function createChainBuilder(store: Map<string, ChainMiddleware>) {
   return {
@@ -114,8 +109,33 @@ function createHarness(overrides: {
   const middlewares: Middleware[] = [];
   const events = new Map<string, EventHandler[]>();
   const chainMiddlewares = new Map<string, ChainMiddleware>();
-  const registeredTools = new Map<string, ToolDescriptor>();
   const inject = vi.fn();
+
+  const database = {
+    get: vi.fn(async (table: string, query: Record<string, unknown>) => {
+      if (table === 'chathub_conversation') {
+        return [{ id: query.id ?? 'conv-1', latestId: 'msg-ai-1' }];
+      }
+      if (table === 'chathub_message') {
+        return [
+          {
+            id: query.id ?? 'msg-ai-1',
+            role: 'ai',
+            content: null,
+            parent: 'msg-human-1',
+            name: null,
+            tool_calls: null,
+            tool_call_id: null,
+            additional_kwargs_binary: null,
+            rawId: null,
+            conversation: 'conv-1',
+          },
+        ];
+      }
+      return [];
+    }),
+    upsert: vi.fn(async () => undefined),
+  };
 
   const internal: Record<string, any> = {
     canSendRecord: vi.fn(async () => {
@@ -141,16 +161,12 @@ function createHarness(overrides: {
   const chatluna = {
     contextManager: { inject },
     chatChain: createChainBuilder(chainMiddlewares),
-    platform: {
-      registerTool: vi.fn((name: string, tool: ToolDescriptor) => {
-        registeredTools.set(name, tool);
-      }),
-    },
   };
 
   const ctx = {
     bots: [bot],
     chatluna,
+    database,
     get: vi.fn((name: string) => {
       if (name !== 'chatluna') return undefined;
       return chatluna;
@@ -163,7 +179,6 @@ function createHarness(overrides: {
       existing.push(handler);
       events.set(name, existing);
     }),
-    setInterval: vi.fn(),
   };
 
   apply(ctx as never, {
@@ -182,13 +197,12 @@ function createHarness(overrides: {
   return {
     inbound: middlewares[0],
     capabilityMiddleware: middlewares[1],
-    beforeSend: (events.get('before-send') ?? [])[0],
     ready: (events.get('ready') ?? [])[0],
     getPolicy: () => chainMiddlewares.get('qqbot_reply_transport_policy'),
+    getExecutor: () => chainMiddlewares.get('qqbot_reply_plan_executor'),
     inject,
     bot,
-    tools: registeredTools,
-    ctx,
+    database,
   };
 }
 
@@ -212,21 +226,6 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
-}
-
-async function invokeTool(
-  descriptor: ToolDescriptor,
-  input: unknown,
-  session: Record<string, any>,
-): Promise<string> {
-  const tool = descriptor.createTool({});
-  return (await (tool as any)._call(input, undefined, {
-    configurable: { session, conversationId: 'conv-1' },
-  })) as string;
-}
-
-function createToolInstance(descriptor: ToolDescriptor): any {
-  return descriptor.createTool({});
 }
 
 describe('qq voice plugin', () => {
@@ -269,19 +268,18 @@ describe('qq voice plugin', () => {
     });
   });
 
-  it('registers reply transport tools and policy middleware on ready', async () => {
-    const { ready, tools, getPolicy } = createHarness();
+  it('registers policy and executor middlewares on ready', async () => {
+    const { ready, getPolicy, getExecutor } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
     await ready();
     await flushMicrotasks();
 
-    expect(tools.has('reply_compose')).toBe(true);
-    expect(tools.has('reply_compose_with_voice')).toBe(true);
     expect(getPolicy()).toBeTypeOf('function');
+    expect(getExecutor()).toBeTypeOf('function');
   });
 
-  it('injects unavailable transport policy when explicit voice request arrives and TTS is down', async () => {
+  it('injects a simple text-only policy when explicit voice request arrives and TTS is down', async () => {
     const { ready, getPolicy, inject, bot } = createHarness();
     vi.stubGlobal(
       'fetch',
@@ -304,17 +302,13 @@ describe('qq voice plugin', () => {
     });
 
     await policy?.(session, { options: { room: { conversationId: 'conv-1' } } });
-    expect(inject).toHaveBeenCalledTimes(1);
-    expect(inject.mock.calls[0]?.[0]).toMatchObject({
-      name: 'qqbot_reply_transport_policy',
-      conversationId: 'conv-1',
-      once: true,
-      stage: 'after_scratchpad',
-    });
-    expect(String(inject.mock.calls[0]?.[0]?.value ?? '')).toContain('reply_compose_with_voice 不可用');
+    const injectedPolicy = String(inject.mock.calls[0]?.[0]?.value ?? '');
+    expect(injectedPolicy).toContain('本轮语音回复不可用。请直接自然地用文字回答。');
+    expect(injectedPolicy).not.toContain('<qqbot-voice>');
+    expect(injectedPolicy).not.toContain('reply_compose');
   });
 
-  it('injects voice-capable transport policy when explicit voice request arrives and TTS is healthy', async () => {
+  it('injects ReplyPlan policy when explicit voice request arrives and TTS is healthy', async () => {
     const { ready, getPolicy, inject, bot } = createHarness();
     vi.stubGlobal(
       'fetch',
@@ -338,11 +332,11 @@ describe('qq voice plugin', () => {
 
     await policy?.(session, { options: { room: { conversationId: 'conv-voice' } } });
     const injectedPolicy = String(inject.mock.calls[0]?.[0]?.value ?? '');
-    expect(injectedPolicy).toContain('reply_compose_with_voice 可用');
-    expect(injectedPolicy).toContain('必须优先调用 reply_compose_with_voice');
-    expect(injectedPolicy).toContain('不要直接输出纯文本');
-    expect(injectedPolicy).toContain('reply_compose 和 reply_compose_with_voice 都是最终交付工具');
-    expect(injectedPolicy).toContain('不要输出“（语音已发送）”');
+    expect(injectedPolicy).toContain('包含 voice 段的 ReplyPlan JSON 对象');
+    expect(injectedPolicy).toContain('"kind":"voice"');
+    expect(injectedPolicy).toContain('voice 段每段不超过 30 个字');
+    expect(injectedPolicy).not.toContain('<qqbot-voice>');
+    expect(injectedPolicy).not.toContain('reply_compose');
   });
 
   it('amortizes tts probing across turns and refreshes again on the 12th turn', async () => {
@@ -358,6 +352,7 @@ describe('qq voice plugin', () => {
 
     await ready();
     await flushMicrotasks();
+
     const session = createSession(bot, {
       content: '普通聊天',
       strippedContent: '普通聊天',
@@ -373,43 +368,36 @@ describe('qq voice plugin', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('reply_compose sends structured segments and suppresses the later assistant text send', async () => {
-    const { ready, tools, beforeSend, bot } = createHarness();
+  it('executes a multiline ReplyPlan and suppresses the raw JSON response', async () => {
+    const { ready, getExecutor, bot, database } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
     await ready();
     await flushMicrotasks();
 
+    const executor = getExecutor();
     const session = createSession(bot, {
-      content: '最终正文不该再发一次',
-      strippedContent: '最终正文不该再发一次',
+      content: '给我两行命令',
+      strippedContent: '给我两行命令',
     });
-    const tool = createToolInstance(tools.get('reply_compose')!);
-    const result = await tool._call(
-      {
-        segments: [
-          { kind: 'text', content: '第一句' },
-          { kind: 'multiline', content: '第二行\n第三行' },
-        ],
+    const context = {
+      options: {
+        room: { conversationId: 'conv-1' },
+        responseMessage: {
+          content: '{"segments":[{"kind":"multiline","content":"echo hi\\npwd"}]}',
+        },
       },
-      undefined,
-      {
-        configurable: { session, conversationId: 'conv-1' },
-      },
-    );
+    };
 
-    expect(result).toContain('reply tool 已成功把内容发给用户');
-    expect(result).toContain('不要输出“（语音已发送）”');
-    expect(tool.returnDirect).not.toBe(true);
-    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['第一句', '第二行\n第三行']);
-
-    const suppressed = await beforeSend(session, {});
-    expect(suppressed).toBe(true);
-    expect(bot.sendMessage.mock.calls).toHaveLength(2);
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['echo hi\npwd']);
+    expect(context.options.responseMessage).toBeNull();
+    expect(database.upsert).toHaveBeenCalled();
   });
 
-  it('suppresses the trailing assistant text after voice tool delivery even when before-send sees a cloned session', async () => {
-    const { ready, tools, beforeSend, bot } = createHarness();
+  it('executes a voice ReplyPlan and sends one audio payload', async () => {
+    const { ready, getExecutor, bot } = createHarness();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === 'http://127.0.0.1:8082/healthz') {
@@ -425,11 +413,10 @@ describe('qq voice plugin', () => {
     await ready();
     await flushMicrotasks();
 
-    const originalSession = createSession(bot, {
-      isDirect: true,
-      channelId: 'private:90000123',
-      guildId: undefined,
-      userId: '90000123',
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '请用语音回我一句晚安',
+      strippedContent: '请用语音回我一句晚安',
       state: {
         qqReplyTransport: {
           capabilitySnapshot: {
@@ -442,135 +429,25 @@ describe('qq voice plugin', () => {
         },
       },
     });
-
-    const tool = createToolInstance(tools.get('reply_compose_with_voice')!);
-    const result = await tool._call(
-      {
-        segments: [{ kind: 'voice', content: '晚安' }],
+    const context = {
+      options: {
+        room: { conversationId: 'conv-voice' },
+        responseMessage: {
+          content: '{"segments":[{"kind":"voice","content":"晚安"}]}',
+        },
       },
-      undefined,
-      {
-        configurable: { session: originalSession, conversationId: 'conv-1' },
-      },
-    );
+    };
 
-    expect(result).toContain('reply tool 已成功把内容发给用户');
-    expect(result).toContain('不要输出“（语音已发送）”');
-    expect(tool.returnDirect).not.toBe(true);
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
     expect(bot.sendMessage.mock.calls).toHaveLength(1);
-
-    const clonedSendSession = createSession(bot, {
-      channelId: 'private:90000123',
-      guildId: undefined,
-      userId: '90000123',
-      content: '（语音已发送）',
-      strippedContent: '（语音已发送）',
-      state: {},
-    });
-
-    const suppressed = await beforeSend(clonedSendSession, {});
-    expect(suppressed).toBe(true);
-    expect(bot.sendMessage.mock.calls).toHaveLength(1);
+    const audioCall = (bot.sendMessage.mock.calls as Array<any[]>)[0];
+    expect(String(audioCall?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
+    expect(context.options.responseMessage).toBeNull();
   });
 
-  it('reply_compose_with_voice authorization reuses the preloaded snapshot for private sessions even when tool auth sees no isDirect flag', async () => {
-    const { ready, capabilityMiddleware, tools, bot } = createHarness();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url === 'http://127.0.0.1:8082/healthz') {
-          return new Response('ok', { status: 200 });
-        }
-        throw new Error(`unexpected fetch: ${url}`);
-      }),
-    );
-
-    await ready();
-    await flushMicrotasks();
-
-    const originalSession = createSession(bot, {
-      isDirect: true,
-      channelId: 'private:90000123',
-      guildId: undefined,
-      userId: '90000123',
-      content: '请用语音回我一句晚安',
-      strippedContent: '请用语音回我一句晚安',
-    });
-
-    await capabilityMiddleware?.(originalSession, async () => undefined);
-
-    const clonedSession = createSession(bot, {
-      channelId: 'private:90000123',
-      guildId: undefined,
-      userId: '90000123',
-      content: '请用语音回我一句晚安',
-      strippedContent: '请用语音回我一句晚安',
-      state: {},
-    });
-
-    expect(tools.get('reply_compose_with_voice')?.authorization?.(clonedSession)).toBe(true);
-  });
-
-  it('reply_compose_with_voice authorization follows the latest capability snapshot', async () => {
-    const { ready, capabilityMiddleware, tools, bot } = createHarness();
-    const fetchMock = vi
-      .fn(async () => new Response('ok', { status: 200 }))
-      .mockRejectedValueOnce(new Error('down'))
-      .mockRejectedValueOnce(new Error('down'))
-      .mockResolvedValueOnce(new Response('ok', { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await ready();
-    await flushMicrotasks();
-
-    const voiceTool = tools.get('reply_compose_with_voice')!;
-    const session = createSession(bot, {
-      content: '请发语音',
-      strippedContent: '请发语音',
-    });
-
-    await capabilityMiddleware?.(session, async () => undefined);
-    expect(voiceTool.authorization?.(session)).toBe(false);
-
-    await capabilityMiddleware?.(session, async () => undefined);
-    expect(voiceTool.authorization?.(session)).toBe(true);
-  });
-
-  it('reply_compose_with_voice authorization can reuse the preloaded snapshot on a cloned session object', async () => {
-    const { ready, capabilityMiddleware, tools, bot } = createHarness();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url === 'http://127.0.0.1:8082/healthz') {
-          return new Response('ok', { status: 200 });
-        }
-        throw new Error(`unexpected fetch: ${url}`);
-      }),
-    );
-
-    await ready();
-    await flushMicrotasks();
-
-    const originalSession = createSession(bot, {
-      content: '请用语音回我一句晚安',
-      strippedContent: '请用语音回我一句晚安',
-    });
-
-    await capabilityMiddleware?.(originalSession, async () => undefined);
-
-    const clonedSession = createSession(bot, {
-      content: '请用语音回我一句晚安',
-      strippedContent: '请用语音回我一句晚安',
-      state: {},
-    });
-
-    expect(tools.get('reply_compose_with_voice')?.authorization?.(clonedSession)).toBe(true);
-  });
-
-  it('reply_compose_with_voice returns structured failure without sending fallback text when preflight synthesis fails', async () => {
-    const { ready, tools, bot } = createHarness();
+  it('downgrades a voice ReplyPlan to plain text when synthesis fails before send', async () => {
+    const { ready, getExecutor, bot } = createHarness();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === 'http://127.0.0.1:8082/healthz') {
@@ -586,9 +463,10 @@ describe('qq voice plugin', () => {
     await ready();
     await flushMicrotasks();
 
+    const executor = getExecutor();
     const session = createSession(bot, {
-      content: '请发语音',
-      strippedContent: '请发语音',
+      content: '请用语音回我一句晚安',
+      strippedContent: '请用语音回我一句晚安',
       state: {
         qqReplyTransport: {
           capabilitySnapshot: {
@@ -601,80 +479,18 @@ describe('qq voice plugin', () => {
         },
       },
     });
-
-    const tool = createToolInstance(tools.get('reply_compose_with_voice')!);
-    const result = await tool._call(
-      {
-        segments: [{ kind: 'voice', content: '晚安' }],
-      },
-      undefined,
-      {
-        configurable: { session, conversationId: 'conv-1' },
-      },
-    );
-
-    expect(JSON.parse(result)).toEqual({
-      status: 'unavailable',
-      mode: 'voice',
-      retry: 'text_only',
-      reason: 'tts_preflight_failed',
-    });
-    expect(tool.returnDirect).not.toBe(true);
-    expect(bot.sendMessage).not.toHaveBeenCalled();
-    expect(result).not.toContain('今天不想发语音');
-  });
-
-  it('reply_compose_with_voice sends text first and then one audio payload when synthesis succeeds', async () => {
-    const { ready, tools, bot } = createHarness();
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === 'http://127.0.0.1:8082/healthz') {
-        return new Response('ok', { status: 200 });
-      }
-      if (url === 'http://127.0.0.1:8082/synthesize' && init?.method === 'POST') {
-        return new Response(Uint8Array.from([82, 73, 70, 70]), { status: 200 });
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    await ready();
-    await flushMicrotasks();
-
-    const session = createSession(bot, {
-      state: {
-        qqReplyTransport: {
-          capabilitySnapshot: {
-            canMultiline: true,
-            canVoice: true,
-            source: 'forced',
-            refreshedAt: Date.now(),
-            explicitVoiceRequest: true,
-          },
+    const context = {
+      options: {
+        room: { conversationId: 'conv-voice' },
+        responseMessage: {
+          content: '{"segments":[{"kind":"voice","content":"晚安"}]}',
         },
       },
-    });
+    };
 
-    const tool = createToolInstance(tools.get('reply_compose_with_voice')!);
-    const result = await tool._call(
-      {
-        segments: [
-          { kind: 'text', content: '这是补充文本。' },
-          { kind: 'voice', content: '晚安' },
-        ],
-      },
-      undefined,
-      {
-        configurable: { session, conversationId: 'conv-1' },
-      },
-    );
-
-    expect(result).toContain('reply tool 已成功把内容发给用户');
-    expect(result).toContain('不要输出“（语音已发送）”');
-    expect(tool.returnDirect).not.toBe(true);
-    const calls = bot.sendMessage.mock.calls as Array<any[]>;
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.[1]).toBe('这是补充文本。');
-    expect(String(calls[1]?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['晚安']);
+    expect(context.options.responseMessage).toBeNull();
   });
 });
