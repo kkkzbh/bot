@@ -694,6 +694,7 @@ function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot, outputMaxC
   const lines = [
     '当前回复能力：普通文本始终可用。普通闲聊、问答、安慰或解释时，直接输出自然文本。',
     '当你需要发送代码、命令、配置、日志、清单或分步骤结果时，可以直接输出一个 ReplyPlan JSON 对象。',
+    '如果你决定使用 ReplyPlan，就只输出 ReplyPlan JSON 对象本身，不要添加解释、前缀或代码块。',
     'ReplyPlan JSON 格式：{"segments":[{"kind":"multiline","content":"第一行\\n第二行"}]}',
   ];
 

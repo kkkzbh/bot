@@ -336,6 +336,7 @@ describe('qq voice plugin', () => {
 
     await policy?.(session, { options: { room: { conversationId: 'conv-voice' } } });
     const injectedPolicy = String(inject.mock.calls[0]?.[0]?.value ?? '');
+    expect(injectedPolicy).toContain('如果你决定使用 ReplyPlan，就只输出 ReplyPlan JSON 对象本身，不要添加解释、前缀或代码块。');
     expect(injectedPolicy).toContain('本轮语音回复可用。需要语音表达时，可以输出一个包含 voice 段的 ReplyPlan JSON 对象。');
     expect(injectedPolicy).toContain('"kind":"voice"');
     expect(injectedPolicy).toContain('较长内容请拆成多个 voice 段');
