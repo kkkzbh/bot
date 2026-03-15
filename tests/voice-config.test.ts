@@ -70,7 +70,7 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('# 回复组织原则');
     expect(content).toContain('默认直接像普通聊天一样说话，优先输出自然的纯文本');
     expect(content).toContain('直接输出 ReplyPlan JSON 对象本身');
-    expect(content).toContain('系统当前告知语音可用时，如果对方想听你说话');
+    expect(content).toContain('系统当前告知语音可用时，如果你决定发送一条语音回复');
     expect(content).not.toContain('<qqbot-multiline>');
     expect(content).not.toContain('<qqbot-voice>');
   });

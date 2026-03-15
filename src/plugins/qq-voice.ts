@@ -755,7 +755,7 @@ function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot, outputMaxW
 
   if (snapshot.canVoice) {
     lines.push(
-      `本轮语音回复可用。如果对方希望你用语音回复，或者你判断语音更适合当前表达，就直接输出一个包含一个或多个 voice 段的 ReplyPlan JSON 对象。单个 voice 段上限约 ${outputMaxWords} 词、${outputMaxSeconds} 秒；多个 voice 段会按顺序发送；较长内容请拆成多个 voice 段。`,
+      `本轮语音回复可用。如果你决定发送一条语音回复，就直接输出一个包含一个或多个 voice 段的 ReplyPlan JSON 对象。单个 voice 段上限约 ${outputMaxWords} 词、${outputMaxSeconds} 秒；多个 voice 段会按顺序发送；较长内容请拆成多个 voice 段。`,
     );
     lines.push('voice 段格式：{"segments":[{"kind":"voice","content":"一段语音内容"}]}');
     lines.push(
