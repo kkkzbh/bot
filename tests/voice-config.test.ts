@@ -67,7 +67,8 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('# 回复组织原则');
     expect(content).toContain('系统当前提供了结构化发送工具');
     expect(content).toContain('系统当前明确提供可用语音工具');
-    expect(content).toContain('工具已经完成发送');
+    expect(content).toContain('回复工具一旦成功');
+    expect(content).toContain('特别不要输出“（语音已发送）”');
     expect(content).not.toContain('<qqbot-multiline>');
     expect(content).not.toContain('<qqbot-voice>');
   });

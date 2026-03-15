@@ -619,9 +619,6 @@ function consumePendingReplyToolDelivery(
 }
 
 function formatReplyToolResult(result: ReplyToolResult): string {
-  if (result.status === 'delivered') {
-    return '';
-  }
   return JSON.stringify(result);
 }
 
@@ -771,6 +768,9 @@ function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot): string {
     '当前回复传输规则：普通闲聊、问答、安慰或解释时，直接输出普通文本，不要调用 reply_compose。',
     '只有代码、命令、配置、日志、明确列表或分步骤结果，才调用 reply_compose 发送单条多行消息。',
     '绝不要在正文里输出 <qqbot-multiline>、<qqbot-voice> 或任何自造标签；需要结构化发送时只能调用 reply tool。',
+    'reply_compose 和 reply_compose_with_voice 都是最终交付工具，不是草稿工具。',
+    '如果 reply tool 返回 {"status":"delivered"}，说明内容已经发给用户了，这一轮到此结束。接下来不要再输出任何正文、确认语、括号说明、舞台说明、总结或重复句子。',
+    '尤其不要输出“（语音已发送）”“已发送”“好了”“以上”“我继续说”“我来用文字补充”这类尾句。',
   ];
 
   if (snapshot.canVoice) {
@@ -790,7 +790,7 @@ function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot): string {
     );
   }
 
-  lines.push('一旦 reply tool 已经把内容发出，最终 assistant 正文不要重复相同内容。');
+  lines.push('如果 reply tool 没有成功送达，你再改用普通文本回复；否则不要补发任何文本。');
   return lines.join('\n');
 }
 
@@ -962,7 +962,8 @@ function isReplyToolSessionAvailable(session: Session): boolean {
 
 class ReplyComposeTool extends StructuredTool<typeof REPLY_COMPOSE_SCHEMA, ReplyComposeInput, ReplyComposeInput, string> {
   name = 'reply_compose';
-  description = '按顺序发送普通文本或单条多行消息。普通闲聊不要调用；只有结构化多行内容才用。';
+  description =
+    '按顺序发送普通文本或单条多行消息。普通闲聊不要调用；只有结构化多行内容才用。调用成功后代表内容已经真的发给用户了，不要再补任何确认、括号说明或重复文本。';
   schema = REPLY_COMPOSE_SCHEMA;
 
   constructor(private deps: ReplyToolDeps) {
@@ -984,7 +985,6 @@ class ReplyComposeTool extends StructuredTool<typeof REPLY_COMPOSE_SCHEMA, Reply
       session,
       plan: input as ReplyTransportPlan,
     });
-    this.returnDirect = result.status === 'delivered';
     return formatReplyToolResult(result);
   }
 }
@@ -997,7 +997,7 @@ class ReplyComposeWithVoiceTool extends StructuredTool<
 > {
   name = 'reply_compose_with_voice';
   description =
-    '按顺序发送普通文本、单条多行消息或语音。若用户本轮明确要求语音，且该工具可用，你应优先调用它而不是直接输出纯文本。';
+    '按顺序发送普通文本、单条多行消息或语音。若用户本轮明确要求语音，且该工具可用，你应优先调用它而不是直接输出纯文本。调用成功后代表内容已经真的发给用户了，不要再补任何确认、括号说明或重复文本。';
   schema = REPLY_COMPOSE_WITH_VOICE_SCHEMA;
 
   constructor(private deps: ReplyToolDeps) {
@@ -1019,7 +1019,6 @@ class ReplyComposeWithVoiceTool extends StructuredTool<
       session,
       plan: input as ReplyTransportPlan,
     });
-    this.returnDirect = result.status === 'delivered';
     return formatReplyToolResult(result);
   }
 }

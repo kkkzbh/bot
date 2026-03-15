@@ -341,6 +341,8 @@ describe('qq voice plugin', () => {
     expect(injectedPolicy).toContain('reply_compose_with_voice 可用');
     expect(injectedPolicy).toContain('必须优先调用 reply_compose_with_voice');
     expect(injectedPolicy).toContain('不要直接输出纯文本');
+    expect(injectedPolicy).toContain('reply_compose 和 reply_compose_with_voice 都是最终交付工具');
+    expect(injectedPolicy).toContain('不要输出“（语音已发送）”');
   });
 
   it('amortizes tts probing across turns and refreshes again on the 12th turn', async () => {
@@ -396,8 +398,8 @@ describe('qq voice plugin', () => {
       },
     );
 
-    expect(result).toBe('');
-    expect(tool.returnDirect).toBe(true);
+    expect(JSON.parse(result)).toEqual({ status: 'delivered' });
+    expect(tool.returnDirect).not.toBe(true);
     expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['第一句', '第二行\n第三行']);
 
     const suppressed = await beforeSend(session, {});
@@ -451,8 +453,8 @@ describe('qq voice plugin', () => {
       },
     );
 
-    expect(result).toBe('');
-    expect(tool.returnDirect).toBe(true);
+    expect(JSON.parse(result)).toEqual({ status: 'delivered' });
+    expect(tool.returnDirect).not.toBe(true);
     expect(bot.sendMessage.mock.calls).toHaveLength(1);
 
     const clonedSendSession = createSession(bot, {
@@ -615,7 +617,7 @@ describe('qq voice plugin', () => {
       retry: 'text_only',
       reason: 'tts_preflight_failed',
     });
-    expect(tool.returnDirect).toBe(false);
+    expect(tool.returnDirect).not.toBe(true);
     expect(bot.sendMessage).not.toHaveBeenCalled();
     expect(result).not.toContain('今天不想发语音');
   });
@@ -665,8 +667,8 @@ describe('qq voice plugin', () => {
       },
     );
 
-    expect(result).toBe('');
-    expect(tool.returnDirect).toBe(true);
+    expect(JSON.parse(result)).toEqual({ status: 'delivered' });
+    expect(tool.returnDirect).not.toBe(true);
     const calls = bot.sendMessage.mock.calls as Array<any[]>;
     expect(calls).toHaveLength(2);
     expect(calls[0]?.[1]).toBe('这是补充文本。');
