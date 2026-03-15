@@ -222,6 +222,16 @@ function stripDeprecatedReplyTransportTags(message: string): string {
     .replaceAll(QQBOT_VOICE_CLOSE_TAG, '');
 }
 
+export function containsDeprecatedReplyTransportTags(message: unknown): boolean {
+  const flattened = decodeControlEntities(flattenMessageText(message));
+  return (
+    flattened.includes(QQBOT_MULTILINE_OPEN_TAG) ||
+    flattened.includes(QQBOT_MULTILINE_CLOSE_TAG) ||
+    flattened.includes(QQBOT_VOICE_OPEN_TAG) ||
+    flattened.includes(QQBOT_VOICE_CLOSE_TAG)
+  );
+}
+
 function decodeControlEntities(message: string): string {
   return message
     .replace(/&lt;(\/?)qqbot-voice&gt;/gi, '<$1qqbot-voice>')
