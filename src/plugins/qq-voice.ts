@@ -1,12 +1,11 @@
+import type { CallbackManagerForToolRun } from '@langchain/core/callbacks/manager';
+import { StructuredTool, type ToolRunnableConfig } from '@langchain/core/tools';
 import { readFile } from 'node:fs/promises';
 import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
+import { z } from 'zod';
 import {
-  buildVoiceFallbackReply,
   buildVoiceFailureReply,
-  buildVoiceRequestedInstruction,
-  buildVoiceUnavailableInstruction,
   containsExplicitVoiceRequest,
-  containsVoiceReplyControl,
   extractFirstIncomingVoice,
   extractTextContentWithoutVoice,
   mergeVoiceInputText,
@@ -14,25 +13,52 @@ import {
   pickVoiceStyle,
 } from './qq-voice-core.js';
 import {
+  buildOutboundMessagePlanFromReplyPlan,
   createBypassLineSplitOptions,
   createBotMessageDispatchers,
   createKeyedStrandRunner,
   dispatchOutboundMessagePlan,
-  hasVoiceSegments,
-  parseOutboundMessagePlan,
   resolveSessionStrandKey,
   sendBotMessageByNormalizedContent,
   shouldBypassLineSplit,
   type OutboundMessagePlan,
   type OutboundMessageSegment,
+  type ReplyTransportPlan,
 } from './message-send-utils.js';
-import { getLiveReplyCoordinator } from './chatluna-live-reply.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
 };
 
 const logger = new Logger('qq-voice');
+const TTS_PROBE_TURN_INTERVAL = 12;
+const TTS_PROBE_TIME_INTERVAL_MS = 45_000;
+const TTS_PROBE_FAILURE_BACKOFF_MS = 10_000;
+const TTS_PROBE_TIMEOUT_MS = 5_000;
+
+const REPLY_COMPOSE_SCHEMA = z.object({
+  segments: z
+    .array(
+      z.object({
+        kind: z.enum(['text', 'multiline']).describe('回复段类型：普通文本或单条多行消息'),
+        content: z.string().describe('要发送的正文内容'),
+      }),
+    )
+    .min(1)
+    .describe('按顺序发送的回复段列表'),
+});
+
+const REPLY_COMPOSE_WITH_VOICE_SCHEMA = z.object({
+  segments: z
+    .array(
+      z.object({
+        kind: z.enum(['text', 'multiline', 'voice']).describe('回复段类型：普通文本、单条多行消息或语音'),
+        content: z.string().describe('要发送的正文内容'),
+      }),
+    )
+    .min(1)
+    .describe('按顺序发送的回复段列表'),
+});
 
 export const name = 'qq-voice';
 
@@ -85,9 +111,27 @@ interface QqVoiceState {
   voiceReplyRequested: boolean;
 }
 
+type ReplyCapabilitySource = 'cached' | 'probed' | 'forced';
+
+interface ReplyCapabilitySnapshot {
+  canMultiline: true;
+  canVoice: boolean;
+  source: ReplyCapabilitySource;
+  refreshedAt: number;
+  explicitVoiceRequest: boolean;
+}
+
+interface ReplyTransportState {
+  capabilitySnapshot?: ReplyCapabilitySnapshot;
+  delivered?: boolean;
+}
+
 type SessionWithVoiceState = Session & {
   stripped?: { content?: string };
-  state?: Record<string, unknown> & { qqVoice?: QqVoiceState };
+  state?: Record<string, unknown> & {
+    qqVoice?: QqVoiceState;
+    qqReplyTransport?: ReplyTransportState;
+  };
 };
 
 type OneBotInternalLike = {
@@ -121,6 +165,61 @@ type MiddlewareContextLike = {
   };
 };
 
+interface DownloadedAudioPayload {
+  bytes: Uint8Array;
+  source: string;
+  filename: string;
+  contentType: string;
+}
+
+interface AsrResponse {
+  text: string;
+  language?: string;
+  durationMs: number;
+}
+
+interface TtsCapabilityState {
+  lastKnownHealthy: boolean | null;
+  lastProbeAt: number;
+  lastProbeTurn: number;
+  turnCounter: number;
+  pendingProbe: Promise<boolean> | null;
+  failureBackoffUntil: number;
+}
+
+interface PreparedVoiceDelivery {
+  segment: OutboundMessageSegment & { kind: 'voice-block' };
+  text: string;
+  style: 'white' | 'black';
+  wav: Uint8Array;
+}
+
+type ReplyComposeInput = z.infer<typeof REPLY_COMPOSE_SCHEMA>;
+type ReplyComposeWithVoiceInput = z.infer<typeof REPLY_COMPOSE_WITH_VOICE_SCHEMA>;
+
+type ReplyToolResult =
+  | { status: 'delivered' }
+  | { status: 'unavailable'; mode: 'voice'; retry: 'text_only'; reason: string }
+  | { status: 'failed_preflight'; retry: 'text_only'; reason: string }
+  | { status: 'failed_after_partial_delivery'; retry: 'none'; reason: string };
+
+type ChatLunaToolRunnable = ToolRunnableConfig & {
+  configurable?: {
+    session?: SessionWithVoiceState;
+    conversationId?: string;
+  };
+};
+
+type HotfixToolDescriptor = {
+  createTool: (params: unknown) => unknown;
+  selector: () => boolean;
+  authorization?: (session: Session) => boolean;
+};
+
+type PlatformLike = {
+  registerTool?: (name: string, tool: HotfixToolDescriptor) => unknown;
+};
+
 type ChatLunaLike = {
   contextManager?: {
     inject: (options: {
@@ -137,38 +236,10 @@ type ChatLunaLike = {
       before: (name: string) => unknown;
     };
   };
+  platform?: PlatformLike;
 };
 
-interface DownloadedAudioPayload {
-  bytes: Uint8Array;
-  source: string;
-  filename: string;
-  contentType: string;
-}
-
-interface AsrResponse {
-  text: string;
-  language?: string;
-  durationMs: number;
-}
-
-interface CachedProbeResult {
-  ok: boolean;
-  expiresAt: number;
-}
-
-interface PreparedVoiceSegment {
-  segment: OutboundMessageSegment & { kind: 'voice-block' };
-  text: string;
-  style: 'white' | 'black';
-  promise: Promise<Uint8Array | null>;
-}
-
-interface VoicePrefetchBatch {
-  revisionId: string;
-  abortController: AbortController;
-  preparedByRaw: Map<string, PreparedVoiceSegment>;
-}
+type ContextWithChatLuna = Context & { chatluna?: ChatLunaLike };
 
 function normalizeBaseUrl(input: string): string {
   return input.trim().replace(/\/+$/, '');
@@ -393,45 +464,6 @@ async function synthesizeVoice(
   }
 }
 
-async function ensureTtsHealthy(
-  runtime: RuntimeConfig,
-  healthCache: Map<string, CachedProbeResult>,
-  force = false,
-): Promise<boolean> {
-  if (!runtime.ttsBaseUrl) return false;
-
-  const cacheKey = runtime.ttsBaseUrl;
-  const now = Date.now();
-  const cached = healthCache.get(cacheKey);
-  if (!force && cached && cached.expiresAt > now) {
-    return cached.ok;
-  }
-
-  let ok = false;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.min(runtime.synthTimeoutMs, 5_000));
-
-  try {
-    const response = await fetch(`${runtime.ttsBaseUrl}/healthz`, {
-      method: 'GET',
-      headers: createAuthHeaders(runtime.ttsApiKey),
-      signal: controller.signal,
-    });
-    ok = response.ok;
-  } catch (error) {
-    logger.warn('tts health probe failed: %s', (error as Error).message);
-    ok = false;
-  } finally {
-    clearTimeout(timer);
-  }
-
-  healthCache.set(cacheKey, {
-    ok,
-    expiresAt: now + (ok ? 30_000 : 10_000),
-  });
-  return ok;
-}
-
 function createAudioDataUri(bytes: Uint8Array): string {
   return `data:audio/wav;base64,${Buffer.from(bytes).toString('base64')}`;
 }
@@ -507,66 +539,467 @@ function isVoiceOutputConfigured(runtime: RuntimeConfig): boolean {
   return runtime.enabled && runtime.outputEnabled && Boolean(runtime.ttsBaseUrl);
 }
 
-function shouldExplainVoiceUnavailable(session: SessionWithVoiceState): boolean {
-  if (session.state?.qqVoice?.voiceReplyRequested) return true;
-  return containsExplicitVoiceRequest(getTextInputContent(session));
+function getReplyTransportState(session: SessionWithVoiceState): ReplyTransportState {
+  const current = session.state ?? {};
+  const transportState = current.qqReplyTransport ?? {};
+  current.qqReplyTransport = transportState;
+  session.state = current;
+  return transportState;
 }
 
-function buildVoiceRevisionId(scopeKey: string | null, revisionCounter: Map<string, number>): string {
-  const scope = scopeKey ?? 'standalone';
-  const next = (revisionCounter.get(scope) ?? 0) + 1;
-  revisionCounter.set(scope, next);
-  return `${scope}:${next}`;
+function getReplyCapabilitySnapshot(session: SessionWithVoiceState): ReplyCapabilitySnapshot | undefined {
+  return session.state?.qqReplyTransport?.capabilitySnapshot;
 }
 
-async function createVoicePrefetchBatch(args: {
+function setReplyCapabilitySnapshot(session: SessionWithVoiceState, snapshot: ReplyCapabilitySnapshot): void {
+  getReplyTransportState(session).capabilitySnapshot = snapshot;
+}
+
+function markReplyToolDelivered(session: SessionWithVoiceState): void {
+  getReplyTransportState(session).delivered = true;
+}
+
+function consumeReplyToolDelivered(session: SessionWithVoiceState): boolean {
+  const transportState = session.state?.qqReplyTransport;
+  if (!transportState?.delivered) return false;
+  transportState.delivered = false;
+  return true;
+}
+
+function formatReplyToolResult(result: ReplyToolResult): string {
+  return JSON.stringify(result);
+}
+
+function createReplyToolUnavailable(reason: string): ReplyToolResult {
+  return {
+    status: 'unavailable',
+    mode: 'voice',
+    retry: 'text_only',
+    reason,
+  };
+}
+
+function createReplyToolPreflightFailure(reason: string): ReplyToolResult {
+  return {
+    status: 'failed_preflight',
+    retry: 'text_only',
+    reason,
+  };
+}
+
+function getTtsCapabilityState(
+  runtime: RuntimeConfig,
+  ttsCapabilityStates: Map<string, TtsCapabilityState>,
+): TtsCapabilityState {
+  const cacheKey = runtime.ttsBaseUrl || 'disabled';
+  const existing = ttsCapabilityStates.get(cacheKey);
+  if (existing) return existing;
+
+  const created: TtsCapabilityState = {
+    lastKnownHealthy: null,
+    lastProbeAt: 0,
+    lastProbeTurn: 0,
+    turnCounter: 0,
+    pendingProbe: null,
+    failureBackoffUntil: 0,
+  };
+  ttsCapabilityStates.set(cacheKey, created);
+  return created;
+}
+
+function updateTtsCapabilityObservation(state: TtsCapabilityState, healthy: boolean): void {
+  const now = Date.now();
+  state.lastKnownHealthy = healthy;
+  state.lastProbeAt = now;
+  state.lastProbeTurn = state.turnCounter;
+  state.failureBackoffUntil = healthy ? 0 : now + TTS_PROBE_FAILURE_BACKOFF_MS;
+}
+
+function isTtsProbeDue(state: TtsCapabilityState, now = Date.now()): boolean {
+  if (!state.lastProbeAt) return true;
+  if (state.turnCounter - state.lastProbeTurn >= TTS_PROBE_TURN_INTERVAL) return true;
+  return now - state.lastProbeAt >= TTS_PROBE_TIME_INTERVAL_MS;
+}
+
+async function runTtsHealthProbe(
+  runtime: RuntimeConfig,
+  state: TtsCapabilityState,
+  force = false,
+): Promise<boolean> {
+  if (!runtime.ttsBaseUrl) return false;
+  if (!force && state.pendingProbe) return state.pendingProbe;
+  if (!force && state.failureBackoffUntil > Date.now()) {
+    return state.lastKnownHealthy === true;
+  }
+
+  const task = (async () => {
+    let healthy = false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.min(runtime.synthTimeoutMs, TTS_PROBE_TIMEOUT_MS));
+
+    try {
+      const response = await fetch(`${runtime.ttsBaseUrl}/healthz`, {
+        method: 'GET',
+        headers: createAuthHeaders(runtime.ttsApiKey),
+        signal: controller.signal,
+      });
+      healthy = response.ok;
+    } catch (error) {
+      logger.warn('tts health probe failed: %s', (error as Error).message);
+      healthy = false;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    updateTtsCapabilityObservation(state, healthy);
+    return healthy;
+  })().finally(() => {
+    if (state.pendingProbe === task) {
+      state.pendingProbe = null;
+    }
+  });
+
+  state.pendingProbe = task;
+  return task;
+}
+
+async function resolveReplyCapabilitySnapshot(args: {
+  runtime: RuntimeConfig;
+  session: SessionWithVoiceState;
+  canSendRecordCache: Map<string, boolean>;
+  ttsCapabilityStates: Map<string, TtsCapabilityState>;
+}): Promise<ReplyCapabilitySnapshot> {
+  const { runtime, session, canSendRecordCache, ttsCapabilityStates } = args;
+  const explicitVoiceRequest =
+    session.state?.qqVoice?.voiceReplyRequested === true || containsExplicitVoiceRequest(getTextInputContent(session));
+
+  const snapshot: ReplyCapabilitySnapshot = {
+    canMultiline: true,
+    canVoice: false,
+    source: 'cached',
+    refreshedAt: Date.now(),
+    explicitVoiceRequest,
+  };
+
+  if (!isVoiceOutputConfigured(runtime)) {
+    return snapshot;
+  }
+
+  const bot = session.bot as OneBotBotLike;
+  if (!(await ensureCanSendRecord(bot, canSendRecordCache))) {
+    return snapshot;
+  }
+
+  const ttsState = getTtsCapabilityState(runtime, ttsCapabilityStates);
+  ttsState.turnCounter += 1;
+  const due = isTtsProbeDue(ttsState, snapshot.refreshedAt);
+
+  if (explicitVoiceRequest && (ttsState.lastKnownHealthy !== true || due)) {
+    snapshot.canVoice = await runTtsHealthProbe(runtime, ttsState, true);
+    snapshot.source = 'forced';
+    snapshot.refreshedAt = Date.now();
+    return snapshot;
+  }
+
+  if (due && snapshot.refreshedAt >= ttsState.failureBackoffUntil && !ttsState.pendingProbe) {
+    void runTtsHealthProbe(runtime, ttsState).catch((error) => {
+      logger.warn('background tts probe failed: %s', (error as Error).message);
+    });
+  }
+
+  snapshot.canVoice = ttsState.lastKnownHealthy === true;
+  return snapshot;
+}
+
+function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot): string {
+  const lines = [
+    '当前回复传输规则：普通闲聊、问答、安慰或解释时，直接输出普通文本，不要调用 reply_compose。',
+    '只有代码、命令、配置、日志、明确列表或分步骤结果，才调用 reply_compose 发送单条多行消息。',
+  ];
+
+  if (snapshot.canVoice) {
+    lines.push('本轮 reply_compose_with_voice 可用。只有用户明确要求语音，或你确实要用语音表达时，才调用它。');
+  } else {
+    lines.push(
+      '本轮 reply_compose_with_voice 不可用。不要尝试任何语音工具；如果用户要求语音，就自然地用文字回答，不要提及工具、系统、TTS、接口或故障。',
+    );
+  }
+
+  lines.push('一旦 reply tool 已经把内容发出，最终 assistant 正文不要重复相同内容。');
+  return lines.join('');
+}
+
+function hasVoiceSegments(plan: OutboundMessagePlan): boolean {
+  return plan.segments.some((segment) => segment.kind === 'voice-block');
+}
+
+async function prepareVoiceDeliveries(args: {
   runtime: RuntimeConfig;
   plan: OutboundMessagePlan;
   bot: OneBotBotLike;
   canSendRecordCache: Map<string, boolean>;
-  ttsHealthCache: Map<string, CachedProbeResult>;
-  revisionId: string;
-}): Promise<VoicePrefetchBatch | null> {
-  const { runtime, plan, bot, canSendRecordCache, ttsHealthCache, revisionId } = args;
-  if (!isVoiceOutputConfigured(runtime)) return null;
-  if (!hasVoiceSegments(plan)) return null;
-  if (!(await ensureCanSendRecord(bot, canSendRecordCache))) return null;
-  if (!(await ensureTtsHealthy(runtime, ttsHealthCache))) return null;
-
-  const abortController = new AbortController();
-  const preparedByRaw = new Map<string, PreparedVoiceSegment>();
-
-  for (const segment of plan.segments) {
-    if (segment.kind !== 'voice-block') continue;
-    const text = normalizeVoiceSynthesisText(segment.content);
-    if (!text || text.length > runtime.outputMaxChars) continue;
-    const style = pickVoiceStyle(text);
-    preparedByRaw.set(segment.raw, {
-      segment,
-      text,
-      style,
-      promise: synthesizeVoice(runtime, text, style, abortController.signal).catch((error) => {
-        if (abortController.signal.aborted) return null;
-        logger.warn('voice prefetch failed for %s: %s', revisionId, (error as Error).message);
-        return null;
-      }),
-    });
+  ttsCapabilityStates: Map<string, TtsCapabilityState>;
+}): Promise<{ preparedByRaw: Map<string, PreparedVoiceDelivery> } | { result: ReplyToolResult }> {
+  const { runtime, plan, bot, canSendRecordCache, ttsCapabilityStates } = args;
+  if (!hasVoiceSegments(plan)) {
+    return { preparedByRaw: new Map() };
+  }
+  if (!isVoiceOutputConfigured(runtime)) {
+    return { result: createReplyToolUnavailable('voice_output_disabled') };
+  }
+  if (!(await ensureCanSendRecord(bot, canSendRecordCache))) {
+    return { result: createReplyToolUnavailable('record_send_unavailable') };
   }
 
-  return {
-    revisionId,
-    abortController,
-    preparedByRaw,
+  const voiceSegments = plan.segments.filter(
+    (segment): segment is OutboundMessageSegment & { kind: 'voice-block' } => segment.kind === 'voice-block',
+  );
+  const ttsState = getTtsCapabilityState(runtime, ttsCapabilityStates);
+  const preparedByRaw = new Map<string, PreparedVoiceDelivery>();
+
+  try {
+    const preparedEntries = await Promise.all(
+      voiceSegments.map(async (segment) => {
+        const text = normalizeVoiceSynthesisText(segment.content);
+        if (!text) {
+          throw new Error('empty_voice_segment');
+        }
+        if (text.length > runtime.outputMaxChars) {
+          throw new Error(`voice_segment_too_long:${runtime.outputMaxChars}`);
+        }
+
+        const style = pickVoiceStyle(text);
+        const wav = await synthesizeVoice(runtime, text, style);
+        return [segment.raw, { segment, text, style, wav }] as const;
+      }),
+    );
+
+    for (const [raw, prepared] of preparedEntries) {
+      preparedByRaw.set(raw, prepared);
+    }
+
+    updateTtsCapabilityObservation(ttsState, true);
+    return { preparedByRaw };
+  } catch (error) {
+    updateTtsCapabilityObservation(ttsState, false);
+    const reason = (error as Error).message;
+    if (reason.startsWith('voice_segment_too_long:')) {
+      return {
+        result: createReplyToolPreflightFailure(`voice_segments_must_be_within_${runtime.outputMaxChars}_chars`),
+      };
+    }
+    if (reason === 'empty_voice_segment') {
+      return { result: createReplyToolPreflightFailure('voice_segment_empty') };
+    }
+    logger.warn('voice preflight failed: %s', reason);
+    return { result: createReplyToolUnavailable('tts_preflight_failed') };
+  }
+}
+
+async function deliverReplyPlan(args: {
+  runtime: RuntimeConfig;
+  session: SessionWithVoiceState;
+  plan: ReplyTransportPlan;
+  sendStrand: ReturnType<typeof createKeyedStrandRunner>;
+  canSendRecordCache: Map<string, boolean>;
+  ttsCapabilityStates: Map<string, TtsCapabilityState>;
+}): Promise<ReplyToolResult> {
+  const { runtime, session, plan, sendStrand, canSendRecordCache, ttsCapabilityStates } = args;
+  if (session.platform !== 'onebot' || !session.channelId) {
+    return createReplyToolPreflightFailure('qq_session_unavailable');
+  }
+
+  const outboundPlan = buildOutboundMessagePlanFromReplyPlan(plan);
+  if (!outboundPlan.segments.length) {
+    return createReplyToolPreflightFailure('empty_reply_plan');
+  }
+
+  const bot = session.bot as OneBotBotLike;
+  const preparedVoice = await prepareVoiceDeliveries({
+    runtime,
+    plan: outboundPlan,
+    bot,
+    canSendRecordCache,
+    ttsCapabilityStates,
+  });
+  if ('result' in preparedVoice) {
+    return preparedVoice.result;
+  }
+
+  let beganSending = false;
+  const sendTask = async () => {
+    const { sendWhole, sendLine } = createBotMessageDispatchers(bot, session.channelId!, session);
+    await dispatchOutboundMessagePlan(outboundPlan, async (segment) => {
+      if (segment.kind === 'multiline-block') {
+        beganSending = true;
+        await sendWhole(segment.content);
+        return;
+      }
+
+      if (segment.kind === 'text-line') {
+        beganSending = true;
+        await sendLine(segment.content);
+        return;
+      }
+
+      const prepared = preparedVoice.preparedByRaw.get(segment.raw);
+      if (!prepared) {
+        throw new Error('missing_prepared_voice');
+      }
+
+      beganSending = true;
+      await bot.sendMessage(
+        session.channelId!,
+        String(h.audio(createAudioDataUri(prepared.wav))),
+        undefined,
+        createBypassLineSplitOptions(session),
+      );
+    });
   };
+
+  try {
+    const strandKey = resolveSessionStrandKey(session);
+    if (strandKey) {
+      await sendStrand.run(strandKey, sendTask);
+    } else {
+      await sendTask();
+    }
+  } catch (error) {
+    logger.warn('reply tool delivery failed: %s', (error as Error).message);
+    if (beganSending) {
+      return {
+        status: 'failed_after_partial_delivery',
+        retry: 'none',
+        reason: 'delivery_interrupted_after_partial_send',
+      };
+    }
+    return createReplyToolPreflightFailure('delivery_failed_before_send');
+  }
+
+  markReplyToolDelivered(session);
+  return { status: 'delivered' };
+}
+
+type ReplyToolDeps = {
+  runtime: RuntimeConfig;
+  sendStrand: ReturnType<typeof createKeyedStrandRunner>;
+  canSendRecordCache: Map<string, boolean>;
+  ttsCapabilityStates: Map<string, TtsCapabilityState>;
+};
+
+function isReplyToolSessionAvailable(session: Session): boolean {
+  return session.platform === 'onebot' && Boolean(session.channelId);
+}
+
+class ReplyComposeTool extends StructuredTool<typeof REPLY_COMPOSE_SCHEMA, ReplyComposeInput, ReplyComposeInput, string> {
+  name = 'reply_compose';
+  description = '按顺序发送普通文本或单条多行消息。普通闲聊不要调用；只有结构化多行内容才用。';
+  schema = REPLY_COMPOSE_SCHEMA;
+
+  constructor(private deps: ReplyToolDeps) {
+    super();
+  }
+
+  protected async _call(
+    input: ReplyComposeInput,
+    _runManager?: CallbackManagerForToolRun,
+    parentConfig?: ToolRunnableConfig,
+  ): Promise<string> {
+    const session = (parentConfig as ChatLunaToolRunnable)?.configurable?.session;
+    if (!session) {
+      return formatReplyToolResult(createReplyToolPreflightFailure('session_missing'));
+    }
+
+    const result = await deliverReplyPlan({
+      ...this.deps,
+      session,
+      plan: input as ReplyTransportPlan,
+    });
+    return formatReplyToolResult(result);
+  }
+}
+
+class ReplyComposeWithVoiceTool extends StructuredTool<
+  typeof REPLY_COMPOSE_WITH_VOICE_SCHEMA,
+  ReplyComposeWithVoiceInput,
+  ReplyComposeWithVoiceInput,
+  string
+> {
+  name = 'reply_compose_with_voice';
+  description =
+    '按顺序发送普通文本、单条多行消息或语音。只有当前语音能力可用，且用户明确要求语音或确实需要语音表达时才用。';
+  schema = REPLY_COMPOSE_WITH_VOICE_SCHEMA;
+
+  constructor(private deps: ReplyToolDeps) {
+    super();
+  }
+
+  protected async _call(
+    input: ReplyComposeWithVoiceInput,
+    _runManager?: CallbackManagerForToolRun,
+    parentConfig?: ToolRunnableConfig,
+  ): Promise<string> {
+    const session = (parentConfig as ChatLunaToolRunnable)?.configurable?.session;
+    if (!session) {
+      return formatReplyToolResult(createReplyToolPreflightFailure('session_missing'));
+    }
+
+    const result = await deliverReplyPlan({
+      ...this.deps,
+      session,
+      plan: input as ReplyTransportPlan,
+    });
+    return formatReplyToolResult(result);
+  }
+}
+
+function registerReplyTransportTools(platform: PlatformLike | undefined, deps: ReplyToolDeps): boolean {
+  if (!platform?.registerTool) return false;
+
+  platform.registerTool('reply_compose', {
+    createTool: () => new ReplyComposeTool(deps),
+    selector: () => true,
+    authorization: (session) => isReplyToolSessionAvailable(session),
+  });
+
+  platform.registerTool('reply_compose_with_voice', {
+    createTool: () => new ReplyComposeWithVoiceTool(deps),
+    selector: () => true,
+    authorization: (session) =>
+      isReplyToolSessionAvailable(session) &&
+      (getReplyCapabilitySnapshot(session as SessionWithVoiceState)?.canVoice ?? false),
+  });
+
+  return true;
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
   const sendStrand = createKeyedStrandRunner();
   const canSendRecordCache = new Map<string, boolean>();
-  const ttsHealthCache = new Map<string, CachedProbeResult>();
-  const voiceRevisionCounter = new Map<string, number>();
-  const activeVoicePrefetches = new Map<string, VoicePrefetchBatch>();
+  const ttsCapabilityStates = new Map<string, TtsCapabilityState>();
+  let toolsRegistered = false;
+
+  const resolveChatLunaService = (): ChatLunaLike | undefined => {
+    const byGetter = typeof (ctx as { get?: (name: string) => unknown }).get === 'function'
+      ? ((ctx as { get: (name: string) => unknown }).get('chatluna') as ChatLunaLike | undefined)
+      : undefined;
+    return byGetter ?? (ctx as ContextWithChatLuna).chatluna;
+  };
+
+  const ensureToolsRegistered = (trigger: 'ready' | 'interval') => {
+    if (toolsRegistered) return;
+    const platform = resolveChatLunaService()?.platform;
+    if (!registerReplyTransportTools(platform, { runtime, sendStrand, canSendRecordCache, ttsCapabilityStates })) {
+      if (trigger === 'ready') {
+        logger.warn('chatluna platform is not available yet, skip reply transport tool registration.');
+      }
+      return;
+    }
+
+    toolsRegistered = true;
+    logger.info('registered local reply transport tools.');
+  };
 
   ctx.middleware(
     async (rawSession, next) => {
@@ -614,116 +1047,11 @@ export function apply(ctx: Context, config: Config = {}): void {
     true,
   );
 
-  ctx.on('before-send', async (session, options) => {
+  ctx.on('before-send', async (rawSession, options) => {
+    const session = rawSession as SessionWithVoiceState;
     if (options && shouldBypassLineSplit(options)) return;
     if (session.platform !== 'onebot') return;
-    if (!session.channelId || !session.content) return;
-    if (!containsVoiceReplyControl(session.content)) return;
-
-    const plan = parseOutboundMessagePlan(session.content);
-    if (!hasVoiceSegments(plan)) return;
-    const bot = session.bot as OneBotBotLike;
-    const strandKey = resolveSessionStrandKey(session);
-    const liveReplyCoordinator = strandKey ? getLiveReplyCoordinator(ctx as object) : null;
-    const sendTask = async () => {
-      const { sendWhole, sendLine } = createBotMessageDispatchers(bot, session.channelId!, session);
-      const revisionId = buildVoiceRevisionId(strandKey, voiceRevisionCounter);
-      const batch = await createVoicePrefetchBatch({
-        runtime,
-        plan,
-        bot,
-        canSendRecordCache,
-        ttsHealthCache,
-        revisionId,
-      });
-      if (strandKey) {
-        activeVoicePrefetches.get(strandKey)?.abortController.abort();
-      }
-      if (strandKey && batch) {
-        activeVoicePrefetches.set(strandKey, batch);
-      }
-      let voiceFallbackHintSent = false;
-
-      const sendVoiceFallback = async (text: string) => {
-        const normalized = normalizeVoiceSynthesisText(text);
-        if (!normalized) return;
-        if (!voiceFallbackHintSent) {
-          voiceFallbackHintSent = true;
-          await sendLine(buildVoiceFallbackReply());
-        }
-        await sendLine(normalized);
-      };
-
-      const sendSegment = async (segment: OutboundMessageSegment) => {
-        if (segment.kind === 'multiline-block') {
-          await sendWhole(segment.content);
-          return;
-        }
-
-        if (segment.kind === 'text-line') {
-          await sendLine(segment.content);
-          return;
-        }
-
-        const fallbackText = normalizeVoiceSynthesisText(segment.content);
-        if (!batch) {
-          await sendVoiceFallback(fallbackText);
-          return;
-        }
-        if (batch.abortController.signal.aborted) return;
-        const prepared = batch.preparedByRaw.get(segment.raw);
-        if (!prepared) {
-          await sendVoiceFallback(fallbackText);
-          return;
-        }
-
-        const wav = await prepared.promise;
-        if (batch.abortController.signal.aborted) return;
-        if (!wav) {
-          await sendVoiceFallback(prepared.text);
-          return;
-        }
-
-        try {
-          await bot.sendMessage(
-            session.channelId!,
-            String(h.audio(createAudioDataUri(wav))),
-            undefined,
-            createBypassLineSplitOptions(session),
-          );
-        } catch (error) {
-          if (batch.abortController.signal.aborted) return;
-          logger.warn('voice send failed for %s: %s', revisionId, (error as Error).message);
-          await sendVoiceFallback(prepared.text);
-        }
-      };
-
-      try {
-        if (strandKey && liveReplyCoordinator) {
-          await liveReplyCoordinator.drainDraftPlan(strandKey, plan, sendSegment, {
-            cancelDraft: () => batch?.abortController.abort(),
-            abortSignal: batch?.abortController.signal,
-          });
-          return;
-        }
-
-        await dispatchOutboundMessagePlan(plan, sendSegment, {
-          abortSignal: batch?.abortController.signal,
-        });
-      } finally {
-        if (batch && strandKey && activeVoicePrefetches.get(strandKey)?.revisionId === batch.revisionId) {
-          activeVoicePrefetches.delete(strandKey);
-        }
-      }
-    };
-
-    if (strandKey) {
-      await sendStrand.run(strandKey, sendTask);
-    } else {
-      await sendTask();
-    }
-
-    return true;
+    if (consumeReplyToolDelivered(session)) return true;
   });
 
   ctx.on('ready', async () => {
@@ -733,46 +1061,44 @@ export function apply(ctx: Context, config: Config = {}): void {
         .map(async (bot) => ensureCanSendRecord(bot as unknown as OneBotBotLike, canSendRecordCache, true)),
     );
     if (isVoiceOutputConfigured(runtime)) {
-      await ensureTtsHealthy(runtime, ttsHealthCache, true);
+      const ttsState = getTtsCapabilityState(runtime, ttsCapabilityStates);
+      void runTtsHealthProbe(runtime, ttsState, true).catch((error) => {
+        logger.warn('initial tts health probe failed: %s', (error as Error).message);
+      });
     }
 
-    const chatluna = ctx.get('chatluna') as ChatLunaLike | undefined;
+    ensureToolsRegistered('ready');
+
+    const chatluna = resolveChatLunaService();
     const chain = chatluna?.chatChain;
     const contextManager = chatluna?.contextManager;
     if (!contextManager || !chain) {
-      logger.warn('chatluna service is not available, skip voice output hint middleware.');
+      logger.warn('chatluna service is not available, skip reply transport policy middleware.');
       return;
     }
 
     chain
-      .middleware('qqbot_voice_output_hint', async (rawSession, rawContext) => {
+      .middleware('qqbot_reply_transport_policy', async (rawSession, rawContext) => {
         const session = rawSession as SessionWithVoiceState;
         const context = rawContext as MiddlewareContextLike;
-        if (session.platform !== 'onebot') return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        if (!shouldExplainVoiceUnavailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        const conversationId = context.options?.room?.conversationId;
-        if (!conversationId) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-
-        const voiceAvailable =
-          isVoiceOutputConfigured(runtime) &&
-          (await ensureCanSendRecord(session.bot as OneBotBotLike, canSendRecordCache)) &&
-          (await ensureTtsHealthy(runtime, ttsHealthCache));
-
-        if (voiceAvailable) {
-          contextManager.inject({
-            name: 'qqbot_voice_output_requested',
-            value: buildVoiceRequestedInstruction(!!session.isDirect),
-            once: true,
-            conversationId,
-            stage: 'after_scratchpad',
-          });
-
+        if (!isReplyToolSessionAvailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        if (!session.userId || session.userId === session.bot?.selfId) {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
 
+        const conversationId = context.options?.room?.conversationId;
+        if (!conversationId) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+
+        const snapshot = await resolveReplyCapabilitySnapshot({
+          runtime,
+          session,
+          canSendRecordCache,
+          ttsCapabilityStates,
+        });
+        setReplyCapabilitySnapshot(session, snapshot);
         contextManager.inject({
-          name: 'qqbot_voice_output_unavailable',
-          value: buildVoiceUnavailableInstruction(),
+          name: 'qqbot_reply_transport_policy',
+          value: buildReplyTransportPolicy(snapshot),
           once: true,
           conversationId,
           stage: 'after_scratchpad',
@@ -782,4 +1108,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       .after('read_chat_message')
       .before('lifecycle-handle_command');
   });
+
+  (ctx as { setInterval?: (callback: () => void, delay: number) => void }).setInterval?.(
+    () => ensureToolsRegistered('interval'),
+    15_000,
+  );
 }

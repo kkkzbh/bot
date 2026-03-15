@@ -463,7 +463,7 @@ describe('live reply gate + drain', () => {
     await expect(interruptPending).resolves.toBe(2);
 
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(sent).toEqual(['第一句', '第二句', '第三句']);
+    expect(sent).toEqual(['第一句']);
     expect(harness.clearCache).not.toHaveBeenCalled();
   });
 
@@ -533,63 +533,6 @@ describe('live reply gate + drain', () => {
     expect(harness.clearCache).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps preserve mode atomic and falls back to queue after the whole block is sent', async () => {
-    vi.useFakeTimers();
-
-    let resolveSend: () => void = () => {};
-    const sent: string[] = [];
-    const sendStarted = new Promise<void>((resolve) => {
-      resolveSend = resolve;
-    });
-
-    const harness = createHarness();
-    seedConversation(harness.database, 'conv-preserve', '整块一\n整块二');
-    const room = { roomId: 1, conversationId: 'conv-preserve', model: 'deepseek/deepseek-chat' };
-    const firstSession = createSession(sent, {
-      userId: 'u1',
-      username: '甲',
-      author: { name: '甲' },
-      content: '原始提问',
-      sendImpl: async (message: string) => {
-        sent.push(message);
-        await sendStarted;
-        return ['msg-id'];
-      },
-    });
-    const preservePayload = '<qqbot-multiline>\n整块一\n整块二\n</qqbot-multiline>';
-
-    await harness.inbound(firstSession, async () => {
-      await harness.gate(firstSession, createGateContext(room, 'msg-preserve-1', '原始提问'));
-      return harness.beforeSend(createSendSession(firstSession, preservePayload), {});
-    });
-
-    await flushMicrotasks();
-    expect(sent).toEqual(['整块一\n整块二']);
-
-    const interruptSession = createSession(sent, {
-      userId: 'u2',
-      username: '乙',
-      author: { name: '乙' },
-      content: '打断一下',
-    });
-    const interruptPending = harness.inbound(interruptSession, async () =>
-      harness.gate(interruptSession, createGateContext(room, 'msg-preserve-2', '打断一下')),
-    );
-
-    await flushMicrotasks();
-    expect(harness.clearCache).not.toHaveBeenCalled();
-
-    resolveSend();
-    await expect(interruptPending).resolves.toBe(2);
-    await vi.runAllTimersAsync();
-
-    expect(sent).toEqual(['整块一\n整块二']);
-    expect(harness.clearCache).not.toHaveBeenCalled();
-    await expect(harness.database.get('chathub_message', { id: 'ai-1' })).resolves.toEqual([
-      expect.objectContaining({ text: '整块一\n整块二' }),
-    ]);
-  });
-
   it('preserves committed voice tags in continuation text and drops unsent tail after rewrite', async () => {
     vi.useFakeTimers();
 
@@ -655,6 +598,78 @@ describe('live reply gate + drain', () => {
     expect(String(inject.mock.calls[0]?.[0]?.instruction ?? inject.mock.calls[0]?.[0]?.value ?? '')).toContain('尾句');
     await expect(database.get('chathub_message', { id: 'ai-1' })).resolves.toEqual([
       expect.objectContaining({ text: '<qqbot-voice>\n先发语音\n</qqbot-voice>\n尾句' }),
+    ]);
+  });
+
+  it('stops the old draft and only lets the latest waiter continue when rewrite falls back to queue', async () => {
+    vi.useFakeTimers();
+
+    const database = new MemoryDatabase();
+    seedConversation(database, 'conv-queue-fallback', '旧回复', {
+      assistantParentRole: 'tool',
+    });
+    const clearCache = vi.fn(async () => true);
+    const inject = vi.fn();
+    const coordinator = new LiveReplyCoordinator({
+      runtime: {
+        enabled: true,
+        collectWindowMs: 600,
+        maxPendingMessages: 8,
+        historyRewriteFallback: 'queue',
+      },
+      database,
+      clearCache,
+      inject,
+      logger: { warn: vi.fn() },
+    });
+
+    const room = { roomId: 1, conversationId: 'conv-queue-fallback', model: 'deepseek/deepseek-chat' };
+    coordinator.bindScope('scope-queue-fallback', room, 'msg-old-1');
+
+    const sent: string[] = [];
+    const plan = parseOutboundMessagePlan('第一句\n第二句');
+    const drainPending = coordinator.drainDraftPlan('scope-queue-fallback', plan, async (segment) => {
+      sent.push(`${segment.kind}:${segment.content}`);
+    });
+
+    await flushMicrotasks();
+    expect(sent).toEqual(['text-line:第一句']);
+
+    const firstInterrupt = coordinator.waitForInterrupt(
+      'scope-queue-fallback',
+      createSession([], {
+        userId: 'u10',
+        username: '甲',
+        author: { name: '甲' },
+        content: '先等等',
+      }) as never,
+      room,
+      'msg-new-1',
+    );
+    const secondInterrupt = coordinator.waitForInterrupt(
+      'scope-queue-fallback',
+      createSession([], {
+        userId: 'u11',
+        username: '乙',
+        author: { name: '乙' },
+        content: '我再补一句',
+      }) as never,
+      room,
+      'msg-new-2',
+    );
+
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(600);
+    await expect(firstInterrupt).resolves.toBe('stop');
+    await expect(secondInterrupt).resolves.toBe('continue');
+    await vi.runAllTimersAsync();
+    await drainPending;
+
+    expect(sent).toEqual(['text-line:第一句']);
+    expect(clearCache).not.toHaveBeenCalled();
+    expect(inject).not.toHaveBeenCalled();
+    await expect(database.get('chathub_message', { id: 'ai-1' })).resolves.toEqual([
+      expect.objectContaining({ text: '旧回复' }),
     ]);
   });
 });

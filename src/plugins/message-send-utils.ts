@@ -64,6 +64,17 @@ export interface OutboundMessagePlan {
   segments: OutboundMessageSegment[];
 }
 
+export type ReplyTransportSegmentKind = 'text' | 'multiline' | 'voice';
+
+export interface ReplyTransportSegment {
+  kind: ReplyTransportSegmentKind;
+  content: string;
+}
+
+export interface ReplyTransportPlan {
+  segments: ReplyTransportSegment[];
+}
+
 export type BotMessageSender = {
   sendMessage: (
     channelId: string,
@@ -201,6 +212,14 @@ function flattenMessageText(content: unknown): string {
     return `${combined}\n`;
   }
   return combined;
+}
+
+function stripDeprecatedReplyTransportTags(message: string): string {
+  return decodeControlEntities(message)
+    .replaceAll(QQBOT_MULTILINE_OPEN_TAG, '')
+    .replaceAll(QQBOT_MULTILINE_CLOSE_TAG, '')
+    .replaceAll(QQBOT_VOICE_OPEN_TAG, '')
+    .replaceAll(QQBOT_VOICE_CLOSE_TAG, '');
 }
 
 function decodeControlEntities(message: string): string {
@@ -353,6 +372,52 @@ function normalizeSplitChunkToSegments(rawChunk: string): OutboundMessageSegment
 
 function normalizePreservedBlockContent(rawContent: string): string {
   return sanitizePromptLeakMessage(stripPreserveModeMarkdown(rawContent));
+}
+
+export function sanitizeStructuredReplySegmentContent(rawContent: string): string {
+  return normalizePreservedBlockContent(rawContent);
+}
+
+export function createTextOutboundSegments(message: string): OutboundMessageSegment[] {
+  return normalizeSplitChunkToSegments(message);
+}
+
+export function createTextOnlyOutboundMessagePlan(message: unknown): OutboundMessagePlan {
+  const flattened = stripDeprecatedReplyTransportTags(flattenMessageText(message));
+  return {
+    segments: createTextOutboundSegments(flattened),
+  };
+}
+
+export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan): OutboundMessagePlan {
+  const segments: OutboundMessageSegment[] = [];
+
+  for (const segment of plan.segments) {
+    if (segment.kind === 'text') {
+      segments.push(...createTextOutboundSegments(segment.content));
+      continue;
+    }
+
+    const content = sanitizeStructuredReplySegmentContent(segment.content);
+    if (!content.trim()) continue;
+
+    if (segment.kind === 'multiline') {
+      segments.push({
+        kind: 'multiline-block',
+        content,
+        raw: content,
+      });
+      continue;
+    }
+
+    segments.push({
+      kind: 'voice-block',
+      content,
+      raw: content,
+    });
+  }
+
+  return { segments };
 }
 
 function createWrappedRawSegment(openTag: string, closeTag: string, content: string): string {

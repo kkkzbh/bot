@@ -8,11 +8,10 @@ import {
 } from './chatluna-live-reply.js';
 import { injectUserStampedPrompt } from './chat-time-context.js';
 import {
+  createTextOnlyOutboundMessagePlan,
   createKeyedStrandRunner,
   createBotMessageDispatchers,
   dispatchOutboundMessagePlan,
-  hasVoiceSegments,
-  parseOutboundMessagePlan,
   resolveSessionStrandKey,
   shouldBypassLineSplit,
   type OutboundMessageSegment,
@@ -77,6 +76,14 @@ type MiddlewareContextLike = {
     messageId?: string;
     inputMessage?: {
       content?: unknown;
+    };
+  };
+};
+
+type SessionWithReplyTransportState = Session & {
+  state?: Record<string, unknown> & {
+    qqReplyTransport?: {
+      delivered?: boolean;
     };
   };
 };
@@ -209,17 +216,20 @@ export function apply(ctx: Context, config: Config = {}): void {
     true,
   );
 
-  ctx.on('before-send', async (session, options) => {
+  ctx.on('before-send', async (rawSession, options) => {
+    const session = rawSession as SessionWithReplyTransportState;
     if (shouldBypassLineSplit(options)) return;
     if (session.platform !== 'onebot') return;
+    if (session.state?.qqReplyTransport?.delivered) {
+      session.state.qqReplyTransport.delivered = false;
+      return true;
+    }
     if (!session.channelId || !session.content) return;
-    const plan = parseOutboundMessagePlan(session.content);
-    if (hasVoiceSegments(plan)) return;
+    const plan = createTextOnlyOutboundMessagePlan(session.content);
     if (!plan.segments.length) return;
 
     const channelId = session.channelId;
-    const shouldIntercept =
-      plan.segments.length > 1 || plan.segments.some((segment) => segment.kind === 'multiline-block');
+    const shouldIntercept = plan.segments.length > 1;
     if (!shouldIntercept) return;
 
     const strandKey = resolveSessionStrandKey(session);

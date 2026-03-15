@@ -189,7 +189,10 @@ describe('chatluna model guard multiline queue', () => {
     expect(sentAt[1]).toBeGreaterThan(sentAt[0]);
   });
 
-  it('sends qqbot multiline payload as one message without line splitting', async () => {
+  it('treats deprecated qqbot multiline wrappers as plain text lines', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-09T20:07:00+08:00'));
+
     const { beforeSend } = createHarness();
     const sent: string[] = [];
     const sentAt: number[] = [];
@@ -201,13 +204,27 @@ describe('chatluna model guard multiline queue', () => {
       '<qqbot-multiline>\n第一句\n第二句\n</qqbot-multiline>',
     );
 
-    const result = await beforeSend(sendSession, { session });
+    let finished = false;
+    const pending = beforeSend(sendSession, { session }).then((result) => {
+      finished = true;
+      return result;
+    });
+
+    await flushMicrotasks();
+    expect(finished).toBe(false);
+    expect(sent).toEqual(['第一句']);
+
+    await vi.runAllTimersAsync();
+    const result = await pending;
 
     expect(result).toBe(true);
-    expect(sent).toEqual(['第一句\n第二句']);
+    expect(sent).toEqual(['第一句', '第二句']);
   });
 
-  it('keeps conversational qqbot multiline payload as one wrapped send', async () => {
+  it('strips deprecated qqbot multiline wrappers instead of treating them as atomic blocks', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-09T20:08:00+08:00'));
+
     const { beforeSend } = createHarness();
     const sent: string[] = [];
     const sentAt: number[] = [];
@@ -219,15 +236,24 @@ describe('chatluna model guard multiline queue', () => {
       '<qqbot-multiline>\n春天和秋天啊……\n都挺好的呢\n春天有樱花，天气温暖\n秋天有枫叶，空气清爽\n非要选的话我更喜欢秋天\n</qqbot-multiline>',
     );
 
-    const result = await beforeSend(sendSession, { session });
+    const pending = beforeSend(sendSession, { session });
+    await vi.runAllTimersAsync();
+    const result = await pending;
 
     expect(result).toBe(true);
     expect(sent).toEqual([
-      '春天和秋天啊……\n都挺好的呢\n春天有樱花，天气温暖\n秋天有枫叶，空气清爽\n非要选的话我更喜欢秋天',
+      '春天和秋天啊……',
+      '都挺好的呢',
+      '春天有樱花，天气温暖',
+      '秋天有枫叶，空气清爽',
+      '非要选的话我更喜欢秋天',
     ]);
   });
 
-  it('keeps local qqbot multiline blocks atomic while preserving surrounding order', async () => {
+  it('preserves surrounding order after removing deprecated qqbot multiline wrappers', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-09T20:09:00+08:00'));
+
     const { beforeSend } = createHarness();
     const sent: string[] = [];
     const sentAt: number[] = [];
@@ -239,10 +265,12 @@ describe('chatluna model guard multiline queue', () => {
       '前缀\n<qqbot-multiline>\n第一行\n第二行\n</qqbot-multiline>\n后缀',
     );
 
-    const result = await beforeSend(sendSession, { session });
+    const pending = beforeSend(sendSession, { session });
+    await vi.runAllTimersAsync();
+    const result = await pending;
 
     expect(result).toBe(true);
-    expect(sent).toEqual(['前缀', '第一行\n第二行', '后缀']);
+    expect(sent).toEqual(['前缀', '第一行', '第二行', '后缀']);
   });
 
   it('splits unwrapped code blocks line by line without explicit wrapper', async () => {

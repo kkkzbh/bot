@@ -61,15 +61,15 @@ describe('qq voice config wiring', () => {
     expect(serviceTemplate).toContain('ExecStart=/home/kkkzbh/code/qqbot/scripts/run-voice-tts-local.sh');
   });
 
-  it('adds qqbot voice tag contract to the sakiko preset', () => {
+  it('keeps the sakiko preset free of deprecated qqbot transport tag contracts', () => {
     const content = readFileSync(resolve(process.cwd(), 'data/chathub/presets/sakiko.yml'), 'utf8');
 
-    expect(content).toContain('## 语音附加规则');
-    expect(content).toContain('默认只发文本，不要主动使用语音标签');
-    expect(content).toContain('允许在一条回复里输出多个 `<qqbot-voice>` 块');
-    expect(content).toContain('每个块内部正文都必须控制在 30 个字以内');
-    expect(content).toContain('标签外默认什么都不要写');
-    expect(content).toContain('错误示例：');
+    expect(content).toContain('# 回复组织原则');
+    expect(content).toContain('系统当前提供了结构化发送工具');
+    expect(content).toContain('系统当前明确提供可用语音工具');
+    expect(content).toContain('工具已经完成发送');
+    expect(content).not.toContain('<qqbot-multiline>');
+    expect(content).not.toContain('<qqbot-voice>');
   });
 
   it('restarts the full compose stack during deploy instead of a hard-coded subset', () => {
