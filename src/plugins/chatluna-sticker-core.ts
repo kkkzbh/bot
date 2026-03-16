@@ -3,6 +3,10 @@ import { resolve } from 'node:path';
 
 export const STICKER_CATALOG_FILENAME = 'catalog.generated.json';
 const PERSONA_SCOPE_PREFIX = 'persona:';
+const STICKER_INTENT_SEGMENTER =
+  typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+    ? new Intl.Segmenter('zh', { granularity: 'word' })
+    : null;
 
 export interface StickerCatalogEntry {
   id: string;
@@ -81,10 +85,40 @@ function tokenizeIntent(intent: string): string[] {
     .map((token) => token.trim())
     .filter(Boolean);
 
+  if (STICKER_INTENT_SEGMENTER) {
+    for (const segment of STICKER_INTENT_SEGMENTER.segment(normalized)) {
+      const token = segment.segment.trim();
+      if (!token || token === normalized) continue;
+      tokens.push(token);
+    }
+  }
+
   if (normalized && !tokens.includes(normalized)) {
     tokens.unshift(normalized);
   }
   return [...new Set(tokens)];
+}
+
+function extractIntentFragments(intent: string): string[] {
+  const normalized = intent
+    .toLowerCase()
+    .replace(/[。！？；;]+/g, '，')
+    .replace(/\s+/g, '')
+    .trim();
+  if (!normalized) return [];
+
+  const fragments = normalized
+    .split(/(?:，|,|然后|再|接着|之后)/)
+    .map((fragment) =>
+      fragment
+        .replace(/^(?:连续发[^，,]*表情包|发[^，,]*表情包|来[^，,]*表情包)+/g, '')
+        .replace(/^(?:先|第一张|第二张|第一个|第二个|一张|一个|两张|两个)+/g, '')
+        .replace(/(?:不要发文字|也不要发文字|不要解释|也不要解释|只发文字|只发表情包)+$/g, '')
+        .trim(),
+    )
+    .filter((fragment) => fragment.length >= 2);
+
+  return [...new Set(fragments)];
 }
 
 function matchesScope(scopes: string[], preset?: string | null): boolean {
@@ -135,8 +169,17 @@ function scoreEntry(entry: LoadedStickerEntry, intent: string, tokens: string[])
       continue;
     }
     if (entry.moods.some((item) => normalizeText(item) === token)) score += 32;
+    if (entry.moods.some((item) => normalizeText(item).includes(token) || token.includes(normalizeText(item)))) {
+      score += 18;
+    }
     if (entry.keywords.some((item) => normalizeText(item) === token)) score += 18;
+    if (entry.keywords.some((item) => normalizeText(item).includes(token) || token.includes(normalizeText(item)))) {
+      score += 10;
+    }
     if (entry.scenes.some((item) => normalizeText(item) === token)) score += 12;
+    if (entry.scenes.some((item) => normalizeText(item).includes(token) || token.includes(normalizeText(item)))) {
+      score += 8;
+    }
     if (normalizeText(entry.caption).includes(token)) score += 10;
     if (normalizeText(entry.historyLabel).includes(token)) score += 10;
   }
@@ -218,8 +261,44 @@ export function resolveStickerSelection(
   catalog: LoadedStickerCatalog | null,
   intent: string,
   preset?: string | null,
+  options?: {
+    usedIds?: Set<string>;
+    maxReuseScoreGap?: number;
+    sequenceIndex?: number;
+  },
 ): LoadedStickerEntry | null {
-  return resolveStickerMatches(catalog, intent, preset)[0]?.entry ?? null;
+  const matches = resolveStickerMatches(catalog, intent, preset);
+  const firstMatch = matches[0];
+  if (!firstMatch) return null;
+
+  const usedIds = options?.usedIds;
+  if (!usedIds?.size) return firstMatch.entry;
+  if (!usedIds.has(normalizeText(firstMatch.entry.id))) return firstMatch.entry;
+
+  const fragments = extractIntentFragments(intent);
+  if (fragments.length > 1) {
+    const sequenceIndex = Math.max(0, options?.sequenceIndex ?? usedIds.size);
+    const orderedFragments = [
+      ...fragments.slice(sequenceIndex, sequenceIndex + 1),
+      ...fragments.slice(0, sequenceIndex),
+      ...fragments.slice(sequenceIndex + 1),
+    ].filter(Boolean);
+
+    for (const fragment of orderedFragments) {
+      const fragmentMatch = resolveStickerMatches(catalog, fragment, preset).find(
+        (match) => !usedIds.has(normalizeText(match.entry.id)),
+      );
+      if (fragmentMatch) {
+        return fragmentMatch.entry;
+      }
+    }
+  }
+
+  const alternative = matches.find((match) => !usedIds.has(normalizeText(match.entry.id)));
+  if (!alternative) return firstMatch.entry;
+
+  const maxReuseScoreGap = options?.maxReuseScoreGap ?? 40;
+  return firstMatch.score - alternative.score <= maxReuseScoreGap ? alternative.entry : firstMatch.entry;
 }
 
 export function createStickerHistoryLine(entry: LoadedStickerEntry): string {

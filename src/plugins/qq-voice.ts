@@ -926,6 +926,7 @@ async function prepareStickerDeliveries(args: {
   );
   const preparedByRaw = new Map<string, PreparedStickerDelivery>();
   const effectiveSegments: ReplyTransportPlan['segments'] = [];
+  const usedStickerIds = new Set<string>();
   let stickerIndex = 0;
 
   for (const segment of plan.segments) {
@@ -938,7 +939,10 @@ async function prepareStickerDeliveries(args: {
     stickerIndex += 1;
     if (!outboundSticker) continue;
 
-    const selected = resolveStickerSelection(stickerState.catalog, segment.content, stickerState.preset);
+    const selected = resolveStickerSelection(stickerState.catalog, segment.content, stickerState.preset, {
+      usedIds: usedStickerIds,
+      sequenceIndex: preparedByRaw.size,
+    });
     if (!selected) continue;
 
     preparedByRaw.set(outboundSticker.raw, {
@@ -947,6 +951,7 @@ async function prepareStickerDeliveries(args: {
       buffer: selected.buffer,
       mime: selected.mime,
     });
+    usedStickerIds.add(selected.id.trim().toLowerCase());
     effectiveSegments.push(segment);
   }
 

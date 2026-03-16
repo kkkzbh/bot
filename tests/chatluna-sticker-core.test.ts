@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildStickerCapabilityPolicy,
+  resolveStickerMatches,
   resolveStickerSelection,
   type LoadedStickerCatalog,
 } from '../src/plugins/chatluna-sticker-core.js';
@@ -36,6 +37,20 @@ function createCatalog(): LoadedStickerCatalog {
       confidence: 0.94,
       buffer: Buffer.from('embarrassed'),
     },
+    {
+      id: 'cold',
+      file: 'images/personas/sakiko/cold.png',
+      hash: 'hash-cold',
+      mime: 'image/png',
+      scopes: ['persona:sakiko'],
+      caption: '蓝发二次元校服少女举手表态我有意见的聊天表情包',
+      keywords: ['我有意见', '举手发言'],
+      moods: ['提出异议', '调侃吐槽'],
+      scenes: ['线上聊天'],
+      historyLabel: '举手提意见',
+      confidence: 0.95,
+      buffer: Buffer.from('cold'),
+    },
   ];
 
   return {
@@ -68,5 +83,27 @@ describe('chatluna sticker core', () => {
 
     expect(resolveStickerSelection(catalog, '无语地看对方一眼', 'sakiko')?.id).toBe('bored');
     expect(resolveStickerSelection(catalog, '生气地噘嘴表达不满', 'sakiko')?.id).toBe('embarrassed');
+  });
+
+  it('scores natural Chinese intent phrases against keyword fragments', () => {
+    const catalog = createCatalog();
+
+    expect(resolveStickerMatches(catalog, '冷淡一点、像在提意见的表情包', 'sakiko')[0]?.entry.id).toBe('cold');
+    expect(resolveStickerMatches(catalog, '生气一点，像是在噘嘴表达不满', 'sakiko')[0]?.entry.id).toBe('embarrassed');
+  });
+
+  it('prefers an unused nearby match for multi-sticker delivery', () => {
+    const catalog = createCatalog();
+
+    expect(
+      resolveStickerSelection(catalog, '连续发两张表情包，先无语，再生气', 'sakiko', {
+        usedIds: new Set(['bored']),
+      })?.id,
+    ).toBe('embarrassed');
+    expect(
+      resolveStickerSelection(catalog, '无语地看对方一眼', 'sakiko', {
+        usedIds: new Set(['bored']),
+      })?.id,
+    ).toBe('bored');
   });
 });
