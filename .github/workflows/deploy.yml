@@ -98,8 +98,8 @@ jobs:
       - name: Sync project files
         run: |
           set -euo pipefail
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
           ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_APP_DIR}'"
           rsync -az --delete \
             --exclude='.git' \
@@ -116,8 +116,8 @@ jobs:
       - name: Sync bundled preset files
         run: |
           set -euo pipefail
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
           if [ -d "./data/chathub/presets" ]; then
             ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_APP_DIR}/data/chathub/presets'"
             rsync -az \
@@ -128,8 +128,8 @@ jobs:
       - name: Sync sticker files
         run: |
           set -euo pipefail
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
           if [ -d "./data/chathub/stickers" ]; then
             ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
               "mkdir -p '${DEPLOY_APP_DIR}/data/chathub/stickers'"
@@ -142,14 +142,14 @@ jobs:
       - name: Sync runtime .env
         run: |
           set -euo pipefail
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
           printf "%s" "${DEPLOY_DOTENV}" | ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "cat > '${DEPLOY_APP_DIR}/.env'"
           ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "chmod 600 '${DEPLOY_APP_DIR}/.env'"
 
       - name: Install, build and restart service on server
         run: |
           set -euo pipefail
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
           ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' DEPLOY_SYSTEMD_TARGET='${DEPLOY_SYSTEMD_TARGET}' bash -s" <<'EOF'
           set -euo pipefail
