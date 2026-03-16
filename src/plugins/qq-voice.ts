@@ -1,6 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
+import type { TraceViewerServiceLike } from '../types/trace-viewer.js';
+import {
+  createStickerHistoryLine,
+  resolveStickerSelection,
+  type StickerCapabilityState,
+} from './chatluna-sticker-core.js';
 import {
   buildVoiceFailureReply,
   extractFirstIncomingVoice,
@@ -16,12 +22,13 @@ import {
   createKeyedStrandRunner,
   dispatchOutboundMessagePlan,
   resolveSessionStrandKey,
+  sanitizeStructuredReplySegmentContent,
   sendBotMessageByNormalizedContent,
   type OutboundMessagePlan,
   type OutboundMessageSegment,
   type ReplyTransportPlan,
 } from './message-send-utils.js';
-import { parseReplyPlanFromModelOutput, renderReplyPlanHistoryText } from './reply-plan-utils.js';
+import { parseReplyPlanFromModelOutput } from './reply-plan-utils.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -109,6 +116,7 @@ type SessionWithVoiceState = Session & {
   state?: Record<string, unknown> & {
     qqVoice?: QqVoiceState;
     qqReplyTransport?: ReplyTransportState;
+    qqSticker?: StickerCapabilityState;
   };
 };
 
@@ -175,6 +183,13 @@ interface PreparedVoiceDelivery {
   wav: Uint8Array;
 }
 
+interface PreparedStickerDelivery {
+  segment: OutboundMessageSegment & { kind: 'sticker-block' };
+  historyLine: string;
+  buffer: Buffer;
+  mime: string;
+}
+
 type ReplyPlanDeliveryResult =
   | { status: 'delivered'; historyText: string }
   | { status: 'failed_before_send'; fallbackText: string; historyText: string }
@@ -199,6 +214,10 @@ type ChatLunaLike = {
 };
 
 type ContextWithChatLuna = Context & { chatluna?: ChatLunaLike };
+
+function getTraceViewer(ctx: Context): TraceViewerServiceLike | undefined {
+  return (ctx as Context & { traceViewer?: TraceViewerServiceLike }).traceViewer;
+}
 
 function normalizeBaseUrl(input: string): string {
   return input.trim().replace(/\/+$/, '');
@@ -517,6 +536,49 @@ function downgradeVoiceSegmentsToText(plan: ReplyTransportPlan): ReplyTransportP
   };
 }
 
+function removeStickerSegments(plan: ReplyTransportPlan): ReplyTransportPlan {
+  return {
+    segments: plan.segments.filter((segment) => segment.kind !== 'sticker'),
+  };
+}
+
+function renderReplyPlanFallbackText(plan: ReplyTransportPlan): string {
+  return plan.segments
+    .filter((segment) => segment.kind !== 'sticker')
+    .map((segment) => sanitizeStructuredReplySegmentContent(segment.content))
+    .filter((segment) => segment.trim().length > 0)
+    .join('\n')
+    .trim();
+}
+
+function renderDeliveredReplyPlanHistoryText(
+  plan: ReplyTransportPlan,
+  preparedStickerByRaw: Map<string, PreparedStickerDelivery> = new Map(),
+): string {
+  const outboundPlan = buildOutboundMessagePlanFromReplyPlan(plan);
+  const stickerHistoryByRaw = new Map(
+    [...preparedStickerByRaw.entries()].map(([raw, prepared]) => [raw, prepared.historyLine] as const),
+  );
+  const stickerSegments = outboundPlan.segments.filter(
+    (segment): segment is OutboundMessageSegment & { kind: 'sticker-block' } => segment.kind === 'sticker-block',
+  );
+  let stickerIndex = 0;
+
+  return plan.segments
+    .map((segment) => {
+      if (segment.kind !== 'sticker') {
+        return sanitizeStructuredReplySegmentContent(segment.content);
+      }
+
+      const outboundSticker = stickerSegments[stickerIndex];
+      stickerIndex += 1;
+      return outboundSticker ? stickerHistoryByRaw.get(outboundSticker.raw) ?? '（发送表情包）' : '（发送表情包）';
+    })
+    .filter((segment) => segment.trim().length > 0)
+    .join('\n')
+    .trim();
+}
+
 async function rewriteLatestAssistantHistoryMessage(
   ctx: Context,
   conversationId: string | undefined,
@@ -772,6 +834,10 @@ function hasVoiceSegments(plan: OutboundMessagePlan): boolean {
   return plan.segments.some((segment) => segment.kind === 'voice-block');
 }
 
+function hasStickerSegments(plan: OutboundMessagePlan): boolean {
+  return plan.segments.some((segment) => segment.kind === 'sticker-block');
+}
+
 async function prepareVoiceDeliveries(args: {
   runtime: RuntimeConfig;
   plan: ReplyTransportPlan;
@@ -840,6 +906,53 @@ async function prepareVoiceDeliveries(args: {
   }
 }
 
+async function prepareStickerDeliveries(args: {
+  session: SessionWithVoiceState;
+  plan: ReplyTransportPlan;
+}): Promise<{ preparedByRaw: Map<string, PreparedStickerDelivery>; effectivePlan: ReplyTransportPlan }> {
+  const { session, plan } = args;
+  const outboundPlan = buildOutboundMessagePlanFromReplyPlan(plan);
+  if (!hasStickerSegments(outboundPlan)) {
+    return { preparedByRaw: new Map(), effectivePlan: plan };
+  }
+
+  const stickerState = session.state?.qqSticker;
+  if (!stickerState?.catalog) {
+    return { preparedByRaw: new Map(), effectivePlan: removeStickerSegments(plan) };
+  }
+
+  const stickerSegments = outboundPlan.segments.filter(
+    (segment): segment is OutboundMessageSegment & { kind: 'sticker-block' } => segment.kind === 'sticker-block',
+  );
+  const preparedByRaw = new Map<string, PreparedStickerDelivery>();
+  const effectiveSegments: ReplyTransportPlan['segments'] = [];
+  let stickerIndex = 0;
+
+  for (const segment of plan.segments) {
+    if (segment.kind !== 'sticker') {
+      effectiveSegments.push(segment);
+      continue;
+    }
+
+    const outboundSticker = stickerSegments[stickerIndex];
+    stickerIndex += 1;
+    if (!outboundSticker) continue;
+
+    const selected = resolveStickerSelection(stickerState.catalog, segment.content, stickerState.preset);
+    if (!selected) continue;
+
+    preparedByRaw.set(outboundSticker.raw, {
+      segment: outboundSticker,
+      historyLine: createStickerHistoryLine(selected),
+      buffer: selected.buffer,
+      mime: selected.mime,
+    });
+    effectiveSegments.push(segment);
+  }
+
+  return { preparedByRaw, effectivePlan: { segments: effectiveSegments } };
+}
+
 async function deliverReplyPlan(args: {
   runtime: RuntimeConfig;
   session: SessionWithVoiceState;
@@ -849,9 +962,10 @@ async function deliverReplyPlan(args: {
   ttsCapabilityStates: Map<string, TtsCapabilityState>;
 }): Promise<ReplyPlanDeliveryResult> {
   const { runtime, session, plan, sendStrand, canSendRecordCache, ttsCapabilityStates } = args;
-  const historyText = renderReplyPlanHistoryText(plan);
+  const historyText = renderDeliveredReplyPlanHistoryText(plan);
+  const fallbackText = renderReplyPlanFallbackText(plan);
   if (session.platform !== 'onebot' || !session.channelId) {
-    return { status: 'failed_before_send', fallbackText: historyText, historyText };
+    return { status: 'failed_before_send', fallbackText, historyText };
   }
 
   const preparedVoice = await prepareVoiceDeliveries({
@@ -861,14 +975,19 @@ async function deliverReplyPlan(args: {
     canSendRecordCache,
     ttsCapabilityStates,
   });
-  const effectivePlan = preparedVoice.effectivePlan;
+  const preparedSticker = await prepareStickerDeliveries({
+    session,
+    plan: preparedVoice.effectivePlan,
+  });
+  const effectivePlan = preparedSticker.effectivePlan;
   const outboundPlan = buildOutboundMessagePlanFromReplyPlan(effectivePlan);
   if (!outboundPlan.segments.length) {
-    return { status: 'failed_before_send', fallbackText: historyText, historyText };
+    return { status: 'failed_before_send', fallbackText, historyText };
   }
 
   const bot = session.bot as OneBotBotLike;
-  const effectiveHistoryText = renderReplyPlanHistoryText(effectivePlan) || historyText;
+  const effectiveHistoryText = renderDeliveredReplyPlanHistoryText(effectivePlan, preparedSticker.preparedByRaw) || historyText;
+  const effectiveFallbackText = renderReplyPlanFallbackText(effectivePlan) || fallbackText;
 
   let beganSending = false;
   const sendTask = async () => {
@@ -883,6 +1002,22 @@ async function deliverReplyPlan(args: {
       if (segment.kind === 'text-line') {
         beganSending = true;
         await sendLine(segment.content);
+        return;
+      }
+
+      if (segment.kind === 'sticker-block') {
+        const prepared = preparedSticker.preparedByRaw.get(segment.raw);
+        if (!prepared) {
+          throw new Error('missing_prepared_sticker');
+        }
+
+        beganSending = true;
+        await bot.sendMessage(
+          session.channelId!,
+          String(h.image(prepared.buffer, prepared.mime)),
+          undefined,
+          createBypassLineSplitOptions(session),
+        );
         return;
       }
 
@@ -913,7 +1048,7 @@ async function deliverReplyPlan(args: {
     if (beganSending) {
       return { status: 'failed_after_partial_send', historyText: effectiveHistoryText };
     }
-    return { status: 'failed_before_send', fallbackText: effectiveHistoryText, historyText: effectiveHistoryText };
+    return { status: 'failed_before_send', fallbackText: effectiveFallbackText, historyText: effectiveHistoryText };
   }
 
   return { status: 'delivered', historyText: effectiveHistoryText };
@@ -925,6 +1060,7 @@ function isReplyPlanSessionAvailable(session: Session): boolean {
 
 export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
+  const traceViewer = getTraceViewer(ctx);
   const sendStrand = createKeyedStrandRunner();
   const canSendRecordCache = new Map<string, boolean>();
   const ttsCapabilityStates = new Map<string, TtsCapabilityState>();
@@ -949,19 +1085,48 @@ export function apply(ctx: Context, config: Config = {}): void {
       try {
         const downloaded = await downloadIncomingAudio(session, runtime, bot);
         const transcript = await transcribeAudio(runtime, downloaded);
+        const mergedPreview = mergeVoiceInputText(getTextInputContent(session), transcript.text);
+        const traceId = traceViewer?.ensureTrace({
+          session,
+          route: 'qq-voice',
+          input: mergedPreview,
+        });
 
         if (!transcript.text) {
+          traceViewer?.record({
+            traceId,
+            phase: 'error',
+            kind: 'voice-transcribe-empty',
+            payload: { source: downloaded.source, durationMs: transcript.durationMs },
+          });
           await sendFailureReply(session, buildVoiceFailureReply('empty', runtime.inputMaxSeconds));
           return;
         }
 
         if (transcript.durationMs > runtime.inputMaxSeconds * 1000) {
+          traceViewer?.record({
+            traceId,
+            phase: 'error',
+            kind: 'voice-transcribe-too-long',
+            payload: { source: downloaded.source, durationMs: transcript.durationMs },
+          });
           await sendFailureReply(session, buildVoiceFailureReply('too-long', runtime.inputMaxSeconds));
           return;
         }
 
         const originalText = getTextInputContent(session);
         const merged = mergeVoiceInputText(originalText, transcript.text);
+        traceViewer?.record({
+          traceId,
+          phase: 'prepare',
+          kind: 'voice-transcribe',
+          payload: {
+            source: downloaded.source,
+            durationMs: transcript.durationMs,
+            transcript: transcript.text,
+            mergedText: merged,
+          },
+        });
         updateVoiceState(session, {
           transcript: transcript.text,
           durationMs: transcript.durationMs,
@@ -973,6 +1138,17 @@ export function apply(ctx: Context, config: Config = {}): void {
         return next();
       } catch (error) {
         logger.warn('voice input handling failed: %s', (error as Error).message);
+        const traceId = traceViewer?.ensureTrace({
+          session,
+          route: 'qq-voice',
+          input: getTextInputContent(session),
+        });
+        traceViewer?.record({
+          traceId,
+          phase: 'error',
+          kind: 'voice-transcribe-error',
+          payload: { message: (error as Error).message },
+        });
         await sendFailureReply(session, buildVoiceFailureReply('broken', runtime.inputMaxSeconds));
         return;
       }
@@ -1079,6 +1255,17 @@ export function apply(ctx: Context, config: Config = {}): void {
           snapshot.canVoice || !rawPlan.segments.some((segment) => segment.kind === 'voice')
             ? rawPlan
             : downgradeVoiceSegmentsToText(rawPlan);
+        const traceId = traceViewer?.getTraceId(session);
+        traceViewer?.record({
+          traceId,
+          phase: 'prepare',
+          kind: 'voice-reply-plan',
+          payload: {
+            rawSegments: rawPlan.segments.map((segment) => segment.kind),
+            executableSegments: executablePlan.segments.map((segment) => segment.kind),
+            canVoice: snapshot.canVoice,
+          },
+        });
         const result = await deliverReplyPlan({
           runtime,
           session,
@@ -1090,6 +1277,15 @@ export function apply(ctx: Context, config: Config = {}): void {
 
         const conversationId = context.options?.room?.conversationId;
         await rewriteLatestAssistantHistoryMessage(ctx, conversationId, result.historyText);
+        traceViewer?.record({
+          traceId,
+          phase: 'outbound',
+          kind: 'voice-reply-delivery',
+          payload: {
+            status: result.status,
+            historyText: result.historyText,
+          },
+        });
 
         if (result.status === 'failed_before_send') {
           if (responseMessage) {

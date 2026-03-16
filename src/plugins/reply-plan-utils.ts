@@ -11,7 +11,7 @@ const REPLY_PLAN_SCHEMA = z.object({
   segments: z
     .array(
       z.object({
-        kind: z.enum(['text', 'multiline', 'voice']),
+        kind: z.enum(['text', 'multiline', 'voice', 'sticker']),
         content: z.string(),
       }),
     )
@@ -86,7 +86,9 @@ export function parseReplyPlanFromModelOutput(raw: unknown): ReplyTransportPlan 
 
 export function renderReplyPlanHistoryText(plan: ReplyTransportPlan): string {
   return plan.segments
-    .map((segment) => sanitizeStructuredReplySegmentContent(segment.content))
+    .map((segment) =>
+      segment.kind === 'sticker' ? '（发送表情包）' : sanitizeStructuredReplySegmentContent(segment.content),
+    )
     .filter((segment) => segment.trim().length > 0)
     .join('\n')
     .trim();

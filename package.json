@@ -11,6 +11,7 @@
     "docs:preview": "vitepress preview web",
     "start": "pnpm build && pnpm exec koishi start koishi.yml",
     "smoke:start": "bash ./scripts/smoke-koishi-start.sh",
+    "stickers:sync": "node ./scripts/stickers-sync.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

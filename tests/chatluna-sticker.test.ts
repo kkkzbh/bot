@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apply, extractStickerTag, loadStickerIndex, type StickerEntry } from '../src/plugins/chatluna-sticker.js';
 
-// ---------------------------------------------------------------------------
-// Mock koishi (same pattern as web-search.test.ts)
-// ---------------------------------------------------------------------------
+vi.mock('koishi-plugin-chatluna/chains', () => ({
+  ChainMiddlewareRunStatus: { STOP: 1, CONTINUE: 0 },
+}));
 
 vi.mock('koishi', () => {
   type MockSchemaNode = {
@@ -29,227 +28,211 @@ vi.mock('koishi', () => {
       object: () => createSchemaNode(),
       string: () => createSchemaNode(),
     },
-    h: {
-      image: (buffer: Buffer, mime: string) => `<img src="data:${mime};base64,${buffer.toString('base64')}" />`,
-    },
   };
 });
 
-// ---------------------------------------------------------------------------
-// Mock yaml
-// ---------------------------------------------------------------------------
-
-let mockYamlContent: unknown = {};
-
-vi.mock('yaml', () => ({
-  parse: () => mockYamlContent,
+const stickerCoreMocks = vi.hoisted(() => ({
+  buildStickerCapabilityPolicy: vi.fn(),
+  loadStickerCatalog: vi.fn(),
 }));
 
-// ---------------------------------------------------------------------------
-// Mock node:fs
-// ---------------------------------------------------------------------------
-
-const mockFiles = new Map<string, string | Buffer>();
-
-vi.mock('node:fs', () => ({
-  readFileSync: (filePath: string, encoding?: string) => {
-    const content = mockFiles.get(filePath);
-    if (content === undefined) {
-      const err = new Error(`ENOENT: no such file or directory, open '${filePath}'`) as NodeJS.ErrnoException;
-      err.code = 'ENOENT';
-      throw err;
-    }
-    if (encoding === 'utf-8') return typeof content === 'string' ? content : content.toString('utf-8');
-    return content;
-  },
+vi.mock('../src/plugins/chatluna-sticker-core.js', () => ({
+  buildStickerCapabilityPolicy: stickerCoreMocks.buildStickerCapabilityPolicy,
+  loadStickerCatalog: stickerCoreMocks.loadStickerCatalog,
 }));
 
-// ---------------------------------------------------------------------------
-// extractStickerTag tests
-// ---------------------------------------------------------------------------
+import { apply, inject } from '../src/plugins/chatluna-sticker.js';
 
-describe('extractStickerTag', () => {
-  it('extracts tag from a plain string', () => {
-    expect(extractStickerTag('smug')).toBe('smug');
-  });
+type EventHandler = (...args: any[]) => Promise<unknown> | unknown;
+type ChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;
 
-  it('extracts tag from an object with "tag" field', () => {
-    expect(extractStickerTag({ tag: 'bored' })).toBe('bored');
-  });
+function createChainBuilder(store: Map<string, ChainMiddleware>) {
+  return {
+    middleware: (name: string, middleware: ChainMiddleware) => {
+      store.set(name, middleware);
+      const builder = {
+        after: () => builder,
+        before: () => builder,
+      };
+      return builder;
+    },
+  };
+}
 
-  it('extracts tag from an object with "name" field', () => {
-    expect(extractStickerTag({ name: 'piano' })).toBe('piano');
-  });
+function createHarness() {
+  const events = new Map<string, EventHandler[]>();
+  const chainMiddlewares = new Map<string, ChainMiddleware>();
+  const inject = vi.fn();
 
-  it('extracts tag from a JSON-stringified object', () => {
-    expect(extractStickerTag('{"tag":"cold"}')).toBe('cold');
-  });
+  const chatluna = {
+    contextManager: { inject },
+    chatChain: createChainBuilder(chainMiddlewares),
+  };
 
-  it('extracts tag from nested args object', () => {
-    expect(extractStickerTag({ args: { tag: 'embarrassed' } })).toBe('embarrassed');
-  });
+  const ctx = {
+    chatluna,
+    get: vi.fn((name: string) => (name === 'chatluna' ? chatluna : undefined)),
+    on: vi.fn((name: string, handler: EventHandler) => {
+      const existing = events.get(name) ?? [];
+      existing.push(handler);
+      events.set(name, existing);
+    }),
+  };
 
-  it('extracts tag from a single-entry object with unknown key', () => {
-    expect(extractStickerTag({ whatever: 'smug' })).toBe('smug');
-  });
+  apply(ctx as never, { stickerDir: './data/chathub/stickers' });
 
-  it('returns empty string for null/undefined', () => {
-    expect(extractStickerTag(null)).toBe('');
-    expect(extractStickerTag(undefined)).toBe('');
-  });
+  return {
+    ready: (events.get('ready') ?? [])[0],
+    getPolicy: () => chainMiddlewares.get('qqbot_sticker_policy'),
+    inject,
+  };
+}
 
-  it('returns empty string for empty string', () => {
-    expect(extractStickerTag('')).toBe('');
-    expect(extractStickerTag('   ')).toBe('');
-  });
+function createSession(overrides: Record<string, unknown> = {}): Record<string, any> {
+  return {
+    platform: 'onebot',
+    channelId: 'group-100',
+    guildId: 'group-100',
+    userId: 'u1',
+    state: {},
+    bot: { selfId: 'bot-1' },
+    ...overrides,
+  };
+}
 
-  it('extracts from deeply nested JSON string', () => {
-    expect(extractStickerTag('{"args":{"tag":"cold"}}')).toBe('cold');
-  });
-
-  it('handles array input by returning first non-empty tag', () => {
-    expect(extractStickerTag(['', 'smug'])).toBe('smug');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// loadStickerIndex tests
-// ---------------------------------------------------------------------------
-
-describe('loadStickerIndex', () => {
+describe('chatluna sticker plugin', () => {
   beforeEach(() => {
-    mockFiles.clear();
-    mockYamlContent = {};
+    vi.restoreAllMocks();
+    stickerCoreMocks.buildStickerCapabilityPolicy.mockReset();
+    stickerCoreMocks.loadStickerCatalog.mockReset();
   });
 
   afterEach(() => {
-    mockFiles.clear();
-    mockYamlContent = {};
+    vi.unstubAllGlobals();
   });
 
-  it('returns empty map when index.yml does not exist', () => {
-    const result = loadStickerIndex('/nonexistent/dir');
-    expect(result.size).toBe(0);
+  it('declares the chatluna service dependency', () => {
+    expect(inject).toEqual(['chatluna']);
   });
 
-  it('returns empty map when stickers key is missing', () => {
-    mockFiles.set('/test/stickers/index.yml', 'other: true');
-    mockYamlContent = { other: true };
-    const result = loadStickerIndex('/test/stickers');
-    expect(result.size).toBe(0);
+  it('registers sticker policy middleware on ready', async () => {
+    stickerCoreMocks.loadStickerCatalog.mockReturnValue({
+      entries: [
+        {
+          id: 'bored',
+          scopes: ['persona:sakiko'],
+        },
+      ],
+    });
+    stickerCoreMocks.buildStickerCapabilityPolicy.mockReturnValue('policy');
+
+    const { ready, getPolicy } = createHarness();
+    await ready?.();
+
+    expect(getPolicy()).toBeTypeOf('function');
   });
 
-  it('loads stickers with valid files', () => {
-    const imgBuffer = Buffer.from('fake-png-data');
-    mockFiles.set('/test/stickers/index.yml', 'stickers: ...');
-    mockFiles.set('/test/stickers/images/smug.png', imgBuffer);
-    mockFiles.set('/test/stickers/images/bored.jpg', imgBuffer);
+  it('injects a sticker policy and stores sticker capability state on the session', async () => {
+    const catalog = {
+      version: 1,
+      generatedAt: '2026-03-16T00:00:00.000Z',
+      model: 'doubao-seed-2-0-mini-260215',
+      entries: [
+        {
+          id: 'bored',
+          file: 'images/personas/sakiko/bored.png',
+          hash: 'hash-1',
+          mime: 'image/png',
+          scopes: ['persona:sakiko'],
+          caption: '无语少女',
+          keywords: ['无语'],
+          moods: ['无语'],
+          scenes: ['吐槽'],
+          historyLabel: '无语少女',
+          confidence: 0.95,
+          buffer: Buffer.from('fake'),
+        },
+      ],
+      byId: new Map(),
+    };
+    stickerCoreMocks.loadStickerCatalog.mockReturnValue(catalog);
+    stickerCoreMocks.buildStickerCapabilityPolicy.mockReturnValue('sticker policy');
 
-    mockYamlContent = {
-      stickers: {
-        smug: { file: 'images/smug.png', description: '得意' },
-        bored: { file: 'images/bored.jpg', description: '无聊' },
+    const { ready, getPolicy, inject } = createHarness();
+    await ready?.();
+
+    const policy = getPolicy();
+    const session = createSession();
+    const context = {
+      options: {
+        room: {
+          conversationId: 'conv-1',
+          preset: 'sakiko',
+        },
       },
     };
 
-    const result = loadStickerIndex('/test/stickers');
-    expect(result.size).toBe(2);
-
-    const smug = result.get('smug') as StickerEntry;
-    expect(smug.tag).toBe('smug');
-    expect(smug.mime).toBe('image/png');
-    expect(smug.description).toBe('得意');
-    expect(smug.buffer).toEqual(imgBuffer);
-
-    const bored = result.get('bored') as StickerEntry;
-    expect(bored.mime).toBe('image/jpeg');
-  });
-
-  it('skips entries with missing file field', () => {
-    mockFiles.set('/test/stickers/index.yml', 'stickers: ...');
-    mockYamlContent = {
-      stickers: {
-        broken: { description: 'no file field' },
-      },
-    };
-
-    const result = loadStickerIndex('/test/stickers');
-    expect(result.size).toBe(0);
-  });
-
-  it('skips entries when image file is not readable', () => {
-    mockFiles.set('/test/stickers/index.yml', 'stickers: ...');
-    mockYamlContent = {
-      stickers: {
-        missing: { file: 'images/missing.png', description: 'gone' },
-      },
-    };
-
-    const result = loadStickerIndex('/test/stickers');
-    expect(result.size).toBe(0);
-  });
-
-  it('handles gif and webp mime types', () => {
-    const imgBuffer = Buffer.from('fake');
-    mockFiles.set('/test/stickers/index.yml', 'stickers: ...');
-    mockFiles.set('/test/stickers/images/anim.gif', imgBuffer);
-    mockFiles.set('/test/stickers/images/modern.webp', imgBuffer);
-
-    mockYamlContent = {
-      stickers: {
-        anim: { file: 'images/anim.gif', description: 'animated' },
-        modern: { file: 'images/modern.webp', description: 'webp' },
-      },
-    };
-
-    const result = loadStickerIndex('/test/stickers');
-    expect(result.get('anim')?.mime).toBe('image/gif');
-    expect(result.get('modern')?.mime).toBe('image/webp');
-  });
-});
-
-describe('apply', () => {
-  beforeEach(() => {
-    mockFiles.clear();
-    mockYamlContent = {};
-  });
-
-  afterEach(() => {
-    mockFiles.clear();
-    mockYamlContent = {};
-  });
-
-  it('registers sticker tool for private chats only', async () => {
-    const imgBuffer = Buffer.from('fake-png-data');
-    mockFiles.set('/test/stickers/index.yml', 'stickers: ...');
-    mockFiles.set('/test/stickers/images/bored.png', imgBuffer);
-    mockYamlContent = {
-      stickers: {
-        bored: { file: 'images/bored.png', description: '无聊' },
-      },
-    };
-
-    const readyHandlers: Array<() => unknown> = [];
-    const platform = {
-      registerTool: vi.fn(),
-    };
-    const ctx = {
-      chatluna: { platform },
-      on: vi.fn((name: string, handler: () => unknown) => {
-        if (name === 'ready') readyHandlers.push(handler);
+    const result = await policy?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(session.state.qqSticker).toEqual({
+      catalog,
+      preset: 'sakiko',
+      availableCount: 1,
+    });
+    expect(inject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'qqbot_sticker_policy',
+        conversationId: 'conv-1',
+        value: 'sticker policy',
       }),
-      setInterval: vi.fn(),
+    );
+  });
+
+  it('skips policy injection when no scoped sticker is available', async () => {
+    const catalog = {
+      version: 1,
+      generatedAt: '2026-03-16T00:00:00.000Z',
+      model: 'doubao-seed-2-0-mini-260215',
+      entries: [
+        {
+          id: 'bored',
+          file: 'images/personas/sakiko/bored.png',
+          hash: 'hash-1',
+          mime: 'image/png',
+          scopes: ['persona:sakiko'],
+          caption: '无语少女',
+          keywords: ['无语'],
+          moods: ['无语'],
+          scenes: ['吐槽'],
+          historyLabel: '无语少女',
+          confidence: 0.95,
+          buffer: Buffer.from('fake'),
+        },
+      ],
+      byId: new Map(),
     };
+    stickerCoreMocks.loadStickerCatalog.mockReturnValue(catalog);
+    stickerCoreMocks.buildStickerCapabilityPolicy.mockReturnValue(null);
 
-    apply(ctx as never, { stickerDir: '/test/stickers' });
-    await readyHandlers[0]?.();
+    const { ready, getPolicy, inject } = createHarness();
+    await ready?.();
 
-    expect(platform.registerTool).toHaveBeenCalledTimes(1);
-    const toolDescriptor = platform.registerTool.mock.calls[0]?.[1] as {
-      authorization?: (session: { isDirect?: boolean }) => boolean;
-    };
+    const policy = getPolicy();
+    const session = createSession();
+    await policy?.(session, {
+      options: {
+        room: {
+          conversationId: 'conv-2',
+          preset: 'other',
+        },
+      },
+    });
 
-    expect(toolDescriptor.authorization?.({ isDirect: true })).toBe(true);
-    expect(toolDescriptor.authorization?.({ isDirect: false })).toBe(false);
+    expect(session.state.qqSticker).toEqual({
+      catalog,
+      preset: 'other',
+      availableCount: 0,
+    });
+    expect(inject).not.toHaveBeenCalled();
   });
 });

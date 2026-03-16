@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "generatedAt": "2026-03-16T05:57:54.594Z",
+  "model": "doubao-seed-2-0-mini-260215",
+  "entries": [
+    {
+      "id": "bored",
+      "file": "images/personas/sakiko/bored.png",
+      "hash": "715948eaa8272765223cb4266c88818c8eb18ed4f2f17853812f96dc98a96a8d",
+      "mime": "image/png",
+      "scopes": [
+        "persona:sakiko"
+      ],
+      "caption": "银发二次元少女配六个省略号的无语表情包",
+      "keywords": [
+        "二次元少女",
+        "银发双马尾",
+        "省略号",
+        "聊天表情",
+        "面无表情"
+      ],
+      "moods": [
+        "无语",
+        "茫然",
+        "麻木",
+        "沉默"
+      ],
+      "scenes": [
+        "聊天互动",
+        "斗图场景",
+        "日常吐槽",
+        "情绪回应"
+      ],
+      "historyLabel": "省略号无语少女",
+      "confidence": 0.95
+    },
+    {
+      "id": "cold",
+      "file": "images/personas/sakiko/cold.png",
+      "hash": "97be91f4fd722dd0a1957faa6b50e200b58df58114621eee4bdb2638b5d14ae1",
+      "mime": "image/png",
+      "scopes": [
+        "persona:sakiko"
+      ],
+      "caption": "蓝发二次元校服少女举手表态我有意见的聊天表情包",
+      "keywords": [
+        "蓝发少女",
+        "校服女生",
+        "我有意见",
+        "举手发言",
+        "吐槽表情包"
+      ],
+      "moods": [
+        "提出异议",
+        "调侃吐槽",
+        "面带笑意"
+      ],
+      "scenes": [
+        "线上聊天",
+        "日常吐槽",
+        "校园场景"
+      ],
+      "historyLabel": "举手提意见",
+      "confidence": 0.95
+    },
+    {
+      "id": "embarrassed",
+      "file": "images/personas/sakiko/embarrassed.gif",
+      "hash": "7aeddbfd4bb6be7dab40728ad35c831252deb302de5b83e81ec1b513338fda60",
+      "mime": "image/gif",
+      "scopes": [
+        "persona:sakiko"
+      ],
+      "caption": "蓝发二次元少女愤怒噘嘴的表情包",
+      "keywords": [
+        "蓝发少女",
+        "二次元表情包",
+        "生气表情",
+        "噘嘴",
+        "双马尾"
+      ],
+      "moods": [
+        "愤怒",
+        "气恼",
+        "不满"
+      ],
+      "scenes": [
+        "聊天互动",
+        "日常斗图",
+        "情绪表达"
+      ],
+      "historyLabel": "生气噘嘴少女",
+      "confidence": 0.94
+    },
+    {
+      "id": "piano",
+      "file": "images/personas/sakiko/piano.gif",
+      "hash": "ee6d979814f5d59cc0a04adca0d728e29fdb1cf133aa948f40c12f65bf9ee471",
+      "mime": "image/gif",
+      "scopes": [
+        "persona:sakiko"
+      ],
+      "caption": "双马尾白发少女手持沙锤在舞台演出",
+      "keywords": [
+        "二次元少女",
+        "沙锤",
+        "乐队演出",
+        "双马尾",
+        "白发少女"
+      ],
+      "moods": [
+        "欢快",
+        "亢奋",
+        "活泼",
+        "热烈"
+      ],
+      "scenes": [
+        "舞台现场",
+        "live演出",
+        "乐队舞台"
+      ],
+      "historyLabel": "沙锤演出少女",
+      "confidence": 0.93
+    }
+  ]
+}

@@ -77,6 +77,9 @@ vi.mock('koishi', () => {
       audio: (src: string) => ({
         toString: () => `<audio src="${src}"/>`,
       }),
+      image: (buffer: Buffer, mime: string) => ({
+        toString: () => `<img src="data:${mime};base64,${buffer.toString('base64')}" />`,
+      }),
     },
   };
 });
@@ -403,6 +406,138 @@ describe('qq voice plugin', () => {
     expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['echo hi\npwd']);
     expect(context.options.responseMessage).toBeNull();
     expect(database.upsert).toHaveBeenCalled();
+  });
+
+  it('executes a sticker ReplyPlan and sends one image payload', async () => {
+    const { ready, getExecutor, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const stickerEntry = {
+      id: 'bored',
+      file: 'images/personas/sakiko/bored.png',
+      hash: 'hash-1',
+      mime: 'image/png',
+      scopes: ['persona:sakiko'],
+      caption: '无语少女',
+      keywords: ['无语', '沉默'],
+      moods: ['无语'],
+      scenes: ['日常吐槽'],
+      historyLabel: '无语少女',
+      confidence: 0.95,
+      buffer: Buffer.from('fake-png'),
+    };
+    const session = createSession(bot, {
+      content: '来个表情包',
+      strippedContent: '来个表情包',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+        qqSticker: {
+          catalog: {
+            version: 1,
+            generatedAt: '2026-03-16T00:00:00.000Z',
+            model: 'doubao-seed-2-0-mini-260215',
+            entries: [stickerEntry],
+            byId: new Map([['bored', stickerEntry]]),
+          },
+          preset: 'sakiko',
+          availableCount: 1,
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: { conversationId: 'conv-sticker', preset: 'sakiko' },
+        responseMessage: {
+          content: '{"segments":[{"kind":"sticker","content":"无语地看对方一眼"}]}',
+        },
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage.mock.calls).toHaveLength(1);
+    expect(String((bot.sendMessage.mock.calls as Array<any[]>)[0]?.[1] ?? '')).toContain(
+      '<img src="data:image/png;base64,',
+    );
+    expect(context.options.responseMessage).toBeNull();
+  });
+
+  it('preserves text and sticker order in a mixed ReplyPlan', async () => {
+    const { ready, getExecutor, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const stickerEntry = {
+      id: 'cold',
+      file: 'images/personas/sakiko/cold.png',
+      hash: 'hash-2',
+      mime: 'image/png',
+      scopes: ['persona:sakiko'],
+      caption: '冷淡举手',
+      keywords: ['冷淡', '拒绝'],
+      moods: ['冷淡'],
+      scenes: ['追问私事'],
+      historyLabel: '冷淡举手',
+      confidence: 0.95,
+      buffer: Buffer.from('fake-cold'),
+    };
+    const session = createSession(bot, {
+      content: '混排一下',
+      strippedContent: '混排一下',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+        qqSticker: {
+          catalog: {
+            version: 1,
+            generatedAt: '2026-03-16T00:00:00.000Z',
+            model: 'doubao-seed-2-0-mini-260215',
+            entries: [stickerEntry],
+            byId: new Map([['cold', stickerEntry]]),
+          },
+          preset: 'sakiko',
+          availableCount: 1,
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: { conversationId: 'conv-sticker-mix', preset: 'sakiko' },
+        responseMessage: {
+          content:
+            '{"segments":[{"kind":"text","content":"前一句"},{"kind":"sticker","content":"冷淡拒绝，被追问私事"},{"kind":"text","content":"后一句"}]}',
+        },
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage.mock.calls.map((call: any[]) => String(call[1]))).toEqual([
+      '前一句',
+      expect.stringContaining('<img src="data:image/png;base64,'),
+      '后一句',
+    ]);
+    expect(context.options.responseMessage).toBeNull();
   });
 
   it('executes a voice ReplyPlan and sends one audio payload', async () => {

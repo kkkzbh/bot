@@ -58,13 +58,18 @@ export type OutboundMessageSegment =
       kind: 'voice-block';
       content: string;
       raw: string;
+    }
+  | {
+      kind: 'sticker-block';
+      content: string;
+      raw: string;
     };
 
 export interface OutboundMessagePlan {
   segments: OutboundMessageSegment[];
 }
 
-export type ReplyTransportSegmentKind = 'text' | 'multiline' | 'voice';
+export type ReplyTransportSegmentKind = 'text' | 'multiline' | 'voice' | 'sticker';
 
 export interface ReplyTransportSegment {
   kind: ReplyTransportSegmentKind;
@@ -410,8 +415,10 @@ export function createTextOnlyOutboundMessagePlan(message: unknown): OutboundMes
 
 export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan): OutboundMessagePlan {
   const segments: OutboundMessageSegment[] = [];
+  const createStructuredRaw = (kind: ReplyTransportSegmentKind, index: number, content: string): string =>
+    `reply-plan:${kind}:${index}:${content}`;
 
-  for (const segment of plan.segments) {
+  for (const [index, segment] of plan.segments.entries()) {
     if (segment.kind === 'text') {
       segments.push(...createTextOutboundSegments(segment.content));
       continue;
@@ -424,7 +431,16 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
       segments.push({
         kind: 'multiline-block',
         content,
-        raw: content,
+        raw: createStructuredRaw(segment.kind, index, content),
+      });
+      continue;
+    }
+
+    if (segment.kind === 'sticker') {
+      segments.push({
+        kind: 'sticker-block',
+        content,
+        raw: createStructuredRaw(segment.kind, index, content),
       });
       continue;
     }
@@ -432,7 +448,7 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
     segments.push({
       kind: 'voice-block',
       content,
-      raw: content,
+      raw: createStructuredRaw(segment.kind, index, content),
     });
   }
 
@@ -598,17 +614,19 @@ export function sanitizeLeakedReasoningMessage(message: string): string {
 
 export function normalizeOutboundMessage(message: string): NormalizedOutboundMessage {
   const plan = parseOutboundMessagePlan(message);
-  const nonVoiceSegments = plan.segments.filter((segment) => segment.kind !== 'voice-block');
-  if (nonVoiceSegments.length === 1 && nonVoiceSegments[0].kind === 'multiline-block') {
+  const nonMediaSegments = plan.segments.filter(
+    (segment) => segment.kind !== 'voice-block' && segment.kind !== 'sticker-block',
+  );
+  if (nonMediaSegments.length === 1 && nonMediaSegments[0].kind === 'multiline-block') {
     return {
       mode: 'preserve',
-      content: nonVoiceSegments[0].content,
+      content: nonMediaSegments[0].content,
     };
   }
 
   return {
     mode: 'split',
-    content: nonVoiceSegments.map((segment) => segment.content).join('\n').trim(),
+    content: nonMediaSegments.map((segment) => segment.content).join('\n').trim(),
   };
 }
 
