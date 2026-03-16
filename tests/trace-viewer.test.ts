@@ -42,6 +42,7 @@ import type { TraceEventRecord } from '../src/types/trace-viewer.js';
 import {
   buildTraceEventsResponse,
   extractInjectedPrompts,
+  inject,
   isAllowedRemoteAddress,
   serializePayload,
   trimText,
@@ -62,6 +63,10 @@ function createEvent(overrides: Partial<TraceEventRecord>): TraceEventRecord {
 }
 
 describe('trace viewer helpers', () => {
+  it('declares required services so chatluna patching can run after service registration', () => {
+    expect(inject).toEqual(expect.arrayContaining(['database', 'server', 'chatluna']));
+  });
+
   it('allows loopback and private network addresses only', () => {
     expect(isAllowedRemoteAddress('127.0.0.1')).toBe(true);
     expect(isAllowedRemoteAddress('192.168.1.20')).toBe(true);

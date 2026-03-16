@@ -36,7 +36,7 @@ const INJECTION_SOURCE_LABELS: Record<string, string> = {
 };
 
 export const name = 'trace-viewer';
-export const inject = ['database', 'server'];
+export const inject = ['database', 'server', 'chatluna'];
 
 export interface Config {
   enabled?: boolean;
@@ -1414,6 +1414,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     });
     service.finish({
       traceId,
+      status: 'ok',
       finalReply: content,
     });
   });
