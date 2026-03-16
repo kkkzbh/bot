@@ -474,17 +474,44 @@ function createTraceViewerHtml(uiPath: string, apiPath: string, pollIntervalMs: 
       background: var(--panel);
       padding: 12px;
       cursor: pointer;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
     }
     .item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+    .item-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      margin-bottom: 8px;
+    }
+    .item-title {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .item-preview, .item-time {
+      max-width: 100%;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
     .item .route {
       display: inline-flex;
       padding: 2px 8px;
       font-size: 12px;
       background: var(--accent-soft);
       color: var(--accent);
-      margin-bottom: 8px;
     }
-    .item .status { float: right; color: var(--muted); font-size: 12px; }
+    .item .status {
+      color: var(--muted);
+      font-size: 12px;
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
     .header-card, .detail-card {
       border: 1px solid var(--line);
       background: rgba(255, 253, 248, 0.94);
@@ -644,9 +671,9 @@ function createTraceViewerHtml(uiPath: string, apiPath: string, pollIntervalMs: 
         div.className = 'item' + (state.selectedTraceId === item.traceId ? ' active' : '');
         div.dataset.traceId = item.traceId;
         div.innerHTML =
-          '<div><span class="route">' + escapeHtml(item.route) + '</span><span class="status">' + escapeHtml(item.status) + '</span></div>' +
-          '<div>' + escapeHtml(item.inputPreview || '(no input preview)') + '</div>' +
-          '<div class="muted" style="margin-top:8px;">' + escapeHtml(item.updatedAtText) + '</div>';
+          '<div class="item-head"><div class="item-title"><span class="route">' + escapeHtml(item.route) + '</span></div><span class="status">' + escapeHtml(item.status) + '</span></div>' +
+          '<div class="item-preview">' + escapeHtml(item.inputPreview || '(no input preview)') + '</div>' +
+          '<div class="item-time muted" style="margin-top:8px;">' + escapeHtml(item.updatedAtText) + '</div>';
         div.addEventListener('click', () => {
           state.selectedTraceId = item.traceId;
           loadList().catch(showError);
