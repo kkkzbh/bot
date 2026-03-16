@@ -5,6 +5,8 @@ import { Context, Logger, Schema, type Session } from 'koishi';
 import type {
   TraceEventRecord,
   TraceFinishOptions,
+  TraceInjectedPromptRecord,
+  TraceInjectedPromptView,
   TraceRecordOptions,
   TraceSessionRecord,
   TraceStartOptions,
@@ -23,8 +25,15 @@ const MAX_SANITIZE_DEPTH = 4;
 const MAX_SANITIZE_ARRAY_ITEMS = 24;
 const MAX_SANITIZE_OBJECT_KEYS = 40;
 const CHAT_SERVICE_PATCH = Symbol.for('qqbot.traceViewer.chatServicePatched');
+const CONTEXT_MANAGER_PATCH = Symbol.for('qqbot.traceViewer.contextManagerPatched');
 const CHAIN_CALL_PATCH = Symbol.for('qqbot.traceViewer.chainCallPatched');
 const PROCESS_CHAT_PATCH = Symbol.for('qqbot.traceViewer.processChatPatched');
+const INJECTION_SOURCE_LABELS: Record<string, string> = {
+  'chatluna-time-context': 'Input rewrite',
+  qqbot_live_reply_continuation: 'Live reply continuation',
+  qqbot_reply_transport_policy: 'Reply transport policy',
+  qqbot_sticker_policy: 'Sticker policy',
+};
 
 export const name = 'trace-viewer';
 export const inject = ['database', 'server'];
@@ -60,8 +69,21 @@ type SessionLike = Session & {
   stripped?: { content?: string };
 };
 
+type ContextManagerInjectOptions = {
+  conversationId?: string;
+  name?: string;
+  once?: boolean;
+  stage?: string;
+  value?: unknown;
+} & Record<string, unknown>;
+
+type ContextManagerLike = {
+  inject?: (options: ContextManagerInjectOptions) => unknown;
+} & Record<symbol, unknown>;
+
 type ChatLunaLike = {
   chat?: (...args: any[]) => Promise<any>;
+  contextManager?: ContextManagerLike;
 };
 
 type LlmChainLike = {
@@ -311,6 +333,75 @@ function serializeLangChainMessage(message: unknown): unknown {
   };
 }
 
+function tryParsePayloadText(text: string): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function formatInjectionSourceLabel(source: string): string {
+  return INJECTION_SOURCE_LABELS[source] ?? source;
+}
+
+function toInjectedPromptRecord(event: TraceEventRecord): TraceInjectedPromptRecord | null {
+  if (event.kind === 'chatluna-time-context') {
+    const payload = tryParsePayloadText(event.payload);
+    if (!payload || typeof payload !== 'object') return null;
+    const content = extractTextContent((payload as { injectedContent?: unknown }).injectedContent);
+    if (!content) return null;
+    return {
+      source: 'chatluna-time-context',
+      sourceLabel: formatInjectionSourceLabel('chatluna-time-context'),
+      stage: 'input-message',
+      content,
+      createdAt: event.createdAt,
+    };
+  }
+
+  if (event.kind !== 'context-injection') return null;
+  const payload = tryParsePayloadText(event.payload);
+  if (!payload || typeof payload !== 'object') return null;
+  const typed = payload as {
+    content?: unknown;
+    source?: unknown;
+    stage?: unknown;
+  };
+  const source = typeof typed.source === 'string' ? typed.source.trim() : '';
+  const content = extractTextContent(typed.content);
+  if (!source || !content) return null;
+  const stage = typeof typed.stage === 'string' && typed.stage.trim() ? typed.stage.trim() : 'unknown';
+  return {
+    source,
+    sourceLabel: formatInjectionSourceLabel(source),
+    stage,
+    content,
+    createdAt: event.createdAt,
+  };
+}
+
+export function extractInjectedPrompts(events: TraceEventRecord[]): TraceInjectedPromptRecord[] {
+  return events.map((event) => toInjectedPromptRecord(event)).filter((event): event is TraceInjectedPromptRecord => Boolean(event));
+}
+
+export function buildTraceEventsResponse(events: TraceEventRecord[]): {
+  events: Array<TraceEventRecord & { createdAtText: string }>;
+  injectedPrompts: TraceInjectedPromptView[];
+} {
+  return {
+    events: events.map((event) => ({
+      ...event,
+      createdAtText: formatTime(event.createdAt),
+    })),
+    injectedPrompts: extractInjectedPrompts(events).map((prompt) => ({
+      ...prompt,
+      createdAtText: formatTime(prompt.createdAt),
+    })),
+  };
+}
+
 function createTraceViewerHtml(uiPath: string, apiPath: string, pollIntervalMs: number): string {
   return `<!doctype html>
 <html lang="en">
@@ -410,6 +501,37 @@ function createTraceViewerHtml(uiPath: string, apiPath: string, pollIntervalMs: 
       border: 1px solid var(--line);
       padding: 10px;
       background: #fffaf2;
+    }
+    .prompt-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .prompt-card {
+      border: 1px solid var(--line);
+      background: #fffaf2;
+      padding: 14px;
+    }
+    .prompt-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .prompt-source {
+      display: inline-flex;
+      padding: 2px 8px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .prompt-stage {
+      color: var(--muted);
+      font-size: 12px;
     }
     .timeline {
       display: grid;
@@ -549,6 +671,7 @@ function createTraceViewerHtml(uiPath: string, apiPath: string, pollIntervalMs: 
       const eventsPayload = await eventsRes.json();
       const trace = tracePayload.trace;
       const events = eventsPayload.events || [];
+      const injectedPrompts = eventsPayload.injectedPrompts || [];
       document.getElementById('title').textContent = trace.traceId;
       const detail = document.getElementById('detail');
       const metaCards = [
@@ -578,10 +701,30 @@ function createTraceViewerHtml(uiPath: string, apiPath: string, pollIntervalMs: 
             })
             .join('')
         : '<div class="empty">No events stored for this trace.</div>';
+      const injectedPromptCards = injectedPrompts.length
+        ? injectedPrompts
+            .map((prompt) => {
+              return (
+                '<div class="prompt-card">' +
+                '<div class="prompt-meta">' +
+                '<div><span class="prompt-source">' + escapeHtml(prompt.sourceLabel || prompt.source) + '</span></div>' +
+                '<div class="prompt-stage">' +
+                escapeHtml(prompt.stage || '-') +
+                ' · ' +
+                escapeHtml(prompt.createdAtText || '') +
+                '</div>' +
+                '</div>' +
+                '<pre>' + escapeHtml(prompt.content || '(empty)') + '</pre>' +
+                '</div>'
+              );
+            })
+            .join('')
+        : '<div class="empty">No injected prompts captured for this trace.</div>';
       detail.innerHTML =
         '<div class="detail-card"><div class="header-grid">' + metaCards + '</div></div>' +
         '<div class="detail-card"><h3>Input preview</h3><pre style="margin-top:10px;">' + escapeHtml(trace.inputPreview || '(empty)') + '</pre></div>' +
         '<div class="detail-card"><h3>Final reply preview</h3><pre style="margin-top:10px;">' + escapeHtml(trace.finalReplyPreview || '(empty)') + '</pre></div>' +
+        '<div class="detail-card"><h3>Injected prompts</h3><div class="prompt-list">' + injectedPromptCards + '</div></div>' +
         (trace.errorText ? '<div class="detail-card"><h3>Error</h3><pre style="margin-top:10px;">' + escapeHtml(trace.errorText) + '</pre></div>' : '') +
         '<div class="timeline">' + timeline + '</div>';
     }
@@ -943,129 +1086,156 @@ function patchChatLuna(service: TraceViewerService, ctx: Context): void {
     ? ((ctx as { get: (name: string) => unknown }).get('chatluna') as ChatLunaLike | undefined)
     : undefined) ?? ((ctx as Context & { chatluna?: ChatLunaLike }).chatluna as ChatLunaLike | undefined);
 
-  if (!chatluna?.chat || ((chatluna.chat as unknown as Record<symbol, unknown>)[CHAT_SERVICE_PATCH])) return;
+  if (!chatluna) return;
 
-  const originalChat = chatluna.chat.bind(chatluna);
-  const wrappedChat = async (
-    session: SessionLike,
-    room: Record<string, any>,
-    message: Record<string, any>,
-    events: Record<string, (...args: any[]) => unknown>,
-    stream: boolean,
-    requestId: string,
-    variables?: Record<string, unknown>,
-    postHandler?: Record<string, unknown>,
-  ) => {
-    const inputText = extractTextContent(message?.content);
-    const traceId =
-      service.getTraceId(session) ??
-      service.ensureTrace({
-        session,
-        route: session?.isDirect ? 'chatluna-direct' : 'chatluna-chat',
-        input: inputText,
-      });
-
-    service.bindTrace(session, traceId);
-    service.update(traceId, {
-      conversationId: room?.conversationId ?? null,
-      requestId: requestId ?? null,
-      model: room?.model ?? null,
-    });
-    service.record({
-      traceId,
-      phase: 'prepare',
-      kind: 'chatluna-request',
-      payload: {
-        room: {
-          conversationId: room?.conversationId ?? null,
-          roomId: room?.roomId ?? null,
-          model: room?.model ?? null,
-          chatMode: room?.chatMode ?? null,
-          preset: room?.preset ?? null,
-        },
-        message: serializeLangChainMessage(message),
-        variables,
-        stream,
-        hasPostHandler: Boolean(postHandler),
-      },
-    });
-
-    const wrappedEvents = {
-      ...events,
-      'llm-queue-waiting': async (...args: any[]) => {
+  if (chatluna.contextManager?.inject && !chatluna.contextManager[CONTEXT_MANAGER_PATCH]) {
+    const originalInject = chatluna.contextManager.inject.bind(chatluna.contextManager);
+    const wrappedInject = (options: ContextManagerInjectOptions) => {
+      const traceId = service.getCurrentTraceId();
+      if (traceId) {
         service.record({
           traceId,
           phase: 'prepare',
-          kind: 'queue-waiting',
-          payload: { args },
-        });
-        return events?.['llm-queue-waiting']?.(...args);
-      },
-      'llm-call-tool': async (...args: any[]) => {
-        service.record({
-          traceId,
-          phase: 'tool-loop',
-          kind: 'tool-call',
-          payload: { args },
-        });
-        service.finish({ traceId, hasToolCall: true });
-        return events?.['llm-call-tool']?.(...args);
-      },
-      'llm-used-token-count': async (...args: any[]) => {
-        service.record({
-          traceId,
-          phase: 'llm-output',
-          kind: 'token-usage',
-          payload: { args },
-        });
-        return events?.['llm-used-token-count']?.(...args);
-      },
-    };
-
-    return service.runWithTrace(traceId, async () => {
-      try {
-        const result = await originalChat(session, room, message, wrappedEvents, stream, requestId, variables, postHandler);
-        service.record({
-          traceId,
-          phase: 'llm-output',
-          kind: 'chatluna-result',
+          kind: 'context-injection',
           payload: {
-            content: extractTextContent(result?.content),
-            additionalReplyMessages: result?.additionalReplyMessages,
+            content: extractTextContent(options?.value),
+            conversationId: options?.conversationId ?? null,
+            once: Boolean(options?.once),
+            source: options?.name ?? 'unknown',
+            stage: options?.stage ?? null,
           },
         });
-        service.finish({
-          traceId,
-          status: 'ok',
-          finalReply: extractTextContent(result?.content),
-          conversationId: room?.conversationId ?? null,
-          requestId: requestId ?? null,
-          model: room?.model ?? null,
-        });
-        return result;
-      } catch (error) {
-        const messageText = (error as Error).message;
-        service.record({
-          traceId,
-          phase: 'error',
-          kind: 'chatluna-error',
-          payload: { message: messageText },
-        });
-        service.finish({
-          traceId,
-          status: 'error',
-          error: messageText,
-          conversationId: room?.conversationId ?? null,
-          requestId: requestId ?? null,
-          model: room?.model ?? null,
-        });
-        throw error;
       }
-    });
-  };
+      return originalInject(options);
+    };
+    (wrappedInject as unknown as Record<symbol, unknown>)[CONTEXT_MANAGER_PATCH] = true;
+    chatluna.contextManager.inject = wrappedInject;
+    chatluna.contextManager[CONTEXT_MANAGER_PATCH] = true;
+  }
 
-  (wrappedChat as unknown as Record<symbol, unknown>)[CHAT_SERVICE_PATCH] = true;
-  chatluna.chat = wrappedChat;
+  if (chatluna.chat && !((chatluna.chat as unknown as Record<symbol, unknown>)[CHAT_SERVICE_PATCH])) {
+    const originalChat = chatluna.chat.bind(chatluna);
+    const wrappedChat = async (
+      session: SessionLike,
+      room: Record<string, any>,
+      message: Record<string, any>,
+      events: Record<string, (...args: any[]) => unknown>,
+      stream: boolean,
+      requestId: string,
+      variables?: Record<string, unknown>,
+      postHandler?: Record<string, unknown>,
+    ) => {
+      const inputText = extractTextContent(message?.content);
+      const traceId =
+        service.getTraceId(session) ??
+        service.ensureTrace({
+          session,
+          route: session?.isDirect ? 'chatluna-direct' : 'chatluna-chat',
+          input: inputText,
+        });
+
+      service.bindTrace(session, traceId);
+      service.update(traceId, {
+        conversationId: room?.conversationId ?? null,
+        requestId: requestId ?? null,
+        model: room?.model ?? null,
+      });
+      service.record({
+        traceId,
+        phase: 'prepare',
+        kind: 'chatluna-request',
+        payload: {
+          room: {
+            conversationId: room?.conversationId ?? null,
+            roomId: room?.roomId ?? null,
+            model: room?.model ?? null,
+            chatMode: room?.chatMode ?? null,
+            preset: room?.preset ?? null,
+          },
+          message: serializeLangChainMessage(message),
+          variables,
+          stream,
+          hasPostHandler: Boolean(postHandler),
+        },
+      });
+
+      const wrappedEvents = {
+        ...events,
+        'llm-queue-waiting': async (...args: any[]) => {
+          service.record({
+            traceId,
+            phase: 'prepare',
+            kind: 'queue-waiting',
+            payload: { args },
+          });
+          return events?.['llm-queue-waiting']?.(...args);
+        },
+        'llm-call-tool': async (...args: any[]) => {
+          service.record({
+            traceId,
+            phase: 'tool-loop',
+            kind: 'tool-call',
+            payload: { args },
+          });
+          service.finish({ traceId, hasToolCall: true });
+          return events?.['llm-call-tool']?.(...args);
+        },
+        'llm-used-token-count': async (...args: any[]) => {
+          service.record({
+            traceId,
+            phase: 'llm-output',
+            kind: 'token-usage',
+            payload: { args },
+          });
+          return events?.['llm-used-token-count']?.(...args);
+        },
+      };
+
+      return service.runWithTrace(traceId, async () => {
+        try {
+          const result = await originalChat(session, room, message, wrappedEvents, stream, requestId, variables, postHandler);
+          service.record({
+            traceId,
+            phase: 'llm-output',
+            kind: 'chatluna-result',
+            payload: {
+              content: extractTextContent(result?.content),
+              additionalReplyMessages: result?.additionalReplyMessages,
+            },
+          });
+          service.finish({
+            traceId,
+            status: 'ok',
+            finalReply: extractTextContent(result?.content),
+            conversationId: room?.conversationId ?? null,
+            requestId: requestId ?? null,
+            model: room?.model ?? null,
+          });
+          return result;
+        } catch (error) {
+          const messageText = (error as Error).message;
+          service.record({
+            traceId,
+            phase: 'error',
+            kind: 'chatluna-error',
+            payload: { message: messageText },
+          });
+          service.finish({
+            traceId,
+            status: 'error',
+            error: messageText,
+            conversationId: room?.conversationId ?? null,
+            requestId: requestId ?? null,
+            model: room?.model ?? null,
+          });
+          throw error;
+        }
+      });
+    };
+
+    (wrappedChat as unknown as Record<symbol, unknown>)[CHAT_SERVICE_PATCH] = true;
+    chatluna.chat = wrappedChat;
+  }
 
   try {
     const chainModule = require('koishi-plugin-chatluna/llm-core/chain/base') as {
@@ -1264,12 +1434,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     addNoStoreHeader(koaCtx);
     const traceId = koaCtx.params?.traceId ?? '';
     const events = await service.getEvents(traceId);
-    koaCtx.body = {
-      events: events.map((event) => ({
-        ...event,
-        createdAtText: formatTime(event.createdAt),
-      })),
-    };
+    koaCtx.body = buildTraceEventsResponse(events);
   });
 
   logger.info(

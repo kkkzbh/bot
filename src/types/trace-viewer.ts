@@ -41,6 +41,18 @@ export interface TraceEventRecord {
   createdAt: number;
 }
 
+export interface TraceInjectedPromptRecord {
+  source: string;
+  sourceLabel: string;
+  stage: string;
+  content: string;
+  createdAt: number;
+}
+
+export interface TraceInjectedPromptView extends TraceInjectedPromptRecord {
+  createdAtText: string;
+}
+
 export interface TraceStartOptions {
   session?: {
     platform?: string;
