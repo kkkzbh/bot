@@ -2,6 +2,7 @@ import 'koishi-plugin-cron';
 import { Context, h, Logger, Schema, Session, type Universal } from 'koishi';
 import { parseExpression } from 'cron-parser';
 import type { AutomationTask, TaskScope } from '../types/task-automation.js';
+import type { TraceViewerServiceLike } from '../types/trace-viewer.js';
 import {
   AutomationIntent,
   isValidCronExpr,
@@ -19,6 +20,7 @@ import {
   buildDeliveryMessageByModel,
   buildNaturalCreateReplyByModel,
   extractMessageText,
+  type AutomationLlmTraceHook,
   type AutomationLlmRuntime,
 } from './task-automation-llm.js';
 import {
@@ -250,6 +252,37 @@ function toAutomationLlmRuntime(runtime: RuntimeConfig): AutomationLlmRuntime {
   };
 }
 
+function getTraceViewer(ctx: Context): TraceViewerServiceLike | undefined {
+  return (ctx as Context & { traceViewer?: TraceViewerServiceLike }).traceViewer;
+}
+
+function createTraceHook(
+  traceViewer: TraceViewerServiceLike | undefined,
+  traceId: string | null,
+  requestKind: string,
+  responseKind: string,
+): AutomationLlmTraceHook | undefined {
+  if (!traceViewer || !traceId) return undefined;
+  return {
+    onRequest(payload) {
+      traceViewer.record({
+        traceId,
+        phase: 'prepare',
+        kind: requestKind,
+        payload,
+      });
+    },
+    onResponse(payload) {
+      traceViewer.record({
+        traceId,
+        phase: 'llm-output',
+        kind: responseKind,
+        payload,
+      });
+    },
+  };
+}
+
 function resolveScopeContext(session: Session, runtime: RuntimeConfig): ScopeContext | null {
   if (!session.channelId) return null;
   if (session.isDirect) {
@@ -338,20 +371,55 @@ async function buildOnceTaskMessage(
 async function buildNaturalCreateReply(
   runtime: RuntimeConfig,
   payload: { kind: 'once' | 'cron'; runAt?: number | null; cronExpr?: string | null; message: string },
+  traceViewer?: TraceViewerServiceLike,
+  traceId?: string | null,
 ): Promise<string | null> {
-  return buildNaturalCreateReplyByModel(toAutomationLlmRuntime(runtime), payload, formatTimestamp);
+  return buildNaturalCreateReplyByModel(
+    toAutomationLlmRuntime(runtime),
+    payload,
+    formatTimestamp,
+    Date.now(),
+    createTraceHook(traceViewer, traceId ?? null, 'automation-create-reply-request', 'automation-create-reply-response'),
+  );
 }
 
-async function parseIntentByModel(content: string, runtime: RuntimeConfig): Promise<AutomationIntent | null> {
+async function parseIntentByModel(
+  content: string,
+  runtime: RuntimeConfig,
+  traceViewer?: TraceViewerServiceLike,
+  session?: Session,
+): Promise<AutomationIntent | null> {
   if (!runtime.intentEnabled || !runtime.intentBaseUrl || !runtime.intentApiKey || !runtime.intentModel) {
     return null;
   }
 
   const now = new Date();
+  const traceId = traceViewer?.ensureTrace({
+    session,
+    route: 'task-automation',
+    input: content,
+  });
   const systemPrompt =
     '你是任务意图解析器。请仅输出 JSON：' +
     '{"action":"none|create_once|create_cron|list|delete|pause|resume","confidence":0~1,' +
     '"runAt":"ISO8601或null","timeText":"自然语言时间或null","cronExpr":"cron或null","message":"提醒内容或null","taskId":数字或null}。';
+  const requestPayload = {
+    model: runtime.intentModel,
+    max_tokens: 220,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      {
+        role: 'user',
+        content: `当前时间: ${now.toISOString()}\n文本: ${content}`,
+      },
+    ],
+  };
+  traceViewer?.record({
+    traceId,
+    phase: 'prepare',
+    kind: 'automation-intent-request',
+    payload: requestPayload,
+  });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), runtime.intentTimeoutMs);
@@ -362,26 +430,34 @@ async function parseIntentByModel(content: string, runtime: RuntimeConfig): Prom
         Authorization: `Bearer ${runtime.intentApiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: runtime.intentModel,
-        max_tokens: 220,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          {
-            role: 'user',
-            content: `当前时间: ${now.toISOString()}\n文本: ${content}`,
-          },
-        ],
-      }),
+      body: JSON.stringify(requestPayload),
       signal: controller.signal,
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      traceViewer?.record({
+        traceId,
+        phase: 'llm-output',
+        kind: 'automation-intent-response',
+        payload: { ok: false, status: response.status },
+      });
+      return null;
+    }
     const payload = (await response.json()) as {
       choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
     };
 
     const contentText = extractMessageText(payload.choices?.[0]?.message?.content);
+    traceViewer?.record({
+      traceId,
+      phase: 'llm-output',
+      kind: 'automation-intent-response',
+      payload: {
+        ok: true,
+        text: contentText,
+        payload,
+      },
+    });
 
     const jsonText = extractJsonObject(contentText);
     if (!jsonText) return null;
@@ -434,6 +510,12 @@ async function parseIntentByModel(content: string, runtime: RuntimeConfig): Prom
     }
     return null;
   } catch {
+    traceViewer?.record({
+      traceId,
+      phase: 'error',
+      kind: 'automation-intent-error',
+      payload: { message: 'intent model call failed' },
+    });
     return null;
   } finally {
     clearTimeout(timer);
@@ -555,6 +637,7 @@ async function getScopedTask(
 
 export function apply(ctx: Context, config: Config): void {
   const runtime = toRuntimeConfig(config);
+  const traceViewer = getTraceViewer(ctx);
   ensureTaskTable(ctx);
 
   const cronDisposers = new Map<number, () => void>();
@@ -740,6 +823,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const handleIntent = async (session: Session, scope: ScopeContext, intent: AutomationIntent): Promise<boolean> => {
     if (!session.userId) return false;
+    const traceId = traceViewer?.getTraceId(session as Session & { state?: Record<string, unknown> });
 
     switch (intent.action) {
       case 'list': {
@@ -817,7 +901,7 @@ export function apply(ctx: Context, config: Config): void {
             kind: 'cron',
             cronExpr,
             message: created.message,
-          });
+          }, traceViewer, traceId);
           if (reply) {
             await sendSessionMessageByLines(session, reply);
             return true;
@@ -847,7 +931,7 @@ export function apply(ctx: Context, config: Config): void {
             kind: 'once',
             runAt,
             message: rawMessage,
-          });
+          }, traceViewer, traceId);
           if (reply) {
             await sendSessionMessageByLines(session, reply);
             return true;
@@ -861,11 +945,24 @@ export function apply(ctx: Context, config: Config): void {
     }
   };
 
-  const parseIntent = async (content: string): Promise<AutomationIntent | null> => {
+  const parseIntent = async (session: Session, content: string): Promise<AutomationIntent | null> => {
     const ruleIntent = parseAutomationIntentByRule(content);
-    if (ruleIntent) return ruleIntent;
+    if (ruleIntent) {
+      const traceId = traceViewer?.ensureTrace({
+        session,
+        route: 'task-automation',
+        input: content,
+      });
+      traceViewer?.record({
+        traceId,
+        phase: 'route',
+        kind: 'automation-rule-intent',
+        payload: ruleIntent,
+      });
+      return ruleIntent;
+    }
     if (!shouldTryAutomationIntent(content)) return null;
-    return parseIntentByModel(content, runtime);
+    return parseIntentByModel(content, runtime, traceViewer, session);
   };
 
   ctx.middleware(
@@ -879,19 +976,45 @@ export function apply(ctx: Context, config: Config): void {
       const content = normalizeMessageContent(session);
       if (!content || isCommandLike(content)) return next();
 
-      const intent = await parseIntent(content);
+      const intent = await parseIntent(session, content);
       if (!intent) return next();
 
+      const traceId = traceViewer?.getTraceId(session as Session & { state?: Record<string, unknown> });
+      traceViewer?.record({
+        traceId,
+        phase: 'route',
+        kind: 'automation-intent-selected',
+        payload: intent,
+      });
+
       if (!(await checkPermission(session, runtime))) {
+        traceViewer?.record({
+          traceId,
+          phase: 'error',
+          kind: 'automation-permission-denied',
+          payload: { userId: session.userId },
+        });
         await sendSessionMessageByLines(session, '你没有权限管理自动化任务。');
         return;
       }
 
       try {
         const handled = await handleIntent(session, scope, intent);
+        traceViewer?.record({
+          traceId,
+          phase: 'route',
+          kind: 'automation-intent-handled',
+          payload: { handled, action: intent.action },
+        });
         if (handled) return;
       } catch (error) {
         logger.warn('automation intent handling failed: %s', (error as Error).message);
+        traceViewer?.record({
+          traceId,
+          phase: 'error',
+          kind: 'automation-intent-handle-error',
+          payload: { message: (error as Error).message },
+        });
         await sendSessionMessageByLines(session, '自动化任务处理失败，请稍后重试。');
         return;
       }

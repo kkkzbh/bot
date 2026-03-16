@@ -14,6 +14,15 @@ plugins:
       uiPath: ${{ env.KOISHI_CONSOLE_UI_PATH || '/console' }}
     database-sqlite:8jr5yp:
       path: ${{ env.SQLITE_PATH || './data/koishi.db' }}
+    ./dist/plugins/trace-viewer:trace:
+      enabled: ${{ env.TRACE_VIEWER_ENABLED !== 'false' }}
+      uiPath: ${{ env.TRACE_VIEWER_UI_PATH || '/trace' }}
+      apiPath: ${{ env.TRACE_VIEWER_API_PATH || '/trace/api' }}
+      retentionDays: ${{ +env.TRACE_VIEWER_RETENTION_DAYS || 7 }}
+      maxSessions: ${{ +env.TRACE_VIEWER_MAX_SESSIONS || 500 }}
+      maxEventPayloadBytes: ${{ +env.TRACE_VIEWER_MAX_EVENT_PAYLOAD_BYTES || 65536 }}
+      pollIntervalMs: ${{ +env.TRACE_VIEWER_POLL_INTERVAL_MS || 2000 }}
+      redactSecrets: ${{ env.TRACE_VIEWER_REDACT_SECRETS !== 'false' }}
     canvas:pokemon: {}
     downloads:g1u6o5:
       output: ${{ env.POKEMON_DOWNLOADS_OUTPUT || './downloads' }}

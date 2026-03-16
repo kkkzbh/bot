@@ -1,4 +1,5 @@
 import { type Context, Logger, type Session } from 'koishi';
+import type { TraceViewerServiceLike } from '../types/trace-viewer.js';
 import {
   type LiveReplyConfig,
   type LiveReplyDatabaseLike,
@@ -88,6 +89,10 @@ type SessionWithReplyTransportState = Session & {
   };
 };
 
+function getTraceViewer(ctx: Context): TraceViewerServiceLike | undefined {
+  return (ctx as Context & { traceViewer?: TraceViewerServiceLike }).traceViewer;
+}
+
 const logger = new Logger(name);
 const LLM_MODEL_TYPE = ChatLunaPlatformTypes.ModelType?.llm ?? 1;
 const deferredMultilineSendKeys = new Map<string, number>();
@@ -152,6 +157,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const services = ctx as unknown as ContextServices;
   const database = services.database;
   const chatlunaService = services.chatluna;
+  const traceViewer = getTraceViewer(ctx);
   const inboundStrand = createKeyedStrandRunner();
   const sendStrand = createKeyedStrandRunner();
   const liveReplyRuntime = resolveLiveReplyRuntimeConfig(config);
@@ -327,6 +333,20 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (!inputMessage) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         const userName = resolveSessionDisplayName(session);
         inputMessage.content = injectUserStampedPrompt(inputMessage.content, userName);
+        const traceId = traceViewer?.ensureTrace({
+          session,
+          route: session.isDirect ? 'chatluna-direct' : 'chatluna-chat',
+          input: typeof session.content === 'string' ? session.content : undefined,
+        });
+        traceViewer?.record({
+          traceId,
+          phase: 'prepare',
+          kind: 'chatluna-time-context',
+          payload: {
+            userName,
+            injectedContent: inputMessage.content,
+          },
+        });
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
       .after('read_chat_message')

@@ -29,6 +29,11 @@ export interface CreateReplyPayload {
   message: string;
 }
 
+export interface AutomationLlmTraceHook {
+  onRequest?: (payload: unknown) => void;
+  onResponse?: (payload: unknown) => void;
+}
+
 export const DEFAULT_DELIVERY_SYSTEM_PROMPT =
   '你是QQ机器人里的“到点发送内容生成器”。你的任务是在定时任务触发时，生成最终要发送给用户的一条消息。' +
   '请严格遵守：' +
@@ -92,6 +97,7 @@ async function generateModelReply(
     userPrompt: string;
     maxTokens?: number;
     reasonerMinTokens?: number;
+    trace?: AutomationLlmTraceHook;
   },
 ): Promise<string | null> {
   if (!runtime.baseUrl || !runtime.apiKey || !options.model) return null;
@@ -106,6 +112,15 @@ async function generateModelReply(
   const finalMaxTokens = normalizeMaxTokensByModel(modelName, preferredMaxTokens);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  const requestPayload = {
+    model: options.model,
+    max_tokens: finalMaxTokens,
+    messages: [
+      { role: 'system', content: options.systemPrompt },
+      { role: 'user', content: options.userPrompt },
+    ],
+  };
+  options.trace?.onRequest?.(requestPayload);
   try {
     const response = await fetch(`${runtime.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -113,23 +128,21 @@ async function generateModelReply(
         Authorization: `Bearer ${runtime.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: options.model,
-        max_tokens: finalMaxTokens,
-        messages: [
-          { role: 'system', content: options.systemPrompt },
-          { role: 'user', content: options.userPrompt },
-        ],
-      }),
+      body: JSON.stringify(requestPayload),
       signal: controller.signal,
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      options.trace?.onResponse?.({ ok: false, status: response.status });
+      return null;
+    }
     const payload = (await response.json()) as {
       choices?: Array<{ message?: { content?: unknown } }>;
     };
     const text = extractMessageText(payload.choices?.[0]?.message?.content);
+    options.trace?.onResponse?.({ ok: true, text, payload });
     return text || null;
   } catch {
+    options.trace?.onResponse?.({ ok: false, status: 'error' });
     return null;
   } finally {
     clearTimeout(timer);
@@ -141,6 +154,7 @@ export async function buildDeliveryMessageByModel(
   task: DeliveryTaskPayload,
   formatTimestamp: (ts: number) => string,
   now = Date.now(),
+  trace?: AutomationLlmTraceHook,
 ): Promise<string> {
   const nowText = formatTimestamp(now);
   const scheduleText =
@@ -162,6 +176,7 @@ export async function buildDeliveryMessageByModel(
     userPrompt,
     maxTokens: runtime.deliveryMaxTokens,
     reasonerMinTokens: runtime.deliveryMaxTokens,
+    trace,
   });
   return cleanGeneratedText(generated) ?? task.message;
 }
@@ -171,6 +186,7 @@ export async function buildNaturalCreateReplyByModel(
   payload: CreateReplyPayload,
   _formatTimestamp: (ts: number) => string,
   now = Date.now(),
+  trace?: AutomationLlmTraceHook,
 ): Promise<string | null> {
   const naturalRunAt = formatNaturalRunAtText(payload.runAt ?? now, now);
   const scheduleText =
@@ -190,6 +206,7 @@ export async function buildNaturalCreateReplyByModel(
     userPrompt,
     maxTokens: runtime.chatReplyMaxTokens,
     reasonerMinTokens: runtime.chatReplyMaxTokens,
+    trace,
   });
   return cleanGeneratedText(generated);
 }

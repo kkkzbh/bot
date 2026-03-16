@@ -1,4 +1,5 @@
 import { Context, Logger, Schema, Session } from 'koishi';
+import type { TraceViewerServiceLike } from '../types/trace-viewer.js';
 import { normalizeGroupId, parseGroupSet } from './task-automation-core.js';
 import {
   containsAlias,
@@ -85,6 +86,12 @@ interface ModelDecisionResponse {
   confidence?: number;
 }
 
+interface TriggerDecisionResult {
+  trigger: boolean;
+  confidence: number | null;
+  rawContent: string | null;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -153,9 +160,13 @@ function isQuotedToBot(session: Session): boolean {
   return Boolean(quote?.user?.id && quote.user.id === session.bot?.selfId);
 }
 
-async function shouldTriggerByModel(content: string, runtime: RuntimeConfig): Promise<boolean> {
+function getTraceViewer(ctx: Context): TraceViewerServiceLike | undefined {
+  return (ctx as Context & { traceViewer?: TraceViewerServiceLike }).traceViewer;
+}
+
+async function shouldTriggerByModel(content: string, runtime: RuntimeConfig): Promise<TriggerDecisionResult> {
   if (!runtime.decisionEnabled || !runtime.decisionBaseUrl || !runtime.decisionApiKey || !runtime.decisionModel) {
-    return false;
+    return { trigger: false, confidence: null, rawContent: null };
   }
 
   const systemPrompt =
@@ -186,7 +197,7 @@ async function shouldTriggerByModel(content: string, runtime: RuntimeConfig): Pr
       signal: controller.signal,
     });
 
-    if (!response.ok) return false;
+    if (!response.ok) return { trigger: false, confidence: null, rawContent: null };
 
     const payload = (await response.json()) as {
       choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
@@ -202,18 +213,24 @@ async function shouldTriggerByModel(content: string, runtime: RuntimeConfig): Pr
         ? rawContent.trim()
         : '';
 
-    if (!contentText) return false;
+    if (!contentText) return { trigger: false, confidence: null, rawContent: null };
 
     const jsonText = extractJsonObject(contentText);
-    if (!jsonText) return false;
+    if (!jsonText) return { trigger: false, confidence: null, rawContent: contentText };
 
     const parsed = JSON.parse(jsonText) as ModelDecisionResponse;
     const confidence = Number(parsed.confidence ?? 0);
-    if (!Number.isFinite(confidence) || confidence < runtime.decisionMinConfidence) return false;
+    if (!Number.isFinite(confidence) || confidence < runtime.decisionMinConfidence) {
+      return { trigger: false, confidence: Number.isFinite(confidence) ? confidence : null, rawContent: contentText };
+    }
 
-    return Boolean(parsed.trigger);
+    return {
+      trigger: Boolean(parsed.trigger),
+      confidence,
+      rawContent: contentText,
+    };
   } catch {
-    return false;
+    return { trigger: false, confidence: null, rawContent: null };
   } finally {
     clearTimeout(timer);
   }
@@ -246,6 +263,7 @@ function shouldHandleGroup(session: Session, runtime: RuntimeConfig): boolean {
 
 export function apply(ctx: Context, config: Config): void {
   const runtime = toRuntimeConfig(config);
+  const traceViewer = getTraceViewer(ctx);
   const focusExpires = new Map<string, number>();
   const spamStates = new Map<string, SpamState>();
   const nextReplyAt = new Map<string, number>();
@@ -280,17 +298,24 @@ export function apply(ctx: Context, config: Config): void {
     const directHit = Math.random() < runtime.directTriggerProbability;
     const focusUntil = focusExpires.get(groupScopeKey) ?? 0;
     const inFocus = focusUntil > now;
+    const ruleTriggered = shouldTriggerByRule(content, runtime.aliases, isQuotedToBot(session));
+    let triggerReason: 'direct' | 'rule' | 'focus' | 'model' | null = directHit ? 'direct' : null;
+    let modelDecision: TriggerDecisionResult | null = null;
 
     let shouldTrigger = directHit;
 
     if (!shouldTrigger) {
-      shouldTrigger = shouldTriggerByRule(content, runtime.aliases, isQuotedToBot(session));
+      shouldTrigger = ruleTriggered;
+      if (shouldTrigger) triggerReason = 'rule';
     }
 
     if (!shouldTrigger && !inFocus) {
-      shouldTrigger = await shouldTriggerByModel(content, runtime);
+      modelDecision = await shouldTriggerByModel(content, runtime);
+      shouldTrigger = modelDecision.trigger;
+      if (shouldTrigger) triggerReason = 'model';
     } else if (!shouldTrigger && inFocus) {
       shouldTrigger = true;
+      triggerReason = 'focus';
     }
 
     if (!shouldTrigger) return next();
@@ -305,6 +330,27 @@ export function apply(ctx: Context, config: Config): void {
     focusExpires.set(groupScopeKey, handlingAt + runtime.focusWindowMs);
 
     const triggerName = runtime.aliases[0] ?? '祥子';
+    const traceId = traceViewer?.ensureTrace({
+      session,
+      route: 'group-natural-trigger',
+      input: content,
+    });
+    if (traceId && traceViewer) {
+      traceViewer.record({
+        traceId,
+        phase: 'route',
+        kind: 'group-natural-trigger',
+        payload: {
+          reason: triggerReason,
+          directHit,
+          ruleTriggered,
+          inFocus,
+          modelConfidence: modelDecision?.confidence ?? null,
+          modelResponse: modelDecision?.rawContent ?? null,
+          rewrittenContent: `${triggerName} ${content}`,
+        },
+      });
+    }
     const originalContent = session.content;
     const stripped = session.stripped as { content?: string } | undefined;
     const originalStripped = stripped?.content;

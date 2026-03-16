@@ -211,4 +211,42 @@ describe('task automation model delivery behavior', () => {
     expect(delivered).toBe('2');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('emits trace hook payloads for create-reply generation', async () => {
+    const runtime = createRuntime();
+    const requests: unknown[] = [];
+    const responses: unknown[] = [];
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '记住了，我会提醒你。' } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await buildNaturalCreateReplyByModel(
+      runtime,
+      {
+        kind: 'once',
+        runAt: new Date('2026-03-01T17:22:00+08:00').getTime(),
+        message: '提醒我喝水',
+      },
+      formatUtc8Timestamp,
+      new Date('2026-03-01T16:00:00+08:00').getTime(),
+      {
+        onRequest(payload) {
+          requests.push(payload);
+        },
+        onResponse(payload) {
+          responses.push(payload);
+        },
+      },
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(responses).toHaveLength(1);
+    expect((requests[0] as { model?: string }).model).toBe('deepseek-reasoner');
+    expect((responses[0] as { ok?: boolean }).ok).toBe(true);
+  });
 });
