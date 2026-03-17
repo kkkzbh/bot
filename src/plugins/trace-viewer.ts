@@ -36,7 +36,7 @@ const INJECTION_SOURCE_LABELS: Record<string, string> = {
 };
 
 export const name = 'trace-viewer';
-export const inject = ['database', 'server', 'chatluna'];
+export const inject = ['database', 'server'];
 
 export interface Config {
   enabled?: boolean;
@@ -1393,7 +1393,14 @@ export function apply(ctx: Context, config: Config = {}): void {
     void service.prune(true).catch((error) => {
       logger.warn('initial trace prune failed: %s', (error as Error).message);
     });
-    patchChatLuna(service, ctx);
+  });
+
+  ctx.inject(['chatluna'], (chatlunaCtx) => {
+    patchChatLuna(service, chatlunaCtx as Context);
+
+    chatlunaCtx.on('ready', () => {
+      patchChatLuna(service, chatlunaCtx as Context);
+    });
   });
 
   ctx.on('before-send', (rawSession, options) => {

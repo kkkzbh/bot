@@ -40,6 +40,7 @@ vi.mock('koishi', () => {
 
 import type { TraceEventRecord } from '../src/types/trace-viewer.js';
 import {
+  apply,
   buildTraceEventsResponse,
   extractInjectedPrompts,
   inject,
@@ -63,8 +64,24 @@ function createEvent(overrides: Partial<TraceEventRecord>): TraceEventRecord {
 }
 
 describe('trace viewer helpers', () => {
-  it('declares required services so chatluna patching can run after service registration', () => {
-    expect(inject).toEqual(expect.arrayContaining(['database', 'server', 'chatluna']));
+  it('keeps trace viewer available without requiring chatluna at plugin load time', () => {
+    expect(inject).toEqual(expect.arrayContaining(['database', 'server']));
+    expect(inject).not.toContain('chatluna');
+  });
+
+  it('registers chatluna patching through a child injected plugin', () => {
+    const ctx = {
+      model: { extend: vi.fn() },
+      provide: vi.fn(),
+      set: vi.fn(),
+      on: vi.fn(),
+      inject: vi.fn(),
+      server: { get: vi.fn() },
+    };
+
+    apply(ctx as any, {});
+
+    expect(ctx.inject).toHaveBeenCalledWith(['chatluna'], expect.any(Function));
   });
 
   it('allows loopback and private network addresses only', () => {
