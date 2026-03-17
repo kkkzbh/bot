@@ -1148,9 +1148,9 @@ function patchChatLuna(service: TraceViewerService, ctx: Context): void {
       message: Record<string, any>,
       events: Record<string, (...args: any[]) => unknown>,
       stream: boolean,
-      requestId: string,
       variables?: Record<string, unknown>,
       postHandler?: Record<string, unknown>,
+      requestId?: string,
     ) => {
       const inputText = extractTextContent(message?.content);
       const traceId =
@@ -1220,7 +1220,7 @@ function patchChatLuna(service: TraceViewerService, ctx: Context): void {
 
       return service.runWithTrace(traceId, async () => {
         try {
-          const result = await originalChat(session, room, message, wrappedEvents, stream, requestId, variables, postHandler);
+          const result = await originalChat(session, room, message, wrappedEvents, stream, variables, postHandler, requestId);
           service.record({
             traceId,
             phase: 'llm-output',

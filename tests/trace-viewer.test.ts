@@ -72,6 +72,11 @@ describe('trace viewer helpers', () => {
   it('registers chatluna patching through a child injected plugin', () => {
     const ctx = {
       model: { extend: vi.fn() },
+      database: {
+        withTransaction: vi.fn(),
+        get: vi.fn(),
+        remove: vi.fn(),
+      },
       provide: vi.fn(),
       set: vi.fn(),
       on: vi.fn(),
@@ -82,6 +87,69 @@ describe('trace viewer helpers', () => {
     apply(ctx as any, {});
 
     expect(ctx.inject).toHaveBeenCalledWith(['chatluna'], expect.any(Function));
+  });
+
+  it('preserves the public chatluna chat argument order when patching service chat', async () => {
+    const ctx = {
+      model: { extend: vi.fn() },
+      database: {
+        withTransaction: vi.fn(async (callback: (database: any) => Promise<void>) => {
+          await callback({
+            upsert: vi.fn(),
+            create: vi.fn(),
+            remove: vi.fn(),
+          });
+        }),
+        get: vi.fn(async () => []),
+        remove: vi.fn(),
+      },
+      provide: vi.fn(),
+      set: vi.fn(),
+      on: vi.fn(),
+      inject: vi.fn(),
+      server: { get: vi.fn() },
+    };
+
+    apply(ctx as any, {});
+
+    const [, injectedCallback] = ctx.inject.mock.calls[0];
+    const originalChat = vi.fn(async () => ({ content: '收到' }));
+    const chatluna: any = {
+      chat: originalChat,
+      contextManager: {},
+    };
+    let readyHandler: (() => void) | undefined;
+    const chatlunaCtx = {
+      get: vi.fn((name: string) => (name === 'chatluna' ? chatluna : undefined)),
+      chatluna,
+      on: vi.fn((event: string, callback: () => void) => {
+        if (event === 'ready') readyHandler = callback;
+      }),
+    };
+
+    injectedCallback(chatlunaCtx, undefined);
+    readyHandler?.();
+
+    const session = { state: {}, platform: 'onebot', channelId: 'private:1', userId: '1', isDirect: true };
+    const room = { conversationId: 'conv-1', model: 'deepseek/test' };
+    const message = { content: '你好' };
+    const events = {};
+    const variables = { prompt: 'hello' };
+    const postHandler = { tag: 'post' };
+    const requestId = 'req-1';
+
+    await chatluna.chat(session as any, room as any, message as any, events as any, true, variables, postHandler, requestId);
+
+    expect(originalChat).toHaveBeenCalledWith(
+      session,
+      room,
+      message,
+      expect.any(Object),
+      true,
+      variables,
+      postHandler,
+      requestId,
+    );
   });
 
   it('allows loopback and private network addresses only', () => {
