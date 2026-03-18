@@ -106,6 +106,8 @@ jobs:
             --exclude='node_modules' \
             --exclude='dist' \
             --exclude='.env' \
+            --exclude='.env.local' \
+            --exclude='.env.server' \
             --exclude='data' \
             --exclude='downloads' \
             --exclude='zpix.ttf' \
@@ -139,12 +141,12 @@ jobs:
               "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_APP_DIR}/data/chathub/stickers/"
           fi
 
-      - name: Sync runtime .env
+      - name: Sync runtime .env.server
         run: |
           set -euo pipefail
           SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          printf "%s" "${DEPLOY_DOTENV}" | ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "cat > '${DEPLOY_APP_DIR}/.env'"
-          ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "chmod 600 '${DEPLOY_APP_DIR}/.env'"
+          printf "%s" "${DEPLOY_DOTENV}" | ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "cat > '${DEPLOY_APP_DIR}/.env.server'"
+          ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "chmod 600 '${DEPLOY_APP_DIR}/.env.server'"
 
       - name: Install, build and restart service on server
         run: |
@@ -160,8 +162,8 @@ jobs:
 
           cd "${APP_DIR}"
 
-          if [ ! -f "${APP_DIR}/.env" ]; then
-            echo "Missing runtime .env at ${APP_DIR}/.env" >&2
+          if [ ! -f "${APP_DIR}/.env.server" ]; then
+            echo "Missing runtime .env at ${APP_DIR}/.env.server" >&2
             exit 1
           fi
 
@@ -216,8 +218,8 @@ jobs:
           [Service]
           Type=simple
           WorkingDirectory=${APP_DIR}
-          EnvironmentFile=${APP_DIR}/.env
-          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && pnpm start'
+          EnvironmentFile=${APP_DIR}/.env.server
+          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && QQBOT_ENV_FILE=${APP_DIR}/.env.server pnpm start'
           Restart=always
           RestartSec=5
 

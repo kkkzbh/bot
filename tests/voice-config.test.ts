@@ -28,17 +28,25 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('"127.0.0.1:${VOICE_TTS_PORT:-5162}:8080"');
   });
 
-  it('documents voice env vars in .env.example', () => {
+  it('documents local voice env vars in .env.example', () => {
     const content = readFileSync(resolve(process.cwd(), '.env.example'), 'utf8');
 
     expect(content).toContain('QQ_VOICE_ENABLED=true');
     expect(content).toContain('QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161');
-    expect(content).toContain('QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162');
+    expect(content).toContain('QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162');
     expect(content).toContain('QQ_VOICE_OUTPUT_MAX_WORDS=80');
     expect(content).toContain('QQ_VOICE_OUTPUT_MAX_SECONDS=45');
     expect(content).toContain('QQ_VOICE_SYNTH_TIMEOUT_MS=300000');
     expect(content).not.toContain('VOICE_TTS_GPT_WEIGHTS=/data/voice/tts/models/sakiko_v2pp-e15.ckpt');
     expect(content).not.toContain('VOICE_TTS_REF_BLACK=/data/voice/tts/references/black_sakiko.wav');
+  });
+
+  it('ships a dedicated server env template with tailnet TTS routing', () => {
+    const content = readFileSync(resolve(process.cwd(), '.env.server.example'), 'utf8');
+
+    expect(content).toContain('QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161');
+    expect(content).toContain('QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162');
+    expect(content).toContain('QQ_VOICE_TTS_API_KEY=qqbot-voice-tts-token');
   });
 
   it('ships a laptop-local TTS env template and user service example', () => {
@@ -56,6 +64,7 @@ describe('qq voice config wiring', () => {
     expect(envTemplate).toContain(
       'VOICE_TTS_REF_BLACK=/home/kkkzbh/code/qqbot/data/voice/tts-local/references/black_sakiko.wav',
     );
+    expect(envTemplate).toContain('VOICE_TTS_MAX_TEXT_CHARS=200');
     expect(envTemplate).toContain('VOICE_TTS_PROMPT_LANG=all_ja');
     expect(envTemplate).toContain('VOICE_TTS_TEXT_LANG=all_zh');
     expect(serviceTemplate).toContain(
@@ -80,6 +89,10 @@ describe('qq voice config wiring', () => {
 
     expect(content).toContain('ExecStart=/usr/bin/podman-compose -f ${APP_DIR}/compose.yaml up -d --build');
     expect(content).toContain('ExecStop=/usr/bin/podman-compose -f ${APP_DIR}/compose.yaml stop');
+    expect(content).toContain("--exclude='.env.local'");
+    expect(content).toContain("--exclude='.env.server'");
+    expect(content).toContain("cat > '${DEPLOY_APP_DIR}/.env.server'");
+    expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
     expect(content).not.toContain('up -d ollama pmhq llbot');
   });
 });

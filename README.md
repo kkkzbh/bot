@@ -12,10 +12,11 @@ Koishi + OneBot + LLOneBot + ChatLuna implementation for Fedora 43 (KDE/Wayland)
 
 ```bash
 pnpm install
-cp .env.example .env
+cp .env.example .env.local
+cp .env.server.example .env.server
 ```
 
-Edit `.env` and set at least:
+Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime. Set at least:
 
 - `ONEBOT_SELF_ID`
 - `SQLITE_PATH`
@@ -56,9 +57,25 @@ pnpm docs:preview
 pnpm start
 ```
 
-`pnpm start` will build `dist/` and run `koishi start koishi.yml`.
+`pnpm start` will build `dist/`, then resolve bot env in this order:
+
+- `.env.local`
+
+Then it runs `koishi start koishi.yml`.
 
 Koishi listens on `KOISHI_HOST:KOISHI_PORT` (default `0.0.0.0:5140`).
+
+The lightweight trace viewer is served by Koishi at:
+
+- `http://127.0.0.1:${KOISHI_PORT}/trace`
+
+Trace capture is performance-oriented by default:
+
+- only stores snapshots for requests that actually enter chat / automation / voice flows
+- no token-by-token stream persistence
+- payloads are capped (`TRACE_VIEWER_MAX_EVENT_PAYLOAD_BYTES`)
+- SQLite writes are buffered and batched
+- access is limited to loopback / private-network addresses
 
 Koishi uses **OneBot WebSocket 正向连接** to LLBot:
 
@@ -104,14 +121,15 @@ serve on `11434` and pre-pull the configured embedding model on startup.
 `keyring = false` to avoid rootless `runc` startup failures caused by exhausted
 session key quotas on the host.
 
-### 4.1 QQ voice services (server ASR + laptop TTS over Tailscale)
+### 4.1 QQ voice services (server ASR + laptop TTS over Tailscale / local loopback)
 
 - The server compose stack keeps only ASR on loopback:
   - `QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161`
   - `./data/voice/asr/cache/` stores the Whisper cache on the server
-- Optional voice replies now come from your laptop over Tailscale:
-  - set `QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162` in the server `.env`
-  - keep `QQ_VOICE_TTS_API_KEY` identical on the server and in the laptop-local TTS env file
+- Optional voice replies use different bot envs by runtime role:
+  - local bot: set `QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162` in `.env.local`
+  - server bot: set `QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162` in `.env.server`
+  - keep `QQ_VOICE_TTS_API_KEY` identical between the bot env file in use and `config/voice-tts.local.env`
 - The laptop-local runtime now lives entirely under this repo:
   - upstream wrapper code: `/home/kkkzbh/code/qqbot/.runtime/gpt-sovits-upstream`
   - copied model assets: `/home/kkkzbh/code/qqbot/data/voice/tts-local`
@@ -293,7 +311,7 @@ systemctl --user enable --now qqbot-voice-tts.service
   - `VOICE_ASR_PORT` / `VOICE_ASR_MODEL` / `VOICE_ASR_COMPUTE_TYPE`
 - Laptop-local TTS env:
   - see `config/voice-tts.local.example`
-  - key knobs are `VOICE_TTS_PYTHON_BIN`, `VOICE_TTS_HOST`, `VOICE_TTS_DEVICE`, `VOICE_TTS_IS_HALF`, `VOICE_TTS_UPSTREAM_ROOT`, `VOICE_TTS_PRETRAINED_ROOT`, `VOICE_TTS_MODEL_ROOT`, and `VOICE_TTS_REFERENCE_ROOT`
+  - key knobs are `VOICE_TTS_PYTHON_BIN`, `VOICE_TTS_HOST`, `VOICE_TTS_DEVICE`, `VOICE_TTS_IS_HALF`, `VOICE_TTS_MAX_TEXT_CHARS`, `VOICE_TTS_UPSTREAM_ROOT`, `VOICE_TTS_PRETRAINED_ROOT`, `VOICE_TTS_MODEL_ROOT`, and `VOICE_TTS_REFERENCE_ROOT`
 - Quick rollback:
   - set `QQ_VOICE_INPUT_ENABLED=false` and/or `QQ_VOICE_OUTPUT_ENABLED=false`, then restart `qqbot.target`.
 
@@ -321,7 +339,7 @@ systemctl --user enable --now qqbot-voice-tts.service
   - image load failure/timeouts: switch `POKEMON_BATTLE_IMAGE_SOURCE` to gitee source:
     `https://gitee.com/maikama/pokemon-fusion-image/raw/master`.
 - Deploy note:
-  - `Deploy` workflow always overwrites server `.env` from secret `QQBOT_DOTENV`, so update this secret after changing pokemon or voice env vars.
+  - `Deploy` workflow always overwrites server `.env.server` from secret `QQBOT_DOTENV`, so update this secret after changing server-side pokemon or voice env vars.
 
 ## 13. Quality checks
 
@@ -365,7 +383,7 @@ pnpm build
   - 确认服务器 `voice-asr` 容器已启动并健康：`podman compose ps`
   - 确认笔记本 `qqbot-voice-tts.service` 已启动：`systemctl --user status qqbot-voice-tts.service`
   - 确认笔记本 TTS 可以在 tailnet 内访问：`curl -H "Authorization: Bearer $QQ_VOICE_TTS_API_KEY" http://<laptop-tailnet-host>:5162/healthz`
-  - 确认 `QQ_VOICE_*` 地址与 token 和 `.env` 一致
+  - 确认 `QQ_VOICE_*` 地址与 token 和当前运行角色对应的 env 文件一致：本地看 `.env.local`，服务器看 `.env.server`
   - 确认 `config/voice-tts.local.env` 中仓库内 `data/voice/tts-local/**` 路径有效
   - 若声音几乎无声，先检查 `VOICE_TTS_PROMPT_LANG` 是否与参考音频一致；当前仓库内 Sakiko 参考音频应为 `all_ja`
   - 只想回退文本时，直接关闭 `QQ_VOICE_INPUT_ENABLED` 或 `QQ_VOICE_OUTPUT_ENABLED`
@@ -381,7 +399,8 @@ Installed unit files:
 - `/home/kkkzbh/.config/systemd/user/qqbot.target`
 
 `qqbot-stack.service` starts/stops the full Podman compose stack defined in `compose.yaml`.
-`qqbot-koishi.service` runs Koishi on host with `/home/kkkzbh/code/qqbot/.env`.
+`qqbot-koishi.service` runs Koishi on host with `/home/kkkzbh/code/qqbot/.env.local` as the canonical local env file.
+Server-side startup should explicitly use `/home/kkkzbh/code/qqbot/.env.server`.
 It sets `NODE_USE_ENV_PROXY=1` and proxy variables to match `~/.zshrc`:
 `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy`
 and uppercase variants.
@@ -471,7 +490,7 @@ Behavior:
 - `QQBOT_SERVER_USER`: SSH login user
 - `QQBOT_SSH_PRIVATE_KEY`: private key used by GitHub Actions to login server
 - `QQBOT_SSH_KNOWN_HOSTS`: optional but recommended (`ssh-keyscan` output)
-- `QQBOT_DOTENV`: production `.env` full content (multiline secret)
+- `QQBOT_DOTENV`: production `.env.server` full content (multiline secret)
 
 ### 18.2 GitHub Actions variables (optional)
 
@@ -501,9 +520,9 @@ sudo apt-get install -y podman podman-compose
 sudo loginctl enable-linger <server_user>
 ```
 
-4. In GitHub repo settings, set secret `QQBOT_DOTENV` to your production `.env` content.
+4. In GitHub repo settings, set secret `QQBOT_DOTENV` to your production `.env.server` content.
 
-`Deploy` will sync this secret to `${QQBOT_SERVER_APP_DIR}/.env` every run.
+`Deploy` will sync this secret to `${QQBOT_SERVER_APP_DIR}/.env.server` every run.
 
 5. Ensure your target user can run `sudo -n` for `loginctl enable-linger` (optional but recommended).
 

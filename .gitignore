@@ -1,5 +1,7 @@
 node_modules
 .env
+.env.local
+.env.server
 .venv-voice-tts
 .runtime/
 .pnpm-store

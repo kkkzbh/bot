@@ -6,7 +6,7 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 const ROOT_DIR = process.cwd()
-loadDotenv(path.resolve(ROOT_DIR, '.env'))
+loadDotenv(resolveBotEnvPath())
 
 const STICKER_DIR = process.env.CHATLUNA_STICKER_DIR || './data/chathub/stickers'
 const INDEXER_BASE_URL = process.env.STICKER_INDEXER_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3'
@@ -16,6 +16,15 @@ const INDEXER_TIMEOUT_MS = Number(process.env.STICKER_INDEXER_TIMEOUT_MS || 6000
 const CATALOG_PATH = path.resolve(ROOT_DIR, STICKER_DIR, 'catalog.generated.json')
 const IMAGE_ROOT = path.resolve(ROOT_DIR, STICKER_DIR, 'images')
 const SUPPORTED_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp'])
+
+function resolveBotEnvPath() {
+  const explicit = String(process.env.QQBOT_ENV_FILE || '').trim()
+  if (explicit) {
+    return path.isAbsolute(explicit) ? explicit : path.resolve(ROOT_DIR, explicit)
+  }
+
+  return path.resolve(ROOT_DIR, '.env.local')
+}
 
 function loadDotenv(envPath) {
   if (!existsSync(envPath)) return
