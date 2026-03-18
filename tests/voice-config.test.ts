@@ -95,4 +95,12 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
     expect(content).not.toContain('up -d ollama pmhq llbot');
   });
+
+  it('lets stickers sync resolve local env first and server env second', () => {
+    const content = readFileSync(resolve(process.cwd(), 'scripts/stickers-sync.mjs'), 'utf8');
+
+    expect(content).toContain("path.resolve(ROOT_DIR, '.env.local')");
+    expect(content).toContain("path.resolve(ROOT_DIR, '.env.server')");
+    expect(content).not.toContain("path.resolve(ROOT_DIR, '.env')");
+  });
 });

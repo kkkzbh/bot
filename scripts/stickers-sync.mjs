@@ -23,6 +23,12 @@ function resolveBotEnvPath() {
     return path.isAbsolute(explicit) ? explicit : path.resolve(ROOT_DIR, explicit)
   }
 
+  const localEnv = path.resolve(ROOT_DIR, '.env.local')
+  if (existsSync(localEnv)) return localEnv
+
+  const serverEnv = path.resolve(ROOT_DIR, '.env.server')
+  if (existsSync(serverEnv)) return serverEnv
+
   return path.resolve(ROOT_DIR, '.env.local')
 }
 
