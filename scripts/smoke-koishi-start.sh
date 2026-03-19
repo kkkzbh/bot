@@ -39,6 +39,9 @@ if (!entry || typeof entry !== 'object') {
 }
 
 const keep = new Set([
+  'server:0b8t2q',
+  'console:9xw6ka',
+  './dist/plugins/bot-console:bot-console',
   'database-sqlite:8jr5yp',
   'cron:task',
   './dist/plugins/task-automation:automation',
@@ -96,7 +99,12 @@ if ! grep -F "loader apply plugin ./dist/plugins/chatluna-model-guard" "$LOG_FIL
   exit 1
 fi
 
-if grep -nE "loader apply plugin adapter-onebot:onebot|loader apply plugin server:|loader apply plugin console:|loader apply plugin chatluna-deepseek-adapter:|loader apply plugin chatluna-ollama-adapter:" "$LOG_FILE" >/dev/null; then
+if ! grep -F "loader apply plugin ./dist/plugins/bot-console:bot-console" "$LOG_FILE" >/dev/null; then
+  echo "Koishi smoke startup did not load bot-console plugin." >&2
+  exit 1
+fi
+
+if grep -nE "loader apply plugin adapter-onebot:onebot|loader apply plugin chatluna-deepseek-adapter:|loader apply plugin chatluna-ollama-adapter:" "$LOG_FILE" >/dev/null; then
   echo "Koishi smoke startup unexpectedly loaded external dependency plugins." >&2
   exit 1
 fi

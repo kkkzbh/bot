@@ -1,0 +1,259 @@
+.bot-console-page {
+  min-height: 100%;
+  padding-left: var(--activity-width, 4rem);
+  box-sizing: border-box;
+}
+
+.bc-shell {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+  color: #e8ecf4;
+}
+
+.bc-hero,
+.bc-panel,
+.bc-banner {
+  border: 1px solid rgba(164, 176, 198, 0.18);
+  border-radius: 20px;
+  background:
+    linear-gradient(160deg, rgba(17, 25, 40, 0.95), rgba(26, 42, 68, 0.92)),
+    radial-gradient(circle at top right, rgba(87, 178, 255, 0.18), transparent 35%);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
+}
+
+.bc-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.5rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.4rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #8eb8ff;
+}
+
+.bc-hero h1,
+.bc-panel h2 {
+  margin: 0;
+}
+
+.muted {
+  color: rgba(225, 232, 245, 0.68);
+}
+
+.bc-hero-actions,
+.bc-panel-head,
+.bc-prompt-head,
+.bc-service-actions,
+.bc-preset-actions,
+.bc-panel-subhead {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.bc-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.bc-panel {
+  padding: 1.2rem;
+}
+
+.bc-banner {
+  padding: 0.9rem 1rem;
+}
+
+.bc-banner.warning {
+  border-color: rgba(255, 204, 102, 0.4);
+}
+
+.bc-banner.error {
+  border-color: rgba(255, 128, 128, 0.45);
+}
+
+.bc-services,
+.bc-toggle-grid,
+.bc-field-grid,
+.bc-prompt-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.bc-service-card,
+.bc-toggle-card,
+.bc-prompt-card {
+  border: 1px solid rgba(164, 176, 198, 0.16);
+  border-radius: 16px;
+  background: rgba(10, 16, 26, 0.45);
+}
+
+.bc-service-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.bc-toggle-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.bc-toggle-card {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.95rem 1rem;
+  align-items: center;
+}
+
+.bc-toggle-card.is-enabled {
+  border-color: rgba(89, 224, 160, 0.4);
+}
+
+.bc-toggle-card.is-disabled {
+  border-color: rgba(132, 147, 170, 0.18);
+}
+
+.bc-dirty-badge,
+.bc-default-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.2rem;
+  height: 1.5rem;
+  padding: 0 0.55rem;
+  border-radius: 999px;
+  background: rgba(86, 164, 255, 0.16);
+  color: #b7d5ff;
+  font-size: 0.75rem;
+}
+
+.bc-field-grid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.bc-field,
+.bc-prompt-card {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.bc-field.bc-field-span {
+  grid-column: 1 / -1;
+}
+
+.bc-field input,
+.bc-field textarea,
+.bc-field select,
+.bc-prompt-card textarea,
+.bc-prompt-card select {
+  width: 100%;
+  min-height: 2.8rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(171, 183, 203, 0.18);
+  border-radius: 12px;
+  background: rgba(8, 13, 21, 0.72);
+  color: inherit;
+  resize: vertical;
+}
+
+.bc-preset-layout {
+  gap: 1rem;
+}
+
+.bc-preset-grid {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.bc-preset-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.bc-preset-list button {
+  justify-content: flex-start;
+}
+
+.bc-preset-list button.is-active {
+  border-color: rgba(142, 184, 255, 0.42);
+  background: rgba(50, 84, 129, 0.32);
+}
+
+.bc-preset-editor {
+  display: grid;
+  gap: 1rem;
+}
+
+.bc-prompt-card {
+  padding: 0.9rem;
+}
+
+button {
+  appearance: none;
+  border: 1px solid rgba(168, 179, 198, 0.22);
+  border-radius: 12px;
+  background: rgba(18, 28, 44, 0.9);
+  color: inherit;
+  padding: 0.72rem 1rem;
+  cursor: pointer;
+}
+
+button.primary {
+  border-color: rgba(120, 189, 255, 0.35);
+  background: linear-gradient(135deg, #2e75ff, #55b0ff);
+  color: #fff;
+}
+
+button.danger {
+  border-color: rgba(255, 131, 131, 0.35);
+  background: rgba(104, 25, 25, 0.65);
+}
+
+button.ghost {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+code {
+  font-family: "SFMono-Regular", "Fira Code", monospace;
+}
+
+@media (max-width: 1024px) {
+  .bc-preset-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .bot-console-page {
+    padding-left: 0;
+  }
+
+  .bc-shell {
+    padding: 0.8rem;
+  }
+
+  .bc-hero,
+  .bc-service-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
