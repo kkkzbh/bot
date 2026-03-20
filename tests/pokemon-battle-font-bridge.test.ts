@@ -36,7 +36,7 @@ import {
   patchPokemonFontForRendering,
   resolveBundledFallbackFontPath,
   resolvePokemonFallbackFont,
-} from '../src/plugins/pokemon-battle-bridge.js';
+} from '../src/plugins/pokemon-battle/index.js';
 
 describe('pokemon battle bridge font fallback', () => {
   it('resolves bundled fallback font from repository asset', async () => {

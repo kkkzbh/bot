@@ -41,8 +41,8 @@ vi.mock('koishi', () => {
   };
 });
 
-import { normalizeOutboundMessage } from '../src/plugins/message-send-utils.js';
-import { prependGroupMention, sendBotMessageByLines } from '../src/plugins/task-automation.js';
+import { normalizeOutboundMessage } from '../src/plugins/shared/outbound/index.js';
+import { prependGroupMention, sendBotMessageByLines } from '../src/plugins/automation/index.js';
 
 describe('task automation outbound send', () => {
   afterEach(() => {
@@ -58,7 +58,10 @@ describe('task automation outbound send', () => {
       }),
     };
 
-    await sendBotMessageByLines(bot, 'group-100', '<qqbot-multiline>\n第一行\n第二行\n</qqbot-multiline>');
+    await sendBotMessageByLines(bot, 'group-100', {
+      mode: 'preserve',
+      content: '第一行\n第二行',
+    });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[0]).toBe('group-100');
@@ -67,12 +70,7 @@ describe('task automation outbound send', () => {
   });
 
   it('puts group mention on its own first line for preserve mode', () => {
-    expect(
-      prependGroupMention(
-        normalizeOutboundMessage('<qqbot-multiline>\n第一行\n第二行\n</qqbot-multiline>'),
-        '@123456',
-      ),
-    ).toEqual({
+    expect(prependGroupMention({ mode: 'preserve', content: '第一行\n第二行' }, '@123456')).toEqual({
       mode: 'preserve',
       content: '@123456\n第一行\n第二行',
     });

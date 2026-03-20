@@ -784,6 +784,133 @@
     font-weight: 600;
 }
 
+.bc-feature-scope-list,
+.bc-conversation-target-list {
+    display: grid;
+    gap: 0.9rem;
+    margin-top: 1rem;
+}
+
+.bc-room-section {
+    margin-top: 1rem;
+    border: 1px solid color-mix(in srgb, var(--k-color-primary) 10%, var(--k-card-border));
+    border-radius: 14px;
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--k-card-bg) 96%, #fff),
+        color-mix(in srgb, var(--k-page-bg) 18%, var(--k-card-bg)));
+    overflow: hidden;
+}
+
+.bc-room-section-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.9rem;
+    padding: 0.95rem 1rem;
+    border: 0;
+    background: transparent;
+    color: var(--bc-text-strong);
+    text-align: left;
+    cursor: pointer;
+}
+
+.bc-room-section-toggle:hover {
+    background: var(--k-hover-bg);
+}
+
+.bc-room-section-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    min-width: 0;
+    font-size: 0.92rem;
+    font-weight: 700;
+}
+
+.bc-room-section-chevron {
+    flex-shrink: 0;
+    color: var(--bc-text-soft);
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.bc-room-section-body {
+    display: grid;
+    gap: 0.85rem;
+    padding: 0 1rem 1rem;
+}
+
+.bc-room-section-actions,
+.bc-room-section-action-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.bc-feature-scope-card,
+.bc-conversation-target-card {
+    display: grid;
+    gap: 0.9rem;
+    padding: 1rem;
+    border: 1px solid var(--k-card-border);
+    border-radius: 14px;
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--k-card-bg) 90%, var(--bc-surface-tint)),
+        var(--k-card-bg));
+}
+
+.bc-feature-scope-head,
+.bc-conversation-target-card {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.8rem;
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
+.bc-feature-scope-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.85rem;
+}
+
+.bc-target-id {
+    margin: 0.2rem 0 0;
+    font-size: 0.76rem;
+    color: var(--bc-text-soft);
+    font-family:
+        "SFMono-Regular", "Fira Code", "Cascadia Code", "JetBrains Mono",
+        monospace;
+    word-break: break-all;
+}
+
+.bc-target-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--bc-text-soft);
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.bc-target-select input {
+    margin: 0;
+    accent-color: var(--k-color-primary);
+}
+
+.bc-conversation-target-main {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    Form fields
    ══════════════════════════════════════════════════════════════════════════ */

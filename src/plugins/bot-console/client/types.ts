@@ -87,6 +87,65 @@ export interface MemoryV2ProbeResult {
   snapshot: MemoryV2StatusSnapshot;
 }
 
+// ─── Scoped Feature Policy ────────────────────────────────────────────────────
+
+export type ScopedFeatureKey =
+  | "QQ_VOICE_ENABLED"
+  | "QQ_VOICE_INPUT_ENABLED"
+  | "QQ_VOICE_OUTPUT_ENABLED"
+  | "POKEMON_BATTLE_ENABLED"
+  | "CHAT_NATURAL_TRIGGER_ENABLED"
+  | "TASK_AUTOMATION_INTENT_ENABLED"
+  | "QQBOT_LIVE_REPLY_ENABLED";
+
+export type FeatureScopeKind = "private_default" | "group";
+export type ConversationTargetScopeKind = "private" | "group";
+
+export interface FeatureScopeOverrideRecord {
+  id: number;
+  featureKey: ScopedFeatureKey;
+  scopeKind: FeatureScopeKind;
+  scopeId: string;
+  enabled: number;
+  updatedAt: number;
+}
+
+export interface FeatureOverrideInput {
+  featureKey: ScopedFeatureKey;
+  scopeKind: FeatureScopeKind;
+  scopeId: string;
+  enabled: boolean;
+}
+
+export interface ConsoleFeatureScope {
+  scopeKind: FeatureScopeKind;
+  scopeId: string;
+  roomId: number | null;
+  roomName: string;
+  groupId: string | null;
+  conversationId: string | null;
+  visibility: string | null;
+  updatedAt: number | null;
+}
+
+export interface ConversationTarget {
+  roomId: number;
+  roomName: string;
+  scopeKind: ConversationTargetScopeKind;
+  scopeId: string;
+  groupId: string | null;
+  conversationId: string;
+  updatedAt: number | null;
+}
+
+export interface ClearConversationHistoryResult {
+  ok: true;
+  roomId: number;
+  conversationId: string;
+  deletedMessages: number;
+  updatedAt: number;
+}
+
 // ─── Bot Console State ────────────────────────────────────────────────────────
 
 export interface BotConsoleState {
@@ -94,6 +153,9 @@ export interface BotConsoleState {
   services: BotServiceStatus[];
   presets: PresetSummary[];
   defaultPreset: string;
+  featureScopes: ConsoleFeatureScope[];
+  featureOverrides: FeatureScopeOverrideRecord[];
+  conversationTargets: ConversationTarget[];
   runtimeStatus: {
     memoryV2: MemoryV2StatusSnapshot;
   };
@@ -114,10 +176,18 @@ export interface SavePresetResponse {
   restartRequired: boolean;
 }
 
+export interface SaveFeatureOverridesResponse {
+  overrides: FeatureScopeOverrideRecord[];
+}
+
 export interface ServiceActionResponse {
   status: BotServiceStatus;
 }
 
 export interface GetRecentLogsResponse {
   lines: string[];
+}
+
+export interface ClearConversationHistoryResponse {
+  result: ClearConversationHistoryResult;
 }

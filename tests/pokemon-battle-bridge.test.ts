@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolvePokemonCommandRoute } from '../src/plugins/pokemon-battle-route.js';
+import { resolvePokemonCommandRoute } from '../src/plugins/pokemon-battle/route.js';
 
 describe('pokemon battle bridge command routing', () => {
   it('routes root pokemon command', () => {

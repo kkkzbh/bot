@@ -1,18 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  buildOutboundMessagePlanFromReplyPlan,
   calculateSmartSendDelayMs,
+  createTextOnlyOutboundMessagePlan,
   createKeyedStrandRunner,
   dispatchOutboundMessagePlan,
   dispatchNormalizedOutboundMessage,
   dropLeadingLeakedReasoningLines,
   looksLikeLeakedReasoningLine,
   normalizeOutboundMessage,
-  parseOutboundMessagePlan,
   resolveSessionStrandKey,
   sanitizeLeakedReasoningMessage,
   sendByLinesWithSmartInterval,
   splitMessageByLines,
-} from '../src/plugins/message-send-utils.js';
+} from '../src/plugins/shared/outbound/index.js';
 
 describe('message send utils', () => {
   afterEach(() => {
@@ -34,64 +35,32 @@ describe('message send utils', () => {
     ]);
   });
 
-  it('parses fully wrapped qqbot multiline payload as preserve mode', () => {
-    expect(normalizeOutboundMessage('<qqbot-multiline>\n第一行\n\n第二行\n</qqbot-multiline>')).toEqual({
-      mode: 'preserve',
-      content: '第一行\n\n第二行',
-    });
-  });
-
-  it('drops malformed multiline control tags and falls back to split mode', () => {
-    expect(normalizeOutboundMessage('<qqbot-multiline>\n第一行\n第二行')).toEqual({
+  it('treats arbitrary marker text as ordinary text instead of transport protocol', () => {
+    expect(normalizeOutboundMessage('<legacy-block>\n第一行\n\n第二行\n</legacy-block>')).toEqual({
       mode: 'split',
-      content: '<qqbot-multiline>\n第一行\n第二行',
+      content: '<legacy-block>\n第一行\n第二行\n</legacy-block>',
     });
   });
 
-  it('parses local qqbot multiline and voice blocks in strict source order', () => {
-    expect(
-      parseOutboundMessagePlan(
-        'x\ny\n<qqbot-multiline>\n哈哈\n你好\n</qqbot-multiline>\n我\n<qqbot-voice>\n我说话\n</qqbot-voice>\n你',
-      ),
-    ).toEqual({
-      segments: [
-        { kind: 'text-line', content: 'x', raw: 'x' },
-        { kind: 'text-line', content: 'y', raw: 'y' },
-        {
-          kind: 'multiline-block',
-          content: '哈哈\n你好',
-          raw: '<qqbot-multiline>\n哈哈\n你好\n</qqbot-multiline>',
-        },
-        { kind: 'text-line', content: '我', raw: '我' },
-        {
-          kind: 'voice-block',
-          content: '我说话',
-          raw: '<qqbot-voice>\n我说话\n</qqbot-voice>',
-        },
-        { kind: 'text-line', content: '你', raw: '你' },
-      ],
-    });
-  });
-
-  it('treats non-standalone or nested control tags as ordinary text', () => {
-    expect(parseOutboundMessagePlan('普通文本<qqbot-voice>晚安</qqbot-voice>')).toEqual({
+  it('creates plain text outbound plans without interpreting transport tags', () => {
+    expect(createTextOnlyOutboundMessagePlan('普通文本<legacy-voice>晚安</legacy-voice>')).toEqual({
       segments: [
         {
           kind: 'text-line',
-          content: '普通文本<qqbot-voice>晚安</qqbot-voice>',
-          raw: '普通文本<qqbot-voice>晚安</qqbot-voice>',
+          content: '普通文本<legacy-voice>晚安</legacy-voice>',
+          raw: '普通文本<legacy-voice>晚安</legacy-voice>',
         },
       ],
     });
 
-    expect(parseOutboundMessagePlan('<qqbot-multiline>\n一\n<qqbot-voice>\n二\n</qqbot-voice>\n</qqbot-multiline>')).toEqual({
+    expect(createTextOnlyOutboundMessagePlan('<legacy-block>\n一\n<legacy-voice>\n二\n</legacy-voice>\n</legacy-block>')).toEqual({
       segments: [
-        { kind: 'text-line', content: '<qqbot-multiline>', raw: '<qqbot-multiline>' },
+        { kind: 'text-line', content: '<legacy-block>', raw: '<legacy-block>' },
         { kind: 'text-line', content: '一', raw: '一' },
-        { kind: 'text-line', content: '<qqbot-voice>', raw: '<qqbot-voice>' },
+        { kind: 'text-line', content: '<legacy-voice>', raw: '<legacy-voice>' },
         { kind: 'text-line', content: '二', raw: '二' },
-        { kind: 'text-line', content: '</qqbot-voice>', raw: '</qqbot-voice>' },
-        { kind: 'text-line', content: '</qqbot-multiline>', raw: '</qqbot-multiline>' },
+        { kind: 'text-line', content: '</legacy-voice>', raw: '</legacy-voice>' },
+        { kind: 'text-line', content: '</legacy-block>', raw: '</legacy-block>' },
       ],
     });
   });
@@ -102,15 +71,6 @@ describe('message send utils', () => {
     ).toEqual({
       mode: 'split',
       content: '标题\n引用\n第一项\n加粗 和 命令 官网 https://example.com',
-    });
-  });
-
-  it('unwraps fenced code inside preserve mode without touching code characters', () => {
-    expect(
-      normalizeOutboundMessage('<qqbot-multiline>\n```ts\nconst value = 1;\n# 保留\n```\n</qqbot-multiline>'),
-    ).toEqual({
-      mode: 'preserve',
-      content: 'const value = 1;\n# 保留',
     });
   });
 
@@ -156,16 +116,6 @@ describe('message send utils', () => {
         userId: '1405359129',
       }),
     ).toBe('onebot:bot-1:private:1405359129');
-  });
-
-  it('keeps qqbot-multiline wrapped conversational text in preserve mode', () => {
-    const chatWrapped =
-      '<qqbot-multiline>\n春天和秋天啊……\n都挺好的呢\n春天有樱花，天气温暖\n秋天有枫叶，空气清爽\n非要选的话我更喜欢秋天\n</qqbot-multiline>';
-
-    expect(normalizeOutboundMessage(chatWrapped)).toEqual({
-      mode: 'preserve',
-      content: '春天和秋天啊……\n都挺好的呢\n春天有樱花，天气温暖\n秋天有枫叶，空气清爽\n非要选的话我更喜欢秋天',
-    });
   });
 
   it('replaces prompt leakage with fixed human-style fallback', () => {
@@ -244,7 +194,13 @@ describe('message send utils', () => {
     vi.useFakeTimers();
     const sent: string[] = [];
     const pending = dispatchOutboundMessagePlan(
-      parseOutboundMessagePlan('第一句\n<qqbot-multiline>\n整块一\n整块二\n</qqbot-multiline>\n第二句'),
+      buildOutboundMessagePlanFromReplyPlan({
+        segments: [
+          { kind: 'text', content: '第一句' },
+          { kind: 'multiline', content: '整块一\n整块二' },
+          { kind: 'text', content: '第二句' },
+        ],
+      }),
       async (segment) => {
         sent.push(`${segment.kind}:${segment.content}`);
       },
@@ -258,6 +214,39 @@ describe('message send utils', () => {
       'multiline-block:整块一\n整块二',
       'text-line:第二句',
     ]);
+  });
+
+  it('builds outbound segments from ReplyPlan without relying on control tags', () => {
+    expect(
+      buildOutboundMessagePlanFromReplyPlan({
+        segments: [
+          { kind: 'text', content: '第一句\n第二句' },
+          { kind: 'multiline', content: '整块一\n整块二' },
+          { kind: 'voice', content: '晚安' },
+          { kind: 'sticker', content: '无语地看对方一眼' },
+        ],
+      }),
+    ).toEqual({
+      segments: [
+        { kind: 'text-line', content: '第一句', raw: '第一句' },
+        { kind: 'text-line', content: '第二句', raw: '第二句' },
+        {
+          kind: 'multiline-block',
+          content: '整块一\n整块二',
+          raw: 'reply-plan:multiline:1:整块一\n整块二',
+        },
+        {
+          kind: 'voice-block',
+          content: '晚安',
+          raw: 'reply-plan:voice:2:晚安',
+        },
+        {
+          kind: 'sticker-block',
+          content: '无语地看对方一眼',
+          raw: 'reply-plan:sticker:3:无语地看对方一眼',
+        },
+      ],
+    });
   });
 
   it('runs same-key tasks in strict order', async () => {

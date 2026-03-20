@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { apply } from '../src/plugins/group-natural-trigger.js';
+import { apply } from '../src/plugins/triggers/group-natural/index.js';
 
 vi.mock('koishi', () => {
   type MockSchemaNode = {
@@ -35,6 +35,7 @@ vi.mock('koishi', () => {
       union: () => createSchemaNode(),
       array: () => createSchemaNode(),
       string: () => createSchemaNode(),
+      const: () => createSchemaNode(),
     },
   };
 });

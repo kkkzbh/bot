@@ -9,7 +9,7 @@ import {
   selectDeliveryModelForTaskMessage,
   shouldPreferReasonerForTaskMessage,
   shouldTryAutomationIntent,
-} from '../src/plugins/task-automation-core.js';
+} from '../src/plugins/automation/scheduler.js';
 
 describe('task automation intent rule parsing', () => {
   it('detects list intent', () => {

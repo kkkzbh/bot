@@ -3,10 +3,22 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BotConsoleManager } from '../src/plugins/bot-console-core.js';
+import { BotConsoleManager } from '../src/plugins/bot-console/server.js';
 
 vi.mock('@koishijs/plugin-console', () => ({}));
 vi.mock('koishi', () => {
+  type MockSchemaNode = {
+    default: () => MockSchemaNode;
+    description: () => MockSchemaNode;
+    role: () => MockSchemaNode;
+  };
+
+  const createSchemaNode = (): MockSchemaNode => ({
+    default: () => createSchemaNode(),
+    description: () => createSchemaNode(),
+    role: () => createSchemaNode(),
+  });
+
   class MockLogger {
     info(): void {}
     warn(): void {}
@@ -16,10 +28,17 @@ vi.mock('koishi', () => {
   return {
     Context: class {},
     Logger: MockLogger,
+    Schema: {
+      object: () => createSchemaNode(),
+      boolean: () => createSchemaNode(),
+      string: () => createSchemaNode(),
+      natural: () => createSchemaNode(),
+      number: () => createSchemaNode(),
+    },
   };
 });
 
-import { apply } from '../src/plugins/bot-console.js';
+import { apply } from '../src/plugins/bot-console/index.js';
 
 const tempDirs: string[] = [];
 
@@ -57,7 +76,7 @@ describe('bot-console plugin', () => {
     apply(ctx as any);
 
     expect(addEntry).toHaveBeenCalledTimes(1);
-    expect(addListener).toHaveBeenCalledTimes(8);
+    expect(addListener).toHaveBeenCalledTimes(10);
     for (const call of addListener.mock.calls) {
       expect(call[2]).toEqual({ authority: 4 });
     }
@@ -135,6 +154,22 @@ describe('bot-console plugin', () => {
           },
         }),
       },
+      featurePolicy: {
+        listConsoleFeatureScopes: vi.fn().mockResolvedValue([
+          {
+            scopeKind: 'private_default',
+            scopeId: 'private-default',
+            roomId: null,
+            roomName: '所有私聊',
+            groupId: null,
+            conversationId: null,
+            visibility: 'private',
+            updatedAt: null,
+          },
+        ]),
+        getFeatureOverrides: vi.fn().mockResolvedValue([]),
+        listConversationTargets: vi.fn().mockResolvedValue([]),
+      },
       console: {
         addEntry: vi.fn(),
         addListener,
@@ -145,6 +180,9 @@ describe('bot-console plugin', () => {
     const state = await getStateListener();
     expect(state.runtimeStatus.memoryV2.embedModel).toBe('Qwen/Qwen3-Embedding-8B');
     expect(state.runtimeStatus.memoryV2.jobs.embedPending).toBe(2);
+    expect(state.featureScopes).toEqual([
+      expect.objectContaining({ scopeKind: 'private_default', scopeId: 'private-default' }),
+    ]);
   });
 
   it('routes manual probe requests to memory-v2 status service', async () => {
@@ -248,5 +286,65 @@ describe('bot-console plugin', () => {
     });
     expect(getRecentLogsSpy).toHaveBeenCalledTimes(1);
     getRecentLogsSpy.mockRestore();
+  });
+
+  it('routes scoped override and conversation clear listeners to feature policy service', async () => {
+    const dir = createTempDir();
+    mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
+    writeFileSync(join(dir, '.env.local'), 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(
+      join(dir, 'data/chathub/presets/sakiko.yml'),
+      'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
+      'utf8',
+    );
+
+    const saveFeatureOverrides = vi.fn().mockResolvedValue([
+      {
+        id: 1,
+        featureKey: 'QQ_VOICE_ENABLED',
+        scopeKind: 'private_default',
+        scopeId: 'private-default',
+        enabled: 0,
+        updatedAt: 1,
+      },
+    ]);
+    const clearConversationHistory = vi.fn().mockResolvedValue({
+      ok: true,
+      roomId: 11,
+      conversationId: 'conv-1',
+      deletedMessages: 4,
+      updatedAt: 2,
+    });
+
+    const addListener = vi.fn();
+    apply({
+      baseDir: dir,
+      featurePolicy: {
+        saveFeatureOverrides,
+        clearConversationHistory,
+      },
+      console: {
+        addEntry: vi.fn(),
+        addListener,
+      },
+    } as any);
+
+    const saveOverridesListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/save-feature-overrides')?.[1];
+    await expect(
+      saveOverridesListener({
+        overrides: [{ featureKey: 'QQ_VOICE_ENABLED', scopeKind: 'private_default', scopeId: 'private-default', enabled: false }],
+      }),
+    ).resolves.toEqual({
+      overrides: [
+        expect.objectContaining({ featureKey: 'QQ_VOICE_ENABLED', scopeKind: 'private_default', scopeId: 'private-default' }),
+      ],
+    });
+    expect(saveFeatureOverrides).toHaveBeenCalledTimes(1);
+
+    const clearListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/clear-conversation-history')?.[1];
+    await expect(clearListener({ roomId: 11, conversationId: 'conv-1' })).resolves.toEqual({
+      result: expect.objectContaining({ ok: true, roomId: 11, conversationId: 'conv-1', deletedMessages: 4 }),
+    });
+    expect(clearConversationHistory).toHaveBeenCalledWith({ roomId: 11, conversationId: 'conv-1' });
   });
 });

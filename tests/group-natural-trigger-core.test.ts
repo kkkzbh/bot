@@ -6,7 +6,7 @@ import {
   parseAliasList,
   recordSpamMessage,
   shouldTriggerByRule,
-} from '../src/plugins/group-natural-trigger-core.js';
+} from '../src/plugins/triggers/group-natural/matcher.js';
 
 describe('group natural trigger aliases', () => {
   it('parses alias list and falls back to defaults', () => {

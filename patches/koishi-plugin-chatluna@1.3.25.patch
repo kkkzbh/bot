@@ -1,0 +1,56 @@
+diff --git a/lib/index.cjs b/lib/index.cjs
+index 1111111..2222222 100644
+--- a/lib/index.cjs
++++ b/lib/index.cjs
+@@ -1065,6 +1065,9 @@ var ChatLunaChatChain = class extends events.EventEmitter {
+     requests["variables"]["built"] = {
+       conversationId
+     };
+     requests["variables_hide"] = requests["variables"];
++    if (message.additional_kwargs?.qqbot_override_request_params && typeof message.additional_kwargs.qqbot_override_request_params === "object") {
++      requests["overrideRequestParams"] = message.additional_kwargs.qqbot_override_request_params;
++    }
+     requests["configurable"] = {
+       session,
+       conversationId
+diff --git a/lib/index.mjs b/lib/index.mjs
+index 1111111..2222222 100644
+--- a/lib/index.mjs
++++ b/lib/index.mjs
+@@ -1040,6 +1040,9 @@ class ChatLunaChatChain extends EventEmitter {
+     requests["variables"]["built"] = {
+       conversationId
+     };
+     requests["variables_hide"] = requests["variables"];
++    if (message.additional_kwargs?.qqbot_override_request_params && typeof message.additional_kwargs.qqbot_override_request_params === "object") {
++      requests["overrideRequestParams"] = message.additional_kwargs.qqbot_override_request_params;
++    }
+     requests["configurable"] = {
+       session,
+       conversationId
+diff --git a/lib/chains/index.cjs b/lib/chains/index.cjs
+index 3333333..4444444 100644
+--- a/lib/chains/index.cjs
++++ b/lib/chains/index.cjs
+@@ -287,6 +287,9 @@ var ChatChain = class {
+   async _handleMiddlewareError(session, middlewareName, error) {
+     if (error instanceof import_error.ChatLunaError) {
++      if (error.errorCode === import_error.ChatLunaErrorCode.ABORTED && session.state?.qqReplyTransport?.suppressAbortNotice) {
++        return;
++      }
+       const message = error.errorCode === import_error.ChatLunaErrorCode.ABORTED ? session.text("chatluna.aborted") : error.message;
+       await this.sendMessage(session, message);
+       return;
+diff --git a/lib/chains/index.mjs b/lib/chains/index.mjs
+index 3333333..4444444 100644
+--- a/lib/chains/index.mjs
++++ b/lib/chains/index.mjs
+@@ -287,6 +287,9 @@ class ChatChain {
+   async _handleMiddlewareError(session, middlewareName, error) {
+     if (error instanceof ChatLunaError) {
++      if (error.errorCode === ChatLunaErrorCode.ABORTED && session.state?.qqReplyTransport?.suppressAbortNotice) {
++        return;
++      }
+       const message = error.errorCode === ChatLunaErrorCode.ABORTED ? session.text("chatluna.aborted") : error.message;
+       await this.sendMessage(session, message);
+       return;

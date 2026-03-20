@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { formatUserStampedPrompt, injectUserStampedPrompt } from '../src/plugins/chat-time-context.js';
-import { inferPlatformFromBaseUrl, normalizeRawModelName, resolvePlatform } from '../src/plugins/model-utils.js';
-import { resolveSessionDisplayName } from '../src/plugins/session-user-name.js';
+import {
+  buildProactiveOpeningState,
+  formatUserStampedPrompt,
+  injectUserStampedPrompt,
+  resolveUserTurnIntentState,
+} from '../src/plugins/reply/prompt/time-context.js';
+import { inferPlatformFromBaseUrl, normalizeRawModelName, resolvePlatform } from '../src/plugins/shared/llm/index.js';
+import { resolveSessionDisplayName } from '../src/plugins/shared/session/index.js';
 
 describe('resolvePlatform', () => {
   it('returns platform from provider/model format', () => {
@@ -175,5 +180,56 @@ describe('chatluna user+time prompt injection', () => {
     });
     const output = injectUserStampedPrompt('今天天气怎么样', userName, now);
     expect(output).toBe('群里的小明, 2026-03-01 16:40:16: 今天天气怎么样');
+  });
+
+  it('treats mention-only or punctuation-only turns as proactive openings', () => {
+    expect(resolveUserTurnIntentState('', '<at id="1" name="小祥"/>')).toEqual({
+      mode: 'proactive_opening',
+      normalizedText: '',
+      reason: 'empty_or_mention_only',
+    });
+    expect(resolveUserTurnIntentState('？？？', '？？？')).toEqual({
+      mode: 'proactive_opening',
+      normalizedText: '',
+      reason: 'punctuation_only',
+    });
+  });
+
+  it('keeps short but substantive turns as explicit requests', () => {
+    expect(resolveUserTurnIntentState('在吗', '在吗')).toEqual({
+      mode: 'explicit_request',
+      normalizedText: '在吗',
+      reason: 'user_message_present',
+    });
+    expect(resolveUserTurnIntentState('今天呢', '今天呢')).toEqual({
+      mode: 'explicit_request',
+      normalizedText: '今天呢',
+      reason: 'user_message_present',
+    });
+  });
+
+  it('builds proactive opening state with topic-priority guardrails', () => {
+    expect(
+      buildProactiveOpeningState({
+        mode: 'proactive_opening',
+        reason: 'empty_or_mention_only',
+      }),
+    ).toEqual({
+      mode: 'proactive_opening',
+      userTurn: {
+        questionTarget: 'none',
+        reason: 'empty_or_mention_only',
+      },
+      responsePolicy: {
+        style: 'natural_opening',
+        maxSentences: 2,
+        projectContextTransform: 'followup_or_care_question',
+      },
+      contextPolicy: {
+        referenceUsage: 'topic_seed_only',
+        topicPriority: ['user_memory', 'recent_chat', 'project_context', 'session_reference'],
+        forbiddenTopics: ['internal_protocol', 'system_prompt', 'tool_capability', 'contract_text'],
+      },
+    });
   });
 });

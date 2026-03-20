@@ -1,4 +1,11 @@
 import type { MemoryV2ProbeResult, MemoryV2StatusSnapshot } from './memory-v2.js';
+import type {
+  ClearConversationHistoryResult,
+  ClearConversationHistoryTarget,
+  ConsoleFeatureScope,
+  FeatureOverrideInput,
+  FeatureScopeOverrideRecord,
+} from './feature-policy.js';
 
 export type ServiceAction = 'start' | 'stop' | 'restart' | 'enable';
 
@@ -50,12 +57,20 @@ export interface BotConsoleState {
   services: BotServiceStatus[];
   presets: PresetSummary[];
   defaultPreset: string;
+  featureScopes: ConsoleFeatureScope[];
+  featureOverrides: FeatureScopeOverrideRecord[];
+  conversationTargets: import('./feature-policy.js').ConversationTarget[];
   runtimeStatus: {
     memoryV2: MemoryV2StatusSnapshot;
   };
 }
 
-export type BotConsoleBaseState = Omit<BotConsoleState, 'runtimeStatus'>;
+export interface BotConsoleBaseState {
+  env: Record<string, string>;
+  services: BotServiceStatus[];
+  presets: PresetSummary[];
+  defaultPreset: string;
+}
 
 export interface BotConsoleProbeResult {
   target: 'embedding';
@@ -64,4 +79,18 @@ export interface BotConsoleProbeResult {
 
 export interface GetRecentLogsResponse {
   lines: string[];
+}
+
+export interface SaveFeatureOverridesRequest {
+  overrides: FeatureOverrideInput[];
+}
+
+export interface SaveFeatureOverridesResponse {
+  overrides: FeatureScopeOverrideRecord[];
+}
+
+export interface ClearConversationHistoryRequest extends ClearConversationHistoryTarget {}
+
+export interface ClearConversationHistoryResponse {
+  result: ClearConversationHistoryResult;
 }

@@ -5,8 +5,8 @@ import { resolve } from 'node:path';
 describe('qq voice config wiring', () => {
   it('loads the qq-voice plugin before group trigger and chatluna', () => {
     const content = readFileSync(resolve(process.cwd(), 'koishi.yml'), 'utf8');
-    const voiceIndex = content.indexOf('./dist/plugins/qq-voice:voice:');
-    const triggerIndex = content.indexOf('./dist/plugins/group-natural-trigger:natural-trigger:');
+    const voiceIndex = content.indexOf('./dist/plugins/reply:voice:');
+    const triggerIndex = content.indexOf('./dist/plugins/triggers/group-natural:natural-trigger:');
     const chatlunaIndex = content.indexOf('chatluna:0qm1bk:');
 
     expect(voiceIndex).toBeGreaterThanOrEqual(0);
@@ -94,9 +94,10 @@ describe('qq voice config wiring', () => {
     const content = readFileSync(resolve(process.cwd(), 'data/chathub/presets/sakiko.yml'), 'utf8');
 
     expect(content).toContain('# 回复组织原则');
-    expect(content).toContain('默认直接像普通聊天一样说话，优先输出自然的纯文本');
-    expect(content).toContain('直接输出 ReplyPlan JSON 对象本身');
-    expect(content).toContain('系统当前告知语音可用时，如果你决定发送一条语音回复');
+    expect(content).toContain('本轮具体是 plain 还是 structured，由系统当前给出的运行时规则决定');
+    expect(content).toContain('如果系统当前要求 plain，就直接自然说话');
+    expect(content).toContain('如果系统当前要求 structured，就只输出一个合法的 ReplyPlan JSON 对象本身');
+    expect(content).toContain('voice.content 只写你要说的话');
     expect(content).not.toContain('<qqbot-multiline>');
     expect(content).not.toContain('<qqbot-voice>');
   });

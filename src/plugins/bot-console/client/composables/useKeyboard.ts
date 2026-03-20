@@ -20,7 +20,14 @@ export function useKeyboard(
     try {
       const tab = activeTab.value
 
-      if (tab === 'features' || tab === 'models' || tab === 'basic') {
+      if (tab === 'features') {
+        if (!bc.canSaveFeatureSettings.value) return
+        await bc.saveFeatureSettings(false)
+        toast.add('配置已保存', 'success')
+        return
+      }
+
+      if (tab === 'models' || tab === 'basic') {
         if (!bc.canSaveEnv.value) return
         await bc.saveEnv(false)
         toast.add('配置已保存', 'success')

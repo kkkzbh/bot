@@ -72,14 +72,12 @@ vi.mock('koishi', () => {
 
 import {
   buildVoiceFailureReply,
-  containsVoiceReplyControl,
   extractFirstIncomingVoice,
   extractTextContentWithoutVoice,
   mergeVoiceInputText,
   normalizeVoiceSynthesisText,
-  parseVoiceReplyControl,
   pickVoiceStyle,
-} from '../src/plugins/qq-voice-core.js';
+} from '../src/plugins/reply/voice/tts.js';
 
 describe('qq voice core', () => {
   it('extracts first incoming audio and counts all audio segments', () => {
@@ -101,63 +99,6 @@ describe('qq voice core', () => {
     expect(mergeVoiceInputText('前缀说明 语音正文', '语音正文')).toBe('前缀说明 语音正文');
   });
 
-  it('parses qqbot voice reply blocks into text plus first voice text', () => {
-    expect(parseVoiceReplyControl('正文\n<qqbot-voice>\n附带语音\n</qqbot-voice>\n结尾')).toEqual({
-      text: '正文\n结尾',
-      voiceText: '附带语音',
-      voiceTagCount: 1,
-    });
-    expect(containsVoiceReplyControl('<qqbot-voice>\ntest\n</qqbot-voice>')).toBe(true);
-    expect(containsVoiceReplyControl('&lt;qqbot-voice&gt;\ntest\n&lt;/qqbot-voice&gt;')).toBe(true);
-    expect(parseVoiceReplyControl('&lt;qqbot-voice&gt;\n晚安\n&lt;/qqbot-voice&gt;')).toEqual({
-      text: '',
-      voiceText: '晚安',
-      voiceTagCount: 1,
-    });
-  });
-
-  it('parses qqbot voice reply blocks from structured rich-text content', () => {
-    const structured = [
-      '晚安\n\n',
-      {
-        type: 'p',
-        attrs: {},
-        children: [
-          { type: 'text', attrs: { content: '<qqbot-voice>' }, children: [] },
-          { type: 'text', attrs: { content: '\n' }, children: [] },
-          { type: 'text', attrs: { content: '晚安' }, children: [] },
-          { type: 'text', attrs: { content: '\n' }, children: [] },
-          { type: 'text', attrs: { content: '</qqbot-voice>' }, children: [] },
-        ],
-      },
-    ];
-
-    expect(containsVoiceReplyControl(structured)).toBe(true);
-    expect(parseVoiceReplyControl(structured)).toEqual({
-      text: '晚安',
-      voiceText: '晚安',
-      voiceTagCount: 1,
-    });
-  });
-
-  it('only recognizes standalone-line voice tags and leaves inline tags untouched', () => {
-    expect(parseVoiceReplyControl('普通文本<qqbot-voice>附带语音</qqbot-voice>')).toEqual({
-      text: '普通文本<qqbot-voice>附带语音</qqbot-voice>',
-      voiceText: null,
-      voiceTagCount: 0,
-    });
-    expect(parseVoiceReplyControl('正文\n<qqbot-voice>\n晚安\n</qqbot-voice>')).toEqual({
-      text: '正文',
-      voiceText: '晚安',
-      voiceTagCount: 1,
-    });
-    expect(parseVoiceReplyControl('<qqbot-voice>\n晚安\n</qqbot-voice>')).toEqual({
-      text: '',
-      voiceText: '晚安',
-      voiceTagCount: 1,
-    });
-  });
-
   it('chooses negative voice style from text tone', () => {
     expect(pickVoiceStyle('……与你无关')).toBe('black');
     expect(pickVoiceStyle('晚安吧')).toBe('white');
@@ -165,6 +106,9 @@ describe('qq voice core', () => {
 
   it('normalizes synthesis text and provides persona failure replies', () => {
     expect(normalizeVoiceSynthesisText('  你好\n\n世界  ')).toBe('你好 世界');
+    expect(normalizeVoiceSynthesisText('头发的事情怎么样了？5cm还是3.5cm？')).toBe(
+      '头发的事情怎么样了？五厘米还是三点五厘米？',
+    );
     expect(buildVoiceFailureReply('too-long', 60)).toContain('60秒');
     expect(buildVoiceFailureReply('empty')).toContain('几乎什么都没有');
     expect(buildVoiceFailureReply('broken')).toContain('没听清');

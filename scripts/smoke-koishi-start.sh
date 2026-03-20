@@ -57,13 +57,13 @@ const keep = new Set([
   './dist/plugins/bot-console:bot-console',
   'database-sqlite:8jr5yp',
   'cron:task',
-  './dist/plugins/task-automation:automation',
-  './dist/plugins/qq-voice:voice',
+  './dist/plugins/automation:automation',
+  './dist/plugins/reply:voice',
   'chatluna:0qm1bk',
   './dist/plugins/web-search:search',
-  './dist/plugins/chatluna-sticker:sticker',
-  './dist/plugins/chatluna-model-guard:mjddgg',
-  './dist/plugins/memory-v2:memory-v2',
+  './dist/plugins/sticker:sticker',
+  './dist/plugins/model-guard:mjddgg',
+  './dist/plugins/memory:memory-v2',
 ]);
 
 for (const key of Object.keys(entry)) {
@@ -93,12 +93,12 @@ if grep -nE "cannot resolve plugin|property database is not registered|TypeError
   exit 1
 fi
 
-if ! grep -F "loader apply plugin ./dist/plugins/task-automation" "$LOG_FILE" >/dev/null; then
+if ! grep -F "loader apply plugin ./dist/plugins/automation" "$LOG_FILE" >/dev/null; then
   echo "Koishi smoke startup did not load task-automation plugin." >&2
   exit 1
 fi
 
-if ! grep -F "loader apply plugin ./dist/plugins/qq-voice:voice" "$LOG_FILE" >/dev/null; then
+if ! grep -F "loader apply plugin ./dist/plugins/reply:voice" "$LOG_FILE" >/dev/null; then
   echo "Koishi smoke startup did not load qq-voice plugin." >&2
   exit 1
 fi
@@ -108,12 +108,12 @@ if ! grep -F "loader apply plugin ./dist/plugins/web-search:search" "$LOG_FILE" 
   exit 1
 fi
 
-if ! grep -F "loader apply plugin ./dist/plugins/chatluna-model-guard" "$LOG_FILE" >/dev/null; then
+if ! grep -F "loader apply plugin ./dist/plugins/model-guard" "$LOG_FILE" >/dev/null; then
   echo "Koishi smoke startup did not load chatluna-model-guard plugin." >&2
   exit 1
 fi
 
-if ! grep -F "loader apply plugin ./dist/plugins/memory-v2:memory-v2" "$LOG_FILE" >/dev/null; then
+if ! grep -F "loader apply plugin ./dist/plugins/memory:memory-v2" "$LOG_FILE" >/dev/null; then
   echo "Koishi smoke startup did not load memory-v2 plugin." >&2
   exit 1
 fi

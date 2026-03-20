@@ -2,13 +2,18 @@ import { ref, reactive, computed } from 'vue'
 import { send } from '@koishijs/client'
 import type {
   BotConsoleState,
-  BotServiceStatus,
+  ClearConversationHistoryResponse,
+  ConversationTarget,
+  FeatureOverrideInput,
+  FeatureScopeKind,
   PresetDocument,
   PresetPrompt,
   SaveEnvResponse,
+  SaveFeatureOverridesResponse,
   SavePresetResponse,
   ServiceActionResponse,
   BotConsoleProbeResponse,
+  ScopedFeatureKey,
 } from '../types'
 
 // ─── Env key groups ───────────────────────────────────────────────────────────
@@ -17,12 +22,14 @@ export const FEATURE_KEYS = [
   'QQ_VOICE_ENABLED',
   'QQ_VOICE_INPUT_ENABLED',
   'QQ_VOICE_OUTPUT_ENABLED',
-  'WEB_SEARCH_ENABLED',
   'POKEMON_BATTLE_ENABLED',
   'CHAT_NATURAL_TRIGGER_ENABLED',
   'TASK_AUTOMATION_INTENT_ENABLED',
   'QQBOT_LIVE_REPLY_ENABLED',
 ] as const
+
+export const PRIVATE_DEFAULT_SCOPE_ID = 'private-default'
+export const PRIVATE_UNSUPPORTED_FEATURE_KEYS = ['CHAT_NATURAL_TRIGGER_ENABLED'] as const
 
 export const MODEL_KEYS = [
   'OPENAI_BASE_URL',
@@ -63,6 +70,8 @@ export function createEmptyPreset(): PresetDocument {
   }
 }
 
+export type FeatureOverrideMode = 'inherit' | 'enabled' | 'disabled'
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 function clonePreset(p: PresetDocument): PresetDocument {
@@ -72,6 +81,24 @@ function clonePreset(p: PresetDocument): PresetDocument {
     keywords: [...p.keywords],
     prompts: p.prompts.map(x => ({ role: x.role, content: x.content })),
   }
+}
+
+function buildFeatureOverrideKey(scopeKind: FeatureScopeKind, scopeId: string, featureKey: ScopedFeatureKey): string {
+  return `${scopeKind}:${scopeId}:${featureKey}`
+}
+
+function normalizeOverrideMode(enabled: number | boolean | null | undefined): FeatureOverrideMode {
+  if (enabled == null) return 'inherit'
+  return Number(enabled) === 1 || enabled === true ? 'enabled' : 'disabled'
+}
+
+function denormalizeOverrideMode(mode: FeatureOverrideMode): boolean | null {
+  if (mode === 'inherit') return null
+  return mode === 'enabled'
+}
+
+function isPrivateUnsupportedFeatureKey(featureKey: string): boolean {
+  return (PRIVATE_UNSUPPORTED_FEATURE_KEYS as readonly string[]).includes(featureKey)
 }
 
 // ─── Composable ───────────────────────────────────────────────────────────────
@@ -96,6 +123,15 @@ export function useBotConsole() {
   /** True while an embedding probe request is in-flight. */
   const probePending = ref(false)
 
+  /** Live-editable scoped feature overrides keyed by `${scopeKind}:${scopeId}:${featureKey}`. */
+  const featureOverrideDraft = reactive<Record<string, FeatureOverrideMode>>({})
+
+  /** Last successfully loaded scoped feature overrides. */
+  const originalFeatureOverrides = ref<Record<string, FeatureOverrideMode>>({})
+
+  /** Tracks in-flight conversation clear requests keyed by conversationId. */
+  const conversationPending = reactive<Record<string, boolean>>({})
+
   /**
    * Tracks in-flight service actions keyed by unit name.
    * Value is the action string (e.g. 'restart') while pending, null otherwise.
@@ -116,6 +152,23 @@ export function useBotConsole() {
   })
 
   const canSaveEnv = computed(() => changedKeys.value.size > 0)
+
+  const changedFeatureOverrideKeys = computed<Set<string>>(() => {
+    const keys = new Set<string>()
+    const allKeys = new Set([
+      ...Object.keys(featureOverrideDraft),
+      ...Object.keys(originalFeatureOverrides.value),
+    ])
+    for (const key of allKeys) {
+      if ((featureOverrideDraft[key] ?? 'inherit') !== (originalFeatureOverrides.value[key] ?? 'inherit')) {
+        keys.add(key)
+      }
+    }
+    return keys
+  })
+
+  const canSaveFeatureOverrides = computed(() => changedFeatureOverrideKeys.value.size > 0)
+  const canSaveFeatureSettings = computed(() => canSaveEnv.value || canSaveFeatureOverrides.value)
 
   const canSavePreset = computed(() => {
     const p = currentPreset.value
@@ -147,6 +200,24 @@ export function useBotConsole() {
         delete envDraft[key]
       }
       Object.assign(envDraft, env)
+
+      const nextOverrides: Record<string, FeatureOverrideMode> = {}
+      for (const item of state?.featureOverrides ?? []) {
+        nextOverrides[buildFeatureOverrideKey(item.scopeKind, item.scopeId, item.featureKey)] = normalizeOverrideMode(item.enabled)
+      }
+      originalFeatureOverrides.value = nextOverrides
+      for (const key of Object.keys(featureOverrideDraft)) {
+        delete featureOverrideDraft[key]
+      }
+      Object.assign(featureOverrideDraft, nextOverrides)
+
+      for (const scope of state?.featureScopes ?? []) {
+        for (const featureKey of FEATURE_KEYS) {
+          if (scope.scopeKind === 'private_default' && isPrivateUnsupportedFeatureKey(featureKey)) continue
+          const key = buildFeatureOverrideKey(scope.scopeKind, scope.scopeId, featureKey)
+          featureOverrideDraft[key] = nextOverrides[key] ?? 'inherit'
+        }
+      }
 
       // Auto-open first preset when none is selected
       if (!currentPreset.value.name && state?.presets?.length) {
@@ -181,6 +252,89 @@ export function useBotConsole() {
     }
 
     return result
+  }
+
+  async function saveFeatureOverrides(): Promise<SaveFeatureOverridesResponse> {
+    const overrides: FeatureOverrideInput[] = []
+    const scopes = botState.value?.featureScopes ?? []
+    for (const scope of scopes) {
+      for (const featureKey of FEATURE_KEYS) {
+        if (scope.scopeKind === 'private_default' && isPrivateUnsupportedFeatureKey(featureKey)) continue
+        const draftKey = buildFeatureOverrideKey(scope.scopeKind, scope.scopeId, featureKey)
+        const mode = featureOverrideDraft[draftKey] ?? 'inherit'
+        const enabled = denormalizeOverrideMode(mode)
+        if (enabled == null) continue
+        overrides.push({
+          featureKey,
+          scopeKind: scope.scopeKind,
+          scopeId: scope.scopeId,
+          enabled,
+        })
+      }
+    }
+
+    const result = await send<SaveFeatureOverridesResponse>(
+      'bot-console/save-feature-overrides',
+      { overrides },
+    )
+
+    const nextOverrides: Record<string, FeatureOverrideMode> = {}
+    for (const item of result?.overrides ?? []) {
+      nextOverrides[buildFeatureOverrideKey(item.scopeKind, item.scopeId, item.featureKey)] = normalizeOverrideMode(item.enabled)
+    }
+    originalFeatureOverrides.value = nextOverrides
+    for (const key of Object.keys(featureOverrideDraft)) {
+      featureOverrideDraft[key] = nextOverrides[key] ?? 'inherit'
+    }
+
+    if (botState.value) {
+      botState.value = {
+        ...botState.value,
+        featureOverrides: result?.overrides ?? [],
+      }
+    }
+
+    return result
+  }
+
+  async function saveFeatureSettings(restartAfter = false): Promise<void> {
+    if (canSaveEnv.value) {
+      await saveEnv(false)
+    }
+    if (canSaveFeatureOverrides.value) {
+      await saveFeatureOverrides()
+    }
+    if (restartAfter) {
+      await runServiceAction('qqbot.target', 'restart')
+    }
+  }
+
+  async function clearConversationHistory(target: ConversationTarget): Promise<ClearConversationHistoryResponse> {
+    conversationPending[target.conversationId] = true
+    try {
+      const result = await send<ClearConversationHistoryResponse>(
+        'bot-console/clear-conversation-history',
+        {
+          roomId: target.roomId,
+          conversationId: target.conversationId,
+        },
+      )
+
+      if (botState.value) {
+        botState.value = {
+          ...botState.value,
+          conversationTargets: botState.value.conversationTargets.map(item =>
+            item.conversationId === target.conversationId
+              ? { ...item, updatedAt: result.result.updatedAt }
+              : item,
+          ),
+        }
+      }
+
+      return result
+    } finally {
+      conversationPending[target.conversationId] = false
+    }
   }
 
   /**
@@ -277,19 +431,28 @@ export function useBotConsole() {
     botState,
     envDraft,
     originalEnv,
+    featureOverrideDraft,
+    originalFeatureOverrides,
     currentPreset,
     probePending,
     servicePending,
+    conversationPending,
 
     // Computed
     changedKeys,
     canSaveEnv,
+    changedFeatureOverrideKeys,
+    canSaveFeatureOverrides,
+    canSaveFeatureSettings,
     canSavePreset,
     defaultPreset,
 
     // Actions
     refresh,
     saveEnv,
+    saveFeatureOverrides,
+    saveFeatureSettings,
+    clearConversationHistory,
     openPreset,
     saveCurrentPreset,
     deletePreset,

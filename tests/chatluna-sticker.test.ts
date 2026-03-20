@@ -41,17 +41,17 @@ const promptAssemblyMocks = vi.hoisted(() => ({
   registerPromptFragment: vi.fn(),
 }));
 
-vi.mock('../src/plugins/chatluna-sticker-core.js', () => ({
+vi.mock('../src/plugins/sticker/selection.js', () => ({
   buildStickerCapabilityDescriptor: stickerCoreMocks.buildStickerCapabilityDescriptor,
   buildStickerCapabilityPolicy: stickerCoreMocks.buildStickerCapabilityPolicy,
   loadStickerCatalog: stickerCoreMocks.loadStickerCatalog,
 }));
 
-vi.mock('../src/plugins/prompt-assembly.js', () => ({
+vi.mock('../src/plugins/shared/prompt-context/index.js', () => ({
   registerPromptFragment: promptAssemblyMocks.registerPromptFragment,
 }));
 
-import { apply, inject } from '../src/plugins/chatluna-sticker.js';
+import { apply, inject } from '../src/plugins/sticker/index.js';
 
 type EventHandler = (...args: any[]) => Promise<unknown> | unknown;
 type ChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;

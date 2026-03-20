@@ -4,7 +4,6 @@ export const FIELD_LABELS: Record<string, string> = {
   QQ_VOICE_ENABLED: 'QQ 语音总开关',
   QQ_VOICE_INPUT_ENABLED: '语音转文字',
   QQ_VOICE_OUTPUT_ENABLED: '语音回复',
-  WEB_SEARCH_ENABLED: '联网搜索',
   POKEMON_BATTLE_ENABLED: '宝可梦对战',
   CHAT_NATURAL_TRIGGER_ENABLED: '群聊自然触发',
   TASK_AUTOMATION_INTENT_ENABLED: '任务意图识别',
@@ -112,7 +111,6 @@ export const UNIT_FILE_STATE_LABELS: Record<string, string> = {
 /** Items shown in the Overview panel's features chip list. */
 export const OVERVIEW_FEATURE_ITEMS: [string, string][] = [
   ['QQ_VOICE_ENABLED', '语音'],
-  ['WEB_SEARCH_ENABLED', '搜索'],
   ['CHAT_NATURAL_TRIGGER_ENABLED', '自然触发'],
   ['TASK_AUTOMATION_INTENT_ENABLED', '任务意图'],
   ['QQBOT_LIVE_REPLY_ENABLED', '发送期续写'],

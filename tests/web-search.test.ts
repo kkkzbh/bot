@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apply } from '../src/plugins/web-search.js';
+import { apply } from '../src/plugins/web-search/index.js';
 import { extractSearchQueryInput } from '../src/plugins/web-search/adapter.js';
 import {
   looksLikeDuckDuckGoLiteAnomalyPage,

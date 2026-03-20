@@ -10,7 +10,7 @@ import {
   parseSystemdShowOutput,
   serializePresetDocument,
   writeFileAtomicWithBackup,
-} from '../src/plugins/bot-console-core.js';
+} from '../src/plugins/bot-console/server.js';
 
 const tempDirs: string[] = [];
 

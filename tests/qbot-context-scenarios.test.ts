@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { injectUserStampedPrompt } from '../src/plugins/chat-time-context.js';
-import { sanitizeLeakedReasoningMessage } from '../src/plugins/message-send-utils.js';
-import { formatAutomationTimestamp, parseAutomationIntentByRule } from '../src/plugins/task-automation-core.js';
+import { injectUserStampedPrompt } from '../src/plugins/reply/prompt/time-context.js';
+import { sanitizeLeakedReasoningMessage } from '../src/plugins/shared/outbound/index.js';
+import { formatAutomationTimestamp, parseAutomationIntentByRule } from '../src/plugins/automation/scheduler.js';
 
 type SimTask = {
   id: number;

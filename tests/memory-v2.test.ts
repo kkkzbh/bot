@@ -1,19 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryV2StatusService, createUnavailableMemoryV2StatusSnapshot } from '../src/plugins/memory-v2-status.js';
+import { MemoryV2StatusService, createUnavailableMemoryV2StatusSnapshot } from '../src/plugins/memory/status.js';
 import {
   embedTexts,
   parseExtractionResponse,
   type MemoryEmbedRuntime,
-} from '../src/plugins/memory-v2-llm.js';
+} from '../src/plugins/memory/llm.js';
 import {
   buildMemoryContextBlock,
   buildMemoryDocuments,
   mergeFactRecord,
   planMemoryRecall,
   rankMemoryDocumentsByVector,
-} from '../src/plugins/memory-v2-store.js';
+} from '../src/plugins/memory/store.js';
 import type { MemoryEpisodeRecord, MemoryFactRecord } from '../src/types/memory-v2.js';
 
 function createFact(partial: Partial<MemoryFactRecord>): MemoryFactRecord {
@@ -131,7 +131,7 @@ describe('memory-v2 core behavior', () => {
     expect(merged.version).toBe(3);
   });
 
-  it('parses fenced extraction json', () => {
+  it('rejects fenced extraction json and only accepts strict JSON', () => {
     const parsed = parseExtractionResponse(
       [
         '```json',
@@ -140,8 +140,7 @@ describe('memory-v2 core behavior', () => {
       ].join('\n'),
     );
 
-    expect(parsed?.facts).toHaveLength(1);
-    expect(parsed?.facts[0]?.topicKey).toBe('plan-travel');
+    expect(parsed).toBeNull();
   });
 
   it('calls SiliconFlow embeddings with batched input', async () => {
@@ -183,7 +182,7 @@ describe('memory-v2 core behavior', () => {
 describe('memory-v2 configuration cleanup', () => {
   it('registers the new plugin and removes old long-memory plugins from koishi.yml', () => {
     const content = readFileSync(resolve(process.cwd(), 'koishi.yml'), 'utf8');
-    expect(content).toContain('./dist/plugins/memory-v2:memory-v2:');
+    expect(content).toContain('./dist/plugins/memory:memory-v2:');
     expect(content).not.toContain('chatluna-ollama-adapter');
     expect(content).not.toContain('chatluna-long-memory');
     expect(content).not.toContain('chatluna-vector-store-service');
@@ -198,7 +197,7 @@ describe('memory-v2 configuration cleanup', () => {
     expect(composeContent).not.toContain('OLLAMA_PORT');
     expect(envContent).toContain('MEMORY_EMBED_BASE_URL=https://api.siliconflow.cn/v1');
     expect(envContent).toContain('MEMORY_EMBED_MODEL=Qwen/Qwen3-Embedding-8B');
-    expect(serverEnvContent).toContain('MEMORY_EXTRACT_MODEL=deepseek/deepseek-chat');
+    expect(serverEnvContent).toContain('MEMORY_EXTRACT_MODEL=deepseek-chat');
     expect(serverEnvContent).not.toContain('CHATLUNA_LONG_MEMORY_EXTRACT_MODEL');
   });
 });
@@ -215,7 +214,7 @@ describe('memory-v2 status service', () => {
         extract: {
           baseUrl: 'https://api.deepseek.com/v1',
           apiKey: 'sk-test',
-          model: 'deepseek/deepseek-chat',
+          model: 'deepseek-chat',
           timeoutMs: 15000,
         },
         embed: {
@@ -256,7 +255,7 @@ describe('memory-v2 status service', () => {
         extract: {
           baseUrl: 'https://api.deepseek.com/v1',
           apiKey: 'sk-test',
-          model: 'deepseek/deepseek-chat',
+          model: 'deepseek-chat',
           timeoutMs: 15000,
         },
         embed: {

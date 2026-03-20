@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AutomationLlmRuntime, CreateReplyPayload, DeliveryTaskPayload } from '../src/plugins/task-automation-llm.js';
+import type { AutomationLlmRuntime, CreateReplyPayload, DeliveryTaskPayload } from '../src/plugins/automation/llm.js';
 import {
   buildDeliveryMessageByModel,
   buildNaturalCreateReplyByModel,
   extractMessageText,
-} from '../src/plugins/task-automation-llm.js';
+} from '../src/plugins/automation/llm.js';
 
 function formatUtc8Timestamp(ts: number): string {
   const parts = new Intl.DateTimeFormat('zh-CN', {

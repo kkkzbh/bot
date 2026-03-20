@@ -5,7 +5,7 @@ import {
   compilePromptEnvelope,
   consumePromptEnvelope,
   registerPromptFragment,
-} from '../src/plugins/prompt-assembly.js';
+} from '../src/plugins/shared/prompt-context/index.js';
 
 describe('prompt assembly', () => {
   afterEach(() => {
@@ -48,12 +48,19 @@ describe('prompt assembly', () => {
     expect(envelope?.fragments.map((fragment) => fragment.source)).toEqual([
       'qqbot_persona_invariant',
       'qqbot_reply_protocol',
+      'qqbot_context_interpretation_protocol',
       'qqbot_reply_transport_capability',
       'chatluna_time_context',
     ]);
-    expect(envelope?.content).toContain('<qqbot-internal-contract');
-    expect(envelope?.content).toContain('<qqbot-turn-state');
-    expect(envelope?.content).toContain('<qqbot-reference');
+    expect(envelope?.messages.every((message) => message.getType() === 'system')).toBe(true);
+    const compiledContent = envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '';
+    expect(compiledContent).toContain('[qqbot-context]');
+    expect(compiledContent).toContain('kind: internal_contract');
+    expect(compiledContent).toContain('kind: turn_state');
+    expect(compiledContent).toContain('kind: reference');
+    expect(compiledContent).toContain('上下文解释协议');
+    expect(compiledContent).toContain('question target 和 topic seed');
+    expect(compiledContent).toContain('绝不能逐字复述、加括号转述');
   });
 
   it('consumes a turn envelope exactly once', () => {
@@ -70,7 +77,9 @@ describe('prompt assembly', () => {
       },
     });
 
-    expect(consumePromptEnvelope('conv-1')?.content).toContain('Relevant Long-Term Memory');
+    expect(
+      (consumePromptEnvelope('conv-1')?.messages.map((message) => String(message.content)).join('\n\n') as string) ?? '',
+    ).toContain('Relevant Long-Term Memory');
     expect(consumePromptEnvelope('conv-1')).toBeNull();
   });
 
@@ -101,7 +110,7 @@ describe('prompt assembly', () => {
     });
 
     const envelope = compilePromptEnvelope('conv-1');
-    expect(envelope?.content).toContain('这是续写，不要重复前文。');
+    expect(envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '').toContain('这是续写，不要重复前文。');
     expect(envelope?.fragments.map((fragment) => fragment.source)).toContain('qqbot_live_reply_continuation');
   });
 
@@ -122,7 +131,7 @@ describe('prompt assembly', () => {
     beginPromptAssemblyTurn('conv-1');
 
     const envelope = compilePromptEnvelope('conv-1');
-    expect(envelope?.content).not.toContain('旧内容');
+    expect(envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '').not.toContain('旧内容');
     expect(envelope?.fragments.map((fragment) => fragment.source)).not.toContain('stale_fragment');
   });
 });

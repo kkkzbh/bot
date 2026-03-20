@@ -11,7 +11,7 @@ describe('pokemon battle config in koishi.yml', () => {
     expect(content).toContain("output: ${{ env.POKEMON_DOWNLOADS_OUTPUT || './downloads' }}");
     expect(content).toContain('canvas:pokemon: {}');
 
-    expect(content).toContain('./dist/plugins/pokemon-battle-bridge:pokemon-battle:');
+    expect(content).toContain('./dist/plugins/pokemon-battle:pokemon-battle:');
     expect(content).toContain("enabled: ${{ env.POKEMON_BATTLE_ENABLED !== 'false' }}");
     expect(content).toContain('imageSource: >-');
     expect(content).toContain('env.POKEMON_BATTLE_IMAGE_SOURCE');
