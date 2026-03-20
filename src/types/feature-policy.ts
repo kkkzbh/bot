@@ -63,6 +63,22 @@ export interface ClearConversationHistoryResult {
   updatedAt: number;
 }
 
+export interface DeleteConversationRoomTarget {
+  roomId: number;
+  conversationId: string;
+}
+
+export interface DeleteConversationRoomResult {
+  ok: true;
+  roomId: number;
+  conversationId: string;
+  deletedMessages: number;
+  deletedConversation: boolean;
+  deletedRoom: boolean;
+  clearedDefaultUsers: number;
+  updatedAt: number;
+}
+
 export interface FeaturePolicyServiceLike {
   resolveFeatureEnabled(session: Session, featureKey: ScopedFeatureKey): Promise<boolean>;
   listConsoleFeatureScopes(): Promise<ConsoleFeatureScope[]>;
@@ -70,6 +86,7 @@ export interface FeaturePolicyServiceLike {
   getFeatureOverrides(): Promise<FeatureScopeOverrideRecord[]>;
   saveFeatureOverrides(overrides: FeatureOverrideInput[]): Promise<FeatureScopeOverrideRecord[]>;
   clearConversationHistory(target: ClearConversationHistoryTarget): Promise<ClearConversationHistoryResult>;
+  deleteConversationRoom(target: DeleteConversationRoomTarget): Promise<DeleteConversationRoomResult>;
   resolvePrivateConversationTarget(session: Session): Promise<ConversationTarget | null>;
 }
 

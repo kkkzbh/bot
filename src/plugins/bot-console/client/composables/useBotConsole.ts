@@ -4,6 +4,7 @@ import type {
   BotConsoleState,
   ClearConversationHistoryResponse,
   ConversationTarget,
+  DeleteConversationRoomResponse,
   FeatureOverrideInput,
   FeatureScopeKind,
   PresetDocument,
@@ -131,6 +132,9 @@ export function useBotConsole() {
 
   /** Tracks in-flight conversation clear requests keyed by conversationId. */
   const conversationPending = reactive<Record<string, boolean>>({})
+
+  /** Tracks in-flight room delete requests keyed by conversationId. */
+  const conversationDeletePending = reactive<Record<string, boolean>>({})
 
   /**
    * Tracks in-flight service actions keyed by unit name.
@@ -337,6 +341,24 @@ export function useBotConsole() {
     }
   }
 
+  async function deleteConversationRoom(target: ConversationTarget): Promise<DeleteConversationRoomResponse> {
+    conversationDeletePending[target.conversationId] = true
+    try {
+      const result = await send<DeleteConversationRoomResponse>(
+        'bot-console/delete-conversation-room',
+        {
+          roomId: target.roomId,
+          conversationId: target.conversationId,
+        },
+      )
+
+      await refresh()
+      return result
+    } finally {
+      conversationDeletePending[target.conversationId] = false
+    }
+  }
+
   /**
    * Loads a named preset from the backend and opens it in the editor.
    */
@@ -437,6 +459,7 @@ export function useBotConsole() {
     probePending,
     servicePending,
     conversationPending,
+    conversationDeletePending,
 
     // Computed
     changedKeys,
@@ -453,6 +476,7 @@ export function useBotConsole() {
     saveFeatureOverrides,
     saveFeatureSettings,
     clearConversationHistory,
+    deleteConversationRoom,
     openPreset,
     saveCurrentPreset,
     deletePreset,

@@ -3,6 +3,8 @@ import type {
   ClearConversationHistoryResult,
   ClearConversationHistoryTarget,
   ConsoleFeatureScope,
+  DeleteConversationRoomResult,
+  DeleteConversationRoomTarget,
   FeatureOverrideInput,
   FeatureScopeOverrideRecord,
 } from './feature-policy.js';
@@ -93,4 +95,10 @@ export interface ClearConversationHistoryRequest extends ClearConversationHistor
 
 export interface ClearConversationHistoryResponse {
   result: ClearConversationHistoryResult;
+}
+
+export interface DeleteConversationRoomRequest extends DeleteConversationRoomTarget {}
+
+export interface DeleteConversationRoomResponse {
+  result: DeleteConversationRoomResult;
 }

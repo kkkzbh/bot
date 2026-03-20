@@ -146,6 +146,17 @@ export interface ClearConversationHistoryResult {
   updatedAt: number;
 }
 
+export interface DeleteConversationRoomResult {
+  ok: true;
+  roomId: number;
+  conversationId: string;
+  deletedMessages: number;
+  deletedConversation: boolean;
+  deletedRoom: boolean;
+  clearedDefaultUsers: number;
+  updatedAt: number;
+}
+
 // ─── Bot Console State ────────────────────────────────────────────────────────
 
 export interface BotConsoleState {
@@ -190,4 +201,8 @@ export interface GetRecentLogsResponse {
 
 export interface ClearConversationHistoryResponse {
   result: ClearConversationHistoryResult;
+}
+
+export interface DeleteConversationRoomResponse {
+  result: DeleteConversationRoomResult;
 }

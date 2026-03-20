@@ -8,6 +8,8 @@ import type {
   BotServiceUnit,
   ClearConversationHistoryRequest,
   ClearConversationHistoryResponse,
+  DeleteConversationRoomRequest,
+  DeleteConversationRoomResponse,
   EnvPatch,
   GetRecentLogsResponse,
   PresetDocument,
@@ -155,6 +157,22 @@ export function apply(ctx: Context): void {
       }
       const record = ensureRecord(payload);
       const result = await runtimeCtx.featurePolicy.clearConversationHistory({
+        roomId: Number(record.roomId ?? 0),
+        conversationId: String(record.conversationId ?? ''),
+      });
+      return { result };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/delete-conversation-room',
+    async (payload: DeleteConversationRoomRequest): Promise<DeleteConversationRoomResponse> => {
+      if (!runtimeCtx.featurePolicy?.deleteConversationRoom) {
+        throw new Error('feature policy service unavailable');
+      }
+      const record = ensureRecord(payload);
+      const result = await runtimeCtx.featurePolicy.deleteConversationRoom({
         roomId: Number(record.roomId ?? 0),
         conversationId: String(record.conversationId ?? ''),
       });

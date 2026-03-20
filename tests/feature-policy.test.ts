@@ -192,6 +192,87 @@ describe('feature policy service', () => {
     ]);
   });
 
+  it('deletes private and group rooms with related records', async () => {
+    const { ctx, database } = createHarness({
+      feature_scope_override: [
+        {
+          id: 1,
+          featureKey: 'QQ_VOICE_ENABLED',
+          scopeKind: 'group',
+          scopeId: '20002',
+          enabled: 1,
+          updatedAt: 1,
+        },
+      ],
+      chathub_user: [
+        { userId: 'u1', defaultRoomId: 1, groupId: '0' },
+        { userId: 'u2', defaultRoomId: 99, groupId: '0' },
+      ],
+      chathub_room: [
+        { roomId: 1, roomName: '私聊房间', conversationId: 'conv-private', visibility: 'private', updatedTime: 10 },
+        { roomId: 2, roomName: '群房间', conversationId: 'conv-group', visibility: 'template_clone', updatedTime: 20 },
+      ],
+      chathub_room_group_member: [{ groupId: '20002', roomId: 2 }],
+      chathub_conversation: [
+        { id: 'conv-private', latestId: 'msg-private', updatedAt: 1 },
+        { id: 'conv-group', latestId: 'msg-group', updatedAt: 2 },
+      ],
+      chathub_message: [
+        { id: 'msg-private', conversation: 'conv-private' },
+        { id: 'msg-group', conversation: 'conv-group' },
+      ],
+    });
+    const service = ctx.featurePolicy as NonNullable<typeof ctx.featurePolicy>;
+
+    await expect(service.deleteConversationRoom({ roomId: 1, conversationId: 'conv-private' })).resolves.toEqual(
+      expect.objectContaining({
+        ok: true,
+        roomId: 1,
+        conversationId: 'conv-private',
+        deletedMessages: 1,
+        deletedConversation: true,
+        deletedRoom: true,
+        clearedDefaultUsers: 1,
+      }),
+    );
+    await expect(database.get('chathub_room', { roomId: 1 })).resolves.toEqual([]);
+    await expect(database.get('chathub_message', { conversation: 'conv-private' })).resolves.toEqual([]);
+    await expect(database.get('chathub_conversation', { id: 'conv-private' })).resolves.toEqual([]);
+    await expect(database.get('chathub_user', { userId: 'u1' })).resolves.toEqual([
+      expect.objectContaining({ userId: 'u1', defaultRoomId: null }),
+    ]);
+
+    await expect(service.deleteConversationRoom({ roomId: 2, conversationId: 'conv-group' })).resolves.toEqual(
+      expect.objectContaining({
+        ok: true,
+        roomId: 2,
+        conversationId: 'conv-group',
+        deletedMessages: 1,
+        deletedConversation: true,
+        deletedRoom: true,
+        clearedDefaultUsers: 0,
+      }),
+    );
+    await expect(database.get('chathub_room', { roomId: 2 })).resolves.toEqual([]);
+    await expect(database.get('chathub_room_group_member', { roomId: 2 })).resolves.toEqual([]);
+    await expect(database.get('chathub_message', { conversation: 'conv-group' })).resolves.toEqual([]);
+    await expect(database.get('chathub_conversation', { id: 'conv-group' })).resolves.toEqual([]);
+    await expect(database.get('feature_scope_override', { id: 1 })).resolves.toEqual([
+      expect.objectContaining({ id: 1, scopeId: '20002' }),
+    ]);
+  });
+
+  it('rejects invalid room delete targets', async () => {
+    const { ctx } = createHarness({
+      chathub_room: [{ roomId: 1, roomName: '私聊房间', conversationId: 'conv-private', visibility: 'private', updatedTime: 10 }],
+    });
+    const service = ctx.featurePolicy as NonNullable<typeof ctx.featurePolicy>;
+
+    await expect(service.deleteConversationRoom({ roomId: 0, conversationId: 'conv-private' })).rejects.toThrow('房间删除目标不完整');
+    await expect(service.deleteConversationRoom({ roomId: 99, conversationId: 'conv-private' })).rejects.toThrow('房间 #99 不存在');
+    await expect(service.deleteConversationRoom({ roomId: 1, conversationId: 'conv-other' })).rejects.toThrow('会话标识不匹配');
+  });
+
   it('registers a private-only /clear command', async () => {
     const { getClearAction } = createHarness({
       chathub_user: [{ userId: 'u1', defaultRoomId: 11, groupId: '0' }],

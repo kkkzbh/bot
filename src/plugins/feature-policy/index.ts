@@ -4,6 +4,8 @@ import type {
   ClearConversationHistoryTarget,
   ConsoleFeatureScope,
   ConversationTarget,
+  DeleteConversationRoomResult,
+  DeleteConversationRoomTarget,
   FeatureOverrideInput,
   FeaturePolicyServiceLike,
   FeatureScopeKind,
@@ -371,6 +373,55 @@ class FeaturePolicyService implements FeaturePolicyServiceLike {
       roomId,
       conversationId,
       deletedMessages: messages.length,
+      updatedAt,
+    };
+  }
+
+  async deleteConversationRoom(target: DeleteConversationRoomTarget): Promise<DeleteConversationRoomResult> {
+    const roomId = toPositiveInteger(target.roomId);
+    const conversationId = normalizeText(target.conversationId);
+    if (roomId == null || !conversationId) {
+      throw new Error('房间删除目标不完整。');
+    }
+
+    const [rooms, messages, conversations, users] = await Promise.all([
+      this.database.get('chathub_room', { roomId }) as Promise<RoomRow[]>,
+      this.database.get('chathub_message', { conversation: conversationId }) as Promise<ChathubMessageRow[]>,
+      this.database.get('chathub_conversation', { id: conversationId }) as Promise<ChathubConversationRow[]>,
+      this.database.get('chathub_user', { defaultRoomId: roomId }) as Promise<ChathubUserRow[]>,
+    ]);
+
+    const room = rooms[0];
+    if (!room) {
+      throw new Error(`房间 #${roomId} 不存在。`);
+    }
+
+    const roomConversationId = normalizeText(room.conversationId);
+    if (!roomConversationId || roomConversationId !== conversationId) {
+      throw new Error(`房间 #${roomId} 的会话标识不匹配。`);
+    }
+
+    const isPrivateRoom = normalizeText(room.visibility) === 'private';
+    const updatedAt = Date.now();
+
+    await Promise.all([
+      this.database.remove('chathub_room_group_member', { roomId }),
+      this.database.remove('chathub_message', { conversation: conversationId }),
+      this.database.remove('chathub_conversation', { id: conversationId }),
+      this.database.remove('chathub_room', { roomId }),
+      isPrivateRoom && users.length > 0
+        ? this.database.set('chathub_user', { defaultRoomId: roomId }, { defaultRoomId: null, updatedAt })
+        : Promise.resolve(undefined),
+    ]);
+
+    return {
+      ok: true,
+      roomId,
+      conversationId,
+      deletedMessages: messages.length,
+      deletedConversation: conversations.length > 0,
+      deletedRoom: true,
+      clearedDefaultUsers: isPrivateRoom ? users.length : 0,
       updatedAt,
     };
   }

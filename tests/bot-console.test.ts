@@ -76,7 +76,7 @@ describe('bot-console plugin', () => {
     apply(ctx as any);
 
     expect(addEntry).toHaveBeenCalledTimes(1);
-    expect(addListener).toHaveBeenCalledTimes(10);
+    expect(addListener).toHaveBeenCalledTimes(11);
     for (const call of addListener.mock.calls) {
       expect(call[2]).toEqual({ authority: 4 });
     }
@@ -315,6 +315,16 @@ describe('bot-console plugin', () => {
       deletedMessages: 4,
       updatedAt: 2,
     });
+    const deleteConversationRoom = vi.fn().mockResolvedValue({
+      ok: true,
+      roomId: 11,
+      conversationId: 'conv-1',
+      deletedMessages: 4,
+      deletedConversation: true,
+      deletedRoom: true,
+      clearedDefaultUsers: 1,
+      updatedAt: 3,
+    });
 
     const addListener = vi.fn();
     apply({
@@ -322,6 +332,7 @@ describe('bot-console plugin', () => {
       featurePolicy: {
         saveFeatureOverrides,
         clearConversationHistory,
+        deleteConversationRoom,
       },
       console: {
         addEntry: vi.fn(),
@@ -346,5 +357,18 @@ describe('bot-console plugin', () => {
       result: expect.objectContaining({ ok: true, roomId: 11, conversationId: 'conv-1', deletedMessages: 4 }),
     });
     expect(clearConversationHistory).toHaveBeenCalledWith({ roomId: 11, conversationId: 'conv-1' });
+
+    const deleteListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/delete-conversation-room')?.[1];
+    await expect(deleteListener({ roomId: 11, conversationId: 'conv-1' })).resolves.toEqual({
+      result: expect.objectContaining({
+        ok: true,
+        roomId: 11,
+        conversationId: 'conv-1',
+        deletedMessages: 4,
+        deletedRoom: true,
+        clearedDefaultUsers: 1,
+      }),
+    });
+    expect(deleteConversationRoom).toHaveBeenCalledWith({ roomId: 11, conversationId: 'conv-1' });
   });
 });

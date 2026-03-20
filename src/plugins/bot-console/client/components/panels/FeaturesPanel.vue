@@ -23,6 +23,7 @@ const {
   changedFeatureOverrideKeys,
   featureOverrideDraft,
   conversationPending,
+  conversationDeletePending,
 } = bc
 
 const featureScopes = computed<ConsoleFeatureScope[]>(() => botState.value?.featureScopes ?? [])
@@ -112,7 +113,13 @@ function countSelectedTargets(targets: ConversationTarget[]): number {
 }
 
 function hasAnyPendingTarget(targets: ConversationTarget[]): boolean {
-  return targets.some(target => conversationPending[target.conversationId])
+  return targets.some(target =>
+    conversationPending[target.conversationId] || conversationDeletePending[target.conversationId],
+  )
+}
+
+function isConversationBusy(target: ConversationTarget): boolean {
+  return conversationPending[target.conversationId] || conversationDeletePending[target.conversationId] || batchPending.value
 }
 
 function areAllTargetsSelected(targets: ConversationTarget[]): boolean {
@@ -189,6 +196,53 @@ async function handleBatchClear(targets: ConversationTarget[]) {
   }
 
   toastAdd(`批量清理失败：${failedTargets[0]}`, 'error', 4500)
+}
+
+async function handleDeleteConversationRoom(target: ConversationTarget) {
+  try {
+    const result = await bc.deleteConversationRoom(target)
+    setConversationSelected(target, false)
+    toastAdd(`已删除房间，清除 ${result.result.deletedMessages} 条消息`, 'success')
+  } catch (e: unknown) {
+    toastAdd(e instanceof Error ? e.message : '删除失败', 'error')
+  }
+}
+
+async function handleBatchDelete(targets: ConversationTarget[]) {
+  const selectedTargets = getSelectedTargets(targets)
+  if (!selectedTargets.length) return
+
+  batchPending.value = true
+  let deletedCount = 0
+  let deletedMessages = 0
+  const failedTargets: string[] = []
+
+  try {
+    for (const target of selectedTargets) {
+      try {
+        const result = await bc.deleteConversationRoom(target)
+        setConversationSelected(target, false)
+        deletedCount += 1
+        deletedMessages += result.result.deletedMessages
+      } catch (error: unknown) {
+        failedTargets.push(error instanceof Error ? `${target.roomName}：${error.message}` : target.roomName)
+      }
+    }
+  } finally {
+    batchPending.value = false
+  }
+
+  if (failedTargets.length === 0) {
+    toastAdd(`已批量删除 ${deletedCount} 个房间，共清除 ${deletedMessages} 条消息`, 'success')
+    return
+  }
+
+  if (deletedCount > 0) {
+    toastAdd(`已删除 ${deletedCount} 个房间，共清除 ${deletedMessages} 条消息；${failedTargets.length} 个失败`, 'warning', 4500)
+    return
+  }
+
+  toastAdd(`批量删除失败：${failedTargets[0]}`, 'error', 4500)
 }
 </script>
 
@@ -309,57 +363,59 @@ async function handleBatchClear(targets: ConversationTarget[]) {
 
       <div
         v-if="groupScopesExpanded"
-        class="bc-room-section-body"
+        class="bc-room-sheet"
       >
-        <p
-          v-if="groupFeatureScopes.length === 0"
-          class="bc-muted"
-        >
-          当前没有可配置的群聊房间。
-        </p>
-
-        <div
-          v-else
-          class="bc-feature-scope-list"
-        >
-          <article
-            v-for="scope in groupFeatureScopes"
-            :key="`${scope.scopeKind}:${scope.scopeId}`"
-            class="bc-feature-scope-card"
+        <div class="bc-room-sheet-scroll">
+          <p
+            v-if="groupFeatureScopes.length === 0"
+            class="bc-muted"
           >
-            <div class="bc-feature-scope-head">
-              <div>
-                <strong>{{ scope.roomName }}</strong>
-                <p class="bc-muted">{{ formatScopeMeta(scope) }}</p>
+            当前没有可配置的群聊房间。
+          </p>
+
+          <div
+            v-else
+            class="bc-feature-scope-list"
+          >
+            <article
+              v-for="scope in groupFeatureScopes"
+              :key="`${scope.scopeKind}:${scope.scopeId}`"
+              class="bc-feature-scope-card"
+            >
+              <div class="bc-feature-scope-head">
+                <div>
+                  <strong>{{ scope.roomName }}</strong>
+                  <p class="bc-muted">{{ formatScopeMeta(scope) }}</p>
+                </div>
+                <span class="bc-badge bc-badge-muted">群聊房间</span>
               </div>
-              <span class="bc-badge bc-badge-muted">群聊房间</span>
-            </div>
 
-            <div class="bc-feature-scope-grid">
-              <label
-                v-for="featureKey in FEATURE_KEYS"
-                :key="featureKey"
-                class="bc-field"
-              >
-                <span class="bc-field-label">
-                  {{ getFieldLabel(featureKey) }}
-                  <span
-                    v-if="isScopeOverrideDirty(scope, featureKey)"
-                    class="bc-field-modified"
-                  >已修改</span>
-                </span>
-
-                <select
-                  :value="getScopeOverrideMode(scope, featureKey)"
-                  @change="setScopeOverrideMode(scope, featureKey, ($event.target as HTMLSelectElement).value)"
+              <div class="bc-feature-scope-grid">
+                <label
+                  v-for="featureKey in FEATURE_KEYS"
+                  :key="featureKey"
+                  class="bc-field"
                 >
-                  <option value="inherit">{{ buildInheritLabel(scope, featureKey) }}</option>
-                  <option value="enabled">开启</option>
-                  <option value="disabled">关闭</option>
-                </select>
-              </label>
-            </div>
-          </article>
+                  <span class="bc-field-label">
+                    {{ getFieldLabel(featureKey) }}
+                    <span
+                      v-if="isScopeOverrideDirty(scope, featureKey)"
+                      class="bc-field-modified"
+                    >已修改</span>
+                  </span>
+
+                  <select
+                    :value="getScopeOverrideMode(scope, featureKey)"
+                    @change="setScopeOverrideMode(scope, featureKey, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option value="inherit">{{ buildInheritLabel(scope, featureKey) }}</option>
+                    <option value="enabled">开启</option>
+                    <option value="disabled">关闭</option>
+                  </select>
+                </label>
+              </div>
+            </article>
+          </div>
         </div>
       </div>
     </section>
@@ -367,7 +423,7 @@ async function handleBatchClear(targets: ConversationTarget[]) {
     <div class="bc-panel-subhead" style="margin-top: 1.25rem;">
       <div>
         <strong>上下文操作</strong>
-        <p class="bc-muted">这里只清除会话历史，不删除长期记忆。</p>
+        <p class="bc-muted">支持清除会话历史或直接删除房间；两者都不会删除长期记忆。</p>
       </div>
     </div>
 
@@ -390,77 +446,97 @@ async function handleBatchClear(targets: ConversationTarget[]) {
 
       <div
         v-if="privateTargetsExpanded"
-        class="bc-room-section-body"
+        class="bc-room-sheet"
       >
-        <div class="bc-room-section-actions">
-          <div class="bc-room-section-action-row">
-            <button
-              type="button"
-              class="bc-btn bc-btn-sm"
-              :disabled="privateConversationTargets.length === 0 || areAllTargetsSelected(privateConversationTargets)"
-              @click="selectAllTargets(privateConversationTargets)"
-            >
-              批量选中本组
-            </button>
-            <button
-              type="button"
-              class="bc-btn bc-btn-sm bc-btn-ghost"
-              :disabled="countSelectedTargets(privateConversationTargets) === 0"
-              @click="clearTargetSelection(privateConversationTargets)"
-            >
-              清空选择
-            </button>
-          </div>
-
-          <InlineConfirm
-            label="批量清除已选"
-            confirm-label="确认批量清除"
-            :disabled="countSelectedTargets(privateConversationTargets) === 0 || hasAnyPendingTarget(getSelectedTargets(privateConversationTargets)) || batchPending"
-            @confirm="handleBatchClear(privateConversationTargets)"
-          />
-        </div>
-
-        <p
-          v-if="privateConversationTargets.length === 0"
-          class="bc-muted"
-        >
-          当前没有可清理的私聊房间。
-        </p>
-
-        <div
-          v-else
-          class="bc-conversation-target-list"
-        >
-          <article
-            v-for="target in privateConversationTargets"
-            :key="target.conversationId"
-            class="bc-conversation-target-card"
-          >
-            <label class="bc-target-select">
-              <input
-                type="checkbox"
-                :checked="isConversationSelected(target)"
-                :disabled="conversationPending[target.conversationId] || batchPending"
-                @change="setConversationSelected(target, ($event.target as HTMLInputElement).checked)"
-              >
-              <span>选中</span>
-            </label>
-
-            <div class="bc-conversation-target-main">
-              <div>
-                <strong>{{ target.roomName }}</strong>
-                <p class="bc-muted">{{ formatTargetMeta(target) }}</p>
-                <p class="bc-target-id">conversation: {{ target.conversationId }}</p>
+        <div class="bc-room-sheet-scroll">
+          <div class="bc-room-section-body">
+            <div class="bc-room-section-actions">
+              <div class="bc-room-section-action-row">
+                <button
+                  type="button"
+                  class="bc-btn bc-btn-sm"
+                  :disabled="privateConversationTargets.length === 0 || areAllTargetsSelected(privateConversationTargets)"
+                  @click="selectAllTargets(privateConversationTargets)"
+                >
+                  批量选中本组
+                </button>
+                <button
+                  type="button"
+                  class="bc-btn bc-btn-sm bc-btn-ghost"
+                  :disabled="countSelectedTargets(privateConversationTargets) === 0"
+                  @click="clearTargetSelection(privateConversationTargets)"
+                >
+                  清空选择
+                </button>
               </div>
 
-              <InlineConfirm
-                label="清除会话历史"
-                confirm-label="确认清除"
-                :disabled="conversationPending[target.conversationId] || batchPending"
-                @confirm="handleClearConversation(target)"
-              />
+              <div class="bc-room-section-action-row">
+                <InlineConfirm
+                  label="批量清除已选"
+                  confirm-label="确认批量清除"
+                  :disabled="countSelectedTargets(privateConversationTargets) === 0 || hasAnyPendingTarget(getSelectedTargets(privateConversationTargets)) || batchPending"
+                  @confirm="handleBatchClear(privateConversationTargets)"
+                />
+                <InlineConfirm
+                  label="批量删除已选"
+                  confirm-label="确认批量删除"
+                  :disabled="countSelectedTargets(privateConversationTargets) === 0 || hasAnyPendingTarget(getSelectedTargets(privateConversationTargets)) || batchPending"
+                  @confirm="handleBatchDelete(privateConversationTargets)"
+                />
+              </div>
             </div>
-          </article>
+
+            <p
+              v-if="privateConversationTargets.length === 0"
+              class="bc-muted"
+            >
+              当前没有可清理的私聊房间。
+            </p>
+
+            <div
+              v-else
+              class="bc-conversation-target-list"
+            >
+              <article
+                v-for="target in privateConversationTargets"
+                :key="target.conversationId"
+                class="bc-conversation-target-card"
+              >
+                <label class="bc-target-select">
+                  <input
+                    type="checkbox"
+                    :checked="isConversationSelected(target)"
+                    :disabled="isConversationBusy(target)"
+                    @change="setConversationSelected(target, ($event.target as HTMLInputElement).checked)"
+                  >
+                  <span>选中</span>
+                </label>
+
+                <div class="bc-conversation-target-main">
+                  <div>
+                    <strong>{{ target.roomName }}</strong>
+                    <p class="bc-muted">{{ formatTargetMeta(target) }}</p>
+                    <p class="bc-target-id">conversation: {{ target.conversationId }}</p>
+                  </div>
+
+                  <div class="bc-conversation-target-actions">
+                    <InlineConfirm
+                      label="清除会话历史"
+                      confirm-label="确认清除"
+                      :disabled="isConversationBusy(target)"
+                      @confirm="handleClearConversation(target)"
+                    />
+                    <InlineConfirm
+                      label="删除房间"
+                      confirm-label="确认删除"
+                      :disabled="isConversationBusy(target)"
+                      @confirm="handleDeleteConversationRoom(target)"
+                    />
+                  </div>
+                </div>
+              </article>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -484,77 +560,97 @@ async function handleBatchClear(targets: ConversationTarget[]) {
 
       <div
         v-if="groupTargetsExpanded"
-        class="bc-room-section-body"
+        class="bc-room-sheet"
       >
-        <div class="bc-room-section-actions">
-          <div class="bc-room-section-action-row">
-            <button
-              type="button"
-              class="bc-btn bc-btn-sm"
-              :disabled="groupConversationTargets.length === 0 || areAllTargetsSelected(groupConversationTargets)"
-              @click="selectAllTargets(groupConversationTargets)"
-            >
-              批量选中本组
-            </button>
-            <button
-              type="button"
-              class="bc-btn bc-btn-sm bc-btn-ghost"
-              :disabled="countSelectedTargets(groupConversationTargets) === 0"
-              @click="clearTargetSelection(groupConversationTargets)"
-            >
-              清空选择
-            </button>
-          </div>
-
-          <InlineConfirm
-            label="批量清除已选"
-            confirm-label="确认批量清除"
-            :disabled="countSelectedTargets(groupConversationTargets) === 0 || hasAnyPendingTarget(getSelectedTargets(groupConversationTargets)) || batchPending"
-            @confirm="handleBatchClear(groupConversationTargets)"
-          />
-        </div>
-
-        <p
-          v-if="groupConversationTargets.length === 0"
-          class="bc-muted"
-        >
-          当前没有可清理的群聊房间。
-        </p>
-
-        <div
-          v-else
-          class="bc-conversation-target-list"
-        >
-          <article
-            v-for="target in groupConversationTargets"
-            :key="target.conversationId"
-            class="bc-conversation-target-card"
-          >
-            <label class="bc-target-select">
-              <input
-                type="checkbox"
-                :checked="isConversationSelected(target)"
-                :disabled="conversationPending[target.conversationId] || batchPending"
-                @change="setConversationSelected(target, ($event.target as HTMLInputElement).checked)"
-              >
-              <span>选中</span>
-            </label>
-
-            <div class="bc-conversation-target-main">
-              <div>
-                <strong>{{ target.roomName }}</strong>
-                <p class="bc-muted">{{ formatTargetMeta(target) }}</p>
-                <p class="bc-target-id">conversation: {{ target.conversationId }}</p>
+        <div class="bc-room-sheet-scroll">
+          <div class="bc-room-section-body">
+            <div class="bc-room-section-actions">
+              <div class="bc-room-section-action-row">
+                <button
+                  type="button"
+                  class="bc-btn bc-btn-sm"
+                  :disabled="groupConversationTargets.length === 0 || areAllTargetsSelected(groupConversationTargets)"
+                  @click="selectAllTargets(groupConversationTargets)"
+                >
+                  批量选中本组
+                </button>
+                <button
+                  type="button"
+                  class="bc-btn bc-btn-sm bc-btn-ghost"
+                  :disabled="countSelectedTargets(groupConversationTargets) === 0"
+                  @click="clearTargetSelection(groupConversationTargets)"
+                >
+                  清空选择
+                </button>
               </div>
 
-              <InlineConfirm
-                label="清除会话历史"
-                confirm-label="确认清除"
-                :disabled="conversationPending[target.conversationId] || batchPending"
-                @confirm="handleClearConversation(target)"
-              />
+              <div class="bc-room-section-action-row">
+                <InlineConfirm
+                  label="批量清除已选"
+                  confirm-label="确认批量清除"
+                  :disabled="countSelectedTargets(groupConversationTargets) === 0 || hasAnyPendingTarget(getSelectedTargets(groupConversationTargets)) || batchPending"
+                  @confirm="handleBatchClear(groupConversationTargets)"
+                />
+                <InlineConfirm
+                  label="批量删除已选"
+                  confirm-label="确认批量删除"
+                  :disabled="countSelectedTargets(groupConversationTargets) === 0 || hasAnyPendingTarget(getSelectedTargets(groupConversationTargets)) || batchPending"
+                  @confirm="handleBatchDelete(groupConversationTargets)"
+                />
+              </div>
             </div>
-          </article>
+
+            <p
+              v-if="groupConversationTargets.length === 0"
+              class="bc-muted"
+            >
+              当前没有可清理的群聊房间。
+            </p>
+
+            <div
+              v-else
+              class="bc-conversation-target-list"
+            >
+              <article
+                v-for="target in groupConversationTargets"
+                :key="target.conversationId"
+                class="bc-conversation-target-card"
+              >
+                <label class="bc-target-select">
+                  <input
+                    type="checkbox"
+                    :checked="isConversationSelected(target)"
+                    :disabled="isConversationBusy(target)"
+                    @change="setConversationSelected(target, ($event.target as HTMLInputElement).checked)"
+                  >
+                  <span>选中</span>
+                </label>
+
+                <div class="bc-conversation-target-main">
+                  <div>
+                    <strong>{{ target.roomName }}</strong>
+                    <p class="bc-muted">{{ formatTargetMeta(target) }}</p>
+                    <p class="bc-target-id">conversation: {{ target.conversationId }}</p>
+                  </div>
+
+                  <div class="bc-conversation-target-actions">
+                    <InlineConfirm
+                      label="清除会话历史"
+                      confirm-label="确认清除"
+                      :disabled="isConversationBusy(target)"
+                      @confirm="handleClearConversation(target)"
+                    />
+                    <InlineConfirm
+                      label="删除房间"
+                      confirm-label="确认删除"
+                      :disabled="isConversationBusy(target)"
+                      @confirm="handleDeleteConversationRoom(target)"
+                    />
+                  </div>
+                </div>
+              </article>
+            </div>
+          </div>
         </div>
       </div>
     </section>
