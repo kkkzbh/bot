@@ -69,7 +69,7 @@ describe('chatluna sticker core', () => {
       preset: 'sakiko',
     });
 
-    expect(policy).toContain('仅当本轮系统要求 structured 输出时');
+    expect(policy).toContain('如果你决定发表情包，就在 ReplyPlan 里加入一个或多个 sticker 段');
     expect(policy).toContain('连续发多张表情包');
     expect(policy).toContain('严格保持用户要求的先后顺序');
     expect(policy).toContain('不要把“连续发两张”“先……再……”这类整句要求原样抄进每个 sticker.content');

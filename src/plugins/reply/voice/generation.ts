@@ -31,13 +31,10 @@ import {
 } from '../../shared/outbound/index.js';
 import { registerPromptFragment } from '../../shared/prompt-context/index.js';
 import { rewriteConversationTailForLiveReply } from '../../live-reply/index.js';
-import { resolveUserTurnIntentState } from '../prompt/time-context.js';
 import {
-  createTextReplyPlan,
   parseReplyPlanFromStructuredOutputDetailed,
   type ReplyPlanParseResult,
 } from '../plan/parser.js';
-import { resolveReplyRoute, type ReplyRoute, type ReplyRouteDecision } from '../plan/routing.js';
 import { ReplyRuntime, type ReplyRuntimeRoomLike } from '../runtime/index.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
@@ -119,13 +116,12 @@ interface ReplyCapabilitySnapshot {
 
 interface ReplyTransportState {
   capabilitySnapshot?: ReplyCapabilitySnapshot;
-  routeDecision?: ReplyRouteDecision;
   generationCapture?: ReplyGenerationCaptureState;
   runId?: string;
   suppressAbortNotice?: boolean;
 }
 
-type ReplyGenerationCapturePhase = 'structured_retry' | 'plain_retry';
+type ReplyGenerationCapturePhase = 'reply_plan_retry';
 
 interface ReplyGenerationCaptureResult {
   plan: ReplyTransportPlan | null;
@@ -702,14 +698,6 @@ function setReplyCapabilitySnapshot(session: SessionWithVoiceState, snapshot: Re
   getReplyTransportState(session).capabilitySnapshot = snapshot;
 }
 
-function getReplyRouteDecision(session: SessionWithVoiceState): ReplyRouteDecision | undefined {
-  return session.state?.qqReplyTransport?.routeDecision;
-}
-
-function setReplyRouteDecision(session: SessionWithVoiceState, decision: ReplyRouteDecision): void {
-  getReplyTransportState(session).routeDecision = decision;
-}
-
 function getReplyGenerationCaptureState(session: SessionWithVoiceState): ReplyGenerationCaptureState | undefined {
   return session.state?.qqReplyTransport?.generationCapture;
 }
@@ -735,23 +723,9 @@ function setReplyAbortNoticeSuppressed(session: SessionWithVoiceState, suppresse
   getReplyTransportState(session).suppressAbortNotice = suppressed;
 }
 
-function resolveCaptureRouteDecision(capture: ReplyGenerationCaptureState): ReplyRouteDecision {
-  if (capture.phase === 'structured_retry') {
-    return {
-      route: 'structured',
-      reason: 'structured_retry',
-    };
-  }
-
-  return {
-    route: 'plain',
-    reason: 'plain_retry_after_structured_failure',
-  };
-}
-
 function buildStructuredRetryInstruction(failureReason: string): string {
   return [
-    '上一条 structured 输出无效，必须立刻重试。',
+    '上一条 ReplyPlan 输出无效，必须立刻重试。',
     '只输出一个合法的 ReplyPlan JSON 对象本身，不要解释，不要加代码块，不要退回普通文本。',
     `上次失败原因：${failureReason}`,
   ].join('\n');
@@ -952,42 +926,16 @@ async function resolveReplyCapabilitySnapshot(args: {
   return snapshot;
 }
 
-function resolveReplyRouteDecision(args: {
-  session: SessionWithVoiceState;
-  context: MiddlewareContextLike;
-  snapshot: ReplyCapabilitySnapshot;
-}): ReplyRouteDecision {
-  const { session, context, snapshot } = args;
-  const inputText = String(
-    session.stripped?.content ?? session.content ?? context.options?.inputMessage?.content ?? '',
-  ).trim();
-  const turnIntent = resolveUserTurnIntentState(session.stripped?.content, context.options?.inputMessage?.content ?? session.content);
-
-  return resolveReplyRoute({
-    inputText,
-    turnIntent,
-    capabilities: {
-      canMultiline: snapshot.canMultiline,
-      canVoice: snapshot.canVoice,
-      canSticker: Boolean(session.state?.qqSticker?.catalog),
-    },
-  });
-}
-
-function applyRouteRequestOverrides(context: MiddlewareContextLike, route: ReplyRoute): void {
+function applyReplyPlanRequestOverrides(context: MiddlewareContextLike): void {
   const inputMessage = context.options?.inputMessage;
   if (!inputMessage) return;
 
   const additionalKwargs = { ...(inputMessage.additional_kwargs ?? {}) };
-  if (route === 'structured') {
-    additionalKwargs.qqbot_override_request_params = {
-      response_format: {
-        type: 'json_object',
-      },
-    };
-  } else {
-    delete additionalKwargs.qqbot_override_request_params;
-  }
+  additionalKwargs.qqbot_override_request_params = {
+    response_format: {
+      type: 'json_object',
+    },
+  };
 
   inputMessage.additional_kwargs = additionalKwargs;
 }
@@ -996,12 +944,10 @@ export function buildReplyTransportCapabilityState(
   snapshot: ReplyCapabilitySnapshot,
   outputMaxWords: number,
   outputMaxSeconds: number,
-  routeDecision: ReplyRouteDecision,
 ): Record<string, unknown> {
   return {
     reply_plan: {
-      plain_path_available: true,
-      structured_path_available: true,
+      enabled: true,
       multiline_available: true,
       schema: {
         segments: [
@@ -1011,10 +957,6 @@ export function buildReplyTransportCapabilityState(
           },
         ],
       },
-    },
-    route: {
-      selected: routeDecision.route,
-      reason: routeDecision.reason,
     },
     voice: {
       enabled: snapshot.canVoice,
@@ -1027,29 +969,17 @@ export function buildReplyTransportCapabilityState(
 }
 
 export function buildReplyTransportExecutionRules(
-  route: ReplyRoute,
   snapshot: ReplyCapabilitySnapshot,
   outputMaxWords: number,
   outputMaxSeconds: number,
 ): string {
-  const lines =
-    route === 'plain'
-      ? [
-          '本轮走 plain 路径。',
-          '直接输出自然文本，不要输出 JSON，不要输出 ReplyPlan，不要输出动作旁白。',
-          '如果你想表达多行内容，直接正常换行即可；发送层会统一包装并发送。',
-        ]
-      : [
-          '本轮走 structured 路径。',
-          '只输出一个 ReplyPlan JSON 对象本身，不要添加解释、前缀、代码块或动作旁白。',
-          'ReplyPlan JSON 格式：{"segments":[{"kind":"text|multiline|voice|sticker","content":"..."}]}',
-          'text 段可按行拆发；multiline 段必须整体发送并保留换行结构。',
-          'sticker 段只写自然语言意图，不写文件名或协议。',
-        ];
-
-  if (route !== 'structured') {
-    return lines.join('\n');
-  }
+  const lines = [
+    '最终只输出一个 ReplyPlan JSON 对象本身，不要添加解释、前缀、代码块或动作旁白。',
+    'ReplyPlan JSON 格式：{"segments":[{"kind":"text|multiline|voice|sticker","content":"..."}]}',
+    '普通文字回复也必须写成 text segment，不要直接输出自然文本。',
+    'text 段可按行拆发；multiline 段必须整体发送并保留换行结构。',
+    'sticker 段只写自然语言意图，不写文件名或协议。',
+  ];
 
   if (snapshot.canVoice) {
     lines.push(
@@ -1529,15 +1459,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           }));
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
         const capture = getReplyGenerationCaptureState(session);
-        const routeDecision = capture
-          ? resolveCaptureRouteDecision(capture)
-          : resolveReplyRouteDecision({
-              session,
-              context,
-              snapshot,
-            });
-        setReplyRouteDecision(session, routeDecision);
-        applyRouteRequestOverrides(context, routeDecision.route);
+        applyReplyPlanRequestOverrides(context);
         registerPromptFragment(conversationId, {
           source: 'qqbot_reply_transport_capability',
           title: 'Reply Transport Capability State',
@@ -1550,19 +1472,7 @@ export function apply(ctx: Context, config: Config = {}): void {
               snapshot,
               runtime.outputMaxWords,
               runtime.outputMaxSeconds,
-              routeDecision,
             ),
-          },
-        });
-        registerPromptFragment(conversationId, {
-          source: 'qqbot_reply_transport_route',
-          title: 'Reply Route Decision',
-          authority: 'runtime_contract',
-          trust: 'trusted',
-          ttl: 'turn',
-          payload: {
-            kind: 'json',
-            value: routeDecision,
           },
         });
         registerPromptFragment(conversationId, {
@@ -1574,14 +1484,13 @@ export function apply(ctx: Context, config: Config = {}): void {
           payload: {
             kind: 'text',
             value: buildReplyTransportExecutionRules(
-              routeDecision.route,
               snapshot,
               runtime.outputMaxWords,
               runtime.outputMaxSeconds,
             ),
           },
         });
-        if (capture?.active && capture.phase === 'structured_retry' && capture.failureReason) {
+        if (capture?.active && capture.failureReason) {
           registerPromptFragment(conversationId, {
             source: 'qqbot_reply_transport_retry_feedback',
             title: 'Reply Transport Retry Feedback',
@@ -1639,20 +1548,10 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
         }
 
-        const routeDecision = getReplyRouteDecision(session) ?? {
-          route: 'plain' as const,
-          reason: 'capability_disabled_fallback' as const,
-        };
         const capture = getReplyGenerationCaptureState(session);
         if (capture?.active) {
-          const plainCapturePlan = routeDecision.route === 'plain' ? createTextReplyPlan(responseMessage.content) : null;
           const captureResult: ReplyGenerationCaptureResult =
-            routeDecision.route === 'structured'
-              ? parseReplyPlanFromStructuredOutputDetailed(responseMessage.content)
-              : {
-                  plan: plainCapturePlan,
-                  error: plainCapturePlan ? null : 'plain 重试返回为空。',
-                };
+            parseReplyPlanFromStructuredOutputDetailed(responseMessage.content);
           setReplyGenerationCaptureState(session, {
             ...capture,
             result: captureResult,
@@ -1663,43 +1562,33 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
         }
 
-        let rawPlan: ReplyTransportPlan | null;
-        if (routeDecision.route === 'structured') {
-          const firstAttempt = parseReplyPlanFromStructuredOutputDetailed(responseMessage.content);
-          if (firstAttempt.plan) {
-            rawPlan = firstAttempt.plan;
-          } else {
-            const structuredRetry = await rerunReplyGeneration({
-              ctx: ctx as ContextWithChatLuna,
-              session,
-              phase: 'structured_retry',
-              failureReason: firstAttempt.error ?? 'structured 输出无效。',
-            });
-            if (structuredRetry.plan) {
-              rawPlan = structuredRetry.plan;
-            } else {
-              const plainRetry = await rerunReplyGeneration({
-                ctx: ctx as ContextWithChatLuna,
-                session,
-                phase: 'plain_retry',
-                failureReason: structuredRetry.error ?? firstAttempt.error ?? 'structured 重试仍然失败。',
-              });
-              rawPlan = plainRetry.plan;
-              if (!rawPlan) {
-                logger.warn(
-                  'reply transport rerun failed: first=%s structuredRetry=%s plainRetry=%s',
-                  firstAttempt.error ?? 'unknown',
-                  structuredRetry.error ?? 'unknown',
-                  plainRetry.error ?? 'unknown',
-                );
-              }
-            }
+        const firstAttempt = parseReplyPlanFromStructuredOutputDetailed(responseMessage.content);
+        let rawPlan: ReplyTransportPlan | null = firstAttempt.plan;
+        if (!rawPlan) {
+          const retry = await rerunReplyGeneration({
+            ctx: ctx as ContextWithChatLuna,
+            session,
+            phase: 'reply_plan_retry',
+            failureReason: firstAttempt.error ?? 'ReplyPlan 输出无效。',
+          });
+          rawPlan = retry.plan;
+          if (!rawPlan) {
+            logger.warn(
+              'reply plan rerun failed: first=%s retry=%s',
+              firstAttempt.error ?? 'unknown',
+              retry.error ?? 'unknown',
+            );
           }
-        } else {
-          rawPlan = createTextReplyPlan(responseMessage.content);
         }
         if (!rawPlan) {
-          rawPlan = createTextReplyPlan('……你再具体说一下，我好准确回复你');
+          rawPlan = {
+            segments: [
+              {
+                kind: 'text',
+                content: '……刚刚卡了一下，你再说一次。',
+              },
+            ],
+          };
         }
         if (!rawPlan) return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
         const voiceFeatureState = await resolveVoiceFeatureState(session);

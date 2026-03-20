@@ -308,7 +308,7 @@ describe('qq voice plugin', () => {
     expect(getExecutor()).toBeTypeOf('function');
   });
 
-  it('injects a text fallback persona line when TTS is down', async () => {
+  it('always injects ReplyPlan execution rules and json_object request override', async () => {
     const { ready, getPolicy, bot } = createHarness();
     vi.stubGlobal(
       'fetch',
@@ -348,8 +348,8 @@ describe('qq voice plugin', () => {
           kind: 'json',
           value: expect.objectContaining({
             reply_plan: expect.objectContaining({
-              plain_path_available: true,
-              structured_path_available: true,
+              enabled: true,
+              multiline_available: true,
             }),
             voice: expect.objectContaining({
               enabled: false,
@@ -366,10 +366,16 @@ describe('qq voice plugin', () => {
         source: 'qqbot_reply_transport_execution_rules',
         payload: {
           kind: 'text',
-          value: expect.stringContaining('本轮不使用语音回复'),
+          value: expect.stringContaining('最终只输出一个 ReplyPlan JSON 对象本身'),
         },
       }),
     );
+    expect(
+      promptAssemblyMocks.registerPromptFragment.mock.calls.some(
+        ([conversationId, fragment]) =>
+          conversationId === 'conv-1' && fragment?.source === 'qqbot_reply_transport_route',
+      ),
+    ).toBe(false);
     expect(context.options.inputMessage.additional_kwargs).toEqual({
       qqbot_override_request_params: {
         response_format: {
@@ -379,7 +385,7 @@ describe('qq voice plugin', () => {
     });
   });
 
-  it('injects the same voice capability policy whenever TTS is healthy', async () => {
+  it('mentions voice availability when TTS is healthy', async () => {
     const { ready, getPolicy, bot } = createHarness();
     vi.stubGlobal(
       'fetch',
@@ -414,30 +420,6 @@ describe('qq voice plugin', () => {
     expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
       'conv-voice',
       expect.objectContaining({
-        source: 'qqbot_reply_transport_capability',
-        payload: {
-          kind: 'json',
-          value: expect.objectContaining({
-            reply_plan: expect.objectContaining({
-              multiline_available: true,
-              schema: {
-                segments: [{ kind: 'text|multiline|voice|sticker', content: 'string' }],
-              },
-            }),
-            voice: expect.objectContaining({
-              enabled: true,
-              source: 'cached',
-              max_words: 80,
-              max_seconds: 45,
-              sequence_mode: 'ordered_segments',
-            }),
-          }),
-        },
-      }),
-    );
-    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
-      'conv-voice',
-      expect.objectContaining({
         source: 'qqbot_reply_transport_execution_rules',
         payload: {
           kind: 'text',
@@ -445,13 +427,6 @@ describe('qq voice plugin', () => {
         },
       }),
     );
-    expect(context.options.inputMessage.additional_kwargs).toEqual({
-      qqbot_override_request_params: {
-        response_format: {
-          type: 'json_object',
-        },
-      },
-    });
   });
 
   it('amortizes tts probing across turns and refreshes again on the 12th turn', async () => {
@@ -483,6 +458,43 @@ describe('qq voice plugin', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('executes a text ReplyPlan through the executor', async () => {
+    const { ready, getExecutor, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '普通聊聊',
+      strippedContent: '普通聊聊',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: { conversationId: 'conv-text' },
+        responseMessage: {
+          content: '{"segments":[{"kind":"text","content":"今晚先这样吧"}]}',
+        },
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['今晚先这样吧']);
+    expect(context.options.responseMessage).toBeNull();
+  });
+
   it('executes a multiline ReplyPlan and suppresses the raw JSON response', async () => {
     const { ready, getExecutor, bot, database } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
@@ -501,10 +513,6 @@ describe('qq voice plugin', () => {
             canVoice: false,
             source: 'cached',
             refreshedAt: Date.now(),
-          },
-          routeDecision: {
-            route: 'structured',
-            reason: 'structured_multiline_task',
           },
         },
       },
@@ -525,48 +533,7 @@ describe('qq voice plugin', () => {
     expect(database.upsert).toHaveBeenCalled();
   });
 
-  it('wraps plain text output into a text ReplyPlan and still executes through the executor', async () => {
-    const { ready, getExecutor, bot } = createHarness();
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
-
-    await ready();
-    await flushMicrotasks();
-
-    const executor = getExecutor();
-    const session = createSession(bot, {
-      content: '普通聊聊',
-      strippedContent: '普通聊聊',
-      state: {
-        qqReplyTransport: {
-          capabilitySnapshot: {
-            canMultiline: true,
-            canVoice: false,
-            source: 'cached',
-            refreshedAt: Date.now(),
-          },
-          routeDecision: {
-            route: 'plain',
-            reason: 'plain_text_task',
-          },
-        },
-      },
-    });
-    const context = {
-      options: {
-        room: { conversationId: 'conv-plain' },
-        responseMessage: {
-          content: '今晚先这样吧',
-        },
-      },
-    };
-
-    const result = await executor?.(session, context);
-    expect(typeof result).toBe('number');
-    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['今晚先这样吧']);
-    expect(context.options.responseMessage).toBeNull();
-  });
-
-  it('retries structured once and then reruns through plain route when structured output stays invalid', async () => {
+  it('retries the same ReplyPlan contract once when the first output is invalid', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -577,18 +544,12 @@ describe('qq voice plugin', () => {
       phases.push(capture.phase);
       retrySession.state.qqReplyTransport.generationCapture = {
         ...capture,
-        result:
-          capture.phase === 'structured_retry'
-            ? {
-                plan: null,
-                error: 'structured 输出不是合法 JSON 对象。',
-              }
-            : {
-                plan: {
-                  segments: [{ kind: 'text', content: '这次只用文字回复' }],
-                },
-                error: null,
-              },
+        result: {
+          plan: {
+            segments: [{ kind: 'text', content: '这次按合法 ReplyPlan 回复' }],
+          },
+          error: null,
+        },
       };
       return false;
     });
@@ -608,10 +569,6 @@ describe('qq voice plugin', () => {
             source: 'cached',
             refreshedAt: Date.now(),
           },
-          routeDecision: {
-            route: 'structured',
-            reason: 'explicit_rich_request',
-          },
         },
       },
     });
@@ -626,9 +583,60 @@ describe('qq voice plugin', () => {
 
     const result = await executor?.(session, context);
     expect(typeof result).toBe('number');
-    expect(chatluna.chatChain.receiveMessage).toHaveBeenCalledTimes(2);
-    expect(phases).toEqual(['structured_retry', 'plain_retry']);
-    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['这次只用文字回复']);
+    expect(chatluna.chatChain.receiveMessage).toHaveBeenCalledTimes(1);
+    expect(phases).toEqual(['reply_plan_retry']);
+    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['这次按合法 ReplyPlan 回复']);
+    expect(context.options.responseMessage).toBeNull();
+  });
+
+  it('sends a fixed short text when ReplyPlan retry still fails', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    (chatluna.chatChain.receiveMessage as any).mockImplementation(async (retrySession: Record<string, any>) => {
+      const capture = retrySession.state?.qqReplyTransport?.generationCapture;
+      if (!capture) return false;
+      retrySession.state.qqReplyTransport.generationCapture = {
+        ...capture,
+        result: {
+          plan: null,
+          error: 'structured 输出不是合法 JSON 对象。',
+        },
+      };
+      return false;
+    });
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '普通聊聊',
+      strippedContent: '普通聊聊',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: { conversationId: 'conv-retry-fail' },
+        responseMessage: {
+          content: '不是合法 JSON',
+        },
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(chatluna.chatChain.receiveMessage).toHaveBeenCalledTimes(1);
+    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['……刚刚卡了一下，你再说一次。']);
     expect(context.options.responseMessage).toBeNull();
   });
 
@@ -664,10 +672,6 @@ describe('qq voice plugin', () => {
             canVoice: false,
             source: 'cached',
             refreshedAt: Date.now(),
-          },
-          routeDecision: {
-            route: 'structured',
-            reason: 'explicit_rich_request',
           },
         },
         qqSticker: {
@@ -734,10 +738,6 @@ describe('qq voice plugin', () => {
             source: 'cached',
             refreshedAt: Date.now(),
           },
-          routeDecision: {
-            route: 'structured',
-            reason: 'daily_chat_with_sticker',
-          },
         },
         qqSticker: {
           catalog: {
@@ -801,10 +801,6 @@ describe('qq voice plugin', () => {
             source: 'cached',
             refreshedAt: Date.now(),
           },
-          routeDecision: {
-            route: 'structured',
-            reason: 'explicit_rich_request',
-          },
         },
       },
     });
@@ -853,10 +849,6 @@ describe('qq voice plugin', () => {
             canVoice: true,
             source: 'cached',
             refreshedAt: Date.now(),
-          },
-          routeDecision: {
-            route: 'structured',
-            reason: 'explicit_rich_request',
           },
         },
       },

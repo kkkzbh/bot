@@ -46,7 +46,7 @@ export function parseReplyPlanFromStructuredOutputDetailed(raw: unknown): ReplyP
   if (!text) {
     return {
       plan: null,
-      error: 'structured 输出为空，未返回任何可解析内容。',
+      error: 'ReplyPlan 输出为空，未返回任何可解析内容。',
     };
   }
 
@@ -56,7 +56,7 @@ export function parseReplyPlanFromStructuredOutputDetailed(raw: unknown): ReplyP
     if (!result.success) {
       return {
         plan: null,
-        error: `structured 输出不符合 ReplyPlan schema：${result.error.issues
+        error: `ReplyPlan 输出不符合 schema：${result.error.issues
           .map((issue) => `${issue.path.join('.') || 'root'} ${issue.message}`)
           .join('; ')}`,
       };
@@ -76,7 +76,7 @@ export function parseReplyPlanFromStructuredOutputDetailed(raw: unknown): ReplyP
     if (segments.length < 1) {
       return {
         plan: null,
-        error: 'structured 输出里的 segments 在清洗后为空。',
+        error: 'ReplyPlan 里的 segments 在清洗后为空。',
       };
     }
 
@@ -87,21 +87,7 @@ export function parseReplyPlanFromStructuredOutputDetailed(raw: unknown): ReplyP
   } catch {
     return {
       plan: null,
-      error: 'structured 输出不是合法 JSON 对象。',
+      error: 'ReplyPlan 输出不是合法 JSON 对象。',
     };
   }
-}
-
-export function createTextReplyPlan(raw: unknown): ReplyTransportPlan | null {
-  const content = sanitizeStructuredReplySegmentContent(extractReplyPlanMessageText(raw));
-  if (!content) return null;
-
-  return {
-    segments: [
-      {
-        kind: 'text',
-        content,
-      },
-    ],
-  };
 }

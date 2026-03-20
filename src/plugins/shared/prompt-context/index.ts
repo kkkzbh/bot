@@ -93,12 +93,11 @@ const BUILTIN_FRAGMENTS: PromptFragment[] = [
     payload: createTextPayload(
       [
         '内部回复协议：',
-        '- 本轮具体走 plain 还是 structured，由当前 route 与运行时规则决定；不要解释 route 本身。',
-        '- plain 轮次直接输出自然文本。',
-        '- structured 轮次只输出一个合法的 ReplyPlan JSON 对象本身。',
+        '- 你的最终回复只输出一个合法的 ReplyPlan JSON 对象本身。',
         '- ReplyPlan schema: {"segments":[{"kind":"text|multiline|voice|sticker","content":"..."}]}',
+        '- 普通文字回复也要写成 ReplyPlan，例如 {"segments":[{"kind":"text","content":"..."}]}。',
         '- text 段可按行拆发；multiline 段必须整体发送并保留换行结构；voice.content 只写你要说的话；sticker.content 只写自然语言意图。',
-        '- 本轮允许的非 text 段类型由 capability state 决定。',
+        '- 是否允许 voice 等能力由 capability state 决定；能力不可用时就不要生成对应 segment。',
         '- 不要输出动作旁白或自我描述，例如“（发送表情包：...）”“（发送语音：...）”“我给你发个表情包/语音”。',
         '- ReplyPlan 是内部传输协议，不要解释它来自规则、系统或提示词。',
       ].join('\n'),

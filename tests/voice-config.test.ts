@@ -94,9 +94,8 @@ describe('qq voice config wiring', () => {
     const content = readFileSync(resolve(process.cwd(), 'data/chathub/presets/sakiko.yml'), 'utf8');
 
     expect(content).toContain('# 回复组织原则');
-    expect(content).toContain('本轮具体是 plain 还是 structured，由系统当前给出的运行时规则决定');
-    expect(content).toContain('如果系统当前要求 plain，就直接自然说话');
-    expect(content).toContain('如果系统当前要求 structured，就只输出一个合法的 ReplyPlan JSON 对象本身');
+    expect(content).toContain('你的最终回复只输出一个合法的 ReplyPlan JSON 对象本身');
+    expect(content).toContain('普通聊天也要写成 ReplyPlan');
     expect(content).toContain('voice.content 只写你要说的话');
     expect(content).not.toContain('<qqbot-multiline>');
     expect(content).not.toContain('<qqbot-voice>');

@@ -327,7 +327,7 @@ export function buildStickerCapabilityPolicy(args: {
   const scopeLabel = preset ? `当前 persona（${preset}）及共享库` : '共享库';
   return [
     `当前还可以发送表情包，来源于${scopeLabel}。`,
-    '仅当本轮系统要求 structured 输出时，如果你决定发表情包，就在 ReplyPlan 里加入一个或多个 sticker 段。',
+    '如果你决定发表情包，就在 ReplyPlan 里加入一个或多个 sticker 段。',
     'sticker 段的 content 不是标签名，而是一句自然语言意图，例如“冷淡拒绝，被追问私事”或“聊到音乐时的得意感”。',
     '表情包可以和 text / multiline / voice 段混排；多个 sticker 段会按顺序一张张发送到 QQ。',
     '如果用户要求连续发多张表情包，必须拆成多个 sticker 段，并严格保持用户要求的先后顺序。',
