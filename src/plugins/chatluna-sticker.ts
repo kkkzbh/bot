@@ -1,9 +1,11 @@
 import { Context, Logger, Schema, type Session } from 'koishi';
 import {
+  buildStickerCapabilityDescriptor,
   buildStickerCapabilityPolicy,
   loadStickerCatalog,
   type StickerCapabilityState,
 } from './chatluna-sticker-core.js';
+import { registerPromptFragment } from './prompt-assembly.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -43,15 +45,6 @@ type MiddlewareContextLike = {
 };
 
 type ChatLunaLike = {
-  contextManager?: {
-    inject: (options: {
-      name: string;
-      value: unknown;
-      once?: boolean;
-      conversationId?: string;
-      stage?: string;
-    }) => void;
-  };
   chatChain?: {
     middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => {
       after: (name: string) => { before: (name: string) => unknown };
@@ -92,8 +85,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.on('ready', () => {
     const chatluna = resolveChatLunaService(ctx as ContextWithChatLuna);
     const chain = chatluna?.chatChain;
-    const contextManager = chatluna?.contextManager;
-    if (!chain || !contextManager) {
+    if (!chain) {
       logger.warn('chatluna service is not available, skip sticker reply policy middleware.');
       return;
     }
@@ -120,18 +112,36 @@ export function apply(ctx: Context, config: Config = {}): void {
         });
 
         const conversationId = room?.conversationId;
-        const policy = catalog ? buildStickerCapabilityPolicy({ catalog, preset }) : null;
-        if (!conversationId || !policy) {
+        const capability = catalog ? buildStickerCapabilityDescriptor({ catalog, preset }) : null;
+        if (!conversationId || !capability || !catalog) {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
 
-        contextManager.inject({
-          name: 'qqbot_sticker_policy',
-          value: policy,
-          once: true,
-          conversationId,
-          stage: 'after_scratchpad',
+        registerPromptFragment(conversationId, {
+          source: 'qqbot_sticker_capability',
+          title: 'Sticker Capability State',
+          authority: 'runtime_contract',
+          trust: 'trusted',
+          ttl: 'turn',
+          payload: {
+            kind: 'json',
+            value: capability,
+          },
         });
+        const policy = buildStickerCapabilityPolicy({ catalog, preset });
+        if (policy) {
+          registerPromptFragment(conversationId, {
+            source: 'qqbot_sticker_execution_rules',
+            title: 'Sticker Execution Rules',
+            authority: 'runtime_contract',
+            trust: 'trusted',
+            ttl: 'turn',
+            payload: {
+              kind: 'text',
+              value: policy,
+            },
+          });
+        }
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
       .after('read_chat_message')

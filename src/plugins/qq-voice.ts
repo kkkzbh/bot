@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
-import type { TraceViewerServiceLike } from '../types/trace-viewer.js';
 import {
   createStickerHistoryLine,
   resolveStickerSelection,
@@ -28,6 +27,7 @@ import {
   type OutboundMessageSegment,
   type ReplyTransportPlan,
 } from './message-send-utils.js';
+import { registerPromptFragment } from './prompt-assembly.js';
 import { parseReplyPlanFromModelOutput } from './reply-plan-utils.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
@@ -196,15 +196,6 @@ type ReplyPlanDeliveryResult =
   | { status: 'failed_after_partial_send'; historyText: string };
 
 type ChatLunaLike = {
-  contextManager?: {
-    inject: (options: {
-      name: string;
-      value: unknown;
-      once?: boolean;
-      conversationId?: string;
-      stage?: string;
-    }) => void;
-  };
   chatChain?: {
     middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => {
       after: (name: string) => { before: (name: string) => unknown };
@@ -214,10 +205,6 @@ type ChatLunaLike = {
 };
 
 type ContextWithChatLuna = Context & { chatluna?: ChatLunaLike };
-
-function getTraceViewer(ctx: Context): TraceViewerServiceLike | undefined {
-  return (ctx as Context & { traceViewer?: TraceViewerServiceLike }).traceViewer;
-}
 
 function normalizeBaseUrl(input: string): string {
   return input.trim().replace(/\/+$/, '');
@@ -807,11 +794,44 @@ async function resolveReplyCapabilitySnapshot(args: {
   return snapshot;
 }
 
-function buildReplyTransportPolicy(snapshot: ReplyCapabilitySnapshot, outputMaxWords: number, outputMaxSeconds: number): string {
+export function buildReplyTransportCapabilityState(
+  snapshot: ReplyCapabilitySnapshot,
+  outputMaxWords: number,
+  outputMaxSeconds: number,
+): Record<string, unknown> {
+  return {
+    reply_plan: {
+      plain_text_default: true,
+      structured_output_available: true,
+      multiline_available: true,
+      schema: {
+        segments: [
+          {
+            kind: 'text|multiline|voice|sticker',
+            content: 'string',
+          },
+        ],
+      },
+    },
+    voice: {
+      enabled: snapshot.canVoice,
+      source: snapshot.source,
+      max_words: outputMaxWords,
+      max_seconds: outputMaxSeconds,
+      sequence_mode: 'ordered_segments',
+    },
+  };
+}
+
+export function buildReplyTransportExecutionRules(
+  snapshot: ReplyCapabilitySnapshot,
+  outputMaxWords: number,
+  outputMaxSeconds: number,
+): string {
   const lines = [
     '当前回复能力：普通文本始终可用。普通闲聊、问答、安慰或解释时，默认直接输出自然文本。',
     '当你需要发送代码、命令、配置、日志、清单或分步骤结果时，可以直接输出一个 ReplyPlan JSON 对象。',
-    '如果你决定使用 ReplyPlan，就只输出 ReplyPlan JSON 对象本身，不要添加解释、前缀或代码块。',
+    '如果你决定使用 ReplyPlan，就只输出 ReplyPlan JSON 对象本身，不要添加解释、前缀、代码块或动作旁白。',
     'ReplyPlan JSON 格式：{"segments":[{"kind":"multiline","content":"第一行\\n第二行"}]}',
   ];
 
@@ -1065,7 +1085,6 @@ function isReplyPlanSessionAvailable(session: Session): boolean {
 
 export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
-  const traceViewer = getTraceViewer(ctx);
   const sendStrand = createKeyedStrandRunner();
   const canSendRecordCache = new Map<string, boolean>();
   const ttsCapabilityStates = new Map<string, TtsCapabilityState>();
@@ -1090,48 +1109,19 @@ export function apply(ctx: Context, config: Config = {}): void {
       try {
         const downloaded = await downloadIncomingAudio(session, runtime, bot);
         const transcript = await transcribeAudio(runtime, downloaded);
-        const mergedPreview = mergeVoiceInputText(getTextInputContent(session), transcript.text);
-        const traceId = traceViewer?.ensureTrace({
-          session,
-          route: 'qq-voice',
-          input: mergedPreview,
-        });
 
         if (!transcript.text) {
-          traceViewer?.record({
-            traceId,
-            phase: 'error',
-            kind: 'voice-transcribe-empty',
-            payload: { source: downloaded.source, durationMs: transcript.durationMs },
-          });
           await sendFailureReply(session, buildVoiceFailureReply('empty', runtime.inputMaxSeconds));
           return;
         }
 
         if (transcript.durationMs > runtime.inputMaxSeconds * 1000) {
-          traceViewer?.record({
-            traceId,
-            phase: 'error',
-            kind: 'voice-transcribe-too-long',
-            payload: { source: downloaded.source, durationMs: transcript.durationMs },
-          });
           await sendFailureReply(session, buildVoiceFailureReply('too-long', runtime.inputMaxSeconds));
           return;
         }
 
         const originalText = getTextInputContent(session);
         const merged = mergeVoiceInputText(originalText, transcript.text);
-        traceViewer?.record({
-          traceId,
-          phase: 'prepare',
-          kind: 'voice-transcribe',
-          payload: {
-            source: downloaded.source,
-            durationMs: transcript.durationMs,
-            transcript: transcript.text,
-            mergedText: merged,
-          },
-        });
         updateVoiceState(session, {
           transcript: transcript.text,
           durationMs: transcript.durationMs,
@@ -1143,17 +1133,6 @@ export function apply(ctx: Context, config: Config = {}): void {
         return next();
       } catch (error) {
         logger.warn('voice input handling failed: %s', (error as Error).message);
-        const traceId = traceViewer?.ensureTrace({
-          session,
-          route: 'qq-voice',
-          input: getTextInputContent(session),
-        });
-        traceViewer?.record({
-          traceId,
-          phase: 'error',
-          kind: 'voice-transcribe-error',
-          payload: { message: (error as Error).message },
-        });
         await sendFailureReply(session, buildVoiceFailureReply('broken', runtime.inputMaxSeconds));
         return;
       }
@@ -1194,8 +1173,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
     const chatluna = resolveChatLunaService();
     const chain = chatluna?.chatChain;
-    const contextManager = chatluna?.contextManager;
-    if (!contextManager || !chain) {
+    if (!chain) {
       logger.warn('chatluna service is not available, skip reply transport policy middleware.');
       return;
     }
@@ -1221,12 +1199,27 @@ export function apply(ctx: Context, config: Config = {}): void {
             ttsCapabilityStates,
           }));
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
-        contextManager.inject({
-          name: 'qqbot_reply_transport_policy',
-          value: buildReplyTransportPolicy(snapshot, runtime.outputMaxWords, runtime.outputMaxSeconds),
-          once: true,
-          conversationId,
-          stage: 'after_scratchpad',
+        registerPromptFragment(conversationId, {
+          source: 'qqbot_reply_transport_capability',
+          title: 'Reply Transport Capability State',
+          authority: 'runtime_contract',
+          trust: 'trusted',
+          ttl: 'turn',
+          payload: {
+            kind: 'json',
+            value: buildReplyTransportCapabilityState(snapshot, runtime.outputMaxWords, runtime.outputMaxSeconds),
+          },
+        });
+        registerPromptFragment(conversationId, {
+          source: 'qqbot_reply_transport_execution_rules',
+          title: 'Reply Transport Execution Rules',
+          authority: 'runtime_contract',
+          trust: 'trusted',
+          ttl: 'turn',
+          payload: {
+            kind: 'text',
+            value: buildReplyTransportExecutionRules(snapshot, runtime.outputMaxWords, runtime.outputMaxSeconds),
+          },
         });
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
@@ -1260,17 +1253,6 @@ export function apply(ctx: Context, config: Config = {}): void {
           snapshot.canVoice || !rawPlan.segments.some((segment) => segment.kind === 'voice')
             ? rawPlan
             : downgradeVoiceSegmentsToText(rawPlan);
-        const traceId = traceViewer?.getTraceId(session);
-        traceViewer?.record({
-          traceId,
-          phase: 'prepare',
-          kind: 'voice-reply-plan',
-          payload: {
-            rawSegments: rawPlan.segments.map((segment) => segment.kind),
-            executableSegments: executablePlan.segments.map((segment) => segment.kind),
-            canVoice: snapshot.canVoice,
-          },
-        });
         const result = await deliverReplyPlan({
           runtime,
           session,
@@ -1282,15 +1264,6 @@ export function apply(ctx: Context, config: Config = {}): void {
 
         const conversationId = context.options?.room?.conversationId;
         await rewriteLatestAssistantHistoryMessage(ctx, conversationId, result.historyText);
-        traceViewer?.record({
-          traceId,
-          phase: 'outbound',
-          kind: 'voice-reply-delivery',
-          payload: {
-            status: result.status,
-            historyText: result.historyText,
-          },
-        });
 
         if (result.status === 'failed_before_send') {
           if (responseMessage) {

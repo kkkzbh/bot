@@ -52,6 +52,17 @@ export interface StickerCapabilityState {
   availableCount: number;
 }
 
+export interface StickerCapabilityDescriptor {
+  sticker: {
+    available: boolean;
+    available_count: number;
+    scope: string;
+    selection_mode: 'natural_intent';
+    sequence_mode: 'ordered_segments';
+    content_rule: 'single_image_intent';
+  };
+}
+
 export function mimeFromExtension(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
   switch (ext) {
@@ -326,4 +337,24 @@ export function buildStickerCapabilityPolicy(args: {
     '混排示例：{"segments":[{"kind":"text","content":"……随你"},{"kind":"sticker","content":"冷淡拒绝，被追问私事"}]}',
     '多张示例：{"segments":[{"kind":"sticker","content":"无语地看对方一眼"},{"kind":"sticker","content":"生气地噘嘴表达不满"}]}',
   ].join('\n');
+}
+
+export function buildStickerCapabilityDescriptor(args: {
+  catalog: LoadedStickerCatalog;
+  preset?: string | null;
+}): StickerCapabilityDescriptor | null {
+  const { catalog, preset } = args;
+  const available = catalog.entries.filter((entry) => matchesScope(entry.scopes, preset));
+  if (!available.length) return null;
+
+  return {
+    sticker: {
+      available: true,
+      available_count: available.length,
+      scope: preset ? `persona:${preset}` : 'shared',
+      selection_mode: 'natural_intent',
+      sequence_mode: 'ordered_segments',
+      content_rule: 'single_image_intent',
+    },
+  };
 }

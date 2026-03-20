@@ -1,5 +1,4 @@
 import { Context, Logger, Schema, Session } from 'koishi';
-import type { TraceViewerServiceLike } from '../types/trace-viewer.js';
 import { normalizeGroupId, parseGroupSet } from './task-automation-core.js';
 import {
   containsAlias,
@@ -160,10 +159,6 @@ function isQuotedToBot(session: Session): boolean {
   return Boolean(quote?.user?.id && quote.user.id === session.bot?.selfId);
 }
 
-function getTraceViewer(ctx: Context): TraceViewerServiceLike | undefined {
-  return (ctx as Context & { traceViewer?: TraceViewerServiceLike }).traceViewer;
-}
-
 async function shouldTriggerByModel(content: string, runtime: RuntimeConfig): Promise<TriggerDecisionResult> {
   if (!runtime.decisionEnabled || !runtime.decisionBaseUrl || !runtime.decisionApiKey || !runtime.decisionModel) {
     return { trigger: false, confidence: null, rawContent: null };
@@ -263,7 +258,6 @@ function shouldHandleGroup(session: Session, runtime: RuntimeConfig): boolean {
 
 export function apply(ctx: Context, config: Config): void {
   const runtime = toRuntimeConfig(config);
-  const traceViewer = getTraceViewer(ctx);
   const focusExpires = new Map<string, number>();
   const spamStates = new Map<string, SpamState>();
   const nextReplyAt = new Map<string, number>();
@@ -330,27 +324,6 @@ export function apply(ctx: Context, config: Config): void {
     focusExpires.set(groupScopeKey, handlingAt + runtime.focusWindowMs);
 
     const triggerName = runtime.aliases[0] ?? '祥子';
-    const traceId = traceViewer?.ensureTrace({
-      session,
-      route: 'group-natural-trigger',
-      input: content,
-    });
-    if (traceId && traceViewer) {
-      traceViewer.record({
-        traceId,
-        phase: 'route',
-        kind: 'group-natural-trigger',
-        payload: {
-          reason: triggerReason,
-          directHit,
-          ruleTriggered,
-          inFocus,
-          modelConfidence: modelDecision?.confidence ?? null,
-          modelResponse: modelDecision?.rawContent ?? null,
-          rewrittenContent: `${triggerName} ${content}`,
-        },
-      });
-    }
     const originalContent = session.content;
     const stripped = session.stripped as { content?: string } | undefined;
     const originalStripped = stripped?.content;

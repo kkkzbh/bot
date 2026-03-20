@@ -1,5 +1,4 @@
 import { type Context, Logger, type Session } from 'koishi';
-import type { TraceViewerServiceLike } from '../types/trace-viewer.js';
 import {
   type LiveReplyConfig,
   type LiveReplyDatabaseLike,
@@ -7,7 +6,7 @@ import {
   registerLiveReplyCoordinator,
   resolveLiveReplyRuntimeConfig,
 } from './chatluna-live-reply.js';
-import { injectUserStampedPrompt } from './chat-time-context.js';
+import { buildUserContextReference } from './chat-time-context.js';
 import {
   createTextOnlyOutboundMessagePlan,
   createKeyedStrandRunner,
@@ -18,6 +17,7 @@ import {
   type OutboundMessageSegment,
 } from './message-send-utils.js';
 import { inferPlatformFromBaseUrl, normalizeRawModelName, resolvePlatform } from './model-utils.js';
+import { beginPromptAssemblyTurn, registerPromptFragment } from './prompt-assembly.js';
 import { resolveSessionDisplayName } from './session-user-name.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
@@ -44,15 +44,6 @@ type ChatLunaLike = {
   clearCache?: (room: unknown) => Promise<boolean>;
   platform?: {
     listAllModels?: (type: number) => { value?: Array<{ toModelName?: () => string; platform?: string; name?: string }> };
-  };
-  contextManager?: {
-    inject: (options: {
-      name: string;
-      value: unknown;
-      once?: boolean;
-      conversationId?: string;
-      stage?: string;
-    }) => void;
   };
   chatChain?: {
     middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => ChainHookBuilder;
@@ -88,10 +79,6 @@ type SessionWithReplyTransportState = Session & {
     };
   };
 };
-
-function getTraceViewer(ctx: Context): TraceViewerServiceLike | undefined {
-  return (ctx as Context & { traceViewer?: TraceViewerServiceLike }).traceViewer;
-}
 
 const logger = new Logger(name);
 const LLM_MODEL_TYPE = ChatLunaPlatformTypes.ModelType?.llm ?? 1;
@@ -157,7 +144,6 @@ export function apply(ctx: Context, config: Config = {}): void {
   const services = ctx as unknown as ContextServices;
   const database = services.database;
   const chatlunaService = services.chatluna;
-  const traceViewer = getTraceViewer(ctx);
   const inboundStrand = createKeyedStrandRunner();
   const sendStrand = createKeyedStrandRunner();
   const liveReplyRuntime = resolveLiveReplyRuntimeConfig(config);
@@ -170,12 +156,16 @@ export function apply(ctx: Context, config: Config = {}): void {
             await chatlunaService?.clearCache?.(room as never);
           },
           inject: ({ conversationId, instruction }) => {
-            chatlunaService?.contextManager?.inject({
-              name: 'qqbot_live_reply_continuation',
-              value: instruction,
-              once: true,
-              conversationId,
-              stage: 'after_scratchpad',
+            registerPromptFragment(conversationId, {
+              source: 'qqbot_live_reply_continuation',
+              title: 'Assistant Continuation State',
+              authority: 'assistant_state',
+              trust: 'trusted',
+              ttl: 'turn',
+              payload: {
+                kind: 'text',
+                value: instruction,
+              },
             });
           },
           logger,
@@ -331,22 +321,25 @@ export function apply(ctx: Context, config: Config = {}): void {
         const context = rawContext as MiddlewareContextLike;
         const inputMessage = context.options?.inputMessage;
         if (!inputMessage) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        const conversationId = context.options?.room?.conversationId?.trim();
+        if (conversationId) {
+          beginPromptAssemblyTurn(conversationId);
+        }
         const userName = resolveSessionDisplayName(session);
-        inputMessage.content = injectUserStampedPrompt(inputMessage.content, userName);
-        const traceId = traceViewer?.ensureTrace({
-          session,
-          route: session.isDirect ? 'chatluna-direct' : 'chatluna-chat',
-          input: typeof session.content === 'string' ? session.content : undefined,
-        });
-        traceViewer?.record({
-          traceId,
-          phase: 'prepare',
-          kind: 'chatluna-time-context',
-          payload: {
-            userName,
-            injectedContent: inputMessage.content,
-          },
-        });
+        const contextReference = buildUserContextReference(userName);
+        if (conversationId) {
+          registerPromptFragment(conversationId, {
+            source: 'chatluna_time_context',
+            title: 'User Turn Metadata',
+            authority: 'reference',
+            trust: 'trusted',
+            ttl: 'turn',
+            payload: {
+              kind: 'json',
+              value: contextReference,
+            },
+          });
+        }
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
       .after('read_chat_message')

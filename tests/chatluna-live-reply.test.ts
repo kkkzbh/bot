@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const promptAssemblyMocks = vi.hoisted(() => ({
+  registerPromptFragment: vi.fn(),
+}));
+
 vi.mock('koishi', () => {
   class MockLogger {
     info(): void {}
@@ -13,6 +17,11 @@ vi.mock('koishi', () => {
     Logger: MockLogger,
   };
 });
+
+vi.mock('../src/plugins/prompt-assembly.js', () => ({
+  beginPromptAssemblyTurn: vi.fn(),
+  registerPromptFragment: promptAssemblyMocks.registerPromptFragment,
+}));
 
 import { apply } from '../src/plugins/chatluna-model-guard.js';
 import {
@@ -101,6 +110,7 @@ function createChainBuilder(store: Map<string, GateHandler>): {
 }
 
 function createHarness(config: Record<string, unknown> = {}) {
+  promptAssemblyMocks.registerPromptFragment.mockReset();
   const middlewares: Middleware[] = [];
   const eventHandlers = new Map<string, Function[]>();
   const chainMiddlewares = new Map<string, GateHandler>();
@@ -399,16 +409,20 @@ describe('live reply gate + drain', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(sent).toEqual(['第一句']);
     expect(clearCache).toHaveBeenCalledTimes(1);
-    expect(inject).toHaveBeenCalledTimes(1);
+    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledTimes(1);
 
-    const injected = inject.mock.calls[0][0];
-    expect(injected).toMatchObject({
-      conversationId: 'conv-live-1',
-      stage: 'after_scratchpad',
-      once: true,
+    const injected = promptAssemblyMocks.registerPromptFragment.mock.calls[0];
+    expect(injected?.[0]).toBe('conv-live-1');
+    expect(injected?.[1]).toMatchObject({
+      source: 'qqbot_live_reply_continuation',
+      authority: 'assistant_state',
+      trust: 'trusted',
+      ttl: 'turn',
     });
-    expect(String(injected.value)).toContain('第一句');
-    expect(String(injected.value)).toContain('[乙/u2] 我补充第一点');
+    expect(String((injected?.[1] as { payload?: { value?: unknown } })?.payload?.value ?? '')).toContain('第一句');
+    expect(String((injected?.[1] as { payload?: { value?: unknown } })?.payload?.value ?? '')).toContain(
+      '[乙/u2] 我补充第一点',
+    );
 
     await expect(database.get('chathub_message', { id: 'ai-1' })).resolves.toEqual([
       expect.objectContaining({ text: '第一句' }),

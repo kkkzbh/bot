@@ -32,13 +32,23 @@ vi.mock('koishi', () => {
 });
 
 const stickerCoreMocks = vi.hoisted(() => ({
+  buildStickerCapabilityDescriptor: vi.fn(),
   buildStickerCapabilityPolicy: vi.fn(),
   loadStickerCatalog: vi.fn(),
 }));
 
+const promptAssemblyMocks = vi.hoisted(() => ({
+  registerPromptFragment: vi.fn(),
+}));
+
 vi.mock('../src/plugins/chatluna-sticker-core.js', () => ({
+  buildStickerCapabilityDescriptor: stickerCoreMocks.buildStickerCapabilityDescriptor,
   buildStickerCapabilityPolicy: stickerCoreMocks.buildStickerCapabilityPolicy,
   loadStickerCatalog: stickerCoreMocks.loadStickerCatalog,
+}));
+
+vi.mock('../src/plugins/prompt-assembly.js', () => ({
+  registerPromptFragment: promptAssemblyMocks.registerPromptFragment,
 }));
 
 import { apply, inject } from '../src/plugins/chatluna-sticker.js';
@@ -62,12 +72,7 @@ function createChainBuilder(store: Map<string, ChainMiddleware>) {
 function createHarness() {
   const events = new Map<string, EventHandler[]>();
   const chainMiddlewares = new Map<string, ChainMiddleware>();
-  const inject = vi.fn();
-
-  const chatluna = {
-    contextManager: { inject },
-    chatChain: createChainBuilder(chainMiddlewares),
-  };
+  const chatluna = { chatChain: createChainBuilder(chainMiddlewares) };
 
   const ctx = {
     chatluna,
@@ -84,7 +89,6 @@ function createHarness() {
   return {
     ready: (events.get('ready') ?? [])[0],
     getPolicy: () => chainMiddlewares.get('qqbot_sticker_policy'),
-    inject,
   };
 }
 
@@ -103,8 +107,10 @@ function createSession(overrides: Record<string, unknown> = {}): Record<string, 
 describe('chatluna sticker plugin', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    stickerCoreMocks.buildStickerCapabilityDescriptor.mockReset();
     stickerCoreMocks.buildStickerCapabilityPolicy.mockReset();
     stickerCoreMocks.loadStickerCatalog.mockReset();
+    promptAssemblyMocks.registerPromptFragment.mockReset();
   });
 
   afterEach(() => {
@@ -124,7 +130,17 @@ describe('chatluna sticker plugin', () => {
         },
       ],
     });
-    stickerCoreMocks.buildStickerCapabilityPolicy.mockReturnValue('policy');
+    stickerCoreMocks.buildStickerCapabilityDescriptor.mockReturnValue({
+      sticker: {
+        available: true,
+        available_count: 1,
+        scope: 'persona:sakiko',
+        selection_mode: 'natural_intent',
+        sequence_mode: 'ordered_segments',
+        content_rule: 'single_image_intent',
+      },
+    });
+    stickerCoreMocks.buildStickerCapabilityPolicy.mockReturnValue('sticker policy');
 
     const { ready, getPolicy } = createHarness();
     await ready?.();
@@ -156,9 +172,20 @@ describe('chatluna sticker plugin', () => {
       byId: new Map(),
     };
     stickerCoreMocks.loadStickerCatalog.mockReturnValue(catalog);
+    const capability = {
+      sticker: {
+        available: true,
+        available_count: 1,
+        scope: 'persona:sakiko',
+        selection_mode: 'natural_intent',
+        sequence_mode: 'ordered_segments',
+        content_rule: 'single_image_intent',
+      },
+    };
+    stickerCoreMocks.buildStickerCapabilityDescriptor.mockReturnValue(capability);
     stickerCoreMocks.buildStickerCapabilityPolicy.mockReturnValue('sticker policy');
 
-    const { ready, getPolicy, inject } = createHarness();
+    const { ready, getPolicy } = createHarness();
     await ready?.();
 
     const policy = getPolicy();
@@ -179,11 +206,24 @@ describe('chatluna sticker plugin', () => {
       preset: 'sakiko',
       availableCount: 1,
     });
-    expect(inject).toHaveBeenCalledWith(
+    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
+      'conv-1',
       expect.objectContaining({
-        name: 'qqbot_sticker_policy',
-        conversationId: 'conv-1',
-        value: 'sticker policy',
+        source: 'qqbot_sticker_capability',
+        payload: {
+          kind: 'json',
+          value: capability,
+        },
+      }),
+    );
+    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
+      'conv-1',
+      expect.objectContaining({
+        source: 'qqbot_sticker_execution_rules',
+        payload: {
+          kind: 'text',
+          value: 'sticker policy',
+        },
       }),
     );
   });
@@ -212,9 +252,10 @@ describe('chatluna sticker plugin', () => {
       byId: new Map(),
     };
     stickerCoreMocks.loadStickerCatalog.mockReturnValue(catalog);
+    stickerCoreMocks.buildStickerCapabilityDescriptor.mockReturnValue(null);
     stickerCoreMocks.buildStickerCapabilityPolicy.mockReturnValue(null);
 
-    const { ready, getPolicy, inject } = createHarness();
+    const { ready, getPolicy } = createHarness();
     await ready?.();
 
     const policy = getPolicy();
@@ -233,6 +274,6 @@ describe('chatluna sticker plugin', () => {
       preset: 'other',
       availableCount: 0,
     });
-    expect(inject).not.toHaveBeenCalled();
+    expect(promptAssemblyMocks.registerPromptFragment).not.toHaveBeenCalled();
   });
 });

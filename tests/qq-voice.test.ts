@@ -4,6 +4,10 @@ vi.mock('koishi-plugin-chatluna/chains', () => ({
   ChainMiddlewareRunStatus: { STOP: 1, CONTINUE: 0 },
 }));
 
+const promptAssemblyMocks = vi.hoisted(() => ({
+  registerPromptFragment: vi.fn(),
+}));
+
 vi.mock('koishi', () => {
   type MockSchemaNode = {
     default: () => MockSchemaNode;
@@ -83,6 +87,10 @@ vi.mock('koishi', () => {
     },
   };
 });
+
+vi.mock('../src/plugins/prompt-assembly.js', () => ({
+  registerPromptFragment: promptAssemblyMocks.registerPromptFragment,
+}));
 
 import { apply, inject } from '../src/plugins/qq-voice.js';
 
@@ -236,6 +244,7 @@ describe('qq voice plugin', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    promptAssemblyMocks.registerPromptFragment.mockReset();
   });
 
   afterEach(() => {
@@ -287,7 +296,7 @@ describe('qq voice plugin', () => {
   });
 
   it('injects a text fallback persona line when TTS is down', async () => {
-    const { ready, getPolicy, inject, bot } = createHarness();
+    const { ready, getPolicy, bot } = createHarness();
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
@@ -309,15 +318,40 @@ describe('qq voice plugin', () => {
     });
 
     await policy?.(session, { options: { room: { conversationId: 'conv-1' } } });
-    const injectedPolicy = String(inject.mock.calls[0]?.[0]?.value ?? '');
-    expect(injectedPolicy).toContain('普通文本始终可用');
-    expect(injectedPolicy).toContain('本轮不使用语音回复。若对方要求语音，就自然地告诉对方你现在不想发语音。');
-    expect(injectedPolicy).not.toContain('<qqbot-voice>');
-    expect(injectedPolicy).not.toContain('reply_compose');
+    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
+      'conv-1',
+      expect.objectContaining({
+        source: 'qqbot_reply_transport_capability',
+        payload: {
+          kind: 'json',
+          value: expect.objectContaining({
+            reply_plan: expect.objectContaining({
+              plain_text_default: true,
+              structured_output_available: true,
+            }),
+            voice: expect.objectContaining({
+              enabled: false,
+              max_words: 80,
+              max_seconds: 45,
+            }),
+          }),
+        },
+      }),
+    );
+    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
+      'conv-1',
+      expect.objectContaining({
+        source: 'qqbot_reply_transport_execution_rules',
+        payload: {
+          kind: 'text',
+          value: expect.stringContaining('本轮不使用语音回复'),
+        },
+      }),
+    );
   });
 
   it('injects the same voice capability policy whenever TTS is healthy', async () => {
-    const { ready, getPolicy, inject, bot } = createHarness();
+    const { ready, getPolicy, bot } = createHarness();
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
@@ -339,16 +373,40 @@ describe('qq voice plugin', () => {
     });
 
     await policy?.(session, { options: { room: { conversationId: 'conv-voice' } } });
-    const injectedPolicy = String(inject.mock.calls[0]?.[0]?.value ?? '');
-    expect(injectedPolicy).toContain('如果你决定使用 ReplyPlan，就只输出 ReplyPlan JSON 对象本身，不要添加解释、前缀或代码块。');
-    expect(injectedPolicy).toContain('本轮语音回复可用。如果你决定发送一条语音回复，就直接输出一个包含一个或多个 voice 段的 ReplyPlan JSON 对象。');
-    expect(injectedPolicy).toContain('"kind":"voice"');
-    expect(injectedPolicy).toContain('80 词、45 秒');
-    expect(injectedPolicy).toContain('多个 voice 段会按顺序发送');
-    expect(injectedPolicy).toContain('较长内容请拆成多个 voice 段');
-    expect(injectedPolicy).toContain('多段 voice 示例：{"segments":[{"kind":"voice","content":"第一段语音内容"},{"kind":"voice","content":"第二段语音内容"}]}');
-    expect(injectedPolicy).not.toContain('<qqbot-voice>');
-    expect(injectedPolicy).not.toContain('reply_compose');
+    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
+      'conv-voice',
+      expect.objectContaining({
+        source: 'qqbot_reply_transport_capability',
+        payload: {
+          kind: 'json',
+          value: expect.objectContaining({
+            reply_plan: expect.objectContaining({
+              multiline_available: true,
+              schema: {
+                segments: [{ kind: 'text|multiline|voice|sticker', content: 'string' }],
+              },
+            }),
+            voice: expect.objectContaining({
+              enabled: true,
+              source: 'cached',
+              max_words: 80,
+              max_seconds: 45,
+              sequence_mode: 'ordered_segments',
+            }),
+          }),
+        },
+      }),
+    );
+    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
+      'conv-voice',
+      expect.objectContaining({
+        source: 'qqbot_reply_transport_execution_rules',
+        payload: {
+          kind: 'text',
+          value: expect.stringContaining('本轮语音回复可用'),
+        },
+      }),
+    );
   });
 
   it('amortizes tts probing across turns and refreshes again on the 12th turn', async () => {

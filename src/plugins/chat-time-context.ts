@@ -1,6 +1,6 @@
 const FIXED_TIMEZONE = 'Asia/Shanghai';
 
-function formatUtc8Now(now = Date.now()): string {
+export function formatUtc8Now(now = Date.now()): string {
   const parts = new Intl.DateTimeFormat('zh-CN', {
     timeZone: FIXED_TIMEZONE,
     year: 'numeric',
@@ -19,6 +19,18 @@ function formatUtc8Now(now = Date.now()): string {
 export function formatUserStampedPrompt(userName: string, message: string, now = Date.now()): string {
   const normalizedUserName = userName.trim() || '用户';
   return `${normalizedUserName}, ${formatUtc8Now(now)}: ${message}`;
+}
+
+export function buildUserContextReference(userName: string, now = Date.now()): {
+  user_name: string;
+  local_time: string;
+  timezone: string;
+} {
+  return {
+    user_name: userName.trim() || '用户',
+    local_time: formatUtc8Now(now),
+    timezone: FIXED_TIMEZONE,
+  };
 }
 
 export function injectUserStampedPrompt(content: unknown, userName: string, now = Date.now()): unknown {
