@@ -1,6 +1,6 @@
 ---
 name: qqbot-git-deliver
-description: 项目级 Git 交付流程（默认本地验证与验收；按需 push、追踪 CI/Deploy、部署后验收）。当用户要求提交、交付、追踪验证结果时使用。
+description: 项目级 Git 交付流程（默认本地验证与 bot 对话验收；按需 push、追踪 CI/Deploy、部署后验收）。当用户要求提交、交付、追踪验证结果时使用。
 ---
 
 # QQBot Git Deliver
@@ -8,10 +8,11 @@ description: 项目级 Git 交付流程（默认本地验证与验收；按需 p
 ## Overview
 
 为 `qqbot` 仓库提供两套固定交付链路：
-- 默认本地链路：严格原子提交、本地验证、本地 `systemd --user`/日志/提示词验收，直到通过。
+- 默认本地链路：严格原子提交、本地验证、本地 `systemd --user`/日志/与 bot 真实对话验收，直到通过。
 - 显式远端链路：在用户明确要求时再执行推送、追踪 `CI` 与 `Deploy`、并做部署后验收。
 
 核心原则是“默认本地优先，push/部署按需启用”，并输出可审计结果。
+验收核心不是测试脚本退出成功，而是你与 bot 真实聊天后，观察 bot 的最终回复内容、行为和风格是否符合预期；脚本、日志、单测、构建都只是辅助证据。
 
 Bot 环境变量采用双 env 设计：
 - `.env.local`：本地 bot 运行配置
@@ -44,6 +45,7 @@ Bot 环境变量采用双 env 设计：
 3. 本地链路：本地验证与验收（默认）
 - 本地运行 bot 时，固定顺序是：
   - 先做最小充分回归验证
+  - 若改动会影响 bot 最终回复内容、行为或人格表现，必须再做真实聊天验收
   - 验证全部通过后，再执行 Git 原子提交
   - 默认不执行 `git push`
 - 禁止在本地链路尚未通过前提前提交“待验证代码”；若必须保留中间状态，使用工作区改动而不是提交半成品。
@@ -52,7 +54,8 @@ Bot 环境变量采用双 env 设计：
   - 单元/集成逻辑优先：`pnpm test` 或针对性 `vitest` 用例
   - 启动/配置回归优先：`pnpm smoke:start`
   - 固定聊天回归优先：`pnpm smoke:chat`
-  - 需要完整 bot 行为时：本地拉起运行链路后，默认优先使用 `bash .codex/skills/qqbot-git-deliver/scripts/probe-local-bot.sh "<prompt>"` 做提示词或交互验收
+  - 若改动触及 prompt、persona、context 组织、memory、reply plan、voice、sticker、search、live reply、消息发送或任何会改变 bot 最终回复的链路，回归核心必须是与 bot 聊天并观察实际回复是否达预期
+  - 需要完整 bot 行为时：本地拉起运行链路后，默认优先使用 `bash .codex/skills/qqbot-git-deliver/scripts/probe-local-bot.sh "<prompt>"` 接入真实 bot 做提示词或交互验收
   - 若改动涉及本地 `web` / `webUI` / 控制台页面 / 浏览器交互调试，默认优先使用 `MCP` 浏览器工具做真实浏览器验收
   - 只有在需要脚本化复现、批量留证、抓取 `console` / `network` / `trace`、或需要多轮稳定回放时，才改用 `Playwright skill`
   - 不要把 Web 验收写成“二选一都行”；默认优先级固定为 `MCP` 第一、`Playwright skill` 第二
@@ -66,13 +69,14 @@ Bot 环境变量采用双 env 设计：
   - 关键日志片段或状态输出来源
   - 输入提示词/触发方式
   - 期望断言
-  - 实际输出或实际行为
+  - bot 的实际输出或实际行为
   - 结论（通过/失败）
   - 若涉及 Web 调试：补充页面 URL、操作路径、snapshot / screenshot、控制台或网络证据、最终可见结果
 - 本地 bot 提示词验收默认使用 `probe-local-bot.sh`：
   - 命中的是当前本机运行中的真实 Koishi + ChatLuna + OneBot 处理链路
   - 通过临时 Node inspector 向本地 worker 注入 fake 私聊入站，并只截获 `private:<fake_user_id>` 的出站
   - 不依赖真实 QQ 发消息
+  - 它的作用是“和真实 bot 聊天并留证”，不是只看脚本返回成功；必须阅读 bot 实际回复，判断是否真的符合本次改动目标
   - 同一轮本地验收也必须串行执行，优先复用同一个 `FAKE_USER_ID`，避免私聊建房竞态
   - 需要清理本地 debug 私聊残留时，使用 `bash ./scripts/cleanup-debug-chat-state.sh`
 - 需要查看运行态时，优先使用：
@@ -128,6 +132,7 @@ bash .codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh "<prompt>"
   - 不依赖真实 QQ 发消息；
   - 默认只临时开启服务器本机 `127.0.0.1:9229`，结束后自动关闭；
   - 只截获伪会话 `private:<fake_user_id>` 的出站，不影响真实用户消息。
+  - 它只是线上真实对话验收的接入方式，不是“脚本返回成功就算通过”；必须以 bot 实际回复是否符合预期为最终判定标准
 - 同一轮验收中的 `probe-live-bot.sh` 必须串行执行，禁止并发跑多条：
   - ChatLuna 私聊存在“自动建房”路径，并发 probe 可能撞到同一个 fake user 的建房竞态；
   - 已知现象是报错 `UNIQUE constraint failed: chathub_room.roomId`，这属于验收方式问题，不等于本次功能本身有缺陷；
@@ -135,9 +140,10 @@ bash .codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh "<prompt>"
 - 用该脚本执行每条验收用例，记录：
   - 输入提示词
   - 期望输出（关键断言）
-  - 实际输出（关键片段）
+  - bot 实际输出（关键片段）
   - 结论（通过/失败）
 - 若脚本返回 `ok=false`、`timeout=true`、无输出，均视为用例失败。
+- 即使脚本返回成功，只要 bot 的回复内容、风格、动作或边界行为不符合预期，该用例仍然判定为失败。
 - 若任一用例失败，必须进入 Debug 回环：
   - 本地修复代码（必要时同步 `.env.server`、`.env.server.example`，以及本地链路受影响时对应的 `.env.local`、`.env.example`）；
   - 再次走“原子提交 -> push -> CI/Deploy 追踪 -> 提示词验收”；
@@ -148,8 +154,8 @@ bash .codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh "<prompt>"
 - 必须给出：
   - 提交哈希与提交信息
   - 采用的是“本地链路”还是“远端链路”
-  - 若走本地链路：本地验证命令、关键日志/状态证据、验收用例（输入、期望、实际、结论）
-  - 若走远端链路：push 目标（remote/branch）、CI/Deploy 运行 ID、URL、最终结论、提示词验收用例（输入、期望、实际、结论）
+  - 若走本地链路：本地验证命令、关键日志/状态证据、与 bot 聊天的验收用例（输入、期望、bot 实际回复/行为、结论）
+  - 若走远端链路：push 目标（remote/branch）、CI/Deploy 运行 ID、URL、最终结论、与 bot 聊天的验收用例（输入、期望、bot 实际回复/行为、结论）
 - 如果失败，给出失败 job/步骤或失败用例断言，并提出下一步修复动作。
 
 ## 给其他模型的提示词模板
@@ -158,13 +164,13 @@ bash .codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh "<prompt>"
 你现在执行 qqbot 交付任务，必须严格遵循以下步骤并输出可审计结果：
 1) 先做变更范围确认，只包含与本次需求相关文件。
 2) 先判断本次应走“本地链路”还是“远端链路”：除非我明确要求 push/Deploy/Actions，否则默认走本地链路；当前 bot 若是本地运行，也默认视为本地链路。
-3) 若走本地链路：先做本地验证（typecheck/test/smoke/startup/systemd/logs 中的最小充分组合），再按改动点设计本地 bot 验收，并记录输入、期望断言、实际输出、通过/失败；全部通过后，才按原子提交原则提交代码。
+3) 若走本地链路：先做本地验证（typecheck/test/smoke/startup/systemd/logs 中的最小充分组合），再按改动点设计本地 bot 验收，并记录输入、期望断言、bot 实际回复/行为、通过/失败；若改动影响 bot 回复内容或行为，必须亲自查看 bot 的真实回复，不能只看脚本退出码；全部通过后，才按原子提交原则提交代码。
 4) 若改动涉及本地 Web 界面、控制台页面、布局、按钮、表单或浏览器交互，必须优先做真实浏览器验证；默认先用 `MCP` 浏览器工具，只有在需要脚本化复现、批量留证或抓取 `console` / `network` / `trace` 时才改用 `Playwright skill`。
 5) 若走远端链路：也先完成本地最小充分验证，再做原子提交，然后使用 push-with-dotenv.sh 推送（除非我明确说不要更新 QQBOT_DOTENV），再用 watch-actions.sh 追踪 CI；若分支为 main 还要追踪 Deploy；必须等到最终结论。
-6) 远端链路在 CI/Deploy 成功后，按本次改动点设计 bot 提示词测试（正常/边界/异常），并使用 `.codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh` 执行线上 bot 测试。
+6) 远端链路在 CI/Deploy 成功后，按本次改动点设计 bot 提示词测试（正常/边界/异常），并使用 `.codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh` 执行线上 bot 测试；最终是否通过，取决于你观察到的 bot 实际回复，而不是脚本本身是否成功结束。
 7) 任一失败都要继续 Debug，并重复对应链路，直到全部通过。
 8) 最后给出提交哈希、采用的链路，以及对应的验证证据；如果走了远端链路，再补充 push 目标、CI/Deploy 运行 ID 与 URL。
-禁止跳过测试、禁止只做口头判断、禁止把 Web 验收停留在静态阅读代码、禁止在本地链路下默认 git push、禁止在验证通过前提前提交半成品。
+禁止跳过测试、禁止只做口头判断、禁止把脚本返回成功误当成 bot 回归通过、禁止在不查看 bot 实际回复的情况下声称“验收通过”、禁止把 Web 验收停留在静态阅读代码、禁止在本地链路下默认 git push、禁止在验证通过前提前提交半成品。
 ```
 
 ```text
@@ -193,7 +199,7 @@ bash .codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh "<prompt>"
 - 当前 bot 若以本地 user-level `systemd` 运行，则默认采用“先本地回归验证、通过后再 Git 原子提交、不 push”的顺序。
 - Bot env 改动按角色分别维护：本地改 `.env.local` / `.env.example`，服务器改 `.env.server` / `.env.server.example`；不要再把 bot 的本地与服务器配置混写到同一个 `.env` 里。
 - 本地调试优先复用现有 user-level `systemd`：`qqbot.target`、`qqbot-stack.service`、`qqbot-koishi.service`；语音相关问题按需查看独立的 `qqbot-voice-tts.service`。
-- 本地 bot 聊天验收默认优先使用 `.codex/skills/qqbot-git-deliver/scripts/probe-local-bot.sh`，而不是手动翻日志猜测输出。
+- 本地 bot 聊天验收默认优先使用 `.codex/skills/qqbot-git-deliver/scripts/probe-local-bot.sh`，但验收结论必须建立在 bot 实际回复是否符合预期之上，而不是脚本是否返回成功。
 - 若是本地 Web / WebUI 调试，默认优先使用 `MCP` 浏览器工具；只有在需要脚本化复现、批量留证或抓取 `console` / `network` / `trace` 时才改用 `Playwright skill`。
 - 远端链路下，部署后 bot 验收允许临时开启服务器本机 Node inspector（`127.0.0.1:9229`）并在验收后关闭；这属于临时调试动作，不改线上代码、不重启服务。
 - 远端链路下，部署后 bot 验收默认串行跑 `probe-live-bot.sh`，并优先复用既有 `FAKE_USER_ID`；不要并发制造新的私聊 fake user 房间。
@@ -270,6 +276,13 @@ FAKE_USER_ID=90000123 BOT_TIMEOUT_SECONDS=60 \
 结论: 通过|失败
 ```
 
+```text
+# 涉及 bot 回复的验收判定原则（必须遵守）
+- 测试、构建、日志、脚本成功，最多说明链路“可运行”，不自动等于 bot 回归“通过”。
+- 只要本次改动会影响 bot 的回复内容、语气、人格、动作、结构化输出、表情包、语音、搜索、上下文理解或空输入行为，就必须与 bot 真实聊天并查看实际回复。
+- 最终通过标准是：bot 的实际回复内容和行为达到本次需求预期。
+```
+
 ## 失败处理
 
 - 本地链路验证失败：
@@ -297,4 +310,4 @@ FAKE_USER_ID=90000123 BOT_TIMEOUT_SECONDS=60 \
   - 先检查是否并发跑了多条 `probe-live-bot.sh` 或同时创建新的 fake user 私聊房间；
   - 该问题通常是 ChatLuna 私聊自动建房竞态，不一定是本次功能回归；
   - 改为串行执行，并优先复用已建好的 `FAKE_USER_ID` 后重试。
-- 提示词验收失败：将失败断言转成可复现最小输入，优先本地改代码修复并重新走整条交付链路，禁止只口头判定“应该可用”。
+- 提示词验收失败：将失败断言转成可复现最小输入，优先本地改代码修复并重新走整条交付链路；即使脚本成功、日志正常，只要 bot 实际回复不对，也必须视为失败，禁止只口头判定“应该可用”。

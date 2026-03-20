@@ -227,12 +227,10 @@ bash ./scripts/cleanup-debug-chat-state.sh
 ## 5. Trigger contract
 
 - Runtime trigger path = `task-automation` (优先) + `group-natural-trigger` + ChatLuna native。
-- `chatluna-model-guard` 额外支持“发送期重规划”灰度开关：
-  - 仅在上一轮回复已经生成完、但仍在按行发送尾部时生效。
-  - 群聊按群共享 scope，任意成员插话都可打断未发出的 tail；私聊只在同一私聊会话内生效。
-  - 已经发出的消息不会撤回或编辑；仅丢弃未发出的 tail，并基于已发前缀 + collect window 内的新消息续写。
-  - `<qqbot-multiline>` preserve 模式保持原子：只会在整块发送前被替换，不支持块内打断。
-  - 默认关闭，通过 `QQBOT_LIVE_REPLY_ENABLED=true` 灰度开启。
+- `reply runtime` 统一接管生成期与发送期中断：
+  - 同一会话的新消息会中断旧 run，并以最新消息重新生成。
+  - 已经发出的内容不会撤回；未发送的剩余 segment 会被丢弃，并重写历史尾部。
+  - `ReplyPlan.multiline` 仍保持原子块发送，但整块发送前可以被新 run 替换。
 - 群聊可自然触发，无需 `@` 或句首昵称：
   - 任意消息有 `25%` 概率直接触发对话。
   - 否则走“规则 + 模型”触发判定。
@@ -322,16 +320,6 @@ bash ./scripts/cleanup-debug-chat-state.sh
 - `TASK_AUTOMATION_CHAT_REPLY_MAX_TOKENS`：创建任务自然回复 `max_tokens`（默认 `10000`）。
 - `TASK_AUTOMATION_CHAT_REPLY_SYSTEM_PROMPT`：创建任务自然回复专用 system prompt（可选覆盖默认值）。
 
-### ChatLuna live reply environment variables
-
-- `QQBOT_LIVE_REPLY_ENABLED`：是否开启发送期可中断续写（默认 `false`）。
-- `QQBOT_LIVE_REPLY_COLLECT_WINDOW_MS`：插话 collect window（默认 `600` 毫秒）。
-- `QQBOT_LIVE_REPLY_MAX_PENDING_MESSAGES`：单个 scope collect window 内最多缓冲的插话数（默认 `8`）。
-- `QQBOT_LIVE_REPLY_HISTORY_REWRITE_FALLBACK`：历史修复失败时的回退策略，当前仅支持 `queue`。
-- 作用边界：
-  - 仅处理“发送期重规划”，不处理模型仍在生成中的中断。
-  - 历史修复仅覆盖普通 `human -> ai` 尾部；遇到 tool/function 尾链会自动回退到现有串行队列。
-
 ### QQ voice environment variables
 
 - `QQ_VOICE_ENABLED`：是否启用语音插件总开关（默认 `true`）。
@@ -354,7 +342,7 @@ bash ./scripts/cleanup-debug-chat-state.sh
 
 ## 12. Pokemon battle plugin
 
-- `koishi-plugin-pokemon-battle` is loaded through local bridge plugin `./dist/plugins/pokemon-battle-bridge`.
+- `koishi-plugin-pokemon-battle` is loaded through local bridge plugin `./dist/plugins/pokemon-battle`.
 - CI 环境默认禁用该插件（除非显式设置 `POKEMON_BATTLE_ENABLED=true`），避免 CI 触发资源下载。
 - 关键词优先路由：命中宝可梦指令关键词时，优先进入宝可梦命令链路；未命中才进入普通聊天链路。
 - Runtime dependencies are provided by:
@@ -399,7 +387,7 @@ pnpm build
   - Confirm ChatLuna is loaded and DeepSeek adapter is loaded.
   - Confirm trigger pattern matches ChatLuna native rules (`@`/昵称/私聊).
 - 自动化未触发：
-  - 确认 `./dist/plugins/task-automation` 与 `cron` 已在 `koishi.yml` 启用。
+  - 确认 `./dist/plugins/automation` 与 `cron` 已在 `koishi.yml` 启用。
   - 确认当前群在 `CHAT_ENABLED_GROUPS` 白名单。
   - 确认意图模型配置可用（或已复用 `OPENAI_*`）。
 - OneBot WS cannot connect:
