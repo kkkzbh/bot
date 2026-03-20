@@ -1,0 +1,188 @@
+// ─── Label maps ───────────────────────────────────────────────────────────────
+
+export const FIELD_LABELS: Record<string, string> = {
+  QQ_VOICE_ENABLED: 'QQ 语音总开关',
+  QQ_VOICE_INPUT_ENABLED: '语音转文字',
+  QQ_VOICE_OUTPUT_ENABLED: '语音回复',
+  WEB_SEARCH_ENABLED: '联网搜索',
+  POKEMON_BATTLE_ENABLED: '宝可梦对战',
+  CHAT_NATURAL_TRIGGER_ENABLED: '群聊自然触发',
+  TASK_AUTOMATION_INTENT_ENABLED: '任务意图识别',
+  QQBOT_LIVE_REPLY_ENABLED: '发送期续写',
+  OPENAI_BASE_URL: '模型接口地址',
+  OPENAI_API_KEY: '模型接口密钥',
+  OPENAI_MODEL: '默认模型',
+  TASK_AUTOMATION_INTENT_MODEL: '任务意图模型',
+  TASK_AUTOMATION_DELIVERY_MODEL: '任务投递模型',
+  TASK_AUTOMATION_CHAT_REPLY_MODEL: '任务回复模型',
+  CHATLUNA_DEFAULT_MODEL: '对话默认模型',
+  CHATLUNA_DEFAULT_PRESET: '默认预设',
+  CHAT_ENABLED_GROUPS: '自动化启用群',
+  CHAT_NATURAL_TRIGGER_GROUPS: '自然触发群',
+  CHAT_NATURAL_TRIGGER_ALIASES: '触发别名',
+  CHATLUNA_COMMAND_AUTHORITY: '命令权限等级',
+}
+
+export const FIELD_HINTS: Record<string, string> = {
+  TASK_AUTOMATION_INTENT_MODEL:
+    '用于识别一段消息是不是任务需求，以及应该进入哪条任务自动化链路。更适合选择理解能力强、分类稳定的模型。',
+  TASK_AUTOMATION_DELIVERY_MODEL:
+    '用于把已识别的任务整理成可执行指令并投递给后续流程。更适合选择结构化输出稳定、遵循要求准确的模型。',
+  TASK_AUTOMATION_CHAT_REPLY_MODEL:
+    '用于任务流程里的对话回复，例如确认、追问和结果回执。它会直接影响用户看到的任务类回复内容。',
+  CHATLUNA_DEFAULT_MODEL:
+    '普通聊天默认走这里配置的模型。未单独指定其它模型的日常对话，会优先使用它。',
+}
+
+export const ROLE_LABELS: Record<string, string> = {
+  system: '系统',
+  user: '用户',
+  assistant: '助手',
+  tool: '工具',
+}
+
+export const SERVICE_LABELS: Record<string, string> = {
+  'qqbot.target': '机器人总控',
+  'qqbot-koishi.service': '主机器人服务',
+  'qqbot-stack.service': '依赖服务栈',
+  'qqbot-voice-tts.service': '语音合成服务',
+  'qqbot-voice-tts-tailnet.service': '语音 Tailnet 发布',
+}
+
+export const SERVICE_HINTS: Record<string, string> = {
+  'qqbot.target':
+    '推荐直接操作这一项。它已经包含主机器人服务和依赖服务栈，不再单独拆开操作。',
+  'qqbot-koishi.service': '机器人主程序。大多数聊天和控制功能依赖它。',
+  'qqbot-stack.service': '依赖组件服务。桥接、外部接口或容器能力需要它。',
+  'qqbot-voice-tts.service': '只有用到语音播报或语音回复时才需要。',
+  'qqbot-voice-tts-tailnet.service':
+    '仅在服务器需要经由 Tailnet 访问本机 TTS 时启用。它不会再启动第二份模型。',
+}
+
+export const VISIBLE_SERVICE_UNITS = [
+  'qqbot.target',
+  'qqbot-voice-tts.service',
+  'qqbot-voice-tts-tailnet.service',
+] as const
+
+export const ALL_SERVICE_UNITS = [
+  'qqbot.target',
+  'qqbot-koishi.service',
+  'qqbot-stack.service',
+  'qqbot-voice-tts.service',
+  'qqbot-voice-tts-tailnet.service',
+] as const
+
+export const ACTIVE_STATE_LABELS: Record<string, string> = {
+  active: '已运行',
+  inactive: '未运行',
+  failed: '运行失败',
+  activating: '正在启动',
+  deactivating: '正在停止',
+  reloading: '正在重载',
+  unknown: '未知',
+}
+
+export const SUB_STATE_LABELS: Record<string, string> = {
+  active: '已激活',
+  running: '运行中',
+  dead: '未运行',
+  exited: '已退出',
+  failed: '失败',
+  start: '启动中',
+  stop: '停止中',
+  auto_restart: '自动重启中',
+  listening: '监听中',
+  plugged: '已接入',
+  mounted: '已挂载',
+  unknown: '未知',
+}
+
+export const UNIT_FILE_STATE_LABELS: Record<string, string> = {
+  enabled: '已启用开机自启',
+  disabled: '未启用开机自启',
+  static: '固定服务',
+  indirect: '间接启用',
+  masked: '已屏蔽',
+  generated: '自动生成',
+  transient: '临时服务',
+  unknown: '未知',
+}
+
+/** Items shown in the Overview panel's features chip list. */
+export const OVERVIEW_FEATURE_ITEMS: [string, string][] = [
+  ['QQ_VOICE_ENABLED', '语音'],
+  ['WEB_SEARCH_ENABLED', '搜索'],
+  ['CHAT_NATURAL_TRIGGER_ENABLED', '自然触发'],
+  ['TASK_AUTOMATION_INTENT_ENABLED', '任务意图'],
+  ['QQBOT_LIVE_REPLY_ENABLED', '发送期续写'],
+]
+
+// ─── Lookup helpers ───────────────────────────────────────────────────────────
+
+export function getFieldLabel(key: string): string {
+  return FIELD_LABELS[key] ?? key
+}
+
+export function getFieldHint(key: string): string {
+  return FIELD_HINTS[key] ?? ''
+}
+
+export function getServiceLabel(unit: string, fallbackDescription?: string): string {
+  return SERVICE_LABELS[unit] ?? fallbackDescription ?? unit
+}
+
+export function getServiceHint(unit: string): string {
+  return SERVICE_HINTS[unit] ?? '这是机器人运行过程中的一个服务组件。'
+}
+
+export function getActiveStateLabel(value: string): string {
+  return ACTIVE_STATE_LABELS[value] ?? value
+}
+
+export function getSubStateLabel(value: string): string {
+  return SUB_STATE_LABELS[value] ?? value
+}
+
+export function getUnitFileStateLabel(value: string): string {
+  return UNIT_FILE_STATE_LABELS[value] ?? value
+}
+
+// ─── Tone / status helpers ────────────────────────────────────────────────────
+
+export type StatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'primary'
+
+/**
+ * Maps a systemd activeState to a badge tone.
+ */
+export function getActiveStateTone(activeState: string): StatusTone {
+  switch (activeState) {
+    case 'active':
+      return 'success'
+    case 'failed':
+      return 'danger'
+    case 'activating':
+    case 'deactivating':
+    case 'reloading':
+      return 'warning'
+    default:
+      return 'muted'
+  }
+}
+
+/**
+ * Maps a systemd activeState to the CSS class suffix used on `.bc-status-dot`.
+ * Returns one of: 'active' | 'failed' | 'inactive'
+ */
+export function getStatusDotClass(activeState: string): 'active' | 'failed' | 'inactive' {
+  if (activeState === 'active') return 'active'
+  if (activeState === 'failed') return 'failed'
+  return 'inactive'
+}
+
+/**
+ * Returns the label for the auto-start toggle button based on current state.
+ */
+export function getAutoStartButtonLabel(canEnable: boolean): string {
+  return canEnable ? '启用开机自启' : '已启用开机自启'
+}

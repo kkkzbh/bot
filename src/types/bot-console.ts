@@ -61,3 +61,7 @@ export interface BotConsoleProbeResult {
   target: 'embedding';
   memoryV2: MemoryV2ProbeResult;
 }
+
+export interface GetRecentLogsResponse {
+  lines: string[];
+}

@@ -4,7 +4,9 @@
   "private": true,
   "description": "QQ group AI chat bot powered by Koishi + OneBot on Fedora/Podman",
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ./scripts/copy-bot-console-assets.mjs",
+    "build": "rm -rf dist node_modules/.cache/qqbot-bot-console && tsc -p tsconfig.build.json && pnpm console:build",
+    "console:build": "vite build --config src/plugins/bot-console/client/vite.config.ts",
+    "console:dev": "vite build --config src/plugins/bot-console/client/vite.config.ts --watch",
     "dev": "pnpm start",
     "docs:dev": "vitepress dev web",
     "docs:build": "vitepress build web",
@@ -55,8 +57,11 @@
   },
   "devDependencies": {
     "@types/node": "^25.3.0",
+    "@vitejs/plugin-vue": "^6.0.5",
     "typescript": "^5.9.3",
+    "vite": "^8.0.1",
     "vitepress": "^1.6.4",
-    "vitest": "^4.0.18"
+    "vitest": "^4.0.18",
+    "vue": "^3.5.28"
   }
 }

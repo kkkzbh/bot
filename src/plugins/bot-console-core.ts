@@ -377,10 +377,6 @@ export class BotConsoleManager {
     return readManagedEnvFromContent(next);
   }
 
-  async validatePreset(document: PresetDocument): Promise<PresetDocument> {
-    return normalizePresetDocument(document);
-  }
-
   async savePreset(document: PresetDocument): Promise<PresetDocument> {
     const normalized = normalizePresetDocument(document);
     const targetPath = this.resolvePresetPath(normalized.name);
@@ -424,6 +420,29 @@ export class BotConsoleManager {
     }
     await this.execFile('systemctl', ['--user', action, unit], { cwd: this.rootDir, timeout: 15_000 });
     return this.getServiceStatus(unit);
+  }
+
+  async getRecentLogs(limit = 200): Promise<string[]> {
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.trunc(limit))) : 200;
+    const { stdout } = await this.execFile(
+      'journalctl',
+      [
+        '--user',
+        '-u',
+        'qqbot-koishi.service',
+        '-n',
+        String(safeLimit),
+        '--no-pager',
+        '--output',
+        'short-precise',
+      ],
+      { cwd: this.rootDir, timeout: 15_000 },
+    );
+
+    return stdout
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter(Boolean);
   }
 
   async getServiceStatuses(): Promise<BotServiceStatus[]> {

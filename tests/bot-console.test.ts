@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BotConsoleManager } from '../src/plugins/bot-console-core.js';
 
 vi.mock('@koishijs/plugin-console', () => ({}));
 vi.mock('koishi', () => {
@@ -215,5 +216,37 @@ describe('bot-console plugin', () => {
     expect(probeEmbedding).toHaveBeenCalledTimes(1);
     expect(result.memoryV2.ok).toBe(true);
     expect(result.memoryV2.snapshot.embed.lastSource).toBe('probe');
+  });
+
+  it('returns recent koishi logs through the protected listener', async () => {
+    const dir = createTempDir();
+    mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
+    writeFileSync(join(dir, '.env.local'), 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(
+      join(dir, 'data/chathub/presets/sakiko.yml'),
+      'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
+      'utf8',
+    );
+
+    const getRecentLogsSpy = vi
+      .spyOn(BotConsoleManager.prototype, 'getRecentLogs')
+      .mockResolvedValue(['2026-03-20 16:00:00 [I] bot-console test']);
+
+    const addListener = vi.fn();
+    apply({
+      baseDir: dir,
+      console: {
+        addEntry: vi.fn(),
+        addListener,
+      },
+    } as any);
+
+    const getRecentLogsListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/get-recent-logs')?.[1];
+    expect(getRecentLogsListener).toBeTypeOf('function');
+    await expect(getRecentLogsListener()).resolves.toEqual({
+      lines: ['2026-03-20 16:00:00 [I] bot-console test'],
+    });
+    expect(getRecentLogsSpy).toHaveBeenCalledTimes(1);
+    getRecentLogsSpy.mockRestore();
   });
 });

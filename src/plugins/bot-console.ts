@@ -2,7 +2,15 @@ import '@koishijs/plugin-console';
 import { join } from 'node:path';
 import { Context, Logger } from 'koishi';
 import { BotConsoleManager } from './bot-console-core.js';
-import type { BotConsoleProbeResult, BotConsoleState, BotServiceUnit, EnvPatch, PresetDocument, ServiceAction } from '../types/bot-console.js';
+import type {
+  BotConsoleProbeResult,
+  BotConsoleState,
+  BotServiceUnit,
+  EnvPatch,
+  GetRecentLogsResponse,
+  PresetDocument,
+  ServiceAction,
+} from '../types/bot-console.js';
 import type { MemoryV2StatusServiceLike } from '../types/memory-v2.js';
 import { createUnavailableMemoryV2StatusSnapshot } from './memory-v2-status.js';
 
@@ -112,14 +120,6 @@ export function apply(ctx: Context): void {
   );
 
   consoleService.addListener(
-    'bot-console/validate-preset',
-    async (payload: unknown) => {
-      return manager.validatePreset(ensureRecord(payload) as unknown as PresetDocument);
-    },
-    { authority: LISTENER_AUTHORITY },
-  );
-
-  consoleService.addListener(
     'bot-console/save-preset',
     async (payload: unknown) => {
       const preset = await manager.savePreset(ensureRecord(payload) as unknown as PresetDocument);
@@ -142,6 +142,15 @@ export function apply(ctx: Context): void {
     async (unit: BotServiceUnit, action: ServiceAction) => {
       const status = await manager.runServiceAction(unit, action);
       return { status };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/get-recent-logs',
+    async (): Promise<GetRecentLogsResponse> => {
+      const lines = await manager.getRecentLogs();
+      return { lines };
     },
     { authority: LISTENER_AUTHORITY },
   );
