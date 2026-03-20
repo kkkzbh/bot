@@ -253,6 +253,75 @@
   gap: 0.45rem;
 }
 
+.bc-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+.bc-field-help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 1px solid #f3c46a;
+  border-radius: 999px;
+  background: #fff7e8;
+  color: #b96a09;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  flex-shrink: 0;
+}
+
+.bc-field-help:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+}
+
+.bc-field-tooltip {
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  left: 50%;
+  z-index: 8;
+  width: min(19rem, calc(100vw - 3rem));
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.96);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.22);
+  color: #f8fafc;
+  font-size: 0.76rem;
+  font-weight: 500;
+  line-height: 1.55;
+  text-align: left;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -0.2rem);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.bc-field-tooltip::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  width: 0.65rem;
+  height: 0.65rem;
+  background: rgba(15, 23, 42, 0.96);
+  transform: translate(-50%, 50%) rotate(45deg);
+}
+
+.bc-field-help:hover .bc-field-tooltip,
+.bc-field-help:focus-visible .bc-field-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .bc-field.bc-field-span {
   grid-column: 1 / -1;
 }

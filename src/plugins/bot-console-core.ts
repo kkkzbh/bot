@@ -15,6 +15,7 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import YAML from 'yaml';
 import type {
+  BotConsoleBaseState,
   BotConsoleState,
   BotServiceStatus,
   BotServiceUnit,
@@ -76,7 +77,6 @@ export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
   { key: 'CHAT_NATURAL_TRIGGER_ENABLED', label: '群聊自然触发', type: 'toggle', section: 'features' },
   { key: 'TASK_AUTOMATION_INTENT_ENABLED', label: '任务意图识别', type: 'toggle', section: 'features' },
   { key: 'QQBOT_LIVE_REPLY_ENABLED', label: '发送期续写', type: 'toggle', section: 'features' },
-  { key: 'TRACE_VIEWER_ENABLED', label: '运行追踪', type: 'toggle', section: 'features' },
   { key: 'OPENAI_BASE_URL', label: '模型接口地址', type: 'text', section: 'model' },
   { key: 'OPENAI_API_KEY', label: '模型接口密钥', type: 'secret', section: 'model' },
   { key: 'OPENAI_MODEL', label: '默认模型', type: 'text', section: 'model' },
@@ -97,6 +97,7 @@ export const BOT_CONSOLE_SERVICE_UNITS: readonly BotServiceUnit[] = [
   'qqbot-koishi.service',
   'qqbot-stack.service',
   'qqbot-voice-tts.service',
+  'qqbot-voice-tts-tailnet.service',
 ] as const;
 
 function defaultFs(): FsLike {
@@ -346,7 +347,7 @@ export class BotConsoleManager {
     this.execFile = options.execFile ?? defaultExec;
   }
 
-  async getState(): Promise<BotConsoleState> {
+  async getState(): Promise<BotConsoleBaseState> {
     const [envContent, presets, services] = await Promise.all([
       this.fs.readFile(this.envFilePath, 'utf8'),
       this.listPresetSummaries(),
@@ -416,6 +417,11 @@ export class BotConsoleManager {
 
   async runServiceAction(unit: BotServiceUnit, action: ServiceAction): Promise<BotServiceStatus> {
     validateServiceAction(unit, action);
+    if (unit === 'qqbot.target' && action === 'restart') {
+      await this.execFile('systemctl', ['--user', 'stop', unit], { cwd: this.rootDir, timeout: 15_000 });
+      await this.execFile('systemctl', ['--user', 'start', unit], { cwd: this.rootDir, timeout: 15_000 });
+      return this.getServiceStatus(unit);
+    }
     await this.execFile('systemctl', ['--user', action, unit], { cwd: this.rootDir, timeout: 15_000 });
     return this.getServiceStatus(unit);
   }

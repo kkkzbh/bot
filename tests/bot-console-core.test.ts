@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyEnvPatchToContent,
   BotConsoleManager,
@@ -148,5 +148,48 @@ describe('bot-console manager', () => {
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await expect(manager.saveEnv({ HACKED: '1' } as any)).rejects.toThrow('不支持这个配置项');
+  });
+
+  it('restarts qqbot.target via explicit stop then start', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    const execFile = vi
+      .fn()
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })
+      .mockResolvedValueOnce({
+        stdout: [
+          'Description=QQ Bot target',
+          'LoadState=loaded',
+          'ActiveState=active',
+          'SubState=active',
+          'UnitFileState=enabled',
+        ].join('\n'),
+        stderr: '',
+      });
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath, execFile });
+    const status = await manager.runServiceAction('qqbot.target', 'restart');
+
+    expect(execFile).toHaveBeenNthCalledWith(
+      1,
+      'systemctl',
+      ['--user', 'stop', 'qqbot.target'],
+      expect.objectContaining({ cwd: dir, timeout: 15_000 }),
+    );
+    expect(execFile).toHaveBeenNthCalledWith(
+      2,
+      'systemctl',
+      ['--user', 'start', 'qqbot.target'],
+      expect.objectContaining({ cwd: dir, timeout: 15_000 }),
+    );
+    expect(execFile).toHaveBeenNthCalledWith(
+      3,
+      'systemctl',
+      ['--user', 'show', 'qqbot.target', '--property', 'Description,LoadState,ActiveState,SubState,UnitFileState'],
+      expect.objectContaining({ cwd: dir, timeout: 15_000 }),
+    );
+    expect(status.activeState).toBe('active');
   });
 });

@@ -53,6 +53,13 @@ const FIELD_LABELS = {
   CHATLUNA_COMMAND_AUTHORITY: '命令权限等级',
 };
 
+const FIELD_HINTS = {
+  TASK_AUTOMATION_INTENT_MODEL: '用于识别一段消息是不是任务需求，以及应该进入哪条任务自动化链路。更适合选择理解能力强、分类稳定的模型。',
+  TASK_AUTOMATION_DELIVERY_MODEL: '用于把已识别的任务整理成可执行指令并投递给后续流程。更适合选择结构化输出稳定、遵循要求准确的模型。',
+  TASK_AUTOMATION_CHAT_REPLY_MODEL: '用于任务流程里的对话回复，例如确认、追问和结果回执。它会直接影响用户看到的任务类回复内容。',
+  CHATLUNA_DEFAULT_MODEL: '普通聊天默认走这里配置的模型。未单独指定其它模型的日常对话，会优先使用它。',
+};
+
 const ROLE_LABELS = {
   system: '系统',
   user: '用户',
@@ -345,6 +352,10 @@ function getFieldLabel(key) {
   return FIELD_LABELS[key] ?? key;
 }
 
+function getFieldHint(key) {
+  return FIELD_HINTS[key] ?? '';
+}
+
 function getServiceLabel(service) {
   return SERVICE_LABELS[service?.unit] ?? service?.description ?? service?.unit ?? '未知服务';
 }
@@ -407,7 +418,10 @@ function renderToggleCards(envDraft, changedKeys) {
 function renderTextFields(keys, envDraft, changedKeys) {
   return keys.map((key) => `
     <label class="bc-field">
-      <span>${escapeHtml(getFieldLabel(key))}</span>
+      <span class="bc-field-label">
+        <span>${escapeHtml(getFieldLabel(key))}</span>
+        ${renderFieldHint(key)}
+      </span>
       <input
         data-env-key="${escapeHtml(key)}"
         type="${key.includes('API_KEY') ? 'password' : 'text'}"
@@ -417,6 +431,17 @@ function renderTextFields(keys, envDraft, changedKeys) {
       ${changedKeys.has(key) ? '<em class="bc-field-note">已修改</em>' : ''}
     </label>
   `).join('');
+}
+
+function renderFieldHint(key) {
+  const hint = getFieldHint(key);
+  if (!hint) return '';
+  return `
+    <span class="bc-field-help" tabindex="0" aria-label="${escapeHtml(hint)}">
+      <span aria-hidden="true">!</span>
+      <span class="bc-field-tooltip" role="tooltip">${escapeHtml(hint)}</span>
+    </span>
+  `;
 }
 
 function renderPresetPrompts(preset) {
