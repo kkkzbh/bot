@@ -47,6 +47,7 @@ Bot 环境变量采用双 env 设计：
   - 先做最小充分回归验证
   - 若改动会影响 bot 最终回复内容、行为或人格表现，必须再做真实聊天验收
   - 验证全部通过后，再执行 Git 原子提交
+  - 若当前 bot 是本地部署形态，Git 提交完成后必须立即执行一次 `systemctl --user restart qqbot.target`
   - 默认不执行 `git push`
 - 禁止在本地链路尚未通过前提前提交“待验证代码”；若必须保留中间状态，使用工作区改动而不是提交半成品。
 - 先按改动点选择最小充分验证：
@@ -95,7 +96,7 @@ Bot 环境变量采用双 env 设计：
 - 按“一个功能/修复一个提交”分组。
 - 每组执行：`git add <paths>` -> `git diff --cached` -> `git commit -m "<type>: <简体中文描述>"`。
 - 禁止把两个独立改动合并进同一提交。
-- 本地链路下，提交完成即视为交付完成，不额外 `git push`。
+- 本地链路下，如果 bot 当前以本地部署形态运行，最后一个本地提交完成后必须执行一次 `systemctl --user restart qqbot.target`，确认服务已重新拉起；之后即视为交付完成，不额外 `git push`。
 
 5. 远端链路：同步 DOTENV + 推送（仅在用户明确要求时）
 - 优先使用脚本（会把本地 `.env.server` 同步到 GitHub Secret `QQBOT_DOTENV`，再 push）：
@@ -200,6 +201,7 @@ bash .codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh "<prompt>"
 - Bot env 改动按角色分别维护：本地改 `.env.local` / `.env.example`，服务器改 `.env.server` / `.env.server.example`；不要再把 bot 的本地与服务器配置混写到同一个 `.env` 里。
 - 本地调试优先复用现有 user-level `systemd`：`qqbot.target`、`qqbot-stack.service`、`qqbot-koishi.service`；语音相关问题按需查看独立的 `qqbot-voice-tts.service`。
 - 本地 bot 聊天验收默认优先使用 `.codex/skills/qqbot-git-deliver/scripts/probe-local-bot.sh`，但验收结论必须建立在 bot 实际回复是否符合预期之上，而不是脚本是否返回成功。
+- 本地链路里，只要已经完成 Git 提交，就必须补一次 `systemctl --user restart qqbot.target`，不要停留在“代码已提交但运行进程还是旧版本”的状态。
 - 若是本地 Web / WebUI 调试，默认优先使用 `MCP` 浏览器工具；只有在需要脚本化复现、批量留证或抓取 `console` / `network` / `trace` 时才改用 `Playwright skill`。
 - 远端链路下，部署后 bot 验收允许临时开启服务器本机 Node inspector（`127.0.0.1:9229`）并在验收后关闭；这属于临时调试动作，不改线上代码、不重启服务。
 - 远端链路下，部署后 bot 验收默认串行跑 `probe-live-bot.sh`，并优先复用既有 `FAKE_USER_ID`；不要并发制造新的私聊 fake user 房间。
