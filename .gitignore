@@ -9,6 +9,7 @@ node_modules
 .pnpm-store
 coverage
 dist
+.env.local.bak.*
 .idea
 koishi-runtime.log
 *.log
@@ -17,8 +18,16 @@ zpix.ttf
 __pycache__/
 *.pyc
 data/llonebot
+data/chathub.local-backup-*/
+data/chathub/stickers/index.yml
+data/chathub/stickers/images/bored.png
+data/chathub/stickers/images/cold.png
+data/chathub/stickers/images/embarrassed.gif
+data/chathub/stickers/images/piano.gif
 data/voice/tts-local/
 data/koishi.db
+data/koishi.db.*.bak
+data/koishi.db.local-backup-*
 downloads/
 data/chathub/presets/*.yml
 !data/chathub/presets/sakiko.yml
