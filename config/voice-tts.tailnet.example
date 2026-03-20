@@ -1,0 +1,6 @@
+# Optional tailnet publisher for the loopback-only local TTS gateway.
+# This does not start another model process. It only publishes
+# 127.0.0.1:${VOICE_TTS_LOCAL_UPSTREAM_PORT} to your tailnet via `tailscale serve`.
+VOICE_TTS_TAILNET_PORT=5162
+VOICE_TTS_LOCAL_UPSTREAM_HOST=127.0.0.1
+VOICE_TTS_LOCAL_UPSTREAM_PORT=5162

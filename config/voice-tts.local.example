@@ -1,6 +1,6 @@
-# Laptop-local GPT-SoVITS gateway over Tailscale
+# Laptop-local GPT-SoVITS gateway on loopback
 VOICE_TTS_PYTHON_BIN=/home/kkkzbh/code/qqbot/.venv-voice-tts/bin/python
-VOICE_TTS_HOST=100.119.134.69
+VOICE_TTS_HOST=127.0.0.1
 VOICE_TTS_PORT=5162
 VOICE_TTS_API_KEY=qqbot-voice-tts-token
 

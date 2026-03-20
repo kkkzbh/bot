@@ -215,6 +215,14 @@ The suite reuses a single fake private chat for the current run and prints only:
 - pass/fail result
 
 By default it generates a fresh `FAKE_USER_ID` for each smoke run, then reuses it serially within that run to avoid private-room creation races. Override `FAKE_USER_ID` or `BOT_TIMEOUT_SECONDS` only when needed.
+The script now also removes the debug-generated private room, conversation, messages, and fake user on exit, so successful and failed runs do not leave `codex-debug` residue behind.
+
+If you need to manually clean prior debug probes, run:
+
+```bash
+cd /home/kkkzbh/code/qqbot
+bash ./scripts/cleanup-debug-chat-state.sh
+```
 
 ## 5. Trigger contract
 

@@ -51,7 +51,11 @@ Bot 环境变量采用双 env 设计：
   - 类型/构建问题优先：`pnpm typecheck`、`pnpm build`
   - 单元/集成逻辑优先：`pnpm test` 或针对性 `vitest` 用例
   - 启动/配置回归优先：`pnpm smoke:start`
-  - 需要完整 bot 行为时：本地拉起运行链路后做提示词或交互验收
+  - 固定聊天回归优先：`pnpm smoke:chat`
+  - 需要完整 bot 行为时：本地拉起运行链路后，默认优先使用 `bash .codex/skills/qqbot-git-deliver/scripts/probe-local-bot.sh "<prompt>"` 做提示词或交互验收
+  - 若改动涉及本地 `web` / `webUI` / 控制台页面 / 浏览器交互调试，默认优先使用 `MCP` 浏览器工具做真实浏览器验收
+  - 只有在需要脚本化复现、批量留证、抓取 `console` / `network` / `trace`、或需要多轮稳定回放时，才改用 `Playwright skill`
+  - 不要把 Web 验收写成“二选一都行”；默认优先级固定为 `MCP` 第一、`Playwright skill` 第二
 - 本地运行优先使用现成 `systemd --user` 拓扑：
   - `qqbot.target`：总目标
   - `qqbot-stack.service`：拉起 `pmhq + llbot`
@@ -64,6 +68,13 @@ Bot 环境变量采用双 env 设计：
   - 期望断言
   - 实际输出或实际行为
   - 结论（通过/失败）
+  - 若涉及 Web 调试：补充页面 URL、操作路径、snapshot / screenshot、控制台或网络证据、最终可见结果
+- 本地 bot 提示词验收默认使用 `probe-local-bot.sh`：
+  - 命中的是当前本机运行中的真实 Koishi + ChatLuna + OneBot 处理链路
+  - 通过临时 Node inspector 向本地 worker 注入 fake 私聊入站，并只截获 `private:<fake_user_id>` 的出站
+  - 不依赖真实 QQ 发消息
+  - 同一轮本地验收也必须串行执行，优先复用同一个 `FAKE_USER_ID`，避免私聊建房竞态
+  - 需要清理本地 debug 私聊残留时，使用 `bash ./scripts/cleanup-debug-chat-state.sh`
 - 需要查看运行态时，优先使用：
   - `systemctl --user status qqbot-stack.service qqbot-koishi.service qqbot.target`
   - `journalctl --user -u qqbot-koishi.service -f`
@@ -148,11 +159,12 @@ bash .codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh "<prompt>"
 1) 先做变更范围确认，只包含与本次需求相关文件。
 2) 先判断本次应走“本地链路”还是“远端链路”：除非我明确要求 push/Deploy/Actions，否则默认走本地链路；当前 bot 若是本地运行，也默认视为本地链路。
 3) 若走本地链路：先做本地验证（typecheck/test/smoke/startup/systemd/logs 中的最小充分组合），再按改动点设计本地 bot 验收，并记录输入、期望断言、实际输出、通过/失败；全部通过后，才按原子提交原则提交代码。
-4) 若走远端链路：也先完成本地最小充分验证，再做原子提交，然后使用 push-with-dotenv.sh 推送（除非我明确说不要更新 QQBOT_DOTENV），再用 watch-actions.sh 追踪 CI；若分支为 main 还要追踪 Deploy；必须等到最终结论。
-5) 远端链路在 CI/Deploy 成功后，按本次改动点设计 bot 提示词测试（正常/边界/异常），并使用 `.codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh` 执行线上 bot 测试。
-6) 任一失败都要继续 Debug，并重复对应链路，直到全部通过。
-7) 最后给出提交哈希、采用的链路，以及对应的验证证据；如果走了远端链路，再补充 push 目标、CI/Deploy 运行 ID 与 URL。
-禁止跳过测试、禁止只做口头判断、禁止在本地链路下默认 git push、禁止在验证通过前提前提交半成品。
+4) 若改动涉及本地 Web 界面、控制台页面、布局、按钮、表单或浏览器交互，必须优先做真实浏览器验证；默认先用 `MCP` 浏览器工具，只有在需要脚本化复现、批量留证或抓取 `console` / `network` / `trace` 时才改用 `Playwright skill`。
+5) 若走远端链路：也先完成本地最小充分验证，再做原子提交，然后使用 push-with-dotenv.sh 推送（除非我明确说不要更新 QQBOT_DOTENV），再用 watch-actions.sh 追踪 CI；若分支为 main 还要追踪 Deploy；必须等到最终结论。
+6) 远端链路在 CI/Deploy 成功后，按本次改动点设计 bot 提示词测试（正常/边界/异常），并使用 `.codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh` 执行线上 bot 测试。
+7) 任一失败都要继续 Debug，并重复对应链路，直到全部通过。
+8) 最后给出提交哈希、采用的链路，以及对应的验证证据；如果走了远端链路，再补充 push 目标、CI/Deploy 运行 ID 与 URL。
+禁止跳过测试、禁止只做口头判断、禁止把 Web 验收停留在静态阅读代码、禁止在本地链路下默认 git push、禁止在验证通过前提前提交半成品。
 ```
 
 ```text
@@ -181,6 +193,8 @@ bash .codex/skills/qqbot-git-deliver/scripts/probe-live-bot.sh "<prompt>"
 - 当前 bot 若以本地 user-level `systemd` 运行，则默认采用“先本地回归验证、通过后再 Git 原子提交、不 push”的顺序。
 - Bot env 改动按角色分别维护：本地改 `.env.local` / `.env.example`，服务器改 `.env.server` / `.env.server.example`；不要再把 bot 的本地与服务器配置混写到同一个 `.env` 里。
 - 本地调试优先复用现有 user-level `systemd`：`qqbot.target`、`qqbot-stack.service`、`qqbot-koishi.service`；语音相关问题按需查看独立的 `qqbot-voice-tts.service`。
+- 本地 bot 聊天验收默认优先使用 `.codex/skills/qqbot-git-deliver/scripts/probe-local-bot.sh`，而不是手动翻日志猜测输出。
+- 若是本地 Web / WebUI 调试，默认优先使用 `MCP` 浏览器工具；只有在需要脚本化复现、批量留证或抓取 `console` / `network` / `trace` 时才改用 `Playwright skill`。
 - 远端链路下，部署后 bot 验收允许临时开启服务器本机 Node inspector（`127.0.0.1:9229`）并在验收后关闭；这属于临时调试动作，不改线上代码、不重启服务。
 - 远端链路下，部署后 bot 验收默认串行跑 `probe-live-bot.sh`，并优先复用既有 `FAKE_USER_ID`；不要并发制造新的私聊 fake user 房间。
 - 不使用破坏性历史操作（`reset --hard`、强推、amend）除非用户明确要求。
@@ -202,8 +216,13 @@ git commit -m "fix: 修复自动化时间解析"
 pnpm typecheck
 pnpm test
 pnpm smoke:start
+pnpm smoke:chat
 pnpm start
 pnpm start:local
+bash .codex/skills/qqbot-git-deliver/scripts/probe-local-bot.sh "你好，请只回复两个字：收到"
+# 串行复用同一个 fake user 以减少私聊建房竞态
+FAKE_USER_ID=90000123 BOT_TIMEOUT_SECONDS=60 \
+  bash .codex/skills/qqbot-git-deliver/scripts/probe-local-bot.sh "测试提示词"
 
 # 本地 systemd / 日志
 systemctl --user restart qqbot.target
@@ -255,12 +274,19 @@ FAKE_USER_ID=90000123 BOT_TIMEOUT_SECONDS=60 \
 
 - 本地链路验证失败：
   - 先把失败断言转成最小可复现输入，优先在本地修复并重跑同一批验证。
+- 若失败点在页面显示、布局、按钮行为、表单交互、路由跳转或控制台页面：
+  - 先用浏览器工具复现，不要只靠日志或口头判断；
+  - 默认优先使用 `MCP`，只有在需要脚本化复现或更强调试留证时才切到 `Playwright skill`。
 - `qqbot-koishi.service` 启动失败：
   - 先看 `systemctl --user status qqbot-koishi.service` 与 `journalctl --user -u qqbot-koishi.service -f`；
   - 再确认 `.env.local`（本地）或 `.env.server`（服务器）、`pnpm start`、以及 `pnpm build` 是否正常。
 - OneBot / LLBot 本地链路异常：
   - 先确认 `qqbot-stack.service` 已启动；
   - 再看 `podman compose -f /home/kkkzbh/code/qqbot/compose.yaml logs -f pmhq`。
+- 本地 `probe-local-bot.sh` 若报超时、无输出或 inspector/worker 定位失败：
+  - 先确认 `qqbot-koishi.service` 在运行，且当前 worker 进程存在；
+  - 再确认 `127.0.0.1:9229` inspector 可临时开启；
+  - 然后串行重试，并优先复用已建好的 `FAKE_USER_ID`。
 - 语音链路异常：
   - 若改动涉及本机 TTS，检查 `systemctl --user status qqbot-voice-tts.service` 与对应日志。
 - `watch-actions.sh` 未找到对应 workflow：

@@ -56,6 +56,7 @@ describe('qq voice config wiring', () => {
       'utf8',
     );
 
+    expect(envTemplate).toContain('VOICE_TTS_HOST=127.0.0.1');
     expect(envTemplate).toContain('VOICE_TTS_DEVICE=cuda');
     expect(envTemplate).toContain('VOICE_TTS_UPSTREAM_ROOT=/home/kkkzbh/code/qqbot/.runtime/gpt-sovits-upstream');
     expect(envTemplate).toContain(
@@ -71,6 +72,22 @@ describe('qq voice config wiring', () => {
       'Environment=QQBOT_VOICE_TTS_ENV_FILE=/home/kkkzbh/code/qqbot/config/voice-tts.local.env',
     );
     expect(serviceTemplate).toContain('ExecStart=/home/kkkzbh/code/qqbot/scripts/run-voice-tts-local.sh');
+    expect(serviceTemplate).not.toContain('tailscaled.service');
+  });
+
+  it('ships a dedicated tailnet publisher template instead of rebinding the model process', () => {
+    const envTemplate = readFileSync(resolve(process.cwd(), 'config/voice-tts.tailnet.example'), 'utf8');
+    const serviceTemplate = readFileSync(
+      resolve(process.cwd(), 'config/systemd/qqbot-voice-tts-tailnet.service.example'),
+      'utf8',
+    );
+
+    expect(envTemplate).toContain('VOICE_TTS_TAILNET_PORT=5162');
+    expect(envTemplate).toContain('VOICE_TTS_LOCAL_UPSTREAM_HOST=127.0.0.1');
+    expect(serviceTemplate).toContain('qqbot-voice-tts.service');
+    expect(serviceTemplate).toContain('QQBOT_VOICE_TTS_TAILNET_ENV_FILE=/home/kkkzbh/code/qqbot/config/voice-tts.tailnet.env');
+    expect(serviceTemplate).toContain('ExecStart=/home/kkkzbh/code/qqbot/scripts/publish-voice-tts-tailnet.sh apply');
+    expect(serviceTemplate).toContain('ExecStop=/home/kkkzbh/code/qqbot/scripts/publish-voice-tts-tailnet.sh clear');
   });
 
   it('keeps the sakiko preset free of deprecated qqbot transport tag contracts', () => {
