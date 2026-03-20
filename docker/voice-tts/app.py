@@ -15,6 +15,11 @@ from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+try:
+    import nltk
+except Exception:  # pragma: no cover - upstream runtime should provide nltk
+    nltk = None
+
 
 def env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -46,6 +51,12 @@ MEDIA_FORMAT = os.getenv("VOICE_TTS_MEDIA_TYPE", os.getenv("VOICE_TTS_MEDIA_FORM
 TTS_VERSION = os.getenv("VOICE_TTS_VERSION", "v2ProPlus")
 TTS_BATCH_SIZE = env_int("VOICE_TTS_BATCH_SIZE", 1)
 TTS_PARALLEL_INFER = os.getenv("VOICE_TTS_PARALLEL_INFER", "false").strip().lower() in {"1", "true", "yes", "on"}
+NLTK_DATA_DIR = Path(os.getenv("NLTK_DATA", str(Path.home() / "nltk_data")))
+REQUIRED_NLTK_RESOURCES = (
+    ("taggers/averaged_perceptron_tagger", "averaged_perceptron_tagger"),
+    ("taggers/averaged_perceptron_tagger_eng", "averaged_perceptron_tagger_eng"),
+    ("corpora/cmudict", "cmudict"),
+)
 
 MODEL_ROOT = Path(os.getenv("VOICE_TTS_MODEL_ROOT", "/data/voice/tts/models"))
 PRETRAINED_ROOT = Path(os.getenv("VOICE_TTS_PRETRAINED_ROOT", "/data/voice/tts/pretrained_models"))
@@ -292,6 +303,37 @@ def require_api_key(authorization: str | None) -> None:
 APP = FastAPI(title="qqbot-voice-tts", version="0.1.0")
 PROCESS = UpstreamProcess()
 SYNTH_LOCK = asyncio.Lock()
+NLTK_RESOURCE_ERROR: str | None = None
+
+
+def ensure_nltk_resources() -> None:
+    global NLTK_RESOURCE_ERROR
+
+    if nltk is None:
+        NLTK_RESOURCE_ERROR = "python package nltk is unavailable"
+        raise RuntimeError(NLTK_RESOURCE_ERROR)
+
+    NLTK_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    for resource_path, package_name in REQUIRED_NLTK_RESOURCES:
+        try:
+            nltk.data.find(resource_path)
+            continue
+        except LookupError:
+            pass
+
+        downloaded = nltk.download(package_name, download_dir=str(NLTK_DATA_DIR), quiet=True)
+        if not downloaded:
+            NLTK_RESOURCE_ERROR = f"failed to download nltk resource: {package_name}"
+            raise RuntimeError(NLTK_RESOURCE_ERROR)
+
+        try:
+            nltk.data.find(resource_path)
+        except LookupError as exc:
+            NLTK_RESOURCE_ERROR = f"nltk resource still missing after download: {package_name}"
+            raise RuntimeError(NLTK_RESOURCE_ERROR) from exc
+
+    NLTK_RESOURCE_ERROR = None
 
 
 @APP.on_event("startup")
@@ -314,6 +356,7 @@ async def healthz() -> Response:
         "upstreamPort": UPSTREAM_PORT,
         "configPath": str(CONFIG_PATH),
         "lastError": PROCESS.last_error,
+        "nltkError": NLTK_RESOURCE_ERROR,
         "device": RUNTIME_DEVICE,
         "isHalf": RUNTIME_IS_HALF,
     }
@@ -329,6 +372,11 @@ async def synthesize(request: SynthesizeRequest, authorization: str | None = Hea
         raise HTTPException(status_code=400, detail="unsupported speaker")
     if len(request.text.strip()) > MAX_TEXT_CHARS:
         raise HTTPException(status_code=413, detail="text too long")
+
+    try:
+        await asyncio.to_thread(ensure_nltk_resources)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     await asyncio.to_thread(PROCESS.ensure_running)
     if not PROCESS.running:
