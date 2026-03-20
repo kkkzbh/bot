@@ -23,6 +23,7 @@ Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime.
 - `OPENAI_BASE_URL`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
+- `MEMORY_EMBED_API_KEY`
 - `CHATLUNA_COMMAND_AUTHORITY`
 
 ## Developer docs (web)
@@ -65,36 +66,23 @@ Then it runs `koishi start koishi.yml`.
 
 Koishi listens on `KOISHI_HOST:KOISHI_PORT` (default `0.0.0.0:5140`).
 
-The lightweight trace viewer is served by Koishi at:
-
-- `http://127.0.0.1:${KOISHI_PORT}/trace`
-
-Trace capture is performance-oriented by default:
-
-- only stores snapshots for requests that actually enter chat / automation / voice flows
-- no token-by-token stream persistence
-- payloads are capped (`TRACE_VIEWER_MAX_EVENT_PAYLOAD_BYTES`)
-- SQLite writes are buffered and batched
-- access is limited to loopback / private-network addresses
-
 Koishi uses **OneBot WebSocket 正向连接** to LLBot:
 
 - `ONEBOT_WS_ENDPOINT=ws://127.0.0.1:3001`
 - Only OneBot protocol is supported in this project.
 
-ChatLuna long-memory does not read host `syslog`/`journalctl` logs as memory.
-Long-memory uses the configured vector store plus embeddings instead.
+Long-memory v2 stores only extracted long-term facts and episode summaries in local SQLite.
+Embeddings are only used for long-memory recall/writeback and are expected to come from SiliconFlow (`Qwen/Qwen3-Embedding-8B` by default).
 
 ## 4. Start LLBot stack (Podman)
 
 ```bash
-podman compose pull ollama pmhq llbot
+podman compose pull pmhq llbot
 podman compose up -d --build
 ```
 
-Official compose mode uses four services:
+Official compose mode uses three services:
 
-- `ollama`: local embedding service for ChatLuna long-memory (`nomic-embed-text:latest` by default)
 - `pmhq`: QQ client runtime and login session
 - `llbot`: OneBot + WebUI
 - `voice-asr`: `faster-whisper small/int8 + ffmpeg` HTTP service for QQ voice transcription
@@ -114,14 +102,11 @@ Then in LLBot WebUI enable **WebSocket正向** (server mode) on port `3001`.
 
 If token is set, keep LLBot token consistent with `ONEBOT_TOKEN`.
 
-`ollama` now starts through an explicit shell entrypoint so the image can both
-serve on `11434` and pre-pull the configured embedding model on startup.
-
 `qqbot-stack.service` also exports a dedicated Podman `containers.conf` with
 `keyring = false` to avoid rootless `runc` startup failures caused by exhausted
 session key quotas on the host.
 
-### 4.1 QQ voice services (server ASR + laptop TTS over Tailscale / local loopback)
+### 4.1 QQ voice services (server ASR + laptop TTS with loopback core and optional tailnet publish)
 
 - The server compose stack keeps only ASR on loopback:
   - `QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161`
@@ -130,13 +115,23 @@ session key quotas on the host.
   - local bot: set `QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162` in `.env.local`
   - server bot: set `QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162` in `.env.server`
   - keep `QQ_VOICE_TTS_API_KEY` identical between the bot env file in use and `config/voice-tts.local.env`
+- The local TTS gateway itself should only listen on loopback:
+  - set `VOICE_TTS_HOST=127.0.0.1` in `config/voice-tts.local.env`
+  - do not bind the model process directly to a Tailscale IP
+- If the server needs to reach your laptop TTS, publish the loopback gateway separately:
+  - use `tailscale serve --tcp 5162 tcp://127.0.0.1:5162`
+  - or install the optional `qqbot-voice-tts-tailnet.service`
+  - this publish layer does not load another model, so GPU memory usage stays single-copy
 - The laptop-local runtime now lives entirely under this repo:
   - upstream wrapper code: `/home/kkkzbh/code/qqbot/.runtime/gpt-sovits-upstream`
   - copied model assets: `/home/kkkzbh/code/qqbot/data/voice/tts-local`
 - This repository ships the laptop-local TTS templates:
   - `config/voice-tts.local.example`
+  - `config/voice-tts.tailnet.example`
   - `config/systemd/qqbot-voice-tts.service.example`
+  - `config/systemd/qqbot-voice-tts-tailnet.service.example`
   - `scripts/run-voice-tts-local.sh`
+  - `scripts/publish-voice-tts-tailnet.sh`
   - `scripts/setup-voice-tts-local-runtime.sh`
 
 ### 4.2 Start laptop-local TTS gateway
@@ -173,11 +168,11 @@ uv pip install --python /home/kkkzbh/code/qqbot/.venv-voice-tts/bin/python \
 5. Smoke test the laptop-local gateway before enabling systemd:
 
 ```bash
-QQBOT_VOICE_TTS_ENV_FILE=/home/kkkzbh/code/qqbot/config/voice-tts.local.env \
+ QQBOT_VOICE_TTS_ENV_FILE=/home/kkkzbh/code/qqbot/config/voice-tts.local.env \
   /home/kkkzbh/code/qqbot/scripts/run-voice-tts-local.sh
 ```
 
-6. Install the user unit after the manual smoke test passes:
+6. Install the loopback-only user unit after the manual smoke test passes:
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -186,6 +181,40 @@ cp /home/kkkzbh/code/qqbot/config/systemd/qqbot-voice-tts.service.example \
 systemctl --user daemon-reload
 systemctl --user enable --now qqbot-voice-tts.service
 ```
+
+7. Optional: if the server bot should access this laptop TTS over Tailnet, publish the loopback gateway instead of rebinding the model process:
+
+```bash
+cp /home/kkkzbh/code/qqbot/config/voice-tts.tailnet.example \
+  /home/kkkzbh/code/qqbot/config/voice-tts.tailnet.env
+mkdir -p ~/.config/systemd/user
+cp /home/kkkzbh/code/qqbot/config/systemd/qqbot-voice-tts-tailnet.service.example \
+  ~/.config/systemd/user/qqbot-voice-tts-tailnet.service
+systemctl --user daemon-reload
+systemctl --user enable --now qqbot-voice-tts-tailnet.service
+```
+
+If `tailscale serve` reports permission denied, grant your user operator access once:
+
+```bash
+sudo tailscale set --operator=$USER
+```
+
+### 4.3 Fixed local chat smoke cases
+
+After the local bot chain is running, use the fixed chat smoke suite to regression-test text reply, protocol-leak avoidance, sticker reply, and voice reply:
+
+```bash
+cd /home/kkkzbh/code/qqbot
+pnpm smoke:chat
+```
+
+The suite reuses a single fake private chat for the current run and prints only:
+- input prompt
+- final visible output summary
+- pass/fail result
+
+By default it generates a fresh `FAKE_USER_ID` for each smoke run, then reuses it serially within that run to avoid private-room creation races. Override `FAKE_USER_ID` or `BOT_TIMEOUT_SECONDS` only when needed.
 
 ## 5. Trigger contract
 

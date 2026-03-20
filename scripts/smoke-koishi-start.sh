@@ -7,6 +7,19 @@ cd "$ROOT_DIR"
 # Provide deterministic minimal runtime env for local/CI smoke start.
 export ONEBOT_SELF_ID="${ONEBOT_SELF_ID:-100000001}"
 export ONEBOT_TOKEN="${ONEBOT_TOKEN:-}"
+if [[ -z "${KOISHI_PORT:-}" ]]; then
+  export KOISHI_PORT="$(
+    python - <<'PY'
+import socket
+s = socket.socket()
+s.bind(('127.0.0.1', 0))
+print(s.getsockname()[1])
+s.close()
+PY
+  )"
+else
+  export KOISHI_PORT
+fi
 export OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.deepseek.com/v1}"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-sk-ci-smoke}"
 export OPENAI_MODEL="${OPENAI_MODEL:-deepseek/deepseek-chat}"
@@ -50,6 +63,7 @@ const keep = new Set([
   './dist/plugins/web-search:search',
   './dist/plugins/chatluna-sticker:sticker',
   './dist/plugins/chatluna-model-guard:mjddgg',
+  './dist/plugins/memory-v2:memory-v2',
 ]);
 
 for (const key of Object.keys(entry)) {
@@ -99,12 +113,17 @@ if ! grep -F "loader apply plugin ./dist/plugins/chatluna-model-guard" "$LOG_FIL
   exit 1
 fi
 
+if ! grep -F "loader apply plugin ./dist/plugins/memory-v2:memory-v2" "$LOG_FILE" >/dev/null; then
+  echo "Koishi smoke startup did not load memory-v2 plugin." >&2
+  exit 1
+fi
+
 if ! grep -F "loader apply plugin ./dist/plugins/bot-console:bot-console" "$LOG_FILE" >/dev/null; then
   echo "Koishi smoke startup did not load bot-console plugin." >&2
   exit 1
 fi
 
-if grep -nE "loader apply plugin adapter-onebot:onebot|loader apply plugin chatluna-deepseek-adapter:|loader apply plugin chatluna-ollama-adapter:" "$LOG_FILE" >/dev/null; then
+if grep -nE "loader apply plugin adapter-onebot:onebot|loader apply plugin chatluna-deepseek-adapter:" "$LOG_FILE" >/dev/null; then
   echo "Koishi smoke startup unexpectedly loaded external dependency plugins." >&2
   exit 1
 fi

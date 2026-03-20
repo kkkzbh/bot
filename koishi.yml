@@ -12,18 +12,19 @@ plugins:
     console:9xw6ka:
       open: false
       uiPath: ${{ env.KOISHI_CONSOLE_UI_PATH || '/console' }}
-    ./dist/plugins/bot-console:bot-console: {}
     database-sqlite:8jr5yp:
       path: ${{ env.SQLITE_PATH || './data/koishi.db' }}
-    ./dist/plugins/trace-viewer:trace:
-      enabled: ${{ env.TRACE_VIEWER_ENABLED !== 'false' }}
-      uiPath: ${{ env.TRACE_VIEWER_UI_PATH || '/trace' }}
-      apiPath: ${{ env.TRACE_VIEWER_API_PATH || '/trace/api' }}
-      retentionDays: ${{ +env.TRACE_VIEWER_RETENTION_DAYS || 7 }}
-      maxSessions: ${{ +env.TRACE_VIEWER_MAX_SESSIONS || 500 }}
-      maxEventPayloadBytes: ${{ +env.TRACE_VIEWER_MAX_EVENT_PAYLOAD_BYTES || 65536 }}
-      pollIntervalMs: ${{ +env.TRACE_VIEWER_POLL_INTERVAL_MS || 2000 }}
-      redactSecrets: ${{ env.TRACE_VIEWER_REDACT_SECRETS !== 'false' }}
+    status:console-status: {}
+    analytics:console-analytics: {}
+    config:console-config: {}
+    market:console-market:
+      search:
+        endpoint: https://registry.koishi.chat/index.json
+        timeout: 30000
+    sandbox:console-sandbox: {}
+    insight:console-insight: {}
+    logger:console-logger: {}
+    ./dist/plugins/bot-console:bot-console: {}
     canvas:pokemon: {}
     downloads:g1u6o5:
       output: ${{ env.POKEMON_DOWNLOADS_OUTPUT || './downloads' }}
@@ -116,21 +117,11 @@ plugins:
         ${{ env.CHATLUNA_DEFAULT_MODEL || (env.OPENAI_MODEL &&
         env.OPENAI_MODEL.includes('/') ? env.OPENAI_MODEL : 'deepseek/' +
         (env.OPENAI_MODEL || 'deepseek-chat')) }}
-      defaultEmbeddings: >-
-        ${{ !env.CHATLUNA_DEFAULT_EMBEDDINGS || env.CHATLUNA_DEFAULT_EMBEDDINGS
-        === '无' || env.CHATLUNA_DEFAULT_EMBEDDINGS ===
-        'deepseek/deepseek-embedding' ? '无' : env.CHATLUNA_DEFAULT_EMBEDDINGS }}
-      defaultVectorStore: ${{ env.CHATLUNA_DEFAULT_VECTOR_STORE || 'luna-vdb' }}
     chatluna-deepseek-adapter:0o3zho:
       apiKeys:
         - - ${{ env.OPENAI_API_KEY || '' }}
           - ${{ env.OPENAI_BASE_URL || 'https://api.deepseek.com/v1' }}
           - true
-    chatluna-ollama-adapter:2w5c8d:
-      apiEndpoints:
-        - - ${{ env.CHATLUNA_OLLAMA_ENDPOINT || 'http://127.0.0.1:11434' }}
-          - ${{ env.CHATLUNA_OLLAMA_ENABLED !== 'false' }}
-      keepAlive: ${{ env.CHATLUNA_OLLAMA_KEEP_ALIVE !== 'false' }}
     puppeteer:0vx5c7: {}
     ./dist/plugins/web-search:search:
       enabled: ${{ env.WEB_SEARCH_ENABLED !== 'false' }}
@@ -264,35 +255,29 @@ plugins:
     chatluna-mcp-client:aq3m2y:
       servers: '{"mcpServers":{}}'
       tools: {}
-    chatluna-vector-store-service:0a9k5w:
-      vectorStore:
-        - ${{ env.CHATLUNA_VECTOR_STORE || 'luna-vdb' }}
-      redisUrl: ${{ env.CHATLUNA_VECTOR_STORE_REDIS_URL || 'redis://127.0.0.1:6379' }}
-      milvusUrl: ${{ env.CHATLUNA_VECTOR_STORE_MILVUS_URL || 'http://127.0.0.1:19530' }}
-      milvusUsername: ${{ env.CHATLUNA_VECTOR_STORE_MILVUS_USERNAME || '' }}
-      milvusPassword: ${{ env.CHATLUNA_VECTOR_STORE_MILVUS_PASSWORD || '' }}
-    chatluna-long-memory:c6x0qv:
-      enabledLayers: []
-      layerEngines:
-        - layer: Global
-          engine: HippoRAG
-        - layer: Guild
-          engine: HippoRAG
-        - layer: User
-          engine: HippoRAG
-      longMemoryExtractModel: >-
-        ${{ env.CHATLUNA_LONG_MEMORY_EXTRACT_MODEL || env.OPENAI_MODEL ||
-        'deepseek/deepseek-chat' }}
-      longMemoryExtractInterval: ${{ +env.CHATLUNA_LONG_MEMORY_EXTRACT_INTERVAL || 3 }}
-      longMemoryQueryRewrite: ${{ env.CHATLUNA_LONG_MEMORY_QUERY_REWRITE !== 'false' }}
-      hippoExtractModel: >-
-        ${{ env.CHATLUNA_HIPPO_EXTRACT_MODEL || env.OPENAI_MODEL ||
-        'deepseek/deepseek-chat' }}
     ./dist/plugins/chatluna-model-guard:mjddgg:
       liveReplyEnabled: ${{ env.QQBOT_LIVE_REPLY_ENABLED === 'true' }}
       liveReplyCollectWindowMs: ${{ +env.QQBOT_LIVE_REPLY_COLLECT_WINDOW_MS || 600 }}
       liveReplyMaxPendingMessages: ${{ +env.QQBOT_LIVE_REPLY_MAX_PENDING_MESSAGES || 8 }}
       liveReplyHistoryRewriteFallback: ${{ env.QQBOT_LIVE_REPLY_HISTORY_REWRITE_FALLBACK || 'queue' }}
+    ./dist/plugins/memory-v2:memory-v2:
+      enabled: ${{ env.MEMORY_V2_ENABLED !== 'false' }}
+      extractBaseUrl: >-
+        ${{ env.MEMORY_EXTRACT_BASE_URL || env.OPENAI_BASE_URL ||
+        'https://api.deepseek.com/v1' }}
+      extractApiKey: ${{ env.MEMORY_EXTRACT_API_KEY || env.OPENAI_API_KEY || '' }}
+      extractModel: ${{ env.MEMORY_EXTRACT_MODEL || 'deepseek/deepseek-chat' }}
+      extractTimeoutMs: ${{ +env.MEMORY_EXTRACT_TIMEOUT_MS || 15000 }}
+      embedBaseUrl: ${{ env.MEMORY_EMBED_BASE_URL || 'https://api.siliconflow.cn/v1' }}
+      embedApiKey: ${{ env.MEMORY_EMBED_API_KEY || '' }}
+      embedModel: ${{ env.MEMORY_EMBED_MODEL || 'Qwen/Qwen3-Embedding-8B' }}
+      embedTimeoutMs: ${{ +env.MEMORY_EMBED_TIMEOUT_MS || 12000 }}
+      queryTopK: ${{ +env.MEMORY_QUERY_TOPK || 8 }}
+      promptBudgetTokens: ${{ +env.MEMORY_PROMPT_BUDGET_TOKENS || 1200 }}
+      embedBatchSize: ${{ +env.MEMORY_EMBED_BATCH_SIZE || 16 }}
+      extractIdleMs: ${{ +env.MEMORY_EXTRACT_IDLE_MS || 90000 }}
+      extractMessageBatch: ${{ +env.MEMORY_EXTRACT_MESSAGE_BATCH || 12 }}
+      archiveDays: ${{ +env.MEMORY_ARCHIVE_DAYS || 90 }}
     commands:qp6oxu:
       chatluna:
         config:
@@ -304,15 +289,6 @@ plugins:
         config:
           authority: ${{ +env.CHATLUNA_COMMAND_AUTHORITY || 3 }}
       chatluna.preset:
-        config:
-          authority: ${{ +env.CHATLUNA_COMMAND_AUTHORITY || 3 }}
-      chatluna.memory:
-        config:
-          authority: ${{ +env.CHATLUNA_COMMAND_AUTHORITY || 3 }}
-      chatluna.embeddings:
-        config:
-          authority: ${{ +env.CHATLUNA_COMMAND_AUTHORITY || 3 }}
-      chatluna.vectorstore:
         config:
           authority: ${{ +env.CHATLUNA_COMMAND_AUTHORITY || 3 }}
       chatluna.tool:

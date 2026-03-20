@@ -1,10 +1,13 @@
+import type { MemoryV2ProbeResult, MemoryV2StatusSnapshot } from './memory-v2.js';
+
 export type ServiceAction = 'start' | 'stop' | 'restart' | 'enable';
 
 export type BotServiceUnit =
   | 'qqbot.target'
   | 'qqbot-koishi.service'
   | 'qqbot-stack.service'
-  | 'qqbot-voice-tts.service';
+  | 'qqbot-voice-tts.service'
+  | 'qqbot-voice-tts-tailnet.service';
 
 export interface BotServiceStatus {
   unit: BotServiceUnit;
@@ -47,4 +50,14 @@ export interface BotConsoleState {
   services: BotServiceStatus[];
   presets: PresetSummary[];
   defaultPreset: string;
+  runtimeStatus: {
+    memoryV2: MemoryV2StatusSnapshot;
+  };
+}
+
+export type BotConsoleBaseState = Omit<BotConsoleState, 'runtimeStatus'>;
+
+export interface BotConsoleProbeResult {
+  target: 'embedding';
+  memoryV2: MemoryV2ProbeResult;
 }

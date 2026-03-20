@@ -1,0 +1,292 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MemoryV2StatusService, createUnavailableMemoryV2StatusSnapshot } from '../src/plugins/memory-v2-status.js';
+import {
+  embedTexts,
+  parseExtractionResponse,
+  type MemoryEmbedRuntime,
+} from '../src/plugins/memory-v2-llm.js';
+import {
+  buildMemoryContextBlock,
+  buildMemoryDocuments,
+  mergeFactRecord,
+  planMemoryRecall,
+  rankMemoryDocumentsByVector,
+} from '../src/plugins/memory-v2-store.js';
+import type { MemoryEpisodeRecord, MemoryFactRecord } from '../src/types/memory-v2.js';
+
+function createFact(partial: Partial<MemoryFactRecord>): MemoryFactRecord {
+  return {
+    id: 1,
+    scopeType: 'user',
+    scopeKey: 'onebot:bot:user:123',
+    topicKey: 'preference-music',
+    content: '用户更喜欢听少女乐队题材的歌。',
+    keywords: JSON.stringify(['少女乐队', '音乐']),
+    importance: 0.7,
+    confidence: 0.9,
+    firstSeenAt: Date.now() - 10_000,
+    lastSeenAt: Date.now() - 5_000,
+    sourceMessageIds: JSON.stringify(['a']),
+    embeddingModel: 'Qwen/Qwen3-Embedding-8B',
+    embedding: JSON.stringify([1, 0]),
+    version: 1,
+    archived: 0,
+    ...partial,
+  };
+}
+
+function createEpisode(partial: Partial<MemoryEpisodeRecord>): MemoryEpisodeRecord {
+  return {
+    id: 2,
+    scopeType: 'user',
+    scopeKey: 'onebot:bot:user:123',
+    title: '上个月准备比赛',
+    summary: '上个月用户一直在准备乐队比赛，反复提过排练和曲目安排。',
+    keywords: JSON.stringify(['上个月', '比赛', '排练']),
+    importance: 0.82,
+    confidence: 0.88,
+    periodStart: new Date('2026-02-01T00:00:00+08:00').getTime(),
+    periodEnd: new Date('2026-02-28T23:59:59+08:00').getTime(),
+    firstSeenAt: Date.now() - 8 * 24 * 3600_000,
+    lastSeenAt: Date.now() - 2 * 24 * 3600_000,
+    lastAccessedAt: Date.now() - 24 * 3600_000,
+    sourceMessageIds: JSON.stringify(['b']),
+    embeddingModel: 'Qwen/Qwen3-Embedding-8B',
+    embedding: JSON.stringify([0.9, 0.1]),
+    archived: 0,
+    ...partial,
+  };
+}
+
+describe('memory-v2 core behavior', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not request semantic recall for ordinary chat without coarse hits', () => {
+    const documents = buildMemoryDocuments([createFact({})], []);
+    const plan = planMemoryRecall('今天天气怎么样', documents, Date.now(), 8);
+    expect(plan.candidates).toHaveLength(0);
+    expect(plan.needsSemanticSearch).toBe(false);
+  });
+
+  it('requests semantic recall when the user explicitly asks about the past', () => {
+    const documents = buildMemoryDocuments([createFact({})], []);
+    const plan = planMemoryRecall('你还记得上个月那件事吗', documents, Date.now(), 8);
+    expect(plan.needsSemanticSearch).toBe(true);
+    expect(plan.explicitRecallCue).toBe(true);
+  });
+
+  it('ranks the most similar past episode by vector similarity', () => {
+    const docs = buildMemoryDocuments(
+      [createFact({ id: 1, embedding: JSON.stringify([1, 0]) })],
+      [
+        createEpisode({ id: 2, embedding: JSON.stringify([0.95, 0.05]) }),
+        createEpisode({
+          id: 3,
+          title: '去年换工作',
+          summary: '去年用户在考虑换工作。',
+          keywords: JSON.stringify(['去年', '工作']),
+          embedding: JSON.stringify([0.05, 0.95]),
+        }),
+      ],
+    );
+    const ranked = rankMemoryDocumentsByVector(docs, [1, 0], Date.now(), 3);
+    expect(ranked[0]?.recordId).toBe(2);
+  });
+
+  it('builds a stable context block grouped by facts and episodes', () => {
+    const docs = buildMemoryDocuments([createFact({})], [createEpisode({})]);
+    const prompt = buildMemoryContextBlock(docs, 1200);
+    expect(prompt).toContain('Relevant Long-Term Memory');
+    expect(prompt).toContain('Stable Facts:');
+    expect(prompt).toContain('Relevant Past Episodes:');
+  });
+
+  it('merges repeated fact updates into one evolving fact row', () => {
+    const now = Date.now();
+    const merged = mergeFactRecord(
+      createFact({
+        topicKey: 'plan-travel',
+        content: '用户计划五月去上海。',
+        keywords: JSON.stringify(['旅行', '上海']),
+        version: 2,
+      }),
+      {
+        topicKey: 'plan-travel',
+        content: '用户计划五月去上海看演出。',
+        keywords: ['旅行', '上海', '演出'],
+        importance: 0.85,
+        confidence: 0.91,
+      },
+      now,
+      ['m3'],
+    );
+
+    expect(merged.topicKey).toBe('plan-travel');
+    expect(merged.content).toContain('看演出');
+    expect(merged.keywords).toContain('演出');
+    expect(merged.version).toBe(3);
+  });
+
+  it('parses fenced extraction json', () => {
+    const parsed = parseExtractionResponse(
+      [
+        '```json',
+        '{"facts":[{"topicKey":"plan-travel","content":"用户准备五月去上海看演出","keywords":["上海","演出"],"importance":0.9,"confidence":0.8}],"episodes":[],"drop":[]}',
+        '```',
+      ].join('\n'),
+    );
+
+    expect(parsed?.facts).toHaveLength(1);
+    expect(parsed?.facts[0]?.topicKey).toBe('plan-travel');
+  });
+
+  it('calls SiliconFlow embeddings with batched input', async () => {
+    const runtime: MemoryEmbedRuntime = {
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      apiKey: 'sk-test',
+      model: 'Qwen/Qwen3-Embedding-8B',
+      timeoutMs: 5000,
+    };
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            { index: 0, embedding: [1, 2, 3] },
+            { index: 1, embedding: [4, 5, 6] },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const vectors = await embedTexts(runtime, ['第一条', '第二条']);
+    expect(vectors).toEqual([
+      [1, 2, 3],
+      [4, 5, 6],
+    ]);
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const body =
+      init && typeof init === 'object' && 'body' in init && typeof init.body === 'string'
+        ? JSON.parse(init.body)
+        : null;
+    expect(body?.model).toBe('Qwen/Qwen3-Embedding-8B');
+    expect(body?.input).toEqual(['第一条', '第二条']);
+  });
+});
+
+describe('memory-v2 configuration cleanup', () => {
+  it('registers the new plugin and removes old long-memory plugins from koishi.yml', () => {
+    const content = readFileSync(resolve(process.cwd(), 'koishi.yml'), 'utf8');
+    expect(content).toContain('./dist/plugins/memory-v2:memory-v2:');
+    expect(content).not.toContain('chatluna-ollama-adapter');
+    expect(content).not.toContain('chatluna-long-memory');
+    expect(content).not.toContain('chatluna-vector-store-service');
+  });
+
+  it('removes ollama from compose and documents SiliconFlow env in templates', () => {
+    const composeContent = readFileSync(resolve(process.cwd(), 'compose.yaml'), 'utf8');
+    const envContent = readFileSync(resolve(process.cwd(), '.env.example'), 'utf8');
+    const serverEnvContent = readFileSync(resolve(process.cwd(), '.env.server.example'), 'utf8');
+
+    expect(composeContent).not.toContain('ollama:');
+    expect(composeContent).not.toContain('OLLAMA_PORT');
+    expect(envContent).toContain('MEMORY_EMBED_BASE_URL=https://api.siliconflow.cn/v1');
+    expect(envContent).toContain('MEMORY_EMBED_MODEL=Qwen/Qwen3-Embedding-8B');
+    expect(serverEnvContent).toContain('MEMORY_EXTRACT_MODEL=deepseek/deepseek-chat');
+    expect(serverEnvContent).not.toContain('CHATLUNA_LONG_MEMORY_EXTRACT_MODEL');
+  });
+});
+
+describe('memory-v2 status service', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('tracks runtime success/failure and exposes queue summary', async () => {
+    const service = new MemoryV2StatusService(
+      {
+        enabled: true,
+        extract: {
+          baseUrl: 'https://api.deepseek.com/v1',
+          apiKey: 'sk-test',
+          model: 'deepseek/deepseek-chat',
+          timeoutMs: 15000,
+        },
+        embed: {
+          baseUrl: 'https://api.siliconflow.cn/v1',
+          apiKey: 'sk-test',
+          model: 'Qwen/Qwen3-Embedding-8B',
+          timeoutMs: 12000,
+        },
+      },
+      {
+        getJobSummary: async () => ({
+          extractPending: 2,
+          extractProcessing: 1,
+          embedPending: 3,
+          embedProcessing: 0,
+        }),
+      } as any,
+      async () => undefined,
+    );
+
+    service.recordAttempt('extract', 'runtime', 100);
+    service.recordFailure('extract', 'runtime', new Error('extract boom'), 25, 125);
+    service.recordSuccess('embed', 'runtime', 40, 200);
+    service.recordArchive(300);
+
+    const snapshot = await service.getSnapshot();
+    expect(snapshot.jobs.extractPending).toBe(2);
+    expect(snapshot.extract.state).toBe('failed');
+    expect(snapshot.extract.lastError).toContain('extract boom');
+    expect(snapshot.embed.state).toBe('success');
+    expect(snapshot.lastArchiveAt).toBe(300);
+  });
+
+  it('marks manual embedding probes as probe results', async () => {
+    const service = new MemoryV2StatusService(
+      {
+        enabled: true,
+        extract: {
+          baseUrl: 'https://api.deepseek.com/v1',
+          apiKey: 'sk-test',
+          model: 'deepseek/deepseek-chat',
+          timeoutMs: 15000,
+        },
+        embed: {
+          baseUrl: 'https://api.siliconflow.cn/v1',
+          apiKey: 'sk-test',
+          model: 'Qwen/Qwen3-Embedding-8B',
+          timeoutMs: 12000,
+        },
+      },
+      {
+        getJobSummary: async () => ({
+          extractPending: 0,
+          extractProcessing: 0,
+          embedPending: 0,
+          embedProcessing: 0,
+        }),
+      } as any,
+      async () => undefined,
+    );
+
+    const result = await service.probeEmbedding();
+    expect(result.ok).toBe(true);
+    expect(result.snapshot.embed.lastSource).toBe('probe');
+    expect(result.snapshot.embed.state).toBe('success');
+  });
+
+  it('returns an unavailable snapshot fallback', () => {
+    const snapshot = createUnavailableMemoryV2StatusSnapshot();
+    expect(snapshot.available).toBe(false);
+    expect(snapshot.enabled).toBe(false);
+    expect(snapshot.embedConfigured).toBe(false);
+  });
+});
