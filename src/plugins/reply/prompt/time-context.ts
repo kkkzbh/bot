@@ -30,6 +30,13 @@ export interface ProactiveOpeningState {
   };
 }
 
+export interface NaturalTriggerReference {
+  natural_trigger: {
+    reason: string;
+    explicit: boolean;
+  };
+}
+
 function flattenPromptInput(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) return content.map((item) => flattenPromptInput(item)).join('');
@@ -112,6 +119,17 @@ export function buildProactiveOpeningState(
   };
 }
 
+export function buildNaturalTriggerReference(
+  state: Pick<NaturalTriggerReference['natural_trigger'], 'reason' | 'explicit'>,
+): NaturalTriggerReference {
+  return {
+    natural_trigger: {
+      reason: state.reason,
+      explicit: state.explicit,
+    },
+  };
+}
+
 export function formatUtc8Now(now = Date.now()): string {
   const parts = new Intl.DateTimeFormat('zh-CN', {
     timeZone: FIXED_TIMEZONE,
@@ -128,11 +146,6 @@ export function formatUtc8Now(now = Date.now()): string {
   return `${lookup.get('year')}-${lookup.get('month')}-${lookup.get('day')} ${lookup.get('hour')}:${lookup.get('minute')}:${lookup.get('second')}`;
 }
 
-export function formatUserStampedPrompt(userName: string, message: string, now = Date.now()): string {
-  const normalizedUserName = userName.trim() || '用户';
-  return `${normalizedUserName}, ${formatUtc8Now(now)}: ${message}`;
-}
-
 export function buildUserContextReference(userName: string, now = Date.now()): {
   user_name: string;
   local_time: string;
@@ -143,14 +156,4 @@ export function buildUserContextReference(userName: string, now = Date.now()): {
     local_time: formatUtc8Now(now),
     timezone: FIXED_TIMEZONE,
   };
-}
-
-export function injectUserStampedPrompt(content: unknown, userName: string, now = Date.now()): unknown {
-  if (typeof content === 'string') {
-    return formatUserStampedPrompt(userName, content, now);
-  }
-  if (Array.isArray(content)) {
-    return [{ type: 'text', text: `${userName.trim() || '用户'}, ${formatUtc8Now(now)}:` }, ...content];
-  }
-  return content;
 }

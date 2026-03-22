@@ -1,4 +1,5 @@
-import type { Context, Session } from 'koishi';
+import { Logger, type Context, type Session } from 'koishi';
+import { gzipDecode } from 'koishi-plugin-chatluna/utils/string';
 import type {
   MemoryEpisodeRecord,
   MemoryFactRecord,
@@ -9,6 +10,7 @@ import type {
 import type {
   ExtractedMemoryEpisode,
   ExtractedMemoryFact,
+  MemoryConversationTurn,
   MemoryExtractionResult,
 } from './llm.js';
 
@@ -27,7 +29,7 @@ export interface StoredMessageRecord {
   role?: string | null;
   parent?: string | null;
   conversation?: string | null;
-  text?: string | null;
+  content?: unknown;
 }
 
 export interface MemorySearchDocument {
@@ -69,6 +71,7 @@ interface MemoryV2DatabaseLike {
 
 const DAY_MS = 86_400_000;
 const CHINESE_STOP_WORDS = new Set(['什么', '怎么', '还是', '就是', '然后', '现在', '今天', '一下', '这个', '那个']);
+const logger = new Logger('memory-v2');
 
 function normalizeText(text: string): string {
   return text.trim().toLowerCase();
@@ -114,6 +117,10 @@ function toTimestamp(raw: string | number | null | undefined): number | null {
 
 export function extractPlainText(raw: unknown): string {
   if (typeof raw === 'string') return raw.trim();
+  if (raw && typeof raw === 'object' && 'text' in raw) {
+    const text = (raw as { text?: unknown }).text;
+    return typeof text === 'string' ? text.trim() : '';
+  }
   if (Array.isArray(raw)) {
     return raw
       .map((item) => {
@@ -128,6 +135,19 @@ export function extractPlainText(raw: unknown): string {
       .trim();
   }
   return '';
+}
+
+function toStoredArrayBuffer(raw: unknown): ArrayBuffer | null {
+  if (raw instanceof ArrayBuffer) return raw;
+  if (!ArrayBuffer.isView(raw)) return null;
+  return raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
+}
+
+export async function decodeStoredMessageText(content: unknown): Promise<string> {
+  const buffer = toStoredArrayBuffer(content);
+  if (!buffer) return '';
+  const payload = await gzipDecode(buffer);
+  return extractPlainText(JSON.parse(payload));
 }
 
 export function buildMemoryScope(session: Session): MemoryScope | null {
@@ -577,19 +597,30 @@ export class MemoryV2Store {
     }
   }
 
-  async readConversationWindow(conversationId: string, maxMessages: number): Promise<StoredMessageRecord[]> {
+  async readConversationWindow(conversationId: string, maxMessages: number): Promise<MemoryConversationTurn[]> {
     const [conversation] = (await this.database.get('chathub_conversation', { id: conversationId })) as StoredConversationRecord[];
     if (!conversation?.id || !conversation.latestId) return [];
 
     const rows = (await this.database.get('chathub_message', { conversation: conversationId })) as StoredMessageRecord[];
     const messageMap = new Map(rows.map((row) => [row.id, row]));
-    const window: StoredMessageRecord[] = [];
+    const window: MemoryConversationTurn[] = [];
     let cursor: string | null | undefined = conversation.latestId;
     while (cursor && window.length < maxMessages) {
       const row = messageMap.get(cursor);
       if (!row) break;
-      if ((row.role === 'human' || row.role === 'ai') && row.text?.trim()) {
-        window.push(row);
+      if (row.role === 'human' || row.role === 'ai') {
+        try {
+          const text = await decodeStoredMessageText(row.content);
+          if (text) {
+            window.push({
+              id: row.id,
+              role: row.role,
+              text,
+            });
+          }
+        } catch (error) {
+          logger.warn('failed to decode stored message content for %s: %s', row.id, (error as Error).message);
+        }
       }
       cursor = row.parent ?? null;
     }

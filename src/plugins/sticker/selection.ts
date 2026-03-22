@@ -324,18 +324,14 @@ export function buildStickerCapabilityPolicy(args: {
   const available = catalog.entries.filter((entry) => matchesScope(entry.scopes, preset));
   if (!available.length) return null;
 
-  const scopeLabel = preset ? `当前 persona（${preset}）及共享库` : '共享库';
   return [
-    `当前还可以发送表情包，来源于${scopeLabel}。`,
-    '如果你决定发表情包，就在 ReplyPlan 里加入一个或多个 sticker 段。',
-    'sticker 段的 content 不是标签名，而是一句自然语言意图，例如“冷淡拒绝，被追问私事”或“聊到音乐时的得意感”。',
-    '表情包可以和 text / multiline / voice 段混排；多个 sticker 段会按顺序一张张发送到 QQ。',
-    '如果用户要求连续发多张表情包，必须拆成多个 sticker 段，并严格保持用户要求的先后顺序。',
-    '每个 sticker.content 只描述当前这一张图的单一情绪或场景，不要把“连续发两张”“先……再……”这类整句要求原样抄进每个 sticker.content。',
-    '相邻 sticker 段默认不要重复同一句 content；只有用户明确要求重复同一张图时，才允许重复。',
-    '单张 sticker 示例：{"segments":[{"kind":"sticker","content":"无语地看对方一眼"}]}',
-    '混排示例：{"segments":[{"kind":"text","content":"……随你"},{"kind":"sticker","content":"冷淡拒绝，被追问私事"}]}',
-    '多张示例：{"segments":[{"kind":"sticker","content":"无语地看对方一眼"},{"kind":"sticker","content":"生气地噘嘴表达不满"}]}',
+    '如果要发表情包，就在 submit_reply_plan 里加入一个或多个 sticker 段。',
+    '格式：submit_reply_plan({"segments":[{"kind":"sticker","content":"自然语言意图"}]})',
+    'sticker.content 不是标签名或文件名，而是一句自然语言意图，例如“冷淡拒绝，被追问私事”或“聊到音乐时的得意感”。',
+    'sticker 可以和 text / multiline 段混排；多个 sticker 段会按顺序一张张发送。',
+    '单张示例：submit_reply_plan({"segments":[{"kind":"sticker","content":"无语地看对方一眼"}]})',
+    '文本混排示例：submit_reply_plan({"segments":[{"kind":"text","content":"……随你"},{"kind":"sticker","content":"冷淡拒绝，被追问私事"}]})',
+    '多张示例：submit_reply_plan({"segments":[{"kind":"sticker","content":"无语地看对方一眼"},{"kind":"sticker","content":"生气地噘嘴表达不满"}]})',
   ].join('\n');
 }
 

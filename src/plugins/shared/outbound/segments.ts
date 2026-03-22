@@ -59,18 +59,30 @@ export type OutboundMessageSegment =
       kind: 'sticker-block';
       content: string;
       raw: string;
+    }
+  | {
+      kind: 'image-block';
+      assetRef: string;
+      alt?: string;
+      raw: string;
     };
 
 export interface OutboundMessagePlan {
   segments: OutboundMessageSegment[];
 }
 
-export type ReplyTransportSegmentKind = 'text' | 'multiline' | 'voice' | 'sticker';
+export type ReplyTransportSegmentKind = 'text' | 'multiline' | 'voice' | 'sticker' | 'image';
 
-export interface ReplyTransportSegment {
-  kind: ReplyTransportSegmentKind;
-  content: string;
-}
+export type ReplyTransportSegment =
+  | {
+      kind: 'text' | 'multiline' | 'voice' | 'sticker';
+      content: string;
+    }
+  | {
+      kind: 'image';
+      assetRef: string;
+      alt?: string;
+    };
 
 export interface ReplyTransportPlan {
   segments: ReplyTransportSegment[];
@@ -100,8 +112,27 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  if (signal.aborted) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      resolve();
+    };
+    signal.addEventListener('abort', abort, { once: true });
+  });
 }
 
 export function createKeyedStrandRunner(): KeyedStrandRunner {
@@ -308,12 +339,25 @@ export function createTextOnlyOutboundMessagePlan(message: unknown): OutboundMes
 
 export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan): OutboundMessagePlan {
   const segments: OutboundMessageSegment[] = [];
-  const createStructuredRaw = (kind: ReplyTransportSegmentKind, index: number, content: string): string =>
-    `reply-plan:${kind}:${index}:${content}`;
+  const createStructuredRaw = (kind: ReplyTransportSegmentKind, index: number, value: string): string =>
+    `reply-plan:${kind}:${index}:${value}`;
 
   for (const [index, segment] of plan.segments.entries()) {
     if (segment.kind === 'text') {
       segments.push(...createTextOutboundSegments(segment.content));
+      continue;
+    }
+
+    if (segment.kind === 'image') {
+      const assetRef = segment.assetRef.trim();
+      if (!assetRef) continue;
+      const alt = segment.alt?.trim() || undefined;
+      segments.push({
+        kind: 'image-block',
+        assetRef,
+        alt,
+        raw: createStructuredRaw(segment.kind, index, assetRef),
+      });
       continue;
     }
 
@@ -359,6 +403,10 @@ export function renderOutboundMessageSegmentsHistoryText(segments: OutboundMessa
         return `（发送语音：${segment.content}）`;
       }
 
+      if (segment.kind === 'image-block') {
+        return segment.alt ? `（发送图片：${segment.alt}）` : '（发送图片）';
+      }
+
       return segment.content;
     })
     .filter((segment) => segment.trim().length > 0)
@@ -381,7 +429,7 @@ export async function dispatchOutboundMessagePlan(
     if (!nextSegment) continue;
     if (segment.kind !== 'text-line') continue;
 
-    await sleep(calculateSmartSendDelayMs(segment.content));
+    await sleep(calculateSmartSendDelayMs(segment.content), options.abortSignal);
   }
 }
 
@@ -444,7 +492,7 @@ export function normalizeOutboundMessage(message: string): NormalizedOutboundMes
   return {
     mode: 'split',
     content: createTextOutboundSegments(message)
-      .map((segment) => segment.content)
+      .map((segment) => ('content' in segment ? segment.content : ''))
       .join('\n')
       .trim(),
   };

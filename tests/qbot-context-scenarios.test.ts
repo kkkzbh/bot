@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { injectUserStampedPrompt } from '../src/plugins/reply/prompt/time-context.js';
 import { sanitizeLeakedReasoningMessage } from '../src/plugins/shared/outbound/index.js';
 import { formatAutomationTimestamp, parseAutomationIntentByRule } from '../src/plugins/automation/scheduler.js';
 
@@ -90,12 +89,6 @@ function emitDueOnce(state: SimState, now: number): string[] {
 }
 
 describe('QBOT context scenario regression', () => {
-  it('injects user name and UTC+8 time into chat content', () => {
-    const now = Date.parse('2026-03-01T16:40:16+08:00');
-    const stamped = injectUserStampedPrompt('麻烦你在 10s 后给我打招呼', '小祥', now);
-    expect(stamped).toBe('小祥, 2026-03-01 16:40:16: 麻烦你在 10s 后给我打招呼');
-  });
-
   it('replays deterministic user-QBOT conversation without API key (create reply passes through)', () => {
     const now = Date.parse('2026-03-01T16:40:16+08:00');
     const state: SimState = { tasks: [] as SimTask[], nextId: 1 };

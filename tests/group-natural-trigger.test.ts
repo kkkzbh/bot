@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apply } from '../src/plugins/triggers/group-natural/index.js';
+import type { NaturalTriggerState } from '../src/plugins/triggers/group-natural/state.js';
 
 vi.mock('koishi', () => {
   type MockSchemaNode = {
@@ -41,15 +42,42 @@ vi.mock('koishi', () => {
 });
 
 type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
+type EventListener = (...args: any[]) => unknown;
+type AllowReplyResolver = (arg: { session: Record<string, any>; context: unknown }) => unknown;
 
-function createHarness(overrides: Record<string, unknown> = {}): Middleware {
+function createHarness(
+  overrides: Record<string, unknown> = {},
+  options: { chatlunaAvailable?: boolean } = {},
+): {
+  middleware: Middleware;
+  registerAllowReplyResolver: ReturnType<typeof vi.fn>;
+  disposeAllowReplyResolver: ReturnType<typeof vi.fn>;
+  runReady: () => Promise<void>;
+  runDispose: () => Promise<void>;
+  setChatLunaAvailable: (available: boolean) => void;
+} {
   const middlewares: Middleware[] = [];
-  const ctx = {
+  const listeners = new Map<string, EventListener[]>();
+  const disposeAllowReplyResolver = vi.fn();
+  const registerAllowReplyResolver = vi.fn(function (this: any, _name: string, _resolver: AllowReplyResolver) {
+    if (this !== chatlunaService) {
+      throw new Error('registerAllowReplyResolver lost chatluna binding');
+    }
+    return disposeAllowReplyResolver;
+  });
+  const chatlunaService = { registerAllowReplyResolver };
+  const ctx: Record<string, unknown> = {
     middleware: vi.fn((handler: Middleware) => {
       middlewares.push(handler);
     }),
-    on: vi.fn(),
+    on: vi.fn((name: string, handler: EventListener) => {
+      const bucket = listeners.get(name) ?? [];
+      bucket.push(handler);
+      listeners.set(name, bucket);
+    }),
   };
+
+  ctx.chatluna = options.chatlunaAvailable === false ? undefined : chatlunaService;
 
   apply(ctx as never, {
     enabled: true,
@@ -65,7 +93,22 @@ function createHarness(overrides: Record<string, unknown> = {}): Middleware {
     ...overrides,
   });
 
-  return middlewares[0];
+  const runHook = async (name: string): Promise<void> => {
+    for (const listener of listeners.get(name) ?? []) {
+      await listener();
+    }
+  };
+
+  return {
+    middleware: middlewares[0],
+    registerAllowReplyResolver,
+    disposeAllowReplyResolver,
+    runReady: () => runHook('ready'),
+    runDispose: () => runHook('dispose'),
+    setChatLunaAvailable: (available: boolean) => {
+      ctx.chatluna = available ? chatlunaService : undefined;
+    },
+  };
 }
 
 function createSession(overrides: Record<string, unknown> = {}): Record<string, any> {
@@ -83,9 +126,19 @@ function createSession(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
-async function runAndCapture(middleware: Middleware, session: Record<string, any>): Promise<string> {
-  const result = await middleware(session, async () => session.content);
-  return typeof result === 'string' ? result : '';
+async function runAndCapture(
+  middleware: Middleware,
+  session: Record<string, any>,
+): Promise<{ content: string; naturalTrigger: NaturalTriggerState | null }> {
+  let naturalTrigger: NaturalTriggerState | null = null;
+  const result = await middleware(session, async () => {
+    naturalTrigger = (session.qqNaturalTrigger as NaturalTriggerState | undefined) ?? null;
+    return session.content;
+  });
+  return {
+    content: typeof result === 'string' ? result : '',
+    naturalTrigger,
+  };
 }
 
 describe('group natural trigger middleware', () => {
@@ -94,7 +147,7 @@ describe('group natural trigger middleware', () => {
   });
 
   it('shares focus within the same group and keeps other groups isolated', async () => {
-    const middleware = createHarness({ replyIntervalMs: 0 });
+    const { middleware } = createHarness({ replyIntervalMs: 0 });
 
     await runAndCapture(
       middleware,
@@ -125,15 +178,17 @@ describe('group natural trigger middleware', () => {
       }),
     );
 
-    expect(sameGroup).toBe('祥子 我补充一下');
-    expect(otherGroup).toBe('我也补充一下');
+    expect(sameGroup.content).toBe('我补充一下');
+    expect(sameGroup.naturalTrigger).toEqual({ reason: 'focus', explicit: false });
+    expect(otherGroup.content).toBe('我也补充一下');
+    expect(otherGroup.naturalTrigger).toBeNull();
   });
 
   it('keeps reply interval isolated by group', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-09T12:00:00+08:00'));
 
-    const middleware = createHarness({ replyIntervalMs: 2_000 });
+    const { middleware } = createHarness({ replyIntervalMs: 2_000 });
 
     await runAndCapture(
       middleware,
@@ -152,22 +207,25 @@ describe('group natural trigger middleware', () => {
       content: '祥子 帮我看下',
     });
     let captured = '';
+    let naturalTrigger: NaturalTriggerState | null = null;
     const pending = middleware(session, async () => {
       captured = session.content;
+      naturalTrigger = (session.qqNaturalTrigger as NaturalTriggerState | undefined) ?? null;
       return captured;
     });
 
     await Promise.resolve();
 
-    expect(captured).toBe('祥子 祥子 帮我看下');
-    await expect(pending).resolves.toBe('祥子 祥子 帮我看下');
+    expect(captured).toBe('祥子 帮我看下');
+    expect(naturalTrigger).toEqual({ reason: 'alias', explicit: true });
+    await expect(pending).resolves.toBe('祥子 帮我看下');
   });
 
   it('waits for the same-group reply interval instead of dropping focused messages', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-09T13:00:00+08:00'));
 
-    const middleware = createHarness({ replyIntervalMs: 2_000 });
+    const { middleware } = createHarness({ replyIntervalMs: 2_000 });
     let firstAt = 0;
 
     const firstSession = createSession({
@@ -190,10 +248,12 @@ describe('group natural trigger middleware', () => {
     });
     let secondAt = 0;
     let secondContent = '';
+    let secondTrigger: NaturalTriggerState | null = null;
 
     const pending = middleware(secondSession, async () => {
       secondAt = Date.now();
       secondContent = secondSession.content;
+      secondTrigger = (secondSession.qqNaturalTrigger as NaturalTriggerState | undefined) ?? null;
       return secondContent;
     });
 
@@ -204,7 +264,65 @@ describe('group natural trigger middleware', () => {
     expect(secondContent).toBe('');
 
     await vi.advanceTimersByTimeAsync(1);
-    await expect(pending).resolves.toBe('祥子 继续说');
+    await expect(pending).resolves.toBe('继续说');
     expect(secondAt - firstAt).toBe(2_000);
+    expect(secondTrigger).toEqual({ reason: 'focus', explicit: false });
+  });
+
+  it('keeps quoted follow-ups as original text and marks them explicit', async () => {
+    const { middleware } = createHarness({ replyIntervalMs: 0 });
+    const session = createSession({
+      content: '这啥东西',
+      quote: {
+        user: {
+          id: 'bot-1',
+        },
+      },
+    });
+
+    const captured = await runAndCapture(middleware, session);
+
+    expect(captured.content).toBe('这啥东西');
+    expect(captured.naturalTrigger).toEqual({ reason: 'quote', explicit: true });
+  });
+
+  it('registers an allow-reply resolver that only allows active natural triggers', async () => {
+    const { middleware, registerAllowReplyResolver, runReady } = createHarness({ replyIntervalMs: 0 });
+
+    await runReady();
+
+    expect(registerAllowReplyResolver).toHaveBeenCalledTimes(1);
+    const resolver = registerAllowReplyResolver.mock.calls[0]?.[1] as AllowReplyResolver;
+    expect(resolver).toBeTypeOf('function');
+
+    const session = createSession({
+      content: '祥子 在吗',
+    });
+
+    let allowResult: unknown;
+    await middleware(session, async () => {
+      allowResult = await resolver({ session, context: {} });
+      return session.content;
+    });
+
+    expect(allowResult).toBe(true);
+    await expect(Promise.resolve(resolver({ session: createSession({ content: '普通闲聊' }), context: {} }))).resolves.toBeUndefined();
+  });
+
+  it('retries allow-reply resolver registration until chatluna becomes available', async () => {
+    vi.useFakeTimers();
+
+    const { registerAllowReplyResolver, runReady, setChatLunaAvailable, runDispose, disposeAllowReplyResolver } =
+      createHarness({}, { chatlunaAvailable: false });
+
+    await runReady();
+    expect(registerAllowReplyResolver).not.toHaveBeenCalled();
+
+    setChatLunaAvailable(true);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(registerAllowReplyResolver).toHaveBeenCalledTimes(1);
+
+    await runDispose();
+    expect(disposeAllowReplyResolver).toHaveBeenCalledTimes(1);
   });
 });

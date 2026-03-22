@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { inject, computed } from 'vue'
 import { useToast } from '../../composables/useToast'
-import { FEATURE_KEYS, normalizeBoolean } from '../../composables/useBotConsole'
+import { normalizeBoolean } from '../../composables/useBotConsole'
 import type { useBotConsole } from '../../composables/useBotConsole'
 import {
   ALL_SERVICE_UNITS,
@@ -32,9 +32,9 @@ const targetActiveState = computed(
   () => services.value.find(s => s.unit === 'qqbot.target')?.activeState ?? 'unknown',
 )
 
-/** Count of ALL 8 feature keys currently enabled. */
+/** Count of overview feature tiles currently enabled. */
 const enabledCount = computed(
-  () => FEATURE_KEYS.filter(k => normalizeBoolean(env.value[k])).length,
+  () => OVERVIEW_FEATURE_ITEMS.filter(([key]) => normalizeBoolean(env.value[key])).length,
 )
 
 // ── Memory status helpers ─────────────────────────────────────────────────────
@@ -156,8 +156,8 @@ async function handleProbe() {
       <article class="bc-status-card bc-status-card-feature">
         <div class="bc-status-card-head">
           <strong>功能状态</strong>
-          <span :class="['bc-status-badge', enabledCount === FEATURE_KEYS.length ? 'is-success' : 'is-warning']">
-            {{ enabledCount }}/{{ FEATURE_KEYS.length }} 已开启
+          <span :class="['bc-status-badge', enabledCount === OVERVIEW_FEATURE_ITEMS.length ? 'is-success' : 'is-warning']">
+            {{ enabledCount }}/{{ OVERVIEW_FEATURE_ITEMS.length }} 已开启
           </span>
         </div>
 

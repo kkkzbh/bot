@@ -1,0 +1,358 @@
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('koishi', () => {
+  class MockLogger {
+    info(): void {}
+    warn(): void {}
+    error(): void {}
+  }
+
+  return {
+    Context: class {},
+    Logger: MockLogger,
+  };
+});
+
+import { apply } from '../src/plugins/tool-policy/index.js';
+import { GLOBAL_DEFAULT_SCOPE_ID, PRIVATE_DEFAULT_SCOPE_ID } from '../src/plugins/tool-policy/catalog.js';
+
+type Row = Record<string, any>;
+
+function matches(row: Row, query: Record<string, unknown>): boolean {
+  return Object.entries(query).every(([key, value]) => Array.isArray(value) ? value.includes(row[key]) : row[key] === value);
+}
+
+function createDatabase(seed: Record<string, Row[]> = {}) {
+  const tables = new Map<string, Row[]>(
+    Object.entries(seed).map(([table, rows]) => [table, rows.map((row) => ({ ...row }))]),
+  );
+  let nextId = 1;
+
+  const ensure = (table: string): Row[] => {
+    if (!tables.has(table)) tables.set(table, []);
+    return tables.get(table)!;
+  };
+
+  return {
+    async get(table: string, query: Record<string, unknown>) {
+      const rows = ensure(table);
+      if (!query || Object.keys(query).length === 0) return rows.map((row) => ({ ...row }));
+      return rows.filter((row) => matches(row, query)).map((row) => ({ ...row }));
+    },
+    async set(table: string, query: Record<string, unknown>, data: Record<string, unknown>) {
+      const rows = ensure(table);
+      for (const row of rows) {
+        if (matches(row, query)) Object.assign(row, data);
+      }
+    },
+    async create(table: string, row: Record<string, unknown>) {
+      const rows = ensure(table);
+      const next = { ...row } as Row;
+      if (table === 'tool_scope_override' && next.id == null) {
+        next.id = nextId++;
+      }
+      rows.push(next);
+      return { ...next };
+    },
+    async remove(table: string, query: Record<string, unknown>) {
+      const rows = ensure(table);
+      tables.set(table, rows.filter((row) => !matches(row, query)));
+    },
+  };
+}
+
+function createHarness(
+  seed: Record<string, Row[]> = {},
+  options: {
+    initialChatLunaAvailable?: boolean;
+  } = {},
+) {
+  const database = createDatabase(seed);
+  const extend = vi.fn();
+  const readyHandlers: Array<() => void> = [];
+  const registerToolMaskResolver = vi.fn(function (this: any, name: string, resolver: unknown) {
+    if (!this || this !== chatluna) {
+      throw new Error('registerToolMaskResolver lost chatluna binding');
+    }
+    return () => {};
+  });
+  const chatluna = {
+    registerToolMaskResolver,
+    platform: {
+      getToolRegistry: () => ({
+        question: { name: 'question' },
+        user_confirm: { name: 'user_confirm' },
+        web_search: { name: 'web_search' },
+        unknown_runtime_tool: { name: 'unknown_runtime_tool' },
+      }),
+    },
+  };
+  let currentChatLuna: typeof chatluna | undefined = options.initialChatLunaAvailable === false ? undefined : chatluna;
+
+  const ctx: any = {
+    database,
+    model: { extend },
+    featurePolicy: {
+      listConversationTargets: vi.fn().mockResolvedValue([
+        {
+          roomId: 7,
+          roomName: '私聊房间 #7',
+          scopeKind: 'private',
+          scopeId: '7',
+          groupId: null,
+          conversationId: 'conv-private',
+          updatedAt: 1,
+        },
+      ]),
+      resolvePrivateConversationTarget: vi.fn().mockResolvedValue({
+        roomId: 7,
+        roomName: '私聊房间 #7',
+        scopeKind: 'private',
+        scopeId: '7',
+        groupId: null,
+        conversationId: 'conv-private',
+        updatedAt: 1,
+      }),
+    },
+    chatluna: currentChatLuna,
+    get(name: string) {
+      if (name === 'chatluna') return currentChatLuna;
+      return undefined;
+    },
+    on(event: string, handler: () => void) {
+      if (event === 'ready') readyHandlers.push(handler);
+    },
+    toolPolicy: undefined,
+  };
+
+  apply(ctx);
+
+  return {
+    ctx,
+    database,
+    extend,
+    registerToolMaskResolver,
+    setChatLunaAvailable(available: boolean) {
+      currentChatLuna = available ? chatluna : undefined;
+      ctx.chatluna = currentChatLuna;
+    },
+    async runReady() {
+      for (const handler of readyHandlers) await handler();
+    },
+  };
+}
+
+describe('tool policy service', () => {
+  it('resolves scoped overrides for chat route with private and group precedence', async () => {
+    const { ctx } = createHarness();
+    const service = ctx.toolPolicy!;
+
+    await service.saveToolOverrides([
+      {
+        toolName: 'web_search',
+        routeProfile: 'chat',
+        scopeKind: 'global_default',
+        scopeId: GLOBAL_DEFAULT_SCOPE_ID,
+        enabled: false,
+      },
+      {
+        toolName: 'web_search',
+        routeProfile: 'chat',
+        scopeKind: 'private_default',
+        scopeId: PRIVATE_DEFAULT_SCOPE_ID,
+        enabled: true,
+      },
+      {
+        toolName: 'user_confirm',
+        routeProfile: 'chat',
+        scopeKind: 'group',
+        scopeId: '1091078473',
+        enabled: false,
+      },
+    ]);
+
+    await expect(
+      service.resolveAllowedTools({
+        session: { isDirect: true, userId: 'u1', channelId: 'private-1' },
+        routeProfile: 'chat',
+        toolNames: ['web_search', 'user_confirm'],
+        room: { roomId: 7, conversationId: 'conv-private' },
+      }),
+    ).resolves.toEqual({
+      allowed: ['web_search', 'user_confirm'],
+      unknown: [],
+    });
+
+    await expect(
+      service.resolveAllowedTools({
+        session: { isDirect: false, userId: 'u1', guildId: '1091078473', channelId: '1091078473' },
+        routeProfile: 'chat',
+        toolNames: ['web_search', 'user_confirm'],
+        room: { roomId: 101, conversationId: 'conv-group' },
+      }),
+    ).resolves.toEqual({
+      allowed: [],
+      unknown: [],
+    });
+  });
+
+  it('filters unknown tools and exposes state for bot-console', async () => {
+    const { ctx } = createHarness();
+    const service = ctx.toolPolicy!;
+
+    const state = await service.getToolPolicyState();
+    expect(state.catalog.length).toBe(3);
+    expect(state.routeProfiles).toEqual([
+      'chat',
+      'automation',
+    ]);
+    expect(state.routeProfileInfo).toEqual([
+      expect.objectContaining({ id: 'chat' }),
+      expect.objectContaining({ id: 'automation' }),
+    ]);
+    expect(state.defaultScopes).toEqual([
+      expect.objectContaining({ scopeKind: 'global_default', scopeId: GLOBAL_DEFAULT_SCOPE_ID }),
+      expect.objectContaining({ scopeKind: 'private_default', scopeId: PRIVATE_DEFAULT_SCOPE_ID }),
+    ]);
+    expect(state.scopes).toEqual([
+      expect.objectContaining({ scopeKind: 'global_default', scopeId: GLOBAL_DEFAULT_SCOPE_ID }),
+      expect.objectContaining({ scopeKind: 'private_default', scopeId: PRIVATE_DEFAULT_SCOPE_ID }),
+      expect.objectContaining({ scopeKind: 'private_conversation', scopeId: '7' }),
+    ]);
+    expect(state.conversationTargets).toEqual([
+      expect.objectContaining({ scopeKind: 'private', scopeId: '7' }),
+    ]);
+
+    await expect(
+      service.resolveAllowedTools({
+        session: { isDirect: false, userId: 'u1', guildId: '1', channelId: '1' },
+        routeProfile: 'chat',
+        toolNames: ['web_search', 'unknown_runtime_tool'],
+      }),
+    ).resolves.toEqual({
+      allowed: ['web_search'],
+      unknown: ['unknown_runtime_tool'],
+    });
+  });
+
+  it('registers a chat route tool-mask resolver and filters disallowed tools', async () => {
+    const { ctx, registerToolMaskResolver, runReady } = createHarness();
+    const service = ctx.toolPolicy!;
+    await service.saveToolOverrides([
+      {
+        toolName: 'user_confirm',
+        routeProfile: 'chat',
+        scopeKind: 'group',
+        scopeId: '1091330365',
+        enabled: false,
+      },
+    ]);
+
+    await runReady();
+    expect(registerToolMaskResolver).toHaveBeenCalledTimes(1);
+    const resolver = registerToolMaskResolver.mock.calls[0]?.[1] as
+      | ((arg: {
+          session: { isDirect: boolean; userId: string; guildId: string; channelId: string };
+          room: { roomId: number; conversationId: string };
+        }) => Promise<unknown>)
+      | undefined;
+    expect(resolver).toBeTypeOf('function');
+    if (!resolver) {
+      throw new Error('tool mask resolver was not registered');
+    }
+
+    await expect(
+      resolver({
+        session: { isDirect: false, userId: 'u1', guildId: '1091330365', channelId: '1091330365' },
+        room: { roomId: 115, conversationId: 'conv-group' },
+      }),
+    ).resolves.toEqual({
+      mode: 'allow',
+      allow: ['question', 'web_search'],
+      deny: [],
+      toolCallMask: {
+        mode: 'allow',
+        allow: ['question', 'web_search'],
+        deny: [],
+      },
+    });
+  });
+
+  it('fails closed at ready when chatluna runtime registry is unavailable', async () => {
+    const { registerToolMaskResolver, runReady, setChatLunaAvailable } = createHarness({}, {
+      initialChatLunaAvailable: false,
+    });
+
+    await expect(runReady()).rejects.toThrow(/runtime tool registry|registerToolMaskResolver/i);
+    expect(registerToolMaskResolver).not.toHaveBeenCalled();
+
+    setChatLunaAvailable(true);
+    await expect(runReady()).resolves.toBeUndefined();
+    expect(registerToolMaskResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it('migrates legacy override ids to canonical runtime ids and drops ghost tools', async () => {
+    const { ctx, database } = createHarness({
+      tool_scope_override: [
+        {
+          id: 1,
+          toolName: 'built_question',
+          routeProfile: 'chat',
+          scopeKind: 'global_default',
+          scopeId: GLOBAL_DEFAULT_SCOPE_ID,
+          enabled: 1,
+          updatedAt: 10,
+        },
+        {
+          id: 2,
+          toolName: 'question',
+          routeProfile: 'chat',
+          scopeKind: 'global_default',
+          scopeId: GLOBAL_DEFAULT_SCOPE_ID,
+          enabled: 0,
+          updatedAt: 11,
+        },
+        {
+          id: 3,
+          toolName: 'built_user_toast',
+          routeProfile: 'chat',
+          scopeKind: 'group',
+          scopeId: '1001',
+          enabled: 1,
+          updatedAt: 12,
+        },
+        {
+          id: 4,
+          toolName: 'web_poster',
+          routeProfile: 'chat',
+          scopeKind: 'group',
+          scopeId: '1002',
+          enabled: 1,
+          updatedAt: 13,
+        },
+      ],
+    });
+    const service = ctx.toolPolicy!;
+
+    await expect(service.getToolOverrides()).resolves.toEqual([
+      expect.objectContaining({
+        id: 2,
+        toolName: 'question',
+        routeProfile: 'chat',
+        scopeKind: 'global_default',
+        scopeId: GLOBAL_DEFAULT_SCOPE_ID,
+        enabled: 0,
+      }),
+    ]);
+
+    await expect(database.get('tool_scope_override', {})).resolves.toEqual([
+      expect.objectContaining({
+        id: 2,
+        toolName: 'question',
+        routeProfile: 'chat',
+        scopeKind: 'global_default',
+        scopeId: GLOBAL_DEFAULT_SCOPE_ID,
+      }),
+    ]);
+  });
+});

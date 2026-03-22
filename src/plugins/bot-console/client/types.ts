@@ -42,6 +42,10 @@ export interface PresetDocument {
   raw?: string;
 }
 
+export interface ReorderPresetsResponse {
+  presets: PresetSummary[];
+}
+
 // ─── Memory V2 ───────────────────────────────────────────────────────────────
 
 export type MemoryStatusState = "never" | "success" | "failed";
@@ -93,10 +97,9 @@ export type ScopedFeatureKey =
   | "QQ_VOICE_ENABLED"
   | "QQ_VOICE_INPUT_ENABLED"
   | "QQ_VOICE_OUTPUT_ENABLED"
-  | "POKEMON_BATTLE_ENABLED"
   | "CHAT_NATURAL_TRIGGER_ENABLED"
   | "TASK_AUTOMATION_INTENT_ENABLED"
-  | "QQBOT_LIVE_REPLY_ENABLED";
+  | "QQBOT_REPLY_INTERRUPT_ENABLED";
 
 export type FeatureScopeKind = "private_default" | "group";
 export type ConversationTargetScopeKind = "private" | "group";
@@ -157,6 +160,69 @@ export interface DeleteConversationRoomResult {
   updatedAt: number;
 }
 
+// ─── Tool Policy ─────────────────────────────────────────────────────────────
+
+export type ToolRouteProfile = "chat" | "automation";
+export type ToolPolicyScopeKind =
+  | "global_default"
+  | "private_default"
+  | "private_conversation"
+  | "group";
+export type ToolCompatibility = "compatible" | "conditional" | "incompatible";
+export type ToolRiskLevel = "low" | "medium" | "high";
+export type ToolCategoryKey = "builtin" | "file" | "web" | "geo";
+export type ToolOverrideMode = "inherit" | "enabled" | "disabled";
+
+export interface ToolCatalogEntry {
+  toolName: string;
+  title: string;
+  category: ToolCategoryKey;
+  description: string;
+  compatibility: ToolCompatibility;
+  compatibilityNote: string;
+  hardDependencies: string[];
+  relatedTools: string[];
+  riskLevel: ToolRiskLevel;
+  availableRoutes: ToolRouteProfile[];
+  defaultEnabledByRoute?: Record<ToolRouteProfile, boolean>;
+}
+
+export interface ToolPolicyScope {
+  scopeKind: ToolPolicyScopeKind;
+  scopeId: string;
+  roomId: number | null;
+  roomName: string;
+  groupId: string | null;
+  conversationId: string | null;
+  visibility: string | null;
+  updatedAt: number | null;
+}
+
+export interface ToolPolicyOverrideRecord {
+  id: number;
+  toolName: string;
+  routeProfile: ToolRouteProfile;
+  scopeKind: ToolPolicyScopeKind;
+  scopeId: string;
+  enabled: number;
+  updatedAt: number;
+}
+
+export interface ToolPolicyOverrideInput {
+  toolName: string;
+  routeProfile: ToolRouteProfile;
+  scopeKind: ToolPolicyScopeKind;
+  scopeId: string;
+  enabled: boolean;
+}
+
+export interface BotConsoleToolPolicyState {
+  routeProfiles: ToolRouteProfile[];
+  catalog: ToolCatalogEntry[];
+  scopes: ToolPolicyScope[];
+  overrides: ToolPolicyOverrideRecord[];
+}
+
 // ─── Bot Console State ────────────────────────────────────────────────────────
 
 export interface BotConsoleState {
@@ -167,6 +233,7 @@ export interface BotConsoleState {
   featureScopes: ConsoleFeatureScope[];
   featureOverrides: FeatureScopeOverrideRecord[];
   conversationTargets: ConversationTarget[];
+  toolPolicy?: BotConsoleToolPolicyState | null;
   runtimeStatus: {
     memoryV2: MemoryV2StatusSnapshot;
   };
@@ -189,6 +256,10 @@ export interface SavePresetResponse {
 
 export interface SaveFeatureOverridesResponse {
   overrides: FeatureScopeOverrideRecord[];
+}
+
+export interface SaveToolOverridesResponse {
+  overrides: ToolPolicyOverrideRecord[];
 }
 
 export interface ServiceActionResponse {

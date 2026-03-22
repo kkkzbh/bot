@@ -24,9 +24,11 @@ export OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.deepseek.com/v1}"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-sk-ci-smoke}"
 export OPENAI_MODEL="${OPENAI_MODEL:-deepseek/deepseek-chat}"
 export TASK_AUTOMATION_INTENT_ENABLED="${TASK_AUTOMATION_INTENT_ENABLED:-false}"
-export POKEMON_BATTLE_ENABLED="${POKEMON_BATTLE_ENABLED:-false}"
-export WEB_SEARCH_LLM_PLANNER_ENABLED="${WEB_SEARCH_LLM_PLANNER_ENABLED:-false}"
-export WEB_SEARCH_LLM_RERANK_ENABLED="${WEB_SEARCH_LLM_RERANK_ENABLED:-false}"
+export CHATLUNA_SEARCH_SERVICE_ENABLED="${CHATLUNA_SEARCH_SERVICE_ENABLED:-true}"
+export CHATLUNA_SEARCH_SERVICE_TOPK="${CHATLUNA_SEARCH_SERVICE_TOPK:-5}"
+export CHATLUNA_SEARCH_SERVICE_SUMMARY_TYPE="${CHATLUNA_SEARCH_SERVICE_SUMMARY_TYPE:-speed}"
+export CHATLUNA_SEARCH_SERVICE_SUMMARY_MODEL="${CHATLUNA_SEARCH_SERVICE_SUMMARY_MODEL:-empty}"
+export CHATLUNA_SEARCH_SERVICE_TAVILY_API_KEY="${CHATLUNA_SEARCH_SERVICE_TAVILY_API_KEY:-tvly-ci-smoke}"
 export QQ_VOICE_ENABLED="${QQ_VOICE_ENABLED:-false}"
 
 LOG_FILE="$(mktemp)"
@@ -60,7 +62,8 @@ const keep = new Set([
   './dist/plugins/automation:automation',
   './dist/plugins/reply:voice',
   'chatluna:0qm1bk',
-  './dist/plugins/web-search:search',
+  'puppeteer:0vx5c7',
+  'chatluna-search-service:search',
   './dist/plugins/sticker:sticker',
   './dist/plugins/model-guard:mjddgg',
   './dist/plugins/memory:memory-v2',
@@ -103,8 +106,8 @@ if ! grep -F "loader apply plugin ./dist/plugins/reply:voice" "$LOG_FILE" >/dev/
   exit 1
 fi
 
-if ! grep -F "loader apply plugin ./dist/plugins/web-search:search" "$LOG_FILE" >/dev/null; then
-  echo "Koishi smoke startup did not load web-search plugin." >&2
+if ! grep -F "loader apply plugin chatluna-search-service:search" "$LOG_FILE" >/dev/null; then
+  echo "Koishi smoke startup did not load chatluna-search-service plugin." >&2
   exit 1
 fi
 
@@ -120,6 +123,11 @@ fi
 
 if ! grep -F "loader apply plugin ./dist/plugins/bot-console:bot-console" "$LOG_FILE" >/dev/null; then
   echo "Koishi smoke startup did not load bot-console plugin." >&2
+  exit 1
+fi
+
+if grep -F "loader apply plugin ./dist/plugins/web-search:search" "$LOG_FILE" >/dev/null; then
+  echo "Koishi smoke startup unexpectedly loaded deleted local web-search plugin." >&2
   exit 1
 fi
 

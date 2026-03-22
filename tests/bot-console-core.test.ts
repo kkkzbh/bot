@@ -117,6 +117,29 @@ describe('bot-console preset helpers', () => {
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath, presetDirPath: presetDir });
     await expect(manager.deletePreset('sakiko', 'sakiko')).rejects.toThrow('不能删除当前正在使用的默认预设');
   });
+
+  it('lists presets by saved order and appends unordered presets alphabetically', async () => {
+    const dir = createTempDir();
+    const presetDir = join(dir, 'data/chathub/presets');
+    const envFilePath = join(dir, '.env.local');
+    mkdirSync(presetDir, { recursive: true });
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_PRESET=sakiko\n', 'utf8');
+    await Promise.all([
+      writeFile(join(presetDir, 'empty.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: empty\n', 'utf8'),
+      writeFile(join(presetDir, 'sakiko.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: sakiko\n', 'utf8'),
+      writeFile(join(presetDir, 'catgirl.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: catgirl\n', 'utf8'),
+      writeFile(join(presetDir, 'sydney.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: sydney\n', 'utf8'),
+      writeFile(join(presetDir, '.bot-console-preset-order.json'), JSON.stringify({ names: ['sakiko', 'catgirl'] }), 'utf8'),
+    ]);
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath, presetDirPath: presetDir });
+    await expect(manager.listPresetSummaries()).resolves.toEqual([
+      expect.objectContaining({ name: 'sakiko' }),
+      expect.objectContaining({ name: 'catgirl' }),
+      expect.objectContaining({ name: 'empty' }),
+      expect.objectContaining({ name: 'sydney' }),
+    ]);
+  });
 });
 
 describe('bot-console systemd helpers', () => {
@@ -150,13 +173,40 @@ describe('bot-console manager', () => {
     await expect(manager.saveEnv({ HACKED: '1' } as any)).rejects.toThrow('不支持这个配置项');
   });
 
-  it('restarts qqbot.target via explicit stop then start', async () => {
+  it('accepts QQBOT_REPLY_INTERRUPT_ENABLED through managed env saves', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    await expect(manager.saveEnv({ QQBOT_REPLY_INTERRUPT_ENABLED: 'false' })).resolves.toMatchObject({
+      QQBOT_REPLY_INTERRUPT_ENABLED: 'false',
+    });
+  });
+
+  it('accepts file system env controls through managed env saves', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    await expect(
+      manager.saveEnv({
+        CHATLUNA_COMMON_FS: 'true',
+        CHATLUNA_COMMON_FS_SCOPE_PATH: '/tmp/qqbot-scope',
+      }),
+    ).resolves.toMatchObject({
+      CHATLUNA_COMMON_FS: 'true',
+      CHATLUNA_COMMON_FS_SCOPE_PATH: '/tmp/qqbot-scope',
+    });
+  });
+
+  it('schedules qqbot.target restart through a transient user unit', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
     writeFileSync(envFilePath, 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
     const execFile = vi
       .fn()
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })
       .mockResolvedValueOnce({ stdout: '', stderr: '' })
       .mockResolvedValueOnce({
         stdout: [
@@ -174,18 +224,12 @@ describe('bot-console manager', () => {
 
     expect(execFile).toHaveBeenNthCalledWith(
       1,
-      'systemctl',
-      ['--user', 'stop', 'qqbot.target'],
+      'systemd-run',
+      ['--user', '--quiet', '--on-active=1s', expect.stringMatching(/^--unit=qqbot-target-restart-\d+$/), 'systemctl', '--user', 'restart', 'qqbot.target'],
       expect.objectContaining({ cwd: dir, timeout: 15_000 }),
     );
     expect(execFile).toHaveBeenNthCalledWith(
       2,
-      'systemctl',
-      ['--user', 'start', 'qqbot.target'],
-      expect.objectContaining({ cwd: dir, timeout: 15_000 }),
-    );
-    expect(execFile).toHaveBeenNthCalledWith(
-      3,
       'systemctl',
       ['--user', 'show', 'qqbot.target', '--property', 'Description,LoadState,ActiveState,SubState,UnitFileState'],
       expect.objectContaining({ cwd: dir, timeout: 15_000 }),
@@ -220,5 +264,31 @@ describe('bot-console manager', () => {
       expect.objectContaining({ cwd: dir, timeout: 15_000 }),
     );
     expect(lines).toEqual(['line one', 'line two']);
+  });
+
+  it('persists custom preset order and removes deleted presets from it', async () => {
+    const dir = createTempDir();
+    const presetDir = join(dir, 'data/chathub/presets');
+    const envFilePath = join(dir, '.env.local');
+    mkdirSync(presetDir, { recursive: true });
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_PRESET=sakiko\n', 'utf8');
+    await Promise.all([
+      writeFile(join(presetDir, 'catgirl.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: catgirl\n', 'utf8'),
+      writeFile(join(presetDir, 'empty.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: empty\n', 'utf8'),
+      writeFile(join(presetDir, 'sakiko.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: sakiko\n', 'utf8'),
+    ]);
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath, presetDirPath: presetDir });
+    await expect(manager.reorderPresets(['sakiko', 'catgirl', 'empty'])).resolves.toEqual([
+      expect.objectContaining({ name: 'sakiko' }),
+      expect.objectContaining({ name: 'catgirl' }),
+      expect.objectContaining({ name: 'empty' }),
+    ]);
+
+    await manager.deletePreset('catgirl', 'sakiko');
+    await expect(manager.listPresetSummaries()).resolves.toEqual([
+      expect.objectContaining({ name: 'sakiko' }),
+      expect.objectContaining({ name: 'empty' }),
+    ]);
   });
 });

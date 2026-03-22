@@ -5,12 +5,20 @@ import { useToast } from './composables/useToast'
 import { useKeyboard } from './composables/useKeyboard'
 import ToastContainer from './components/ToastContainer.vue'
 import OverviewPanel from './components/panels/OverviewPanel.vue'
+import AnalyticsPanel from './components/panels/AnalyticsPanel.vue'
 import ServicesPanel from './components/panels/ServicesPanel.vue'
 import FeaturesPanel from './components/panels/FeaturesPanel.vue'
+import ToolPolicyPanel from './components/panels/ToolPolicyPanel.vue'
 import ModelsPanel from './components/panels/ModelsPanel.vue'
 import BasicPanel from './components/panels/BasicPanel.vue'
 import PresetsPanel from './components/panels/PresetsPanel.vue'
 import LogsPanel from './components/panels/LogsPanel.vue'
+
+const props = withDefaults(defineProps<{
+  embedded?: boolean
+}>(), {
+  embedded: false,
+})
 
 // ── Composables ───────────────────────────────────────────────────────────────
 
@@ -26,8 +34,10 @@ const activeTab = ref('overview')
 
 const TABS = [
   { id: 'overview', label: '服务总览' },
+  { id: 'analytics', label: '数据统计' },
   { id: 'services', label: '运行控制' },
   { id: 'features', label: '功能开关' },
+  { id: 'tools', label: '工具控制' },
   { id: 'models',   label: '模型接口' },
   { id: 'basic',    label: '基础配置' },
   { id: 'presets',  label: '角色预设' },
@@ -36,8 +46,10 @@ const TABS = [
 
 const panelMap: Record<string, Component> = {
   overview: OverviewPanel,
+  analytics: AnalyticsPanel,
   services: ServicesPanel,
   features: FeaturesPanel,
+  tools: ToolPolicyPanel,
   models:   ModelsPanel,
   basic:    BasicPanel,
   presets:  PresetsPanel,
@@ -72,7 +84,7 @@ async function handleRefresh() {
 async function handleRestart() {
   try {
     await bc.runServiceAction('qqbot.target', 'restart')
-    toast.add('机器人总控已重启', 'success')
+    toast.add('机器人总控已触发重启', 'success')
   } catch (err: unknown) {
     toast.add(err instanceof Error ? err.message : '重启失败', 'error')
   }
@@ -83,7 +95,10 @@ const { loading, botState } = bc
 </script>
 
 <template>
-  <div class="bot-console-page">
+  <div
+    class="bot-console-page"
+    :class="{ 'is-embedded': props.embedded }"
+  >
     <div class="bc-shell">
 
       <!-- ── Hero ──────────────────────────────────────────────────────── -->

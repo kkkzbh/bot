@@ -90,13 +90,13 @@ describe('qq voice config wiring', () => {
     expect(serviceTemplate).toContain('ExecStop=/home/kkkzbh/code/qqbot/scripts/publish-voice-tts-tailnet.sh clear');
   });
 
-  it('keeps the sakiko preset free of deprecated qqbot transport tag contracts', () => {
+  it('keeps the sakiko preset free of runtime transport protocol text and deprecated tag contracts', () => {
     const content = readFileSync(resolve(process.cwd(), 'data/chathub/presets/sakiko.yml'), 'utf8');
 
-    expect(content).toContain('# 回复组织原则');
-    expect(content).toContain('你的最终回复只输出一个合法的 ReplyPlan JSON 对象本身');
-    expect(content).toContain('普通聊天也要写成 ReplyPlan');
-    expect(content).toContain('voice.content 只写你要说的话');
+    expect(content).not.toContain('# 回复组织原则');
+    expect(content).not.toContain('你的最终回复只输出一个合法的 ReplyPlan JSON 对象本身');
+    expect(content).not.toContain('普通聊天也要写成 ReplyPlan');
+    expect(content).not.toContain('voice.content 只写你要说的话');
     expect(content).not.toContain('<qqbot-multiline>');
     expect(content).not.toContain('<qqbot-voice>');
   });

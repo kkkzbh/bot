@@ -10,11 +10,18 @@ import {
   shouldTriggerByRule,
   type SpamState,
 } from './matcher.js';
+import {
+  getNaturalTriggerState,
+  setNaturalTriggerState,
+  type NaturalTriggerReason,
+  type NaturalTriggerState,
+} from './state.js';
 
 const logger = new Logger('group-natural-trigger');
+const allowReplyResolverName = 'group-natural-trigger';
 
 export const name = 'group-natural-trigger';
-export const inject = { optional: ['featurePolicy'] } as const;
+export const inject = { optional: ['featurePolicy', 'chatluna'] } as const;
 
 export interface Config {
   enabled?: boolean;
@@ -95,6 +102,12 @@ interface TriggerDecisionResult {
 
 type ContextWithFeaturePolicy = Context & {
   featurePolicy?: FeaturePolicyServiceLike;
+  chatluna?: {
+    registerAllowReplyResolver?: (
+      name: string,
+      resolver: (arg: { session: Session; context: unknown }) => boolean | void | Promise<boolean | void>,
+    ) => () => void;
+  };
 };
 
 function sleep(ms: number): Promise<void> {
@@ -264,10 +277,51 @@ function shouldHandleGroup(session: Session, runtime: RuntimeConfig): boolean {
 
 export function apply(ctx: Context, config: Config): void {
   const runtime = toRuntimeConfig(config);
-  const featurePolicy = (ctx as ContextWithFeaturePolicy).featurePolicy;
+  const serviceCtx = ctx as ContextWithFeaturePolicy;
+  const featurePolicy = serviceCtx.featurePolicy;
   const focusExpires = new Map<string, number>();
   const spamStates = new Map<string, SpamState>();
   const nextReplyAt = new Map<string, number>();
+  let disposeAllowReplyResolver: (() => void) | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let warnedUnavailable = false;
+
+  const clearRetryTimer = () => {
+    if (!retryTimer) return;
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  };
+
+  const registerAllowReplyResolver = (): boolean => {
+    if (disposeAllowReplyResolver) return true;
+    const registerResolver = serviceCtx.chatluna?.registerAllowReplyResolver?.bind(serviceCtx.chatluna);
+    if (typeof registerResolver !== 'function') return false;
+    warnedUnavailable = false;
+    disposeAllowReplyResolver = registerResolver(allowReplyResolverName, ({ session }) => {
+      const naturalTrigger = getNaturalTriggerState(session as unknown as Record<string, unknown>);
+      if (!naturalTrigger) return;
+      logger.info(
+        'natural trigger allow resolver hit: channel=%s user=%s reason=%s explicit=%s',
+        session.channelId,
+        session.userId,
+        naturalTrigger.reason,
+        String(naturalTrigger.explicit),
+      );
+      return true;
+    });
+    clearRetryTimer();
+    return true;
+  };
+
+  const scheduleRegisterRetry = () => {
+    if (disposeAllowReplyResolver || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!registerAllowReplyResolver()) {
+        scheduleRegisterRetry();
+      }
+    }, 250);
+  };
 
   ctx.middleware(async (session, next) => {
     if (!runtime.enabled) return next();
@@ -302,24 +356,40 @@ export function apply(ctx: Context, config: Config): void {
     const directHit = Math.random() < runtime.directTriggerProbability;
     const focusUntil = focusExpires.get(groupScopeKey) ?? 0;
     const inFocus = focusUntil > now;
-    const ruleTriggered = shouldTriggerByRule(content, runtime.aliases, isQuotedToBot(session));
-    let triggerReason: 'direct' | 'rule' | 'focus' | 'model' | null = directHit ? 'direct' : null;
+    const quotedToBot = isQuotedToBot(session);
+    const hasAlias = containsAlias(content, runtime.aliases);
+    const ruleTriggered = shouldTriggerByRule(content, runtime.aliases, quotedToBot);
+    let triggerReason: NaturalTriggerReason | null = directHit ? 'direct' : null;
+    let explicitTrigger = false;
     let modelDecision: TriggerDecisionResult | null = null;
 
     let shouldTrigger = directHit;
 
     if (!shouldTrigger) {
       shouldTrigger = ruleTriggered;
-      if (shouldTrigger) triggerReason = 'rule';
+      if (shouldTrigger) {
+        if (quotedToBot) {
+          triggerReason = 'quote';
+        } else if (hasAlias) {
+          triggerReason = 'alias';
+        } else {
+          triggerReason = 'rule';
+        }
+        explicitTrigger = true;
+      }
     }
 
     if (!shouldTrigger && !inFocus) {
       modelDecision = await shouldTriggerByModel(content, runtime);
       shouldTrigger = modelDecision.trigger;
-      if (shouldTrigger) triggerReason = 'model';
+      if (shouldTrigger) {
+        triggerReason = 'model';
+        explicitTrigger = false;
+      }
     } else if (!shouldTrigger && inFocus) {
       shouldTrigger = true;
       triggerReason = 'focus';
+      explicitTrigger = false;
     }
 
     if (!shouldTrigger) return next();
@@ -333,27 +403,34 @@ export function apply(ctx: Context, config: Config): void {
     nextReplyAt.set(groupScopeKey, handlingAt + runtime.replyIntervalMs);
     focusExpires.set(groupScopeKey, handlingAt + runtime.focusWindowMs);
 
-    const triggerName = runtime.aliases[0] ?? '祥子';
-    const originalContent = session.content;
-    const stripped = session.stripped as { content?: string } | undefined;
-    const originalStripped = stripped?.content;
-
-    session.content = `${triggerName} ${content}`;
-    if (stripped && typeof stripped.content === 'string') {
-      stripped.content = `${triggerName} ${stripped.content}`;
-    }
+    const naturalTrigger: NaturalTriggerState = {
+      reason: triggerReason ?? 'direct',
+      explicit: explicitTrigger,
+    };
 
     try {
+      setNaturalTriggerState(session as unknown as Record<string, unknown>, naturalTrigger);
+      logger.info(
+        'natural trigger decision hit: channel=%s user=%s reason=%s explicit=%s',
+        session.channelId,
+        session.userId,
+        naturalTrigger.reason,
+        String(naturalTrigger.explicit),
+      );
       return await next();
     } finally {
-      session.content = originalContent;
-      if (stripped && typeof originalStripped === 'string') {
-        stripped.content = originalStripped;
-      }
+      setNaturalTriggerState(session as unknown as Record<string, unknown>, null);
     }
   });
 
   ctx.on('ready', () => {
+    if (!registerAllowReplyResolver()) {
+      if (!warnedUnavailable) {
+        warnedUnavailable = true;
+        logger.warn('chatluna service is unavailable at ready, postpone allow-reply resolver registration.');
+      }
+      scheduleRegisterRetry();
+    }
     logger.info(
       'group natural trigger loaded: groups=%d, aliases=%d, direct=%s, focusWindowMs=%d, replyIntervalMs=%d, spam=%d/%dms mute=%dms',
       runtime.enabledGroups.size,
@@ -365,5 +442,13 @@ export function apply(ctx: Context, config: Config): void {
       runtime.spamWindowMs,
       runtime.spamMuteMs,
     );
+  });
+
+  ctx.on('dispose', () => {
+    clearRetryTimer();
+    if (disposeAllowReplyResolver) {
+      disposeAllowReplyResolver();
+      disposeAllowReplyResolver = null;
+    }
   });
 }

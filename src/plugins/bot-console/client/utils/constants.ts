@@ -4,10 +4,11 @@ export const FIELD_LABELS: Record<string, string> = {
   QQ_VOICE_ENABLED: 'QQ 语音总开关',
   QQ_VOICE_INPUT_ENABLED: '语音转文字',
   QQ_VOICE_OUTPUT_ENABLED: '语音回复',
-  POKEMON_BATTLE_ENABLED: '宝可梦对战',
   CHAT_NATURAL_TRIGGER_ENABLED: '群聊自然触发',
   TASK_AUTOMATION_INTENT_ENABLED: '任务意图识别',
-  QQBOT_LIVE_REPLY_ENABLED: '发送期续写',
+  QQBOT_REPLY_INTERRUPT_ENABLED: '回复期中断',
+  CHATLUNA_COMMON_FS: '文件系统工具总开关',
+  CHATLUNA_COMMON_FS_SCOPE_PATH: '文件系统作用域目录',
   OPENAI_BASE_URL: '模型接口地址',
   OPENAI_API_KEY: '模型接口密钥',
   OPENAI_MODEL: '默认模型',
@@ -29,6 +30,10 @@ export const FIELD_HINTS: Record<string, string> = {
     '用于把已识别的任务整理成可执行指令并投递给后续流程。更适合选择结构化输出稳定、遵循要求准确的模型。',
   TASK_AUTOMATION_CHAT_REPLY_MODEL:
     '用于任务流程里的对话回复，例如确认、追问和结果回执。它会直接影响用户看到的任务类回复内容。',
+  CHATLUNA_COMMON_FS:
+    '控制是否向 ChatLuna 注入整组 file_* 文件系统能力。关闭后，下方文件系统工具即使策略设为启用，也不会真正提供给模型。',
+  CHATLUNA_COMMON_FS_SCOPE_PATH:
+    '限制文件系统工具默认可访问的根目录。留空时会跟随 Koishi 启动目录，也就是当前 bot 的工作目录。',
   CHATLUNA_DEFAULT_MODEL:
     '普通聊天默认走这里配置的模型。未单独指定其它模型的日常对话，会优先使用它。',
 }
@@ -113,7 +118,7 @@ export const OVERVIEW_FEATURE_ITEMS: [string, string][] = [
   ['QQ_VOICE_ENABLED', '语音'],
   ['CHAT_NATURAL_TRIGGER_ENABLED', '自然触发'],
   ['TASK_AUTOMATION_INTENT_ENABLED', '任务意图'],
-  ['QQBOT_LIVE_REPLY_ENABLED', '发送期续写'],
+  ['QQBOT_REPLY_INTERRUPT_ENABLED', '回复期中断'],
 ]
 
 // ─── Lookup helpers ───────────────────────────────────────────────────────────

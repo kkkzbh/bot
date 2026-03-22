@@ -8,6 +8,13 @@ const promptAssemblyMocks = vi.hoisted(() => ({
   registerPromptFragment: vi.fn(),
 }));
 
+const loggerMocks = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+}));
+
 vi.mock('koishi', () => {
   type MockSchemaNode = {
     default: () => MockSchemaNode;
@@ -57,10 +64,18 @@ vi.mock('koishi', () => {
   };
 
   class MockLogger {
-    info(): void {}
-    warn(): void {}
-    error(): void {}
-    debug(): void {}
+    info(...args: any[]): void {
+      loggerMocks.info(...args);
+    }
+    warn(...args: any[]): void {
+      loggerMocks.warn(...args);
+    }
+    error(...args: any[]): void {
+      loggerMocks.error(...args);
+    }
+    debug(...args: any[]): void {
+      loggerMocks.debug(...args);
+    }
   }
 
   return {
@@ -81,8 +96,11 @@ vi.mock('koishi', () => {
       audio: (src: string) => ({
         toString: () => `<audio src="${src}"/>`,
       }),
-      image: (buffer: Buffer, mime: string) => ({
-        toString: () => `<img src="data:${mime};base64,${buffer.toString('base64')}" />`,
+      image: (source: string | Buffer, mime?: string) => ({
+        toString: () =>
+          typeof source === 'string'
+            ? `<img src="${source}" />`
+            : `<img src="data:${mime};base64,${source.toString('base64')}" />`,
       }),
     },
   };
@@ -111,11 +129,60 @@ function createChainBuilder(store: Map<string, ChainMiddleware>) {
   };
 }
 
+function createStoredReplyAgentTail(conversationId: string) {
+  return [
+    {
+      id: 'msg-human-1',
+      role: 'human',
+      parent: null,
+      conversation: conversationId,
+      text: '上一轮用户输入',
+      content: null,
+      name: null,
+      tool_calls: null,
+      tool_call_id: null,
+      additional_kwargs_binary: null,
+      rawId: null,
+    },
+    {
+      id: 'msg-ai-1',
+      role: 'ai',
+      parent: 'msg-human-1',
+      conversation: conversationId,
+      text: '',
+      content: null,
+      name: null,
+      tool_calls: [{ id: 'tool-submit', name: 'submit_reply_plan', args: { segments: [] } }],
+      tool_call_id: null,
+      additional_kwargs_binary: null,
+      rawId: null,
+    },
+    {
+      id: 'msg-tool-1',
+      role: 'tool',
+      parent: 'msg-ai-1',
+      conversation: conversationId,
+      text: '{"segments":[{"kind":"text","content":"旧回复"}]}',
+      content: null,
+      name: 'submit_reply_plan',
+      tool_calls: null,
+      tool_call_id: 'tool-submit',
+      additional_kwargs_binary: null,
+      rawId: null,
+    },
+  ];
+}
+
 function createHarness(overrides: {
   canSendRecord?: boolean;
   canSendRecordImpl?: () => Promise<boolean>;
   includeInternalRequest?: boolean;
   pluginConfig?: Record<string, unknown>;
+  replyInterruptEnabled?: boolean;
+  databaseGetImpl?: (table: string, query: Record<string, unknown>) => Promise<any[]>;
+  databaseUpsertImpl?: (table: string, rows: Record<string, unknown>[]) => Promise<unknown>;
+  databaseRemoveImpl?: (table: string, query: Record<string, unknown>) => Promise<unknown>;
+  normalizeReplyAgentHistoryImpl?: (room: Record<string, unknown>, finalVisibleText: string) => Promise<unknown>;
 } = {}) {
   const middlewares: Middleware[] = [];
   const events = new Map<string, EventHandler[]>();
@@ -124,28 +191,29 @@ function createHarness(overrides: {
 
   const database = {
     get: vi.fn(async (table: string, query: Record<string, unknown>) => {
+      if (overrides.databaseGetImpl) {
+        return overrides.databaseGetImpl(table, query);
+      }
       if (table === 'chathub_conversation') {
-        return [{ id: query.id ?? 'conv-1', latestId: 'msg-ai-1' }];
+        return [{ id: query.id ?? 'conv-1', latestId: 'msg-tool-1' }];
       }
       if (table === 'chathub_message') {
-        return [
-          {
-            id: query.id ?? 'msg-ai-1',
-            role: 'ai',
-            content: null,
-            parent: 'msg-human-1',
-            name: null,
-            tool_calls: null,
-            tool_call_id: null,
-            additional_kwargs_binary: null,
-            rawId: null,
-            conversation: 'conv-1',
-          },
-        ];
+        return createStoredReplyAgentTail(String(query.conversation ?? 'conv-1'));
       }
       return [];
     }),
-    upsert: vi.fn(async () => undefined),
+    upsert: vi.fn(async (table: string, rows: Record<string, unknown>[]) => {
+      if (overrides.databaseUpsertImpl) {
+        return overrides.databaseUpsertImpl(table, rows);
+      }
+      return undefined;
+    }),
+    remove: vi.fn(async (table: string, query: Record<string, unknown>) => {
+      if (overrides.databaseRemoveImpl) {
+        return overrides.databaseRemoveImpl(table, query);
+      }
+      return undefined;
+    }),
   };
 
   const internal: Record<string, any> = {
@@ -175,11 +243,30 @@ function createHarness(overrides: {
       ...createChainBuilder(chainMiddlewares),
       receiveMessage: vi.fn(async () => false),
     },
+    normalizeReplyAgentHistory: vi.fn(async (room: Record<string, unknown>, finalVisibleText: string) => {
+      if (overrides.normalizeReplyAgentHistoryImpl) {
+        return overrides.normalizeReplyAgentHistoryImpl(room, finalVisibleText);
+      }
+      return {
+        deletedMessageIds: ['msg-tool-1', 'msg-ai-1'],
+        latestId: 'msg-ai-normalized',
+        normalizedMessageId: 'msg-ai-normalized',
+        normalizedText: finalVisibleText,
+      };
+    }),
   };
 
   const ctx = {
     bots: [bot],
     chatluna,
+    featurePolicy: {
+      resolveFeatureEnabled: vi.fn(async (_session: Record<string, any>, featureKey: string) => {
+        if (featureKey === 'QQBOT_REPLY_INTERRUPT_ENABLED') {
+          return overrides.replyInterruptEnabled ?? false;
+        }
+        return true;
+      }),
+    },
     database,
     get: vi.fn((name: string) => {
       if (name !== 'chatluna') return undefined;
@@ -213,6 +300,7 @@ function createHarness(overrides: {
     inbound: middlewares[0],
     capabilityMiddleware: middlewares[1],
     ready: (events.get('ready') ?? [])[0],
+    getPrepare: () => chainMiddlewares.get('qqbot_reply_runtime_prepare'),
     getPolicy: () => chainMiddlewares.get('qqbot_reply_transport_policy'),
     getExecutor: () => chainMiddlewares.get('qqbot_reply_plan_executor'),
     chatluna,
@@ -244,11 +332,27 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+function createReplyAgentResponse(input: Record<string, unknown>) {
+  return {
+    content: '',
+    additional_kwargs: {
+      chatluna_agent_terminal_tool: {
+        name: 'submit_reply_plan',
+        input,
+      },
+    },
+  };
+}
+
 describe('qq voice plugin', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     promptAssemblyMocks.registerPromptFragment.mockReset();
+    loggerMocks.info.mockReset();
+    loggerMocks.warn.mockReset();
+    loggerMocks.error.mockReset();
+    loggerMocks.debug.mockReset();
   });
 
   afterEach(() => {
@@ -266,6 +370,50 @@ describe('qq voice plugin', () => {
         required: expect.arrayContaining(['chatluna', 'database']),
       }),
     );
+  });
+
+  it('serializes turns instead of interrupting when reply interrupt is disabled', async () => {
+    const { ready, getPrepare, getExecutor, bot } = createHarness({ replyInterruptEnabled: false });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const prepare = getPrepare();
+    const executor = getExecutor();
+    const session1 = createSession(bot, {
+      content: '第一条',
+      strippedContent: '第一条',
+    });
+    const session2 = createSession(bot, {
+      content: '第二条',
+      strippedContent: '第二条',
+    });
+    const prepareContext1 = { options: { room: { conversationId: 'conv-serial' } } };
+    const prepareContext2 = { options: { room: { conversationId: 'conv-serial' } } };
+
+    await prepare?.(session1, prepareContext1);
+
+    let secondPrepared = false;
+    const prepareSecondPromise = prepare?.(session2, prepareContext2).then(() => {
+      secondPrepared = true;
+    });
+
+    await flushMicrotasks();
+    expect(secondPrepared).toBe(false);
+
+    await executor?.(session1, {
+      options: {
+        room: { conversationId: 'conv-serial' },
+        responseMessage: createReplyAgentResponse({
+          segments: [{ kind: 'text', content: '第一条回复' }],
+        }),
+      },
+    });
+
+    await prepareSecondPromise;
+    expect(secondPrepared).toBe(true);
+    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['第一条回复']);
   });
 
   it('transcribes first incoming audio and merges it into session content', async () => {
@@ -308,7 +456,7 @@ describe('qq voice plugin', () => {
     expect(getExecutor()).toBeTypeOf('function');
   });
 
-  it('always injects ReplyPlan execution rules and json_object request override', async () => {
+  it('switches QQ reply turns to reply-agent and only injects voice execution rules when voice is unavailable', async () => {
     const { ready, getPolicy, bot } = createHarness();
     vi.stubGlobal(
       'fetch',
@@ -340,6 +488,7 @@ describe('qq voice plugin', () => {
     };
 
     await policy?.(session, context);
+    expect((context.options.room as any).chatMode).toBe('reply-agent');
     expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
       'conv-1',
       expect.objectContaining({
@@ -350,6 +499,7 @@ describe('qq voice plugin', () => {
             reply_plan: expect.objectContaining({
               enabled: true,
               multiline_available: true,
+              terminal_tool: 'submit_reply_plan',
             }),
             voice: expect.objectContaining({
               enabled: false,
@@ -360,32 +510,22 @@ describe('qq voice plugin', () => {
         },
       }),
     );
-    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
-      'conv-1',
-      expect.objectContaining({
-        source: 'qqbot_reply_transport_execution_rules',
-        payload: {
-          kind: 'text',
-          value: expect.stringContaining('最终只输出一个 ReplyPlan JSON 对象本身'),
-        },
-      }),
-    );
     expect(
       promptAssemblyMocks.registerPromptFragment.mock.calls.some(
         ([conversationId, fragment]) =>
-          conversationId === 'conv-1' && fragment?.source === 'qqbot_reply_transport_route',
+          conversationId === 'conv-1' && fragment?.source === 'qqbot_reply_transport_execution_rules',
+      ),
+    ).toBe(true);
+    expect(
+      promptAssemblyMocks.registerPromptFragment.mock.calls.some(
+        ([conversationId, fragment]) =>
+        conversationId === 'conv-1' && fragment?.source === 'qqbot_reply_transport_route',
       ),
     ).toBe(false);
-    expect(context.options.inputMessage.additional_kwargs).toEqual({
-      qqbot_override_request_params: {
-        response_format: {
-          type: 'json_object',
-        },
-      },
-    });
+    expect(context.options.inputMessage.additional_kwargs).toEqual({});
   });
 
-  it('mentions voice availability when TTS is healthy', async () => {
+  it('injects compact voice execution rules with multi-segment examples when TTS is healthy', async () => {
     const { ready, getPolicy, bot } = createHarness();
     vi.stubGlobal(
       'fetch',
@@ -417,15 +557,15 @@ describe('qq voice plugin', () => {
     };
 
     await policy?.(session, context);
-    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
-      'conv-voice',
-      expect.objectContaining({
-        source: 'qqbot_reply_transport_execution_rules',
-        payload: {
-          kind: 'text',
-          value: expect.stringContaining('本轮语音回复可用'),
-        },
-      }),
+    const executionRuleCall = promptAssemblyMocks.registerPromptFragment.mock.calls.find(
+      ([conversationId, fragment]) =>
+        conversationId === 'conv-voice' && fragment?.source === 'qqbot_reply_transport_execution_rules',
+    );
+    const executionRules = String(executionRuleCall?.[1]?.payload?.value ?? '');
+    expect(executionRules).toContain('最终只能调用 submit_reply_plan');
+    expect(executionRules).toContain('如果要发语音，就提交 voice 段');
+    expect(executionRules).toContain(
+      '文本 + voice 混排示例：submit_reply_plan({"segments":[{"kind":"text","content":"先说一句"},{"kind":"voice","content":"接着用语音继续"},{"kind":"text","content":"最后补一句"}]})',
     );
   });
 
@@ -458,8 +598,8 @@ describe('qq voice plugin', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('executes a text ReplyPlan through the executor', async () => {
-    const { ready, getExecutor, bot } = createHarness();
+  it('executes a text ReplyPlan through the executor and normalizes the tail to visible text', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
     await ready();
@@ -483,9 +623,9 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         room: { conversationId: 'conv-text' },
-        responseMessage: {
-          content: '{"segments":[{"kind":"text","content":"今晚先这样吧"}]}',
-        },
+        responseMessage: createReplyAgentResponse({
+          segments: [{ kind: 'text', content: '今晚先这样吧' }],
+        }),
       },
     };
 
@@ -493,10 +633,14 @@ describe('qq voice plugin', () => {
     expect(typeof result).toBe('number');
     expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['今晚先这样吧']);
     expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeReplyAgentHistory).toHaveBeenCalledWith(
+      { conversationId: 'conv-text' },
+      '今晚先这样吧',
+    );
   });
 
   it('executes a multiline ReplyPlan and suppresses the raw JSON response', async () => {
-    const { ready, getExecutor, bot, database } = createHarness();
+    const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
     await ready();
@@ -520,9 +664,9 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         room: { conversationId: 'conv-1' },
-        responseMessage: {
-          content: '{"segments":[{"kind":"multiline","content":"echo hi\\npwd"}]}',
-        },
+        responseMessage: createReplyAgentResponse({
+          segments: [{ kind: 'multiline', content: 'echo hi\npwd' }],
+        }),
       },
     };
 
@@ -530,37 +674,23 @@ describe('qq voice plugin', () => {
     expect(typeof result).toBe('number');
     expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['echo hi\npwd']);
     expect(context.options.responseMessage).toBeNull();
-    expect(database.upsert).toHaveBeenCalled();
+    expect(chatluna.normalizeReplyAgentHistory).toHaveBeenCalledWith(
+      { conversationId: 'conv-1' },
+      'echo hi\npwd',
+    );
   });
 
-  it('retries the same ReplyPlan contract once when the first output is invalid', async () => {
+  it('executes an image ReplyPlan and stores the existing image history text form', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
-
-    const phases: string[] = [];
-    (chatluna.chatChain.receiveMessage as any).mockImplementation(async (retrySession: Record<string, any>) => {
-      const capture = retrySession.state?.qqReplyTransport?.generationCapture;
-      if (!capture) return false;
-      phases.push(capture.phase);
-      retrySession.state.qqReplyTransport.generationCapture = {
-        ...capture,
-        result: {
-          plan: {
-            segments: [{ kind: 'text', content: '这次按合法 ReplyPlan 回复' }],
-          },
-          error: null,
-        },
-      };
-      return false;
-    });
 
     await ready();
     await flushMicrotasks();
 
     const executor = getExecutor();
     const session = createSession(bot, {
-      content: '发个表情包',
-      strippedContent: '发个表情包',
+      content: '发张图',
+      strippedContent: '发张图',
       state: {
         qqReplyTransport: {
           capabilitySnapshot: {
@@ -574,37 +704,30 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: { conversationId: 'conv-rerun' },
-        responseMessage: {
-          content: '不是合法 JSON',
-        },
+        room: { conversationId: 'conv-image' },
+        responseMessage: createReplyAgentResponse({
+          segments: [{ kind: 'image', asset_ref: 'https://example.com/image.png', alt: '测试图片' }],
+        }),
       },
     };
 
     const result = await executor?.(session, context);
     expect(typeof result).toBe('number');
-    expect(chatluna.chatChain.receiveMessage).toHaveBeenCalledTimes(1);
-    expect(phases).toEqual(['reply_plan_retry']);
-    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['这次按合法 ReplyPlan 回复']);
+    expect(bot.sendMessage.mock.calls.map((call: any[]) => String(call[1]))).toEqual(['<img src="https://example.com/image.png" />']);
     expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeReplyAgentHistory).toHaveBeenCalledWith(
+      { conversationId: 'conv-image' },
+      '（发送图片：测试图片）',
+    );
   });
 
-  it('sends a fixed short text when ReplyPlan retry still fails', async () => {
-    const { ready, getExecutor, bot, chatluna } = createHarness();
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
-
-    (chatluna.chatChain.receiveMessage as any).mockImplementation(async (retrySession: Record<string, any>) => {
-      const capture = retrySession.state?.qqReplyTransport?.generationCapture;
-      if (!capture) return false;
-      retrySession.state.qqReplyTransport.generationCapture = {
-        ...capture,
-        result: {
-          plan: null,
-          error: 'structured 输出不是合法 JSON 对象。',
-        },
-      };
-      return false;
+  it('logs history normalization failures after send instead of surfacing a second user-visible error', async () => {
+    const { ready, getExecutor, bot } = createHarness({
+      normalizeReplyAgentHistoryImpl: async () => {
+        throw new Error('reply-agent history normalization failed: latest message missing (conv-broken)');
+      },
     });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
     await ready();
     await flushMicrotasks();
@@ -626,18 +749,73 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: { conversationId: 'conv-retry-fail' },
-        responseMessage: {
-          content: '不是合法 JSON',
-        },
+        room: { conversationId: 'conv-broken' },
+        responseMessage: createReplyAgentResponse({
+          segments: [{ kind: 'text', content: '收到' }],
+        }),
       },
     };
 
     const result = await executor?.(session, context);
     expect(typeof result).toBe('number');
-    expect(chatluna.chatChain.receiveMessage).toHaveBeenCalledTimes(1);
-    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['……刚刚卡了一下，你再说一次。']);
+    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['收到']);
     expect(context.options.responseMessage).toBeNull();
+    expect(
+      loggerMocks.warn.mock.calls.some(
+        ([message, detail]) =>
+          String(message).includes('reply-agent history normalization failed') &&
+          String(detail).includes('latest message missing'),
+      ),
+    ).toBe(true);
+  });
+
+  it('throws when reply-agent ends without submit_reply_plan and logs protocol failure details', async () => {
+    const { ready, getExecutor, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '发个表情包',
+      strippedContent: '发个表情包',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: { conversationId: 'conv-rerun', roomId: 7, model: 'deepseek/deepseek-chat', preset: 'sakiko' },
+        responseMessage: {
+          content: '模型直接说了一句普通文本',
+          additional_kwargs: {},
+        },
+      },
+    };
+
+    await expect(executor?.(session, context)).rejects.toThrow('reply-agent 未提交 submit_reply_plan 终态工具。');
+    expect(bot.sendMessage).not.toHaveBeenCalled();
+    const debugCalls = loggerMocks.warn.mock.calls.filter(([message]) => String(message).includes('reply-plan-debug'));
+    expect(debugCalls).toHaveLength(1);
+    expect(JSON.parse(String(debugCalls[0][1]))).toEqual({
+      stage: 'terminal_tool_missing_or_invalid',
+      conversationId: 'conv-rerun',
+      roomId: 7,
+      roomModel: 'deepseek/deepseek-chat',
+      preset: 'sakiko',
+      parseError: 'reply-agent 未提交 submit_reply_plan 终态工具。',
+      rawOutputText: '模型直接说了一句普通文本',
+      terminalToolName: null,
+      terminalToolPayload: null,
+    });
   });
 
   it('executes a sticker ReplyPlan and sends one image payload', async () => {
@@ -690,9 +868,9 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         room: { conversationId: 'conv-sticker', preset: 'sakiko' },
-        responseMessage: {
-          content: '{"segments":[{"kind":"sticker","content":"无语地看对方一眼"}]}',
-        },
+        responseMessage: createReplyAgentResponse({
+          segments: [{ kind: 'sticker', content: '无语地看对方一眼' }],
+        }),
       },
     };
 
@@ -705,8 +883,8 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
   });
 
-  it('preserves text and sticker order in a mixed ReplyPlan', async () => {
-    const { ready, getExecutor, bot } = createHarness();
+  it('preserves text and sticker order in a mixed ReplyPlan and stores sticker history lines', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
     await ready();
@@ -755,10 +933,13 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         room: { conversationId: 'conv-sticker-mix', preset: 'sakiko' },
-        responseMessage: {
-          content:
-            '{"segments":[{"kind":"text","content":"前一句"},{"kind":"sticker","content":"冷淡拒绝，被追问私事"},{"kind":"text","content":"后一句"}]}',
-        },
+        responseMessage: createReplyAgentResponse({
+          segments: [
+            { kind: 'text', content: '前一句' },
+            { kind: 'sticker', content: '冷淡拒绝，被追问私事' },
+            { kind: 'text', content: '后一句' },
+          ],
+        }),
       },
     };
 
@@ -770,10 +951,14 @@ describe('qq voice plugin', () => {
       '后一句',
     ]);
     expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeReplyAgentHistory).toHaveBeenCalledWith(
+      { conversationId: 'conv-sticker-mix', preset: 'sakiko' },
+      '前一句\n（发送表情包：冷淡举手）\n后一句',
+    );
   });
 
-  it('executes a voice ReplyPlan and sends one audio payload', async () => {
-    const { ready, getExecutor, bot } = createHarness();
+  it('executes a voice ReplyPlan, sends one audio payload, and stores the voice history text form', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === 'http://127.0.0.1:8082/healthz') {
@@ -807,9 +992,9 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         room: { conversationId: 'conv-voice' },
-        responseMessage: {
-          content: '{"segments":[{"kind":"voice","content":"晚安"}]}',
-        },
+        responseMessage: createReplyAgentResponse({
+          segments: [{ kind: 'voice', content: '晚安' }],
+        }),
       },
     };
 
@@ -819,6 +1004,10 @@ describe('qq voice plugin', () => {
     const audioCall = (bot.sendMessage.mock.calls as Array<any[]>)[0];
     expect(String(audioCall?.[1] ?? '')).toContain('<audio src="data:audio/wav;base64,');
     expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeReplyAgentHistory).toHaveBeenCalledWith(
+      { conversationId: 'conv-voice' },
+      '（发送语音：晚安）',
+    );
   });
 
   it('downgrades a voice ReplyPlan to plain text when synthesis fails before send', async () => {
@@ -856,9 +1045,9 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         room: { conversationId: 'conv-voice' },
-        responseMessage: {
-          content: '{"segments":[{"kind":"voice","content":"晚安"}]}',
-        },
+        responseMessage: createReplyAgentResponse({
+          segments: [{ kind: 'voice', content: '晚安' }],
+        }),
       },
     };
 

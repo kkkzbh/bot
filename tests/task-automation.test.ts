@@ -54,6 +54,14 @@ describe('task automation intent rule parsing', () => {
     expect(intent?.message).toBe('打招呼');
   });
 
+  it('parses stripped group-mention reminder text from relative seconds', () => {
+    const base = new Date('2026-03-01T08:00:00+08:00').getTime();
+    const intent = parseAutomationIntentByRule('10s后提醒我关门', base);
+    expect(intent?.action).toBe('create-once');
+    expect(intent?.runAt).toBe(base + 10 * 1000);
+    expect(intent?.message).toBe('关门');
+  });
+
   it('parses once intent from sentence-middle second-based expression', () => {
     const base = new Date('2026-03-01T08:00:00+08:00').getTime();
     const intent = parseAutomationIntentByRule('麻烦你在 10s 后给我打招呼', base);

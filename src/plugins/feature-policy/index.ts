@@ -22,10 +22,9 @@ export const SCOPED_FEATURE_KEYS = [
   'QQ_VOICE_ENABLED',
   'QQ_VOICE_INPUT_ENABLED',
   'QQ_VOICE_OUTPUT_ENABLED',
-  'POKEMON_BATTLE_ENABLED',
   'CHAT_NATURAL_TRIGGER_ENABLED',
   'TASK_AUTOMATION_INTENT_ENABLED',
-  'QQBOT_LIVE_REPLY_ENABLED',
+  'QQBOT_REPLY_INTERRUPT_ENABLED',
 ] as const satisfies readonly ScopedFeatureKey[];
 
 export const PRIVATE_DEFAULT_SCOPE_ID = 'private-default';
@@ -95,16 +94,14 @@ function normalizeBoolean(value: unknown, fallback = true): boolean {
 
 function defaultFeatureEnabled(featureKey: ScopedFeatureKey): boolean {
   switch (featureKey) {
-    case 'QQBOT_LIVE_REPLY_ENABLED':
-      return normalizeBoolean(process.env.QQBOT_LIVE_REPLY_ENABLED, false);
+    case 'QQBOT_REPLY_INTERRUPT_ENABLED':
+      return normalizeBoolean(process.env.QQBOT_REPLY_INTERRUPT_ENABLED, false);
     case 'QQ_VOICE_ENABLED':
       return normalizeBoolean(process.env.QQ_VOICE_ENABLED, true);
     case 'QQ_VOICE_INPUT_ENABLED':
       return normalizeBoolean(process.env.QQ_VOICE_INPUT_ENABLED, true);
     case 'QQ_VOICE_OUTPUT_ENABLED':
       return normalizeBoolean(process.env.QQ_VOICE_OUTPUT_ENABLED, true);
-    case 'POKEMON_BATTLE_ENABLED':
-      return normalizeBoolean(process.env.POKEMON_BATTLE_ENABLED, true);
     case 'CHAT_NATURAL_TRIGGER_ENABLED':
       return normalizeBoolean(process.env.CHAT_NATURAL_TRIGGER_ENABLED, true);
     case 'TASK_AUTOMATION_INTENT_ENABLED':

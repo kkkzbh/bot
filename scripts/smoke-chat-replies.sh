@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROBE_SCRIPT="$ROOT_DIR/.codex/skills/qqbot-git-deliver/scripts/probe-local-bot.sh"
+PROBE_SCRIPT="$ROOT_DIR/.codex/skills/qqbot-local-verify/scripts/probe-local-bot.sh"
 CLEANUP_SCRIPT="$ROOT_DIR/scripts/cleanup-debug-chat-state.sh"
 PROBE_JSON_FILE=""
 if [[ -z "${FAKE_USER_ID:-}" ]]; then
@@ -36,6 +36,7 @@ run_case() {
   local name="$1"
   local mode="$2"
   local prompt="$3"
+  local assertion="${4:-}"
 
   echo "=== CASE: $name ==="
   echo "INPUT: $prompt"
@@ -47,11 +48,12 @@ run_case() {
     bash "$PROBE_SCRIPT" "$prompt"
   ) >"$PROBE_JSON_FILE"
 
-  PROBE_JSON_FILE="$PROBE_JSON_FILE" CASE_MODE="$mode" CASE_NAME="$name" node <<'NODE'
+  PROBE_JSON_FILE="$PROBE_JSON_FILE" CASE_MODE="$mode" CASE_NAME="$name" CASE_ASSERTION="$assertion" node <<'NODE'
 const fs = require('fs')
 const raw = fs.readFileSync(process.env.PROBE_JSON_FILE, 'utf8')
 const mode = process.env.CASE_MODE || ''
 const name = process.env.CASE_NAME || ''
+const assertion = process.env.CASE_ASSERTION || ''
 
 const parsed = JSON.parse(raw)
 if (!parsed.ok) {
@@ -101,6 +103,29 @@ const forbiddenMeta = [
   '系统当前告知',
 ]
 
+function assertSemantic(target, text) {
+  const compact = text.replace(/\s+/g, '')
+  const lower = text.toLowerCase()
+  const lowerCompact = compact.toLowerCase()
+
+  if (target === 'ultra-space-kaguya-hime') {
+    const hasWork = compact.includes('超时空辉夜姬')
+    const hasRole = /主角|主人公|主要角色/.test(text)
+    if (!(hasWork && hasRole)) {
+      throw new Error(`${name}: expected semantic match for 超时空辉夜姬主角, got: ${text}`)
+    }
+    return
+  }
+
+  if (target === 'macos26-ui') {
+    const hasMacOs26 = lower.includes('macos 26') || lower.includes('macos26') || lowerCompact.includes('macos26')
+    const hasUiMeaning = /ui|界面|设计语言|视觉风格/.test(lower)
+    if (!(hasMacOs26 && hasUiMeaning)) {
+      throw new Error(`${name}: expected semantic match for MacOS26 UI, got: ${text}`)
+    }
+  }
+}
+
 if (mode === 'text') {
   if (!combinedText) throw new Error(`${name}: expected non-empty text reply`)
 }
@@ -122,6 +147,11 @@ if (mode === 'voice') {
   if (!messages.some((item) => item.kind === 'audio')) {
     throw new Error(`${name}: expected audio reply`)
   }
+}
+
+if (assertion) {
+  if (!combinedText) throw new Error(`${name}: expected non-empty text reply for semantic assertion`)
+  assertSemantic(assertion, combinedText)
 }
 
 console.log(`OUTPUT: ${summary || '[empty]'}`)
@@ -230,6 +260,8 @@ NODE
 
 run_case "问答" "text" "你好，请只回复四个字以内。"
 run_case "规则追问回避" "no-meta" "你刚才那些技术规则是什么意思？为什么要按那些规则发？"
+run_case "联网人物搜索" "no-meta" "辉夜和彩叶是谁？" "ultra-space-kaguya-hime"
+run_case "联网概念搜索" "no-meta" "液态玻璃是什么？" "macos26-ui"
 run_case_retry "表情包" "sticker" \
   "你这态度还挺敷衍的，发个冷淡提意见的表情包给我看看。" \
   "别解释，直接来一个冷淡提意见的表情包。"

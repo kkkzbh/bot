@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject, computed } from 'vue'
+import { inject, computed, ref } from 'vue'
 import { useToast } from '../../composables/useToast'
 import { createEmptyPreset } from '../../composables/useBotConsole'
 import { ROLE_LABELS } from '../../utils/constants'
@@ -12,6 +12,12 @@ const { add: toastAdd } = useToast()
 
 // Destructure reactive refs for template auto-unwrapping
 const { currentPreset, botState, canSavePreset, defaultPreset } = bc
+const presetItems = computed(() => botState.value?.presets ?? [])
+const draggingPresetName = ref<string | null>(null)
+const dropTargetName = ref<string | null>(null)
+const dropPosition = ref<'before' | 'after' | null>(null)
+const reorderPending = ref(false)
+const suppressOpen = ref(false)
 
 // ── Keywords ─────────────────────────────────────────────────────────────────
 
@@ -56,6 +62,11 @@ async function handleOpen(name: string) {
   }
 }
 
+function handlePresetClick(name: string) {
+  if (suppressOpen.value || reorderPending.value) return
+  void handleOpen(name)
+}
+
 function handleNew() {
   currentPreset.value = createEmptyPreset()
 }
@@ -89,6 +100,90 @@ async function handleSave() {
   } catch (err: unknown) {
     toastAdd(err instanceof Error ? err.message : '保存失败', 'error')
   }
+}
+
+function resetDragState() {
+  draggingPresetName.value = null
+  dropTargetName.value = null
+  dropPosition.value = null
+}
+
+function suppressPresetOpen() {
+  suppressOpen.value = true
+  window.setTimeout(() => {
+    suppressOpen.value = false
+  }, 160)
+}
+
+function buildReorderedPresetNames(
+  sourceName: string,
+  targetName: string,
+  position: 'before' | 'after',
+): string[] | null {
+  if (sourceName === targetName) return null
+  const currentNames = presetItems.value.map(item => item.name)
+  const sourceIndex = currentNames.indexOf(sourceName)
+  const targetIndex = currentNames.indexOf(targetName)
+  if (sourceIndex < 0 || targetIndex < 0) return null
+
+  const nextNames = [...currentNames]
+  const [movedName] = nextNames.splice(sourceIndex, 1)
+  const anchorIndex = nextNames.indexOf(targetName)
+  if (anchorIndex < 0) return null
+  const insertIndex = position === 'before' ? anchorIndex : anchorIndex + 1
+  nextNames.splice(insertIndex, 0, movedName)
+
+  return nextNames.every((name, index) => name === currentNames[index]) ? null : nextNames
+}
+
+function handlePresetDragStart(event: DragEvent, name: string) {
+  draggingPresetName.value = name
+  dropTargetName.value = name
+  dropPosition.value = 'after'
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', name)
+  }
+}
+
+function handlePresetDragOver(event: DragEvent, name: string) {
+  event.preventDefault()
+  if (!draggingPresetName.value || draggingPresetName.value === name) return
+  const currentTarget = event.currentTarget as HTMLElement | null
+  if (!currentTarget) return
+  const rect = currentTarget.getBoundingClientRect()
+  dropTargetName.value = name
+  dropPosition.value = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+}
+
+async function handlePresetDrop(event: DragEvent, targetName: string) {
+  event.preventDefault()
+  const sourceName = draggingPresetName.value ?? event.dataTransfer?.getData('text/plain')?.trim() ?? ''
+  const position = dropPosition.value ?? 'after'
+  const nextNames = buildReorderedPresetNames(sourceName, targetName, position)
+  suppressPresetOpen()
+  if (!nextNames) {
+    resetDragState()
+    return
+  }
+
+  reorderPending.value = true
+  try {
+    await bc.reorderPresets(nextNames)
+    toastAdd('预设顺序已更新', 'success')
+  } catch (err: unknown) {
+    toastAdd(err instanceof Error ? err.message : '调整顺序失败', 'error')
+  } finally {
+    reorderPending.value = false
+    resetDragState()
+  }
+}
+
+function handlePresetDragEnd() {
+  resetDragState()
 }
 </script>
 
@@ -141,7 +236,14 @@ async function handleSave() {
       <!-- ── Sidebar: preset list ────────────────────────────────────── -->
       <aside class="bc-preset-list">
         <p
-          v-if="!botState?.presets?.length"
+          v-if="presetItems.length"
+          class="bc-preset-list-tip"
+        >
+          拖动左侧条目可调整预设顺序。
+        </p>
+
+        <p
+          v-if="!presetItems.length"
           class="bc-muted"
           style="padding: 0.5rem 0; font-size: 0.85rem;"
         >
@@ -149,12 +251,23 @@ async function handleSave() {
         </p>
 
         <button
-          v-for="item in botState?.presets ?? []"
+          v-for="item in presetItems"
           :key="item.name"
           class="bc-preset-list-item"
-          :class="{ 'is-active': item.name === currentPreset.name }"
+          :class="{
+            'is-active': item.name === currentPreset.name,
+            'is-dragging': item.name === draggingPresetName,
+            'is-drop-before': item.name === dropTargetName && dropPosition === 'before',
+            'is-drop-after': item.name === dropTargetName && dropPosition === 'after',
+          }"
           type="button"
-          @click="handleOpen(item.name)"
+          :disabled="reorderPending"
+          draggable="true"
+          @click="handlePresetClick(item.name)"
+          @dragstart="(event) => handlePresetDragStart(event, item.name)"
+          @dragover="(event) => handlePresetDragOver(event, item.name)"
+          @drop="(event) => handlePresetDrop(event, item.name)"
+          @dragend="handlePresetDragEnd"
         >
           <span class="bc-preset-list-name">{{ item.name }}</span>
           <span

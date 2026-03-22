@@ -171,16 +171,6 @@ function resolveInputText(session: Session, context: MiddlewareContextLike): str
   return extractPlainText(session.stripped?.content ?? session.content ?? context.options?.inputMessage?.content);
 }
 
-function toConversationTurns(rows: Array<{ id: string; role?: string | null; text?: string | null }>): MemoryConversationTurn[] {
-  return rows
-    .filter((row) => (row.role === 'human' || row.role === 'ai') && row.text?.trim())
-    .map((row) => ({
-      id: row.id,
-      role: row.role === 'ai' ? 'ai' : 'human',
-      text: row.text!.trim(),
-    }));
-}
-
 async function injectMemoryContext(
   store: MemoryV2Store,
   runtime: RuntimeConfig,
@@ -238,9 +228,9 @@ async function processExtractJob(store: MemoryV2Store, runtime: RuntimeConfig, j
     return;
   }
 
-  const rows = await store.readConversationWindow(payload.conversationId, payload.maxMessages);
-  const turns = toConversationTurns(rows);
+  const turns = await store.readConversationWindow(payload.conversationId, payload.maxMessages);
   if (turns.length < 2) {
+    logger.debug('memory extract skipped: conversation %s has %d text turns after content extraction', payload.conversationId, turns.length);
     await store.completeJob(job);
     return;
   }

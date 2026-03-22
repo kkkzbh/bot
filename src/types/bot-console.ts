@@ -8,6 +8,11 @@ import type {
   FeatureOverrideInput,
   FeatureScopeOverrideRecord,
 } from './feature-policy.js';
+import type {
+  BotConsoleToolPolicyState,
+  ToolOverrideInput,
+  ToolOverrideRecord,
+} from './tool-policy.js';
 
 export type ServiceAction = 'start' | 'stop' | 'restart' | 'enable';
 
@@ -54,6 +59,10 @@ export interface PresetDocument {
   raw?: string;
 }
 
+export interface ReorderPresetsResponse {
+  presets: PresetSummary[];
+}
+
 export interface BotConsoleState {
   env: Record<string, string>;
   services: BotServiceStatus[];
@@ -62,6 +71,7 @@ export interface BotConsoleState {
   featureScopes: ConsoleFeatureScope[];
   featureOverrides: FeatureScopeOverrideRecord[];
   conversationTargets: import('./feature-policy.js').ConversationTarget[];
+  toolPolicy: BotConsoleToolPolicyState;
   runtimeStatus: {
     memoryV2: MemoryV2StatusSnapshot;
   };
@@ -89,6 +99,14 @@ export interface SaveFeatureOverridesRequest {
 
 export interface SaveFeatureOverridesResponse {
   overrides: FeatureScopeOverrideRecord[];
+}
+
+export interface SaveToolOverridesRequest {
+  overrides: ToolOverrideInput[];
+}
+
+export interface SaveToolOverridesResponse {
+  overrides: ToolOverrideRecord[];
 }
 
 export interface ClearConversationHistoryRequest extends ClearConversationHistoryTarget {}

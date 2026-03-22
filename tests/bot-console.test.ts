@@ -76,7 +76,7 @@ describe('bot-console plugin', () => {
     apply(ctx as any);
 
     expect(addEntry).toHaveBeenCalledTimes(1);
-    expect(addListener).toHaveBeenCalledTimes(11);
+    expect(addListener).toHaveBeenCalledTimes(14);
     for (const call of addListener.mock.calls) {
       expect(call[2]).toEqual({ authority: 4 });
     }
@@ -170,6 +170,32 @@ describe('bot-console plugin', () => {
         getFeatureOverrides: vi.fn().mockResolvedValue([]),
         listConversationTargets: vi.fn().mockResolvedValue([]),
       },
+      toolPolicy: {
+        getToolPolicyState: vi.fn().mockResolvedValue({
+          catalog: [
+            {
+              toolName: 'web_search',
+              title: '联网搜索',
+              category: '网页与网络',
+              description: 'desc',
+              compatibility: 'conditional',
+              compatibilityNote: 'note',
+              hardDependencies: [],
+              relatedTools: [],
+              riskLevel: 'medium',
+              source: 'project',
+              availableRoutes: ['chat', 'automation'],
+              defaultEnabledByRoute: { chat: true, automation: true },
+            },
+          ],
+          routeProfiles: [{ id: 'chat', title: '普通聊天', description: 'desc' }],
+          routeProfileInfo: [{ id: 'chat', title: '普通聊天', description: 'desc' }],
+          defaultScopes: [{ scopeKind: 'global_default', scopeId: 'global-default', title: '全局默认', description: 'desc' }],
+          scopes: [],
+          overrides: [],
+          conversationTargets: [],
+        }),
+      },
       console: {
         addEntry: vi.fn(),
         addListener,
@@ -182,6 +208,9 @@ describe('bot-console plugin', () => {
     expect(state.runtimeStatus.memoryV2.jobs.embedPending).toBe(2);
     expect(state.featureScopes).toEqual([
       expect.objectContaining({ scopeKind: 'private_default', scopeId: 'private-default' }),
+    ]);
+    expect(state.toolPolicy.catalog).toEqual([
+      expect.objectContaining({ toolName: 'web_search', title: '联网搜索' }),
     ]);
   });
 
@@ -325,6 +354,26 @@ describe('bot-console plugin', () => {
       clearedDefaultUsers: 1,
       updatedAt: 3,
     });
+    const saveToolOverrides = vi.fn().mockResolvedValue([
+      {
+        id: 9,
+        toolName: 'user_confirm',
+        routeProfile: 'chat',
+        scopeKind: 'group',
+        scopeId: '1091330365',
+        enabled: 0,
+        updatedAt: 4,
+      },
+    ]);
+    const getToolPolicyState = vi.fn().mockResolvedValue({
+      catalog: [],
+      routeProfiles: [],
+      routeProfileInfo: [],
+      defaultScopes: [],
+      scopes: [],
+      overrides: [],
+      conversationTargets: [],
+    });
 
     const addListener = vi.fn();
     apply({
@@ -333,6 +382,10 @@ describe('bot-console plugin', () => {
         saveFeatureOverrides,
         clearConversationHistory,
         deleteConversationRoom,
+      },
+      toolPolicy: {
+        saveToolOverrides,
+        getToolPolicyState,
       },
       console: {
         addEntry: vi.fn(),
@@ -352,6 +405,30 @@ describe('bot-console plugin', () => {
     });
     expect(saveFeatureOverrides).toHaveBeenCalledTimes(1);
 
+    const getToolPolicyListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/get-tool-policy-state')?.[1];
+    await expect(getToolPolicyListener()).resolves.toEqual({
+      catalog: [],
+      routeProfiles: [],
+      routeProfileInfo: [],
+      defaultScopes: [],
+      scopes: [],
+      overrides: [],
+      conversationTargets: [],
+    });
+    expect(getToolPolicyState).toHaveBeenCalledTimes(1);
+
+    const saveToolOverridesListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/save-tool-overrides')?.[1];
+    await expect(
+      saveToolOverridesListener({
+        overrides: [{ toolName: 'user_confirm', routeProfile: 'chat', scopeKind: 'group', scopeId: '1091330365', enabled: false }],
+      }),
+    ).resolves.toEqual({
+      overrides: [
+        expect.objectContaining({ toolName: 'user_confirm', routeProfile: 'chat', scopeKind: 'group', scopeId: '1091330365' }),
+      ],
+    });
+    expect(saveToolOverrides).toHaveBeenCalledTimes(1);
+
     const clearListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/clear-conversation-history')?.[1];
     await expect(clearListener({ roomId: 11, conversationId: 'conv-1' })).resolves.toEqual({
       result: expect.objectContaining({ ok: true, roomId: 11, conversationId: 'conv-1', deletedMessages: 4 }),
@@ -370,5 +447,36 @@ describe('bot-console plugin', () => {
       }),
     });
     expect(deleteConversationRoom).toHaveBeenCalledWith({ roomId: 11, conversationId: 'conv-1' });
+  });
+
+  it('routes preset reorder listener to bot console manager', async () => {
+    const dir = createTempDir();
+    mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
+    writeFileSync(join(dir, '.env.local'), 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(
+      join(dir, 'data/chathub/presets/sakiko.yml'),
+      'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
+      'utf8',
+    );
+
+    const reorderPresetsSpy = vi
+      .spyOn(BotConsoleManager.prototype, 'reorderPresets')
+      .mockResolvedValue([{ name: 'sakiko', path: join(dir, 'data/chathub/presets/sakiko.yml') }]);
+
+    const addListener = vi.fn();
+    apply({
+      baseDir: dir,
+      console: {
+        addEntry: vi.fn(),
+        addListener,
+      },
+    } as any);
+
+    const reorderListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/reorder-presets')?.[1];
+    await expect(reorderListener({ names: ['sakiko'] })).resolves.toEqual({
+      presets: [{ name: 'sakiko', path: join(dir, 'data/chathub/presets/sakiko.yml') }],
+    });
+    expect(reorderPresetsSpy).toHaveBeenCalledWith(['sakiko']);
+    reorderPresetsSpy.mockRestore();
   });
 });

@@ -62,6 +62,10 @@ async function handleAction(unit: string, action: string) {
       restart: '已重启',
       enable: '已启用开机自启',
     }
+    if (unit === 'qqbot.target' && action === 'restart') {
+      toastAdd(`${getServiceLabel(unit)} 已触发重启`, 'success')
+      return
+    }
     toastAdd(`${getServiceLabel(unit)} ${doneLabels[action] ?? action}`, 'success')
   } catch (e: unknown) {
     toastAdd(e instanceof Error ? e.message : '操作失败', 'error')

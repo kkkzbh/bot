@@ -69,18 +69,25 @@ type BotConsoleStaticState = {
   defaultPreset: string;
 };
 
+type PresetOrderDocument = {
+  names?: unknown;
+};
+
 const DEFAULT_ROOT_DIR = resolve(process.cwd());
 const ENV_FILE_BASENAME = '.env.local';
 const PRESET_DIR_RELATIVE = 'data/chathub/presets';
+const PRESET_ORDER_FILENAME = '.bot-console-preset-order.json';
 const PRESET_ROLE_SET = new Set(['system', 'user', 'assistant', 'tool']);
 
 export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
   { key: 'QQ_VOICE_ENABLED', label: 'QQ 语音总开关', type: 'toggle', section: 'features' },
   { key: 'QQ_VOICE_INPUT_ENABLED', label: '语音转文字', type: 'toggle', section: 'features' },
   { key: 'QQ_VOICE_OUTPUT_ENABLED', label: '语音回复', type: 'toggle', section: 'features' },
-  { key: 'POKEMON_BATTLE_ENABLED', label: '宝可梦对战', type: 'toggle', section: 'features' },
   { key: 'CHAT_NATURAL_TRIGGER_ENABLED', label: '群聊自然触发', type: 'toggle', section: 'features' },
   { key: 'TASK_AUTOMATION_INTENT_ENABLED', label: '任务意图识别', type: 'toggle', section: 'features' },
+  { key: 'QQBOT_REPLY_INTERRUPT_ENABLED', label: '回复期中断', type: 'toggle', section: 'features' },
+  { key: 'CHATLUNA_COMMON_FS', label: '文件系统工具总开关', type: 'toggle', section: 'features' },
+  { key: 'CHATLUNA_COMMON_FS_SCOPE_PATH', label: '文件系统作用域目录', type: 'text', section: 'features' },
   { key: 'OPENAI_BASE_URL', label: '模型接口地址', type: 'text', section: 'model' },
   { key: 'OPENAI_API_KEY', label: '模型接口密钥', type: 'secret', section: 'model' },
   { key: 'OPENAI_MODEL', label: '默认模型', type: 'text', section: 'model' },
@@ -399,6 +406,23 @@ export class BotConsoleManager {
       await this.fs.rm(sourcePath, { force: true });
     }
 
+    await this.updatePresetOrder((names) => {
+      if (sourceName !== normalized.name) {
+        const sourceIndex = names.indexOf(sourceName);
+        if (sourceIndex >= 0) {
+          names.splice(sourceIndex, 1, normalized.name);
+        } else if (!names.includes(normalized.name)) {
+          names.push(normalized.name);
+        }
+        return names;
+      }
+
+      if (!names.includes(normalized.name)) {
+        names.push(normalized.name);
+      }
+      return names;
+    });
+
     return {
       ...normalized,
       path: targetPath,
@@ -413,13 +437,54 @@ export class BotConsoleManager {
     }
     await this.assertPresetExists(normalized);
     await this.fs.rm(this.resolvePresetPath(normalized), { force: true });
+    await this.updatePresetOrder((names) => names.filter((item) => item !== normalized));
+  }
+
+  async reorderPresets(names: string[]): Promise<PresetSummary[]> {
+    const normalizedNames = names.map((name) =>
+      normalizePresetDocument({ name, keywords: [], prompts: [{ role: 'system', content: 'x' }] }).name,
+    );
+    const uniqueNames = [...new Set(normalizedNames)];
+    const presets = await this.readPresetSummariesFromDisk();
+    const presetNames = presets.map((preset) => preset.name);
+
+    if (uniqueNames.length !== presetNames.length) {
+      throw new Error('预设排序数据不完整。');
+    }
+
+    const presetNameSet = new Set(presetNames);
+    if (uniqueNames.some((name) => !presetNameSet.has(name))) {
+      throw new Error('预设排序包含不存在的预设。');
+    }
+
+    await this.writePresetOrder(uniqueNames);
+    return this.sortPresetSummaries(presets, uniqueNames);
+  }
+
+  async scheduleTargetRestart(unit: Extract<BotServiceUnit, 'qqbot.target'>): Promise<void> {
+    const transientUnit = `qqbot-target-restart-${Date.now()}`;
+    await this.execFile(
+      'systemd-run',
+      [
+        '--user',
+        '--quiet',
+        '--on-active=1s',
+        `--unit=${transientUnit}`,
+        'systemctl',
+        '--user',
+        'restart',
+        unit,
+      ],
+      { cwd: this.rootDir, timeout: 15_000 },
+    );
   }
 
   async runServiceAction(unit: BotServiceUnit, action: ServiceAction): Promise<BotServiceStatus> {
     validateServiceAction(unit, action);
     if (unit === 'qqbot.target' && action === 'restart') {
-      await this.execFile('systemctl', ['--user', 'stop', unit], { cwd: this.rootDir, timeout: 15_000 });
-      await this.execFile('systemctl', ['--user', 'start', unit], { cwd: this.rootDir, timeout: 15_000 });
+      // Hand the restart off to a transient user unit so the console request can
+      // return before Koishi is terminated as part of the target restart.
+      await this.scheduleTargetRestart(unit);
       return this.getServiceStatus(unit);
     }
     await this.execFile('systemctl', ['--user', action, unit], { cwd: this.rootDir, timeout: 15_000 });
@@ -471,14 +536,66 @@ export class BotConsoleManager {
 
   async listPresetSummaries(): Promise<PresetSummary[]> {
     await this.fs.mkdir(this.presetDirPath, { recursive: true });
+    const presets = await this.readPresetSummariesFromDisk();
+    const order = await this.readPresetOrder();
+    return this.sortPresetSummaries(presets, order);
+  }
+
+  private async readPresetSummariesFromDisk(): Promise<PresetSummary[]> {
     const entries = await this.fs.readdir(this.presetDirPath, { withFileTypes: true });
     return entries
       .filter((entry) => entry.isFile() && entry.name.endsWith('.yml'))
       .map((entry) => ({
         name: entry.name.slice(0, -4),
         path: join(this.presetDirPath, entry.name),
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+      }));
+  }
+
+  private sortPresetSummaries(presets: PresetSummary[], order: readonly string[]): PresetSummary[] {
+    const rank = new Map(order.map((name, index) => [name, index]));
+    return [...presets].sort((left, right) => {
+      const leftRank = rank.get(left.name);
+      const rightRank = rank.get(right.name);
+      if (leftRank != null || rightRank != null) {
+        if (leftRank == null) return 1;
+        if (rightRank == null) return -1;
+        return leftRank - rightRank;
+      }
+      return left.name.localeCompare(right.name, 'zh-CN');
+    });
+  }
+
+  private async readPresetOrder(): Promise<string[]> {
+    try {
+      const raw = await this.fs.readFile(this.getPresetOrderFilePath(), 'utf8');
+      const parsed = JSON.parse(raw) as PresetOrderDocument;
+      return Array.isArray(parsed?.names)
+        ? [...new Set(parsed.names.map((name) => String(name ?? '').trim()).filter(Boolean))]
+        : [];
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (code === 'ENOENT') return [];
+      return [];
+    }
+  }
+
+  private async writePresetOrder(names: readonly string[]): Promise<void> {
+    const filePath = this.getPresetOrderFilePath();
+    const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+    const content = `${JSON.stringify({ names }, null, 2)}\n`;
+    await this.fs.mkdir(this.presetDirPath, { recursive: true });
+    await this.fs.writeFile(tempPath, content, 'utf8');
+    await this.fs.rename(tempPath, filePath);
+  }
+
+  private async updatePresetOrder(mutator: (names: string[]) => string[]): Promise<void> {
+    const current = await this.readPresetOrder();
+    const next = [...new Set(mutator([...current]).map((name) => name.trim()).filter(Boolean))];
+    await this.writePresetOrder(next);
+  }
+
+  private getPresetOrderFilePath(): string {
+    return join(this.presetDirPath, PRESET_ORDER_FILENAME);
   }
 
   resolvePresetPath(name: string): string {

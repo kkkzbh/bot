@@ -1,5 +1,6 @@
 plugins:
   group:entry:
+    $collapsed: true
     http:main: {}
     adapter-onebot:onebot:
       protocol: ws
@@ -25,16 +26,9 @@ plugins:
     insight:console-insight: {}
     logger:console-logger: {}
     ./dist/plugins/feature-policy:feature-policy: {}
+    ./dist/plugins/tool-policy:tool-policy: {}
     ./dist/plugins/bot-console:bot-console: {}
-    canvas:pokemon: {}
-    downloads:g1u6o5:
-      output: ${{ env.POKEMON_DOWNLOADS_OUTPUT || './downloads' }}
     cron:task: {}
-    ./dist/plugins/pokemon-battle:pokemon-battle:
-      enabled: ${{ env.POKEMON_BATTLE_ENABLED !== 'false' }}
-      imageSource: >-
-        ${{ env.POKEMON_BATTLE_IMAGE_SOURCE ||
-        'https://raw.githubusercontent.com/MAIxxxIAM/pokemonFusionImage/main' }}
     ./dist/plugins/automation:automation:
       enabledGroups: ${{ env.CHAT_ENABLED_GROUPS || '' }}
       listenPrivate: ${{ env.TASK_AUTOMATION_LISTEN_PRIVATE !== 'false' }}
@@ -72,9 +66,7 @@ plugins:
       ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || 'http://127.0.0.1:5162' }}
       ttsApiKey: ${{ env.QQ_VOICE_TTS_API_KEY || '' }}
       inputMaxSeconds: ${{ +env.QQ_VOICE_INPUT_MAX_SECONDS || 60 }}
-      outputMaxWords: >-
-        ${{ +env.QQ_VOICE_OUTPUT_MAX_WORDS || +env.QQ_VOICE_OUTPUT_MAX_CHARS ||
-        80 }}
+      outputMaxWords: ${{ +env.QQ_VOICE_OUTPUT_MAX_WORDS || 80 }}
       outputMaxSeconds: ${{ +env.QQ_VOICE_OUTPUT_MAX_SECONDS || 45 }}
       transcribeTimeoutMs: ${{ +env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS || 45000 }}
       synthTimeoutMs: ${{ +env.QQ_VOICE_SYNTH_TIMEOUT_MS || 300000 }}
@@ -112,25 +104,21 @@ plugins:
       sendThinkingMessage: false
       defaultModel: deepseek/deepseek-chat
       defaultPreset: sakiko
+      isLog: true
     chatluna-deepseek-adapter:0o3zho:
       apiKeys:
         - - ${{ env.OPENAI_API_KEY || '' }}
           - ${{ env.OPENAI_BASE_URL || 'https://api.deepseek.com/v1' }}
           - true
     puppeteer:0vx5c7: {}
-    ./dist/plugins/web-search:search:
-      enabled: ${{ env.WEB_SEARCH_ENABLED !== 'false' }}
-      topK: ${{ +env.WEB_SEARCH_TOPK || 5 }}
-      timeoutMs: ${{ +env.WEB_SEARCH_TIMEOUT_MS || 12000 }}
-      providers: >-
-        ${{ env.WEB_SEARCH_PROVIDERS ||
-        'bing-web,duckduckgo-lite,wikipedia,moegirl' }}
-      llmBaseURL: ${{ env.WEB_SEARCH_LLM_BASE_URL || '' }}
-      llmApiKey: ${{ env.WEB_SEARCH_LLM_API_KEY || '' }}
-      llmModel: ${{ env.WEB_SEARCH_LLM_MODEL || '' }}
-      plannerEnabled: ${{ env.WEB_SEARCH_LLM_PLANNER_ENABLED !== 'false' }}
-      rerankEnabled: ${{ env.WEB_SEARCH_LLM_RERANK_ENABLED !== 'false' }}
-      acgnExtensionEnabled: ${{ env.WEB_SEARCH_ACGN_EXTENSION_ENABLED !== 'false' }}
+    chatluna-search-service:search:
+      enabled: ${{ env.CHATLUNA_SEARCH_SERVICE_ENABLED !== 'false' }}
+      searchEngine:
+        - tavily
+      topK: ${{ +env.CHATLUNA_SEARCH_SERVICE_TOPK || 5 }}
+      summaryType: ${{ env.CHATLUNA_SEARCH_SERVICE_SUMMARY_TYPE || 'balanced' }}
+      summaryModel: ${{ env.CHATLUNA_SEARCH_SERVICE_SUMMARY_MODEL || 'empty' }}
+      tavilyApiKey: ${{ env.CHATLUNA_SEARCH_SERVICE_TAVILY_API_KEY || '' }}
     ./dist/plugins/sticker:sticker:
       stickerDir: ${{ env.CHATLUNA_STICKER_DIR || './data/chathub/stickers' }}
     chatluna-plugin-common:qf1a6x:

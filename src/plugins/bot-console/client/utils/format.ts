@@ -27,3 +27,31 @@ export function formatLatency(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(Number(value))) return '未记录'
   return `${Math.max(0, Math.round(Number(value)))} ms`
 }
+
+export function formatErrorMessage(error: unknown, fallback = '操作失败'): string {
+  if (error instanceof Error) {
+    return error.message || fallback
+  }
+
+  if (typeof error === 'string') {
+    return error || fallback
+  }
+
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>
+    const direct = record.message
+    if (typeof direct === 'string' && direct) {
+      return direct
+    }
+
+    const nestedError = record.error
+    if (nestedError && typeof nestedError === 'object') {
+      const nestedMessage = (nestedError as Record<string, unknown>).message
+      if (typeof nestedMessage === 'string' && nestedMessage) {
+        return nestedMessage
+      }
+    }
+  }
+
+  return fallback
+}

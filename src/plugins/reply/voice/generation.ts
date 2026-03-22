@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { gzipSync } from 'node:zlib';
 import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
 import type { FeaturePolicyServiceLike } from '../../../types/feature-policy.js';
+import type { ScopedFeatureKey } from '../../../types/feature-policy.js';
 import {
   createStickerHistoryLine,
   resolveStickerSelection,
@@ -30,12 +30,17 @@ import {
   type ReplyTransportPlan,
 } from '../../shared/outbound/index.js';
 import { registerPromptFragment } from '../../shared/prompt-context/index.js';
-import { rewriteConversationTailForLiveReply } from '../../live-reply/index.js';
+import { resolveSessionDisplayName } from '../../shared/session/index.js';
 import {
-  parseReplyPlanFromStructuredOutputDetailed,
-  type ReplyPlanParseResult,
+  parseReplyPlanFromToolResultDetailed,
 } from '../plan/parser.js';
-import { ReplyRuntime, type ReplyRuntimeRoomLike } from '../runtime/index.js';
+import {
+  ReplyRuntime,
+  type ReplyTurnContinuationContext,
+  type ReplyTurnInput,
+  type ReplyRunMode,
+  type ReplyRuntimeRoomLike,
+} from '../runtime/index.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -66,7 +71,8 @@ export interface Config {
   outputMaxSeconds?: number;
   transcribeTimeoutMs?: number;
   synthTimeoutMs?: number;
-  outputMaxChars?: number;
+  replyInterruptCollectWindowMs?: number;
+  replyInterruptMaxPendingInputs?: number;
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -82,6 +88,8 @@ export const Config: Schema<Config> = Schema.object({
   outputMaxSeconds: Schema.natural().default(45).description('单个语音段最大时长（秒）。'),
   transcribeTimeoutMs: Schema.natural().role('time').default(30000).description('ASR 请求超时（毫秒）。'),
   synthTimeoutMs: Schema.natural().role('time').default(300000).description('TTS 请求超时（毫秒）。'),
+  replyInterruptCollectWindowMs: Schema.natural().role('time').default(400).description('回复中断聚合窗口（毫秒）。'),
+  replyInterruptMaxPendingInputs: Schema.natural().default(8).description('回复中断最多暂存的新消息条数。'),
 });
 
 interface RuntimeConfig {
@@ -97,6 +105,8 @@ interface RuntimeConfig {
   outputMaxSeconds: number;
   transcribeTimeoutMs: number;
   synthTimeoutMs: number;
+  replyInterruptCollectWindowMs: number;
+  replyInterruptMaxPendingInputs: number;
 }
 
 interface QqVoiceState {
@@ -116,23 +126,7 @@ interface ReplyCapabilitySnapshot {
 
 interface ReplyTransportState {
   capabilitySnapshot?: ReplyCapabilitySnapshot;
-  generationCapture?: ReplyGenerationCaptureState;
   runId?: string;
-  suppressAbortNotice?: boolean;
-}
-
-type ReplyGenerationCapturePhase = 'reply_plan_retry';
-
-interface ReplyGenerationCaptureResult {
-  plan: ReplyTransportPlan | null;
-  error: string | null;
-}
-
-interface ReplyGenerationCaptureState {
-  active: boolean;
-  phase: ReplyGenerationCapturePhase;
-  failureReason?: string;
-  result?: ReplyGenerationCaptureResult;
 }
 
 type SessionWithVoiceState = Session & {
@@ -166,6 +160,9 @@ type OneBotBotLike = {
 
 type RoomLike = {
   conversationId?: string;
+  roomId?: number | string;
+  model?: string;
+  preset?: string;
   [key: string]: unknown;
 };
 
@@ -179,6 +176,7 @@ type MiddlewareContextLike = {
     };
     responseMessage?: {
       content?: unknown;
+      additional_kwargs?: Record<string, unknown>;
     } | null;
   };
 };
@@ -237,6 +235,9 @@ type ChatLunaLike = {
   };
 };
 
+type ChatLunaChainLike = NonNullable<ChatLunaLike['chatChain']>;
+type ChatLunaChainBuilderLike = ReturnType<ChatLunaChainLike['middleware']>;
+
 type ContextWithChatLuna = Context & { chatluna?: ChatLunaLike; featurePolicy?: FeaturePolicyServiceLike };
 
 function normalizeBaseUrl(input: string): string {
@@ -249,11 +250,6 @@ function clampNatural(input: unknown, fallback: number): number {
 }
 
 function toRuntimeConfig(config: Config): RuntimeConfig {
-  const legacyOutputMaxChars = clampNatural(
-    config.outputMaxChars ?? process.env.QQ_VOICE_OUTPUT_MAX_CHARS,
-    80,
-  );
-
   return {
     enabled: config.enabled ?? String(process.env.QQ_VOICE_ENABLED ?? 'true').toLowerCase() !== 'false',
     inputEnabled: config.inputEnabled ?? String(process.env.QQ_VOICE_INPUT_ENABLED ?? 'true').toLowerCase() !== 'false',
@@ -264,13 +260,21 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
     ttsBaseUrl: normalizeBaseUrl(config.ttsBaseUrl ?? process.env.QQ_VOICE_TTS_BASE_URL ?? 'http://127.0.0.1:8082'),
     ttsApiKey: config.ttsApiKey ?? process.env.QQ_VOICE_TTS_API_KEY ?? '',
     inputMaxSeconds: clampNatural(config.inputMaxSeconds ?? process.env.QQ_VOICE_INPUT_MAX_SECONDS, 60),
-    outputMaxWords: clampNatural(config.outputMaxWords ?? process.env.QQ_VOICE_OUTPUT_MAX_WORDS, legacyOutputMaxChars),
+    outputMaxWords: clampNatural(config.outputMaxWords ?? process.env.QQ_VOICE_OUTPUT_MAX_WORDS, 80),
     outputMaxSeconds: clampNatural(config.outputMaxSeconds ?? process.env.QQ_VOICE_OUTPUT_MAX_SECONDS, 45),
     transcribeTimeoutMs: clampNatural(
       config.transcribeTimeoutMs ?? process.env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS,
       30_000,
     ),
     synthTimeoutMs: clampNatural(config.synthTimeoutMs ?? process.env.QQ_VOICE_SYNTH_TIMEOUT_MS, 300_000),
+    replyInterruptCollectWindowMs: clampNatural(
+      config.replyInterruptCollectWindowMs ?? process.env.QQBOT_REPLY_COLLECT_WINDOW_MS,
+      400,
+    ),
+    replyInterruptMaxPendingInputs: clampNatural(
+      config.replyInterruptMaxPendingInputs ?? process.env.QQBOT_REPLY_MAX_PENDING_INPUTS,
+      8,
+    ),
   };
 }
 
@@ -281,15 +285,6 @@ function createAuthHeaders(apiKey: string): Record<string, string> {
 
 function decodeBase64Payload(payload: string): Uint8Array {
   return Uint8Array.from(Buffer.from(payload, 'base64'));
-}
-
-function toOwnedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return Uint8Array.from(bytes).buffer;
-}
-
-function gzipJsonToArrayBuffer(value: string): ArrayBuffer {
-  const compressed = gzipSync(Buffer.from(value));
-  return toOwnedArrayBuffer(compressed);
 }
 
 function parseDataUri(uri: string): { bytes: Uint8Array; contentType: string } | null {
@@ -562,10 +557,17 @@ function removeStickerSegments(plan: ReplyTransportPlan): ReplyTransportPlan {
   };
 }
 
+function renderReplyPlanSegmentTextForFallback(segment: ReplyTransportPlan['segments'][number]): string {
+  if (segment.kind === 'sticker') return '';
+  if (segment.kind === 'image') {
+    return sanitizeStructuredReplySegmentContent(segment.alt ?? '');
+  }
+  return sanitizeStructuredReplySegmentContent(segment.content);
+}
+
 function renderReplyPlanFallbackText(plan: ReplyTransportPlan): string {
   return plan.segments
-    .filter((segment) => segment.kind !== 'sticker')
-    .map((segment) => sanitizeStructuredReplySegmentContent(segment.content))
+    .map((segment) => renderReplyPlanSegmentTextForFallback(segment))
     .filter((segment) => segment.trim().length > 0)
     .join('\n')
     .trim();
@@ -586,6 +588,14 @@ function renderDeliveredReplyPlanHistoryText(
 
   return plan.segments
     .map((segment) => {
+      if (segment.kind === 'image') {
+        return segment.alt ? `（发送图片：${segment.alt}）` : '（发送图片）';
+      }
+
+      if (segment.kind === 'voice') {
+        return `（发送语音：${sanitizeStructuredReplySegmentContent(segment.content)}）`;
+      }
+
       if (segment.kind !== 'sticker') {
         return sanitizeStructuredReplySegmentContent(segment.content);
       }
@@ -599,37 +609,37 @@ function renderDeliveredReplyPlanHistoryText(
     .trim();
 }
 
-async function rewriteLatestAssistantHistoryMessage(
+function buildPlannedUnitHistoryLines(args: {
+  outboundPlan: OutboundMessagePlan;
+  preparedVoiceByRaw: Map<string, PreparedVoiceDelivery>;
+  preparedStickerByRaw: Map<string, PreparedStickerDelivery>;
+}): string[] {
+  const { outboundPlan, preparedVoiceByRaw, preparedStickerByRaw } = args;
+  return outboundPlan.segments.map((segment) => {
+    if (segment.kind === 'text-line' || segment.kind === 'multiline-block') {
+      return segment.content;
+    }
+    if (segment.kind === 'image-block') {
+      return segment.alt ? `（发送图片：${segment.alt}）` : '（发送图片）';
+    }
+    if (segment.kind === 'sticker-block') {
+      return preparedStickerByRaw.get(segment.raw)?.historyLine ?? '（发送表情包）';
+    }
+    return `（发送语音：${preparedVoiceByRaw.get(segment.raw)?.text ?? segment.content}）`;
+  });
+}
+
+async function normalizeReplyAgentHistory(
   ctx: Context,
-  conversationId: string | undefined,
+  room: Record<string, unknown> | undefined,
   messageText: string,
 ): Promise<void> {
-  const database = (ctx as { database?: any }).database;
-  if (!conversationId || !database) return;
-
-  try {
-    const normalized = messageText.trim();
-    const rewritten = await rewriteConversationTailForLiveReply({
-      database,
-      conversationId,
-      committedText: normalized,
-      logger,
-    });
-    if (rewritten.kind === 'fallback' && normalized) {
-      const [conversation] = await database.get('chathub_conversation', { id: conversationId });
-      const latestId = conversation?.latestId;
-      if (!latestId) return;
-
-      const [latestMessage] = await database.get('chathub_message', { id: latestId });
-      if (!latestMessage || latestMessage.role !== 'ai') return;
-
-      const encoded = gzipJsonToArrayBuffer(JSON.stringify(normalized));
-      await database.upsert('chathub_message', [{ ...latestMessage, content: encoded }]);
-      await database.upsert('chathub_conversation', [{ id: conversationId, latestId, updatedAt: new Date() }]);
-    }
-  } catch (error) {
-    logger.warn('failed to rewrite latest reply-plan history message: %s', (error as Error).message);
-  }
+  const chatluna = (ctx.get?.('chatluna') ?? (ctx as { chatluna?: any }).chatluna) as
+    | { normalizeReplyAgentHistory?: (room: Record<string, unknown>, finalVisibleText: string) => Promise<unknown> }
+    | undefined;
+  const conversationId = typeof room?.conversationId === 'string' ? room.conversationId.trim() : '';
+  if (!chatluna?.normalizeReplyAgentHistory || !conversationId) return;
+  await chatluna.normalizeReplyAgentHistory(room!, messageText.trim());
 }
 
 async function ensureCanSendRecord(
@@ -698,18 +708,6 @@ function setReplyCapabilitySnapshot(session: SessionWithVoiceState, snapshot: Re
   getReplyTransportState(session).capabilitySnapshot = snapshot;
 }
 
-function getReplyGenerationCaptureState(session: SessionWithVoiceState): ReplyGenerationCaptureState | undefined {
-  return session.state?.qqReplyTransport?.generationCapture;
-}
-
-function setReplyGenerationCaptureState(session: SessionWithVoiceState, state: ReplyGenerationCaptureState): void {
-  getReplyTransportState(session).generationCapture = state;
-}
-
-function clearReplyGenerationCaptureState(session: SessionWithVoiceState): void {
-  delete getReplyTransportState(session).generationCapture;
-}
-
 function getReplyRunId(session: SessionWithVoiceState): string | undefined {
   const runId = session.state?.qqReplyTransport?.runId;
   return typeof runId === 'string' && runId.trim() ? runId.trim() : undefined;
@@ -719,73 +717,118 @@ function setReplyRunId(session: SessionWithVoiceState, runId: string): void {
   getReplyTransportState(session).runId = runId;
 }
 
-function setReplyAbortNoticeSuppressed(session: SessionWithVoiceState, suppressed: boolean): void {
-  getReplyTransportState(session).suppressAbortNotice = suppressed;
+function resolveBooleanEnv(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (!normalized) return fallback;
+  return normalized !== 'false';
 }
 
-function buildStructuredRetryInstruction(failureReason: string): string {
-  return [
-    '上一条 ReplyPlan 输出无效，必须立刻重试。',
-    '只输出一个合法的 ReplyPlan JSON 对象本身，不要解释，不要加代码块，不要退回普通文本。',
-    `上次失败原因：${failureReason}`,
-  ].join('\n');
+function createReplyTurnInput(session: SessionWithVoiceState): ReplyTurnInput {
+  const text = getTextInputContent(session).trim() || String(session.content ?? '').trim();
+  return {
+    text,
+    displayName: resolveSessionDisplayName(session),
+    userId: session.userId?.trim() || '用户',
+    isDirect: Boolean(session.isDirect),
+  };
 }
 
-function ensureRetrySessionCompatibility(
+function applyPreparedInputText(
   session: SessionWithVoiceState,
+  context: MiddlewareContextLike,
+  inputText: string | undefined,
 ): void {
-  const target = session as any;
+  const normalized = inputText?.trim();
+  if (!normalized) return;
 
-  if (typeof target.resolve !== 'function') {
-    target.resolve = async (value: unknown) => {
-      if (typeof value === 'function') {
-        return await value(target);
-      }
-      return await Promise.resolve(value);
-    };
-  }
-
-  if (typeof target.text !== 'function') {
-    target.text = (path: string) => String(path ?? '');
+  session.content = normalized;
+  if (context.options?.inputMessage) {
+    context.options.inputMessage.content = normalized;
   }
 }
 
-async function rerunReplyGeneration(args: {
-  ctx: ContextWithChatLuna;
-  session: SessionWithVoiceState;
-  phase: ReplyGenerationCapturePhase;
-  failureReason?: string;
-}): Promise<ReplyGenerationCaptureResult> {
-  const { ctx, session, phase, failureReason } = args;
-  const chatChain = ctx.chatluna?.chatChain;
-  if (typeof chatChain?.receiveMessage !== 'function') {
-    return {
-      plan: null,
-      error: 'ChatLuna chatChain.receiveMessage 不可用，无法执行链路内重试。',
-    };
+function buildReplyTurnStateText(context: ReplyTurnContinuationContext): string {
+  const lines = ['这是一次回复中断后的重生成。'];
+  if (context.alreadySentText) {
+    lines.push('以下内容已经发给用户，不要重复：');
+    lines.push(context.alreadySentText);
   }
+  if (context.pendingUnitTexts.length > 0) {
+    lines.push('以下内容是上一轮尚未发出的剩余发送单元，仅供承接参考，不要机械复述：');
+    lines.push(context.pendingUnitTexts.join('\n'));
+  }
+  if (context.supplementalMessages.length > 0) {
+    lines.push('在当前主消息之前，还收到了这些补充消息：');
+    lines.push(...context.supplementalMessages);
+  }
+  lines.push('请基于当前用户输入，自然决定现在应该怎么回复。');
+  return lines.join('\n');
+}
 
-  const previousCapture = getReplyGenerationCaptureState(session);
-  setReplyGenerationCaptureState(session, {
-    active: true,
-    phase,
-    failureReason,
+function registerReplyTurnStateFragment(
+  conversationId: string,
+  continuationContext: ReplyTurnContinuationContext | undefined,
+): void {
+  if (!continuationContext) return;
+  registerPromptFragment(conversationId, {
+    source: 'qqbot_reply_interrupt_state',
+    title: 'Reply Interrupt State',
+    authority: 'assistant_state',
+    trust: 'trusted',
+    ttl: 'turn',
+    payload: {
+      kind: 'text',
+      value: buildReplyTurnStateText(continuationContext),
+    },
   });
-  try {
-    ensureRetrySessionCompatibility(session);
-    await chatChain.receiveMessage(session, ctx);
-    const result = getReplyGenerationCaptureState(session)?.result;
-    return result ?? {
-      plan: null,
-      error: '链路内重试没有返回任何可用结果。',
-    };
-  } finally {
-    if (previousCapture) {
-      setReplyGenerationCaptureState(session, previousCapture);
-    } else {
-      clearReplyGenerationCaptureState(session);
+}
+
+function serializeReplyPlanRawOutput(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw)) {
+    try {
+      return JSON.stringify(raw, null, 2);
+    } catch {
+      return String(raw);
     }
   }
+  if (raw && typeof raw === 'object') {
+    try {
+      return JSON.stringify(raw, null, 2);
+    } catch {
+      return String(raw);
+    }
+  }
+  return String(raw ?? '');
+}
+
+function trimOptionalText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function buildReplyPlanDebugPayload(
+  context: MiddlewareContextLike,
+  details: Record<string, unknown>,
+): Record<string, unknown> {
+  const room = context.options?.room;
+  return {
+    conversationId: trimOptionalText(room?.conversationId) ?? null,
+    roomId: room?.roomId ?? null,
+    roomModel: trimOptionalText(room?.model) ?? null,
+    preset: trimOptionalText(room?.preset) ?? null,
+    ...details,
+  };
+}
+
+function logReplyPlanDebug(
+  context: MiddlewareContextLike,
+  stage: string,
+  details: Record<string, unknown>,
+): void {
+  logger.warn('reply-plan-debug %s', JSON.stringify(buildReplyPlanDebugPayload(context, { stage, ...details })));
 }
 
 function rememberReplyCapabilitySnapshot(
@@ -926,20 +969,6 @@ async function resolveReplyCapabilitySnapshot(args: {
   return snapshot;
 }
 
-function applyReplyPlanRequestOverrides(context: MiddlewareContextLike): void {
-  const inputMessage = context.options?.inputMessage;
-  if (!inputMessage) return;
-
-  const additionalKwargs = { ...(inputMessage.additional_kwargs ?? {}) };
-  additionalKwargs.qqbot_override_request_params = {
-    response_format: {
-      type: 'json_object',
-    },
-  };
-
-  inputMessage.additional_kwargs = additionalKwargs;
-}
-
 export function buildReplyTransportCapabilityState(
   snapshot: ReplyCapabilitySnapshot,
   outputMaxWords: number,
@@ -952,11 +981,14 @@ export function buildReplyTransportCapabilityState(
       schema: {
         segments: [
           {
-            kind: 'text|multiline|voice|sticker',
-            content: 'string',
+            kind: 'text|multiline|voice|sticker|image',
+            content: 'string (text|multiline|voice|sticker only)',
+            asset_ref: 'string (image only)',
+            alt: 'string? (image only)',
           },
         ],
       },
+      terminal_tool: 'submit_reply_plan',
     },
     voice: {
       enabled: snapshot.canVoice,
@@ -974,23 +1006,17 @@ export function buildReplyTransportExecutionRules(
   outputMaxSeconds: number,
 ): string {
   const lines = [
-    '最终只输出一个 ReplyPlan JSON 对象本身，不要添加解释、前缀、代码块或动作旁白。',
-    'ReplyPlan JSON 格式：{"segments":[{"kind":"text|multiline|voice|sticker","content":"..."}]}',
-    '普通文字回复也必须写成 text segment，不要直接输出自然文本。',
-    'text 段可按行拆发；multiline 段必须整体发送并保留换行结构。',
-    'sticker 段只写自然语言意图，不写文件名或协议。',
+    '最终只能调用 submit_reply_plan，不要输出普通文本或裸 JSON。',
+    'submit_reply_plan 参数格式：{"segments":[...]}。',
+    'text / multiline / voice / sticker 段必须提供 content。',
+    'image 段必须提供 asset_ref，可选 alt；没有现成图片资产时不要提交 image 段。',
   ];
 
   if (snapshot.canVoice) {
+    lines.push(`如果要发语音，就提交 voice 段。单个 voice 段上限约 ${outputMaxWords} 词、${outputMaxSeconds} 秒；较长内容拆成多个 voice 段。`);
     lines.push(
-      `本轮语音回复可用。如果你决定发送一条语音回复，就直接输出一个包含一个或多个 voice 段的 ReplyPlan JSON 对象。单个 voice 段上限约 ${outputMaxWords} 词、${outputMaxSeconds} 秒；多个 voice 段会按顺序发送；较长内容请拆成多个 voice 段。`,
+      '文本 + voice 混排示例：submit_reply_plan({"segments":[{"kind":"text","content":"先说一句"},{"kind":"voice","content":"接着用语音继续"},{"kind":"text","content":"最后补一句"}]})',
     );
-    lines.push('voice 段格式：{"segments":[{"kind":"voice","content":"一段语音内容"}]}');
-    lines.push(
-      '多段 voice 示例：{"segments":[{"kind":"voice","content":"第一段语音内容"},{"kind":"voice","content":"第二段语音内容"}]}',
-    );
-  } else {
-    lines.push('本轮不使用语音回复。若对方要求语音，就自然地告诉对方你现在不想发语音。');
   }
 
   return lines.join('\n');
@@ -1161,6 +1187,12 @@ async function deliverReplyPlan(args: {
   const bot = session.bot as OneBotBotLike;
   const effectiveHistoryText = renderDeliveredReplyPlanHistoryText(effectivePlan, preparedSticker.preparedByRaw) || historyText;
   const effectiveFallbackText = renderReplyPlanFallbackText(effectivePlan) || fallbackText;
+  const plannedUnitHistoryLines = buildPlannedUnitHistoryLines({
+    outboundPlan,
+    preparedVoiceByRaw: preparedVoice.preparedByRaw,
+    preparedStickerByRaw: preparedSticker.preparedByRaw,
+  });
+  replyRuntime.setPlannedUnitHistory(runId, plannedUnitHistoryLines);
   const sendAbortSignal = replyRuntime.beginSending(runId);
   if (!sendAbortSignal || !replyRuntime.isCurrentRun(runId)) {
     return { status: 'interrupted', historyText: replyRuntime.getCommittedHistoryText(runId) };
@@ -1170,17 +1202,18 @@ async function deliverReplyPlan(args: {
   const sendTask = async () => {
     const { sendWhole, sendLine } = createBotMessageDispatchers(bot, session.channelId!, session);
     await dispatchOutboundMessagePlan(outboundPlan, async (segment) => {
+      const historyLine = plannedUnitHistoryLines[outboundPlan.segments.indexOf(segment)] ?? '';
       if (segment.kind === 'multiline-block') {
         beganSending = true;
         await sendWhole(segment.content);
-        replyRuntime.recordCommittedSegment(runId, segment, segment.content);
+        replyRuntime.recordCommittedUnit(runId, historyLine);
         return;
       }
 
       if (segment.kind === 'text-line') {
         beganSending = true;
         await sendLine(segment.content);
-        replyRuntime.recordCommittedSegment(runId, segment, segment.content);
+        replyRuntime.recordCommittedUnit(runId, historyLine);
         return;
       }
 
@@ -1197,7 +1230,19 @@ async function deliverReplyPlan(args: {
           undefined,
           createBypassLineSplitOptions(session),
         );
-        replyRuntime.recordCommittedSegment(runId, segment, prepared.historyLine);
+        replyRuntime.recordCommittedUnit(runId, historyLine);
+        return;
+      }
+
+      if (segment.kind === 'image-block') {
+        beganSending = true;
+        await bot.sendMessage(
+          session.channelId!,
+          String(h.image(segment.assetRef)),
+          undefined,
+          createBypassLineSplitOptions(session),
+        );
+        replyRuntime.recordCommittedUnit(runId, historyLine);
         return;
       }
 
@@ -1213,7 +1258,7 @@ async function deliverReplyPlan(args: {
         undefined,
         createBypassLineSplitOptions(session),
       );
-      replyRuntime.recordCommittedSegment(runId, segment, `（发送语音：${prepared.text}）`);
+      replyRuntime.recordCommittedUnit(runId, historyLine);
     }, {
       abortSignal: sendAbortSignal,
     });
@@ -1232,9 +1277,9 @@ async function deliverReplyPlan(args: {
       return { status: 'interrupted', historyText: replyRuntime.getCommittedHistoryText(runId) };
     }
     if (beganSending) {
-      return { status: 'failed_after_partial_send', historyText: effectiveHistoryText };
+      return { status: 'failed_after_partial_send', historyText: replyRuntime.getCommittedHistoryText(runId) };
     }
-    return { status: 'failed_before_send', fallbackText: effectiveFallbackText, historyText: effectiveHistoryText };
+    return { status: 'failed_before_send', fallbackText: effectiveFallbackText, historyText: effectiveFallbackText };
   }
 
   if (sendAbortSignal.aborted || replyRuntime.wasInterrupted(runId)) {
@@ -1289,12 +1334,22 @@ export function apply(ctx: Context, config: Config = {}): void {
     };
   };
 
+  const resolveReplyRunMode = async (session: SessionWithVoiceState): Promise<ReplyRunMode> => {
+    const replyInterruptFeatureKey = 'QQBOT_REPLY_INTERRUPT_ENABLED' as ScopedFeatureKey;
+    const replyInterruptEnabled = featurePolicy
+      ? await featurePolicy.resolveFeatureEnabled(session, replyInterruptFeatureKey)
+      : resolveBooleanEnv(process.env.QQBOT_REPLY_INTERRUPT_ENABLED, false);
+    return replyInterruptEnabled ? 'interrupt' : 'queue';
+  };
+
   const replyRuntime = new ReplyRuntime({
     stopChat: async (room, requestId) => {
       const chatluna = resolveChatLunaService();
       if (typeof chatluna?.stopChat !== 'function') return;
       await chatluna.stopChat(room as never, requestId);
     },
+    collectWindowMs: runtime.replyInterruptCollectWindowMs,
+    maxPendingInputs: runtime.replyInterruptMaxPendingInputs,
   });
 
   ctx.middleware(
@@ -1332,7 +1387,6 @@ export function apply(ctx: Context, config: Config = {}): void {
         });
 
         session.content = merged;
-        session.stripped = { ...(session.stripped ?? {}), content: merged };
         return next();
       } catch (error) {
         logger.warn('voice input handling failed: %s', (error as Error).message);
@@ -1377,14 +1431,13 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
 
     const chatluna = resolveChatLunaService();
-    const chain = chatluna?.chatChain;
-    if (!chain) {
+    const chain = chatluna?.chatChain as ChatLunaChainLike | undefined;
+    if (!chain?.middleware) {
       logger.warn('chatluna service is not available, skip reply transport policy middleware.');
       return;
     }
 
-    chain
-      .middleware('qqbot_reply_runtime_prepare', async (rawSession, rawContext) => {
+    const prepareBuilder = chain.middleware('qqbot_reply_runtime_prepare', async (rawSession, rawContext) => {
         const session = rawSession as SessionWithVoiceState;
         const context = rawContext as MiddlewareContextLike;
         if (!isReplyPlanSessionAvailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
@@ -1398,45 +1451,34 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (!room || !conversationId || !strandKey) {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
-
-        const capture = getReplyGenerationCaptureState(session);
-        const existingRunId = getReplyRunId(session);
-        if (capture?.active && existingRunId) {
-          replyRuntime.reuseRun({
-            runId: existingRunId,
-            strandKey,
-            conversationId,
-            room,
-            session,
-          });
-          replyRuntime.markGenerating(existingRunId);
-          setReplyAbortNoticeSuppressed(session, false);
-          if (context.options) {
-            context.options.messageId = existingRunId;
-          }
-          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        }
+        const runMode = await resolveReplyRunMode(session);
 
         const runId = `qqreply:${randomUUID()}`;
-        await replyRuntime.beginRun({
+        const prepared = await replyRuntime.prepareRun({
           runId,
           strandKey,
           conversationId,
           room,
-          session,
+          mode: runMode,
+          input: createReplyTurnInput(session),
         });
+        if (prepared.action === 'stop') {
+          return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
+        }
+        applyPreparedInputText(session, context, prepared.inputText);
+        registerReplyTurnStateFragment(conversationId, prepared.continuationContext);
         setReplyRunId(session, runId);
-        setReplyAbortNoticeSuppressed(session, false);
         if (context.options) {
           context.options.messageId = runId;
         }
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-      })
-      .after('read_chat_message')
-      .before('qqbot_reply_transport_policy');
+      }) as ChatLunaChainBuilderLike;
+    prepareBuilder.after('read_chat_message');
+    prepareBuilder.before('chatluna_time_context');
+    prepareBuilder.before('qqbot_memory_v2');
+    prepareBuilder.before('qqbot_reply_transport_policy');
 
-    chain
-      .middleware('qqbot_reply_transport_policy', async (rawSession, rawContext) => {
+    const policyBuilder = chain.middleware('qqbot_reply_transport_policy', async (rawSession, rawContext) => {
         const session = rawSession as SessionWithVoiceState;
         const context = rawContext as MiddlewareContextLike;
         if (!isReplyPlanSessionAvailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
@@ -1444,8 +1486,10 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
 
-        const conversationId = context.options?.room?.conversationId;
-        if (!conversationId) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        const room = context.options?.room;
+        const conversationId = room?.conversationId;
+        if (!conversationId || !room) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        room.chatMode = 'reply-agent';
         const voiceFeatureState = await resolveVoiceFeatureState(session);
 
         const snapshot =
@@ -1458,8 +1502,6 @@ export function apply(ctx: Context, config: Config = {}): void {
             voiceOutputEnabled: voiceFeatureState.enabled && voiceFeatureState.outputEnabled,
           }));
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
-        const capture = getReplyGenerationCaptureState(session);
-        applyReplyPlanRequestOverrides(context);
         registerPromptFragment(conversationId, {
           source: 'qqbot_reply_transport_capability',
           title: 'Reply Transport Capability State',
@@ -1475,41 +1517,30 @@ export function apply(ctx: Context, config: Config = {}): void {
             ),
           },
         });
-        registerPromptFragment(conversationId, {
-          source: 'qqbot_reply_transport_execution_rules',
-          title: 'Reply Transport Execution Rules',
-          authority: 'runtime_contract',
-          trust: 'trusted',
-          ttl: 'turn',
-          payload: {
-            kind: 'text',
-            value: buildReplyTransportExecutionRules(
-              snapshot,
-              runtime.outputMaxWords,
-              runtime.outputMaxSeconds,
-            ),
-          },
-        });
-        if (capture?.active && capture.failureReason) {
+        const executionRules = buildReplyTransportExecutionRules(
+          snapshot,
+          runtime.outputMaxWords,
+          runtime.outputMaxSeconds,
+        );
+        if (executionRules) {
           registerPromptFragment(conversationId, {
-            source: 'qqbot_reply_transport_retry_feedback',
-            title: 'Reply Transport Retry Feedback',
+            source: 'qqbot_reply_transport_execution_rules',
+            title: 'Reply Transport Execution Rules',
             authority: 'runtime_contract',
             trust: 'trusted',
             ttl: 'turn',
             payload: {
               kind: 'text',
-              value: buildStructuredRetryInstruction(capture.failureReason),
+              value: executionRules,
             },
           });
         }
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-      })
-      .after('read_chat_message')
-      .before('lifecycle-handle_command');
+      }) as ChatLunaChainBuilderLike;
+    policyBuilder.after('read_chat_message');
+    policyBuilder.before('lifecycle-handle_command');
 
-    chain
-      .middleware('qqbot_reply_plan_executor', async (rawSession, rawContext) => {
+    const executorBuilder = chain.middleware('qqbot_reply_plan_executor', async (rawSession, rawContext) => {
         const session = rawSession as SessionWithVoiceState;
         const context = rawContext as MiddlewareContextLike;
         if (!isReplyPlanSessionAvailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
@@ -1519,6 +1550,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
         const responseMessage = context.options?.responseMessage;
         if (!responseMessage) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        const runMode = await resolveReplyRunMode(session);
         let runId = getReplyRunId(session);
         if (!runId) {
           const room = context.options?.room as ReplyRuntimeRoomLike | undefined;
@@ -1531,13 +1563,22 @@ export function apply(ctx: Context, config: Config = {}): void {
             return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
           }
           runId = `qqreply:${randomUUID()}`;
-          await replyRuntime.beginRun({
+          const prepared = await replyRuntime.prepareRun({
             runId,
             strandKey,
             conversationId,
             room,
-            session,
+            mode: runMode,
+            input: createReplyTurnInput(session),
           });
+          if (prepared.action === 'stop') {
+            if (context.options) {
+              context.options.responseMessage = null;
+            }
+            return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
+          }
+          applyPreparedInputText(session, context, prepared.inputText);
+          registerReplyTurnStateFragment(conversationId, prepared.continuationContext);
           setReplyRunId(session, runId);
         }
         if (!replyRuntime.isCurrentRun(runId)) {
@@ -1548,49 +1589,17 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
         }
 
-        const capture = getReplyGenerationCaptureState(session);
-        if (capture?.active) {
-          const captureResult: ReplyGenerationCaptureResult =
-            parseReplyPlanFromStructuredOutputDetailed(responseMessage.content);
-          setReplyGenerationCaptureState(session, {
-            ...capture,
-            result: captureResult,
+        const parsedPlan = parseReplyPlanFromToolResultDetailed(responseMessage);
+        if (!parsedPlan.plan) {
+          logReplyPlanDebug(context, 'terminal_tool_missing_or_invalid', {
+            parseError: parsedPlan.error,
+            terminalToolName: parsedPlan.terminalToolName,
+            rawOutputText: serializeReplyPlanRawOutput(responseMessage.content),
+            terminalToolPayload: responseMessage.additional_kwargs?.chatluna_agent_terminal_tool ?? null,
           });
-          if (context.options) {
-            context.options.responseMessage = null;
-          }
-          return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
+          replyRuntime.finishRun(runId);
+          throw new Error(parsedPlan.error ?? 'reply-agent 未提交合法的 submit_reply_plan。');
         }
-
-        const firstAttempt = parseReplyPlanFromStructuredOutputDetailed(responseMessage.content);
-        let rawPlan: ReplyTransportPlan | null = firstAttempt.plan;
-        if (!rawPlan) {
-          const retry = await rerunReplyGeneration({
-            ctx: ctx as ContextWithChatLuna,
-            session,
-            phase: 'reply_plan_retry',
-            failureReason: firstAttempt.error ?? 'ReplyPlan 输出无效。',
-          });
-          rawPlan = retry.plan;
-          if (!rawPlan) {
-            logger.warn(
-              'reply plan rerun failed: first=%s retry=%s',
-              firstAttempt.error ?? 'unknown',
-              retry.error ?? 'unknown',
-            );
-          }
-        }
-        if (!rawPlan) {
-          rawPlan = {
-            segments: [
-              {
-                kind: 'text',
-                content: '……刚刚卡了一下，你再说一次。',
-              },
-            ],
-          };
-        }
-        if (!rawPlan) return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
         const voiceFeatureState = await resolveVoiceFeatureState(session);
 
         const snapshot =
@@ -1605,39 +1614,48 @@ export function apply(ctx: Context, config: Config = {}): void {
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
 
         const executablePlan =
-          snapshot.canVoice || !rawPlan.segments.some((segment) => segment.kind === 'voice')
-            ? rawPlan
-            : downgradeVoiceSegmentsToText(rawPlan);
-        const result = await deliverReplyPlan({
-          runtime,
-          session,
-          plan: executablePlan,
-          sendStrand,
-          canSendRecordCache,
-          ttsCapabilityStates,
-          replyRuntime,
-          runId,
-        });
+          snapshot.canVoice || !parsedPlan.plan.segments.some((segment) => segment.kind === 'voice')
+            ? parsedPlan.plan
+            : downgradeVoiceSegmentsToText(parsedPlan.plan);
+        try {
+          const result = await deliverReplyPlan({
+            runtime,
+            session,
+            plan: executablePlan,
+            sendStrand,
+            canSendRecordCache,
+            ttsCapabilityStates,
+            replyRuntime,
+            runId,
+          });
 
-        const conversationId = context.options?.room?.conversationId;
-        await rewriteLatestAssistantHistoryMessage(ctx, conversationId, result.historyText);
-        replyRuntime.finishRun(runId);
-
-        if (result.status === 'failed_before_send') {
-          if (responseMessage) {
-            responseMessage.content = result.fallbackText;
+          const room = context.options?.room;
+          if (result.status === 'failed_before_send') {
+            if (responseMessage) {
+              responseMessage.content = result.fallbackText;
+            }
+          } else if (context.options) {
+            context.options.responseMessage = null;
           }
-          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        }
 
-        if (context.options) {
-          context.options.responseMessage = null;
+          try {
+            await normalizeReplyAgentHistory(ctx, room, result.historyText);
+          } catch (error) {
+            logger.warn('reply-agent history normalization failed: %s', (error as Error).message);
+          }
+
+          if (result.status === 'failed_before_send') {
+            return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+          }
+
+          return result.status === 'failed_after_partial_send'
+            ? ChatLunaChains.ChainMiddlewareRunStatus.STOP
+            : ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        } finally {
+          replyRuntime.finishRun(runId);
         }
-        return result.status === 'failed_after_partial_send'
-          ? ChatLunaChains.ChainMiddlewareRunStatus.STOP
-          : ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-      })
-      .after('request_model')
-      .before('censor');
+      }) as ChatLunaChainBuilderLike;
+    executorBuilder.after('request_model');
+    executorBuilder.before('censor');
   });
 }

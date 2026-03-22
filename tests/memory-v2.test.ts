@@ -1,6 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('koishi', () => ({
+  Context: class {},
+  Session: class {},
+  Logger: class {
+    warn(): void {}
+    debug(): void {}
+  },
+}));
+
 import { MemoryV2StatusService, createUnavailableMemoryV2StatusSnapshot } from '../src/plugins/memory/status.js';
 import {
   embedTexts,
@@ -10,11 +21,22 @@ import {
 import {
   buildMemoryContextBlock,
   buildMemoryDocuments,
+  decodeStoredMessageText,
   mergeFactRecord,
+  MemoryV2Store,
   planMemoryRecall,
   rankMemoryDocumentsByVector,
 } from '../src/plugins/memory/store.js';
 import type { MemoryEpisodeRecord, MemoryFactRecord } from '../src/types/memory-v2.js';
+
+vi.mock('koishi-plugin-chatluna/utils/string', async () => {
+  const { gunzipSync } = await import('node:zlib');
+  return {
+    async gzipDecode(input: ArrayBuffer): Promise<string> {
+      return gunzipSync(Buffer.from(input)).toString('utf8');
+    },
+  };
+});
 
 function createFact(partial: Partial<MemoryFactRecord>): MemoryFactRecord {
   return {
@@ -58,6 +80,54 @@ function createEpisode(partial: Partial<MemoryEpisodeRecord>): MemoryEpisodeReco
     archived: 0,
     ...partial,
   };
+}
+
+function encodeStoredContent(content: unknown): ArrayBuffer {
+  const buffer = gzipSync(Buffer.from(JSON.stringify(content), 'utf8'));
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+}
+
+type MemoryTableName =
+  | 'chathub_conversation'
+  | 'chathub_message'
+  | 'memory_fact'
+  | 'memory_episode'
+  | 'memory_job';
+
+type MemoryRow = Record<string, any>;
+
+class MemoryStoreDatabaseMock {
+  constructor(
+    tables: Partial<Record<MemoryTableName, MemoryRow[]>> = {},
+  ) {
+    this.tables = {
+      chathub_conversation: [],
+      chathub_message: [],
+      memory_fact: [],
+      memory_episode: [],
+      memory_job: [],
+      ...tables,
+    };
+  }
+
+  private readonly tables: Record<MemoryTableName, MemoryRow[]>;
+
+  async get(table: string, query: Record<string, unknown>): Promise<MemoryRow[]> {
+    const rows = this.tables[table as MemoryTableName] ?? [];
+    return rows
+      .filter((row) => Object.entries(query).every(([key, value]) => row[key] === value))
+      .map((row) => ({ ...row }));
+  }
+
+  async set(): Promise<void> {}
+
+  async upsert(): Promise<void> {}
+
+  async create(_table: string, row: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return row;
+  }
+
+  async remove(): Promise<void> {}
 }
 
 describe('memory-v2 core behavior', () => {
@@ -176,6 +246,105 @@ describe('memory-v2 core behavior', () => {
         : null;
     expect(body?.model).toBe('Qwen/Qwen3-Embedding-8B');
     expect(body?.input).toEqual(['第一条', '第二条']);
+  });
+});
+
+describe('memory-v2 stored content extraction', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('extracts text from stored string content', async () => {
+    await expect(decodeStoredMessageText(encodeStoredContent('用户喜欢蓝莓芝士贝果。'))).resolves.toBe('用户喜欢蓝莓芝士贝果。');
+  });
+
+  it('joins multiple text parts and ignores non-text parts', async () => {
+    await expect(
+      decodeStoredMessageText(
+        encodeStoredContent([
+          { type: 'text', text: '第一句。' },
+          { type: 'image_url', image_url: { url: 'https://example.com/1.png' } },
+          { type: 'text', text: '第二句。' },
+        ]),
+      ),
+    ).resolves.toBe('第一句。第二句。');
+  });
+
+  it('returns empty text for attachment-only content', async () => {
+    await expect(
+      decodeStoredMessageText(
+        encodeStoredContent([
+          { type: 'image_url', image_url: { url: 'https://example.com/1.png' } },
+          { type: 'audio_url', audio_url: { url: 'https://example.com/1.mp3' } },
+        ]),
+      ),
+    ).resolves.toBe('');
+  });
+
+  it('treats malformed stored content as invalid', async () => {
+    const invalid = Buffer.from('not-gzip', 'utf8').buffer.slice(0) as ArrayBuffer;
+    await expect(decodeStoredMessageText(invalid)).rejects.toThrow();
+  });
+
+  it('reads only text turns from stored conversation content', async () => {
+    const store = new MemoryV2Store(
+      new MemoryStoreDatabaseMock({
+        chathub_conversation: [
+          {
+            id: 'conversation-1',
+            latestId: 'm4',
+          },
+        ],
+        chathub_message: [
+          {
+            id: 'm1',
+            conversation: 'conversation-1',
+            parent: null,
+            role: 'human',
+            content: encodeStoredContent([{ type: 'text', text: '我最喜欢蓝莓芝士贝果。' }]),
+          },
+          {
+            id: 'm2',
+            conversation: 'conversation-1',
+            parent: 'm1',
+            role: 'ai',
+            content: encodeStoredContent([{ type: 'image_url', image_url: { url: 'https://example.com/2.png' } }]),
+          },
+          {
+            id: 'm3',
+            conversation: 'conversation-1',
+            parent: 'm2',
+            role: 'human',
+            content: encodeStoredContent([{ type: 'text', text: '明天提醒我买贝果。' }]),
+          },
+          {
+            id: 'm4',
+            conversation: 'conversation-1',
+            parent: 'm3',
+            role: 'ai',
+            content: encodeStoredContent('收到，我明天再提醒你。'),
+          },
+        ],
+      }) as any,
+    );
+
+    await expect(store.readConversationWindow('conversation-1', 6)).resolves.toEqual([
+      {
+        id: 'm1',
+        role: 'human',
+        text: '我最喜欢蓝莓芝士贝果。',
+      },
+      {
+        id: 'm3',
+        role: 'human',
+        text: '明天提醒我买贝果。',
+      },
+      {
+        id: 'm4',
+        role: 'ai',
+        text: '收到，我明天再提醒你。',
+      },
+    ]);
   });
 });
 

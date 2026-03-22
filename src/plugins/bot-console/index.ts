@@ -13,18 +13,22 @@ import type {
   EnvPatch,
   GetRecentLogsResponse,
   PresetDocument,
+  ReorderPresetsResponse,
   SaveFeatureOverridesRequest,
   SaveFeatureOverridesResponse,
+  SaveToolOverridesRequest,
+  SaveToolOverridesResponse,
   ServiceAction,
 } from '../../types/bot-console.js';
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
 import type { MemoryV2StatusServiceLike } from '../../types/memory-v2.js';
-import { createUnavailableMemoryV2StatusSnapshot } from '../memory/index.js';
+import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
+import { createUnavailableMemoryV2StatusSnapshot } from '../memory/status.js';
 
 const logger = new Logger('bot-console');
 
 export const name = 'bot-console';
-export const inject = { required: ['console'], optional: ['memoryV2Status', 'featurePolicy'] } as const;
+export const inject = { required: ['console'], optional: ['memoryV2Status', 'featurePolicy', 'toolPolicy'] } as const;
 
 const LISTENER_AUTHORITY = 4;
 
@@ -38,10 +42,11 @@ function ensureRecord(value: unknown): Record<string, unknown> {
 type ContextWithRuntimeServices = Context & {
   memoryV2Status?: MemoryV2StatusServiceLike;
   featurePolicy?: FeaturePolicyServiceLike;
+  toolPolicy?: ToolPolicyServiceLike;
 };
 
 async function buildState(ctx: ContextWithRuntimeServices, manager: BotConsoleManager): Promise<BotConsoleState> {
-  const [state, memoryV2, featureScopes, featureOverrides, conversationTargets] = await Promise.all([
+  const [state, memoryV2, featureScopes, featureOverrides, conversationTargets, toolPolicy] = await Promise.all([
     manager.getState(),
     ctx.memoryV2Status
       ? ctx.memoryV2Status.getSnapshot().catch(() => createUnavailableMemoryV2StatusSnapshot())
@@ -49,6 +54,15 @@ async function buildState(ctx: ContextWithRuntimeServices, manager: BotConsoleMa
     ctx.featurePolicy?.listConsoleFeatureScopes?.() ?? Promise.resolve([]),
     ctx.featurePolicy?.getFeatureOverrides?.() ?? Promise.resolve([]),
     ctx.featurePolicy?.listConversationTargets?.() ?? Promise.resolve([]),
+    ctx.toolPolicy?.getToolPolicyState?.() ?? Promise.resolve({
+      catalog: [],
+      routeProfiles: [],
+      routeProfileInfo: [],
+      defaultScopes: [],
+      scopes: [],
+      overrides: [],
+      conversationTargets: [],
+    }),
   ]);
 
   return {
@@ -56,6 +70,10 @@ async function buildState(ctx: ContextWithRuntimeServices, manager: BotConsoleMa
     featureScopes,
     featureOverrides,
     conversationTargets,
+    toolPolicy: {
+      ...toolPolicy,
+      conversationTargets: toolPolicy.conversationTargets.length > 0 ? toolPolicy.conversationTargets : conversationTargets,
+    },
     runtimeStatus: {
       memoryV2,
     },
@@ -150,6 +168,42 @@ export function apply(ctx: Context): void {
   );
 
   consoleService.addListener(
+    'bot-console/get-tool-policy-state',
+    async () => {
+      if (runtimeCtx.toolPolicy?.getToolPolicyState) {
+        return runtimeCtx.toolPolicy.getToolPolicyState();
+      }
+      const conversationTargets = runtimeCtx.featurePolicy?.listConversationTargets
+        ? await runtimeCtx.featurePolicy.listConversationTargets()
+        : [];
+      return {
+        catalog: [],
+        routeProfiles: [],
+        routeProfileInfo: [],
+        defaultScopes: [],
+        scopes: [],
+        overrides: [],
+        conversationTargets,
+      };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/save-tool-overrides',
+    async (payload: SaveToolOverridesRequest): Promise<SaveToolOverridesResponse> => {
+      if (!runtimeCtx.toolPolicy?.saveToolOverrides) {
+        throw new Error('tool policy service unavailable');
+      }
+      const record = ensureRecord(payload);
+      const overrides = Array.isArray(record.overrides) ? (record.overrides as SaveToolOverridesRequest['overrides']) : [];
+      const nextOverrides = await runtimeCtx.toolPolicy.saveToolOverrides(overrides);
+      return { overrides: nextOverrides };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
     'bot-console/clear-conversation-history',
     async (payload: ClearConversationHistoryRequest): Promise<ClearConversationHistoryResponse> => {
       if (!runtimeCtx.featurePolicy?.clearConversationHistory) {
@@ -195,6 +249,17 @@ export function apply(ctx: Context): void {
     async (name: string, defaultPreset: string) => {
       await manager.deletePreset(String(name ?? ''), String(defaultPreset ?? ''));
       return { ok: true, restartRequired: true };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/reorder-presets',
+    async (payload: unknown): Promise<ReorderPresetsResponse> => {
+      const record = ensureRecord(payload);
+      const names = Array.isArray(record.names) ? record.names.map((item) => String(item ?? '')) : [];
+      const presets = await manager.reorderPresets(names);
+      return { presets };
     },
     { authority: LISTENER_AUTHORITY },
   );

@@ -202,7 +202,7 @@ describe('message send utils', () => {
         ],
       }),
       async (segment) => {
-        sent.push(`${segment.kind}:${segment.content}`);
+        sent.push(`${segment.kind}:${'content' in segment ? segment.content : segment.assetRef}`);
       },
     );
 
@@ -224,6 +224,7 @@ describe('message send utils', () => {
           { kind: 'multiline', content: '整块一\n整块二' },
           { kind: 'voice', content: '晚安' },
           { kind: 'sticker', content: '无语地看对方一眼' },
+          { kind: 'image', assetRef: 'asset://image-1', alt: '夜空照片' },
         ],
       }),
     ).toEqual({
@@ -244,6 +245,12 @@ describe('message send utils', () => {
           kind: 'sticker-block',
           content: '无语地看对方一眼',
           raw: 'reply-plan:sticker:3:无语地看对方一眼',
+        },
+        {
+          kind: 'image-block',
+          assetRef: 'asset://image-1',
+          alt: '夜空照片',
+          raw: 'reply-plan:image:4:asset://image-1',
         },
       ],
     });

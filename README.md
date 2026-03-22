@@ -226,7 +226,7 @@ bash ./scripts/cleanup-debug-chat-state.sh
 
 ## 5. Trigger contract
 
-- Runtime trigger path = `task-automation` (优先) + `group-natural-trigger` + ChatLuna native。
+- Runtime trigger path = `task-automation` (优先) + `group-natural-trigger` 判定 + ChatLuna allow-reply resolver 接线 + ChatLuna native。
 - `reply runtime` 统一接管生成期与发送期中断：
   - 同一会话的新消息会中断旧 run，并以最新消息重新生成。
   - 已经发出的内容不会撤回；未发送的剩余 segment 会被丢弃，并重写历史尾部。
@@ -237,6 +237,7 @@ bash ./scripts/cleanup-debug-chat-state.sh
   - 会话焦点窗口 `5` 分钟（同群共享、群间隔离）。
   - 机器人最小回复间隔 `2s`（同群串行等待，不丢消息）。
   - 反刷屏：同一用户 `10s` 内 `10` 条消息，`3` 分钟内忽略该用户。
+  - `group-natural-trigger` 负责产出自然触发判定，并通过 ChatLuna service 注册的 allow-reply resolver 把结果接入放行链。
 - 昵称触发保留，默认别名包含：
   - `祥子`、`祥`、`丰川`、`丰川祥子`、`saki`、`saki酱`、`sakiko`。
 - 新增自动化任务插件：
@@ -340,33 +341,7 @@ bash ./scripts/cleanup-debug-chat-state.sh
 - Quick rollback:
   - set `QQ_VOICE_INPUT_ENABLED=false` and/or `QQ_VOICE_OUTPUT_ENABLED=false`, then restart `qqbot.target`.
 
-## 12. Pokemon battle plugin
-
-- `koishi-plugin-pokemon-battle` is loaded through local bridge plugin `./dist/plugins/pokemon-battle`.
-- CI 环境默认禁用该插件（除非显式设置 `POKEMON_BATTLE_ENABLED=true`），避免 CI 触发资源下载。
-- 关键词优先路由：命中宝可梦指令关键词时，优先进入宝可梦命令链路；未命中才进入普通聊天链路。
-- Runtime dependencies are provided by:
-  - `koishi-plugin-downloads` (`downloads` service)
-  - `koishi-plugin-canvas` (`canvas` service)
-  - existing `database-sqlite` + `cron`
-- Default command access is open to all group members (no extra authority gate).
-- Environment variables:
-  - `POKEMON_BATTLE_ENABLED`：whether to enable pokemon plugin (default `true`).
-  - `POKEMON_BATTLE_IMAGE_SOURCE`：pokemon image base URL (default `https://raw.githubusercontent.com/MAIxxxIAM/pokemonFusionImage/main`).
-  - `POKEMON_DOWNLOADS_OUTPUT`：downloads plugin output directory (default `./downloads`).
-- Quick rollback:
-  - set `POKEMON_BATTLE_ENABLED=false`, then restart `qqbot.target`.
-- Common issues:
-  - startup reports missing `downloads` service: confirm `downloads:*` exists in `koishi.yml`.
-  - startup reports missing `canvas` service or puppeteer/chrome errors: confirm `canvas:*` exists in `koishi.yml`.
-  - pokemon image text shows square/tofu glyphs: ensure `downloads` subdirs are traversable (`x` bit). Bridge plugin auto-fixes `bucket2-*` mode, auto-registers `zpix.ttf`, prefers bundled `NotoSansCJKsc-Regular.otf` as CJK fallback, injects fallback font families for `zpix`, and normalizes known missing symbols (for example `：` -> `:`).
-  - rare nickname glyphs still show tofu: confirm deploy contains `src/plugins/assets/fonts/NotoSansCJKsc-Regular.otf` and check koishi logs for `pokemon fallback ready` / `pokemon fallback missing` before considering server font installation.
-  - image load failure/timeouts: switch `POKEMON_BATTLE_IMAGE_SOURCE` to gitee source:
-    `https://gitee.com/maikama/pokemon-fusion-image/raw/master`.
-- Deploy note:
-  - `Deploy` workflow always overwrites server `.env.server` from secret `QQBOT_DOTENV`, so update this secret after changing server-side pokemon or voice env vars.
-
-## 13. Quality checks
+## 12. Quality checks
 
 ```bash
 pnpm docs:build
@@ -375,13 +350,13 @@ pnpm test
 pnpm build
 ```
 
-## 14. Fedora / Podman notes
+## 13. Fedora / Podman notes
 
 - This project is built for Podman (not Docker Desktop).
 - `compose.yaml` uses `:Z` on bind mount for SELinux Enforcing.
 - Container should call host via `host.containers.internal`, not `127.0.0.1`.
 
-## 15. Troubleshooting
+## 14. Troubleshooting
 
 - No reply in group:
   - Confirm ChatLuna is loaded and DeepSeek adapter is loaded.

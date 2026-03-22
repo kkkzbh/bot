@@ -41,6 +41,7 @@ const groupConversationTargets = computed<ConversationTarget[]>(
   () => conversationTargets.value.filter(item => item.scopeKind === 'group'),
 )
 
+const privateScopeExpanded = ref(false)
 const groupScopesExpanded = ref(false)
 const privateTargetsExpanded = ref(false)
 const groupTargetsExpanded = ref(false)
@@ -296,57 +297,78 @@ async function handleBatchDelete(targets: ConversationTarget[]) {
       >{{ changedFeatureOverrideKeys.size }} 项覆盖修改</span>
     </div>
 
-    <div
+    <section
       v-if="privateDefaultScope"
-      class="bc-feature-scope-list"
+      class="bc-room-section"
     >
-      <article
-        :key="`${privateDefaultScope.scopeKind}:${privateDefaultScope.scopeId}`"
-        class="bc-feature-scope-card"
+      <button
+        type="button"
+        class="bc-room-section-toggle"
+        @click="privateScopeExpanded = !privateScopeExpanded"
       >
-        <div class="bc-feature-scope-head">
-          <div>
-            <strong>{{ privateDefaultScope.roomName }}</strong>
-            <p class="bc-muted">{{ formatScopeMeta(privateDefaultScope) }}</p>
-          </div>
+        <span class="bc-room-section-title">
+          {{ privateDefaultScope.roomName }}
           <span class="bc-badge bc-badge-primary">私聊默认</span>
-        </div>
+        </span>
+        <span class="bc-room-section-chevron">{{ privateScopeExpanded ? '收起' : '展开' }}</span>
+      </button>
 
-        <div class="bc-feature-scope-grid">
-          <label
-            v-for="featureKey in FEATURE_KEYS"
-            :key="featureKey"
-            class="bc-field"
-          >
-            <span class="bc-field-label">
-              {{ getFieldLabel(featureKey) }}
-              <span
-                v-if="isScopeOverrideDirty(privateDefaultScope, featureKey)"
-                class="bc-field-modified"
-              >已修改</span>
-            </span>
+      <div
+        v-if="privateScopeExpanded"
+        class="bc-room-sheet"
+      >
+        <div class="bc-room-sheet-scroll">
+          <div class="bc-feature-scope-list" style="margin-top: 0;">
+            <article
+              :key="`${privateDefaultScope.scopeKind}:${privateDefaultScope.scopeId}`"
+              class="bc-feature-scope-card"
+            >
+              <div class="bc-feature-scope-head">
+                <div>
+                  <strong>{{ privateDefaultScope.roomName }}</strong>
+                  <p class="bc-muted">{{ formatScopeMeta(privateDefaultScope) }}</p>
+                </div>
+                <span class="bc-badge bc-badge-primary">私聊默认</span>
+              </div>
 
-            <template v-if="isPrivateUnsupported(privateDefaultScope, featureKey)">
-              <input
-                type="text"
-                value="私聊不可用"
-                disabled
-              />
-            </template>
-            <template v-else>
-              <select
-                :value="getScopeOverrideMode(privateDefaultScope, featureKey)"
-                @change="setScopeOverrideMode(privateDefaultScope, featureKey, ($event.target as HTMLSelectElement).value)"
-              >
-                <option value="inherit">{{ buildInheritLabel(privateDefaultScope, featureKey) }}</option>
-                <option value="enabled">开启</option>
-                <option value="disabled">关闭</option>
-              </select>
-            </template>
-          </label>
+              <div class="bc-feature-scope-grid">
+                <label
+                  v-for="featureKey in FEATURE_KEYS"
+                  :key="featureKey"
+                  class="bc-field"
+                >
+                  <span class="bc-field-label">
+                    {{ getFieldLabel(featureKey) }}
+                    <span
+                      v-if="isScopeOverrideDirty(privateDefaultScope, featureKey)"
+                      class="bc-field-modified"
+                    >已修改</span>
+                  </span>
+
+                  <template v-if="isPrivateUnsupported(privateDefaultScope, featureKey)">
+                    <input
+                      type="text"
+                      value="私聊不可用"
+                      disabled
+                    />
+                  </template>
+                  <template v-else>
+                    <select
+                      :value="getScopeOverrideMode(privateDefaultScope, featureKey)"
+                      @change="setScopeOverrideMode(privateDefaultScope, featureKey, ($event.target as HTMLSelectElement).value)"
+                    >
+                      <option value="inherit">{{ buildInheritLabel(privateDefaultScope, featureKey) }}</option>
+                      <option value="enabled">开启</option>
+                      <option value="disabled">关闭</option>
+                    </select>
+                  </template>
+                </label>
+              </div>
+            </article>
+          </div>
         </div>
-      </article>
-    </div>
+      </div>
+    </section>
 
     <section class="bc-room-section">
       <button

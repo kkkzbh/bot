@@ -1,11 +1,11 @@
 export { Config, apply, inject, name, type Config as ReplyConfig } from './voice/generation.js';
 export {
+  buildNaturalTriggerReference,
   buildProactiveOpeningState,
   buildUserContextReference,
   formatUtc8Now,
-  formatUserStampedPrompt,
-  injectUserStampedPrompt,
   resolveUserTurnIntentState,
+  type NaturalTriggerReference,
   type ProactiveOpeningState,
   type UserTurnIntentMode,
   type UserTurnIntentState,

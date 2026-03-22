@@ -1,5 +1,6 @@
 import { type Context, Logger, type Session } from 'koishi';
 import {
+  buildNaturalTriggerReference,
   buildProactiveOpeningState,
   buildUserContextReference,
   resolveUserTurnIntentState,
@@ -7,6 +8,7 @@ import {
 import { inferPlatformFromBaseUrl, normalizeRawModelName, resolvePlatform } from '../shared/llm/index.js';
 import { beginPromptAssemblyTurn, registerPromptFragment } from '../shared/prompt-context/index.js';
 import { resolveSessionDisplayName } from '../shared/session/index.js';
+import { getNaturalTriggerState } from '../triggers/group-natural/state.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -89,6 +91,12 @@ function resolvePreferredPlatformForGuard(defaultModel: string | null): string |
   );
 }
 
+function trimOptionalText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized || null;
+}
+
 export function apply(ctx: Context, config: Config = {}): void {
   const services = ctx as unknown as ContextServices;
   void config;
@@ -114,6 +122,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const turnIntent = resolveUserTurnIntentState(session.stripped?.content, inputMessage.content);
         const userName = resolveSessionDisplayName(session);
         const contextReference = buildUserContextReference(userName);
+        const naturalTrigger = getNaturalTriggerState(session as unknown as Record<string, unknown>);
         if (conversationId) {
           registerPromptFragment(conversationId, {
             source: 'chatluna_time_context',
@@ -139,6 +148,19 @@ export function apply(ctx: Context, config: Config = {}): void {
               },
             });
           }
+          if (naturalTrigger && !naturalTrigger.explicit) {
+            registerPromptFragment(conversationId, {
+              source: 'qqbot_natural_trigger',
+              title: 'Natural Trigger Context',
+              authority: 'reference',
+              trust: 'trusted',
+              ttl: 'turn',
+              payload: {
+                kind: 'json',
+                value: buildNaturalTriggerReference(naturalTrigger),
+              },
+            });
+          }
         }
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
@@ -156,6 +178,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           const room = context.options?.room;
           if (!room) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
 
+          const originalRoomModel = trimOptionalText(room.model);
           const defaultModel = resolveDefaultModelForGuard();
           const preferredPlatform = resolvePreferredPlatformForGuard(defaultModel);
           const normalizedModel = normalizeRawModelName(room.model, {
@@ -169,6 +192,29 @@ export function apply(ctx: Context, config: Config = {}): void {
               'normalized room model for guard (roomId=%s, model=%s).',
               String(room.roomId ?? ''),
               normalizedModel,
+            );
+          }
+          logger.info(
+            'reply-plan-debug %s',
+            JSON.stringify({
+              stage: 'model_guard_effective_model',
+              roomId: room.roomId ?? null,
+              conversationId: trimOptionalText(room.conversationId) ?? null,
+              originalRoomModel,
+              effectiveModel: trimOptionalText(room.model) ?? null,
+              preset: trimOptionalText(room.preset) ?? null,
+            }),
+          );
+          if (trimOptionalText(room.model) === 'deepseek/deepseek-chat') {
+            logger.warn(
+              'reply-plan-debug %s',
+              JSON.stringify({
+                stage: 'model_guard_model_compatibility_risk',
+                roomId: room.roomId ?? null,
+                conversationId: trimOptionalText(room.conversationId) ?? null,
+                effectiveModel: trimOptionalText(room.model),
+                providerBaseUrl: trimOptionalText(process.env.OPENAI_BASE_URL) ?? null,
+              }),
             );
           }
           if (!room.model) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;

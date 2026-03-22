@@ -5,6 +5,7 @@ import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
 import type { AutomationTask, TaskScope } from '../../types/task-automation.js';
 import {
   AutomationIntent,
+  formatNaturalRunAtText,
   isValidCronExpr,
   normalizeGroupId,
   parseAutomationIntentByRule,
@@ -18,7 +19,6 @@ import {
   DEFAULT_CHAT_REPLY_SYSTEM_PROMPT,
   DEFAULT_DELIVERY_SYSTEM_PROMPT,
   buildDeliveryMessageByModel,
-  buildNaturalCreateReplyByModel,
   extractMessageText,
   type AutomationLlmRuntime,
 } from './llm.js';
@@ -341,16 +341,16 @@ async function buildOnceTaskMessage(
   );
 }
 
-async function buildNaturalCreateReply(
-  runtime: RuntimeConfig,
-  payload: { kind: 'once' | 'cron'; runAt?: number | null; cronExpr?: string | null; message: string },
-): Promise<string | null> {
-  return buildNaturalCreateReplyByModel(
-    toAutomationLlmRuntime(runtime),
-    payload,
-    formatTimestamp,
-    Date.now(),
-  );
+function buildDeterministicCreateReply(payload: {
+  kind: 'once' | 'cron';
+  runAt?: number | null;
+  message: string;
+}): string {
+  if (payload.kind === 'once') {
+    return `记住了，${formatNaturalRunAtText(payload.runAt ?? Date.now(), Date.now())}提醒你${payload.message}`;
+  }
+
+  return `记住了，这件事我会按时提醒你：${payload.message}`;
 }
 
 async function parseIntentByModel(
@@ -748,6 +748,13 @@ export function apply(ctx: Context, config: Config): void {
     if (created.kind === 'cron') {
       registerCronTask(created);
     }
+    logger.info(
+      'task #%d created from chat intent: action=%s scope=%s channel=%s',
+      created.id,
+      created.kind,
+      created.scope,
+      created.channelId,
+    );
     return created;
   };
 
@@ -831,16 +838,12 @@ export function apply(ctx: Context, config: Config): void {
           message: (intent.message ?? '定时提醒').trim() || '定时提醒',
         });
         if (created) {
-          const reply = await buildNaturalCreateReply(runtime, {
+          const reply = buildDeterministicCreateReply({
             kind: 'cron',
-            cronExpr,
             message: created.message,
           });
-          if (reply) {
-            await sendSessionMessageByLines(session, reply);
-            return true;
-          }
-          return false;
+          await sendSessionMessageByLines(session, reply);
+          logger.info('task #%d create reply sent for cron intent', created.id);
         }
         return true;
       }
@@ -861,16 +864,13 @@ export function apply(ctx: Context, config: Config): void {
           if (shouldPreloadNow) {
             void preloadOnceTask(created);
           }
-          const reply = await buildNaturalCreateReply(runtime, {
+          const reply = buildDeterministicCreateReply({
             kind: 'once',
             runAt,
-            message: rawMessage,
+            message: created.message,
           });
-          if (reply) {
-            await sendSessionMessageByLines(session, reply);
-            return true;
-          }
-          return false;
+          await sendSessionMessageByLines(session, reply);
+          logger.info('task #%d create reply sent for once intent', created.id);
         }
         return true;
       }
@@ -902,6 +902,12 @@ export function apply(ctx: Context, config: Config): void {
 
       const intent = await parseIntent(session, content);
       if (!intent) return next();
+      logger.info(
+        'automation intent intercepted: action=%s user=%s channel=%s',
+        intent.action,
+        session.userId,
+        scope.channelId,
+      );
 
       if (!(await checkPermission(session, runtime))) {
         await sendSessionMessageByLines(session, '你没有权限管理自动化任务。');
@@ -910,7 +916,15 @@ export function apply(ctx: Context, config: Config): void {
 
       try {
         const handled = await handleIntent(session, scope, intent);
-        if (handled) return;
+        if (handled) {
+          logger.info(
+            'automation intent handled: action=%s user=%s channel=%s',
+            intent.action,
+            session.userId,
+            scope.channelId,
+          );
+          return;
+        }
       } catch (error) {
         logger.warn('automation intent handling failed: %s', (error as Error).message);
         await sendSessionMessageByLines(session, '自动化任务处理失败，请稍后重试。');

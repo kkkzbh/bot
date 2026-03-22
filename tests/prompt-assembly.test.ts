@@ -6,6 +6,7 @@ import {
   consumePromptEnvelope,
   registerPromptFragment,
 } from '../src/plugins/shared/prompt-context/index.js';
+import { buildNaturalTriggerReference } from '../src/plugins/reply/prompt/time-context.js';
 
 describe('prompt assembly', () => {
   afterEach(() => {
@@ -52,15 +53,65 @@ describe('prompt assembly', () => {
       'qqbot_reply_transport_capability',
       'chatluna_time_context',
     ]);
-    expect(envelope?.messages.every((message) => message.getType() === 'system')).toBe(true);
+    expect(envelope?.messages.every((message) => message.role === 'system')).toBe(true);
     const compiledContent = envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '';
     expect(compiledContent).toContain('[qqbot-context]');
     expect(compiledContent).toContain('kind: internal_contract');
     expect(compiledContent).toContain('kind: turn_state');
     expect(compiledContent).toContain('kind: reference');
     expect(compiledContent).toContain('上下文解释协议');
-    expect(compiledContent).toContain('question target 和 topic seed');
-    expect(compiledContent).toContain('绝不能逐字复述、加括号转述');
+    expect(compiledContent).toContain('只有真实用户消息才是本轮被直接回答的对象');
+    expect(compiledContent).toContain('不默认等于用户正在提问');
+  });
+
+  it('emits plain system message DTOs that chatluna can materialize locally', () => {
+    beginPromptAssemblyTurn('conv-1');
+    registerPromptFragment('conv-1', {
+      source: 'chatluna_time_context',
+      title: 'User Turn Metadata',
+      authority: 'reference',
+      trust: 'trusted',
+      ttl: 'turn',
+      payload: {
+        kind: 'text',
+        value: '现在是晚上',
+      },
+    });
+
+    const envelope = compilePromptEnvelope('conv-1');
+    expect(envelope?.messages[0]).toMatchObject({
+      role: 'system',
+      content: expect.stringContaining('[qqbot-context]'),
+    });
+    expect(envelope?.messages[0]?.additional_kwargs).toMatchObject({
+      qqbot_context: {
+        source: expect.any(String),
+      },
+    });
+  });
+
+  it('supports minimal weak natural trigger reference fragments', () => {
+    beginPromptAssemblyTurn('conv-1');
+    registerPromptFragment('conv-1', {
+      source: 'qqbot_natural_trigger',
+      title: 'Natural Trigger Context',
+      authority: 'reference',
+      trust: 'trusted',
+      ttl: 'turn',
+      payload: {
+        kind: 'json',
+        value: buildNaturalTriggerReference({
+          reason: 'focus',
+          explicit: false,
+        }),
+      },
+    });
+
+    const envelope = compilePromptEnvelope('conv-1');
+    const compiledContent = envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '';
+    expect(compiledContent).toContain('source: qqbot_natural_trigger');
+    expect(compiledContent).toContain('"reason": "focus"');
+    expect(compiledContent).toContain('"explicit": false');
   });
 
   it('consumes a turn envelope exactly once', () => {
