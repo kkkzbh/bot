@@ -30,5 +30,6 @@ set +a
 echo "[info] Loaded bot env: $ENV_FILE"
 
 cd "$ROOT_DIR"
+./scripts/ensure-chatluna-build.sh
 pnpm build
 exec pnpm exec koishi start koishi.yml

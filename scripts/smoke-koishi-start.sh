@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+./scripts/ensure-chatluna-build.sh
+
 # Provide deterministic minimal runtime env for local/CI smoke start.
 export ONEBOT_SELF_ID="${ONEBOT_SELF_ID:-100000001}"
 export ONEBOT_TOKEN="${ONEBOT_TOKEN:-}"
@@ -22,6 +24,9 @@ else
 fi
 export OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.deepseek.com/v1}"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-sk-ci-smoke}"
+export CHATLUNA_BASE_URL="${CHATLUNA_BASE_URL:-https://api.siliconflow.cn/v1}"
+export CHATLUNA_API_KEY="${CHATLUNA_API_KEY:-sk-ci-smoke}"
+export CHATLUNA_DEFAULT_MODEL="${CHATLUNA_DEFAULT_MODEL:-siliconflow/Pro/moonshotai/Kimi-K2.5}"
 export OPENAI_MODEL="${OPENAI_MODEL:-deepseek/deepseek-chat}"
 export TASK_AUTOMATION_INTENT_ENABLED="${TASK_AUTOMATION_INTENT_ENABLED:-false}"
 export CHATLUNA_SEARCH_SERVICE_ENABLED="${CHATLUNA_SEARCH_SERVICE_ENABLED:-true}"
@@ -131,7 +136,7 @@ if grep -F "loader apply plugin ./dist/plugins/web-search:search" "$LOG_FILE" >/
   exit 1
 fi
 
-if grep -nE "loader apply plugin adapter-onebot:onebot|loader apply plugin chatluna-deepseek-adapter:" "$LOG_FILE" >/dev/null; then
+if grep -nE "loader apply plugin adapter-onebot:onebot|loader apply plugin chatluna-openai-like-adapter:" "$LOG_FILE" >/dev/null; then
   echo "Koishi smoke startup unexpectedly loaded external dependency plugins." >&2
   exit 1
 fi

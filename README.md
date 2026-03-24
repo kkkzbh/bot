@@ -20,6 +20,9 @@ Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime.
 
 - `ONEBOT_SELF_ID`
 - `SQLITE_PATH`
+- `CHATLUNA_BASE_URL`
+- `CHATLUNA_API_KEY`
+- `CHATLUNA_DEFAULT_MODEL`
 - `OPENAI_BASE_URL`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
@@ -279,7 +282,7 @@ bash ./scripts/cleanup-debug-chat-state.sh
   - `tests/group-chat.test.ts`
   - `src/types/chat.ts`
 - Current conversation chain:
-  - `chatluna` + `chatluna-deepseek-adapter` + `chatluna-model-guard` + `database-sqlite` + `commands`
+  - `chatluna` + `chatluna-openai-like-adapter` + `chatluna-model-guard` + `database-sqlite` + `commands`
 - Task automation extension chain:
   - `cron` + `task-automation` (independent of ChatLuna trigger path)
 

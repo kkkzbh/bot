@@ -102,13 +102,17 @@ plugins:
         - 小祥
       isNickNameWithContent: true
       sendThinkingMessage: false
-      defaultModel: deepseek/deepseek-chat
+      defaultModel: >-
+        ${{ env.CHATLUNA_DEFAULT_MODEL || 'siliconflow/Pro/moonshotai/Kimi-K2.5'
+        }}
       defaultPreset: sakiko
       isLog: true
-    chatluna-deepseek-adapter:0o3zho:
+    chatluna-openai-like-adapter:0o3zho:
+      platform: siliconflow
+      nonStreaming: true
       apiKeys:
-        - - ${{ env.OPENAI_API_KEY || '' }}
-          - ${{ env.OPENAI_BASE_URL || 'https://api.deepseek.com/v1' }}
+        - - ${{ env.CHATLUNA_API_KEY || '' }}
+          - ${{ env.CHATLUNA_BASE_URL || 'https://api.siliconflow.cn/v1' }}
           - true
     puppeteer:0vx5c7: {}
     chatluna-search-service:search:
@@ -243,11 +247,9 @@ plugins:
     ./dist/plugins/model-guard:mjddgg: {}
     ./dist/plugins/memory:memory-v2:
       enabled: ${{ env.MEMORY_V2_ENABLED !== 'false' }}
-      extractBaseUrl: >-
-        ${{ env.MEMORY_EXTRACT_BASE_URL || env.OPENAI_BASE_URL ||
-        'https://api.deepseek.com/v1' }}
-      extractApiKey: ${{ env.MEMORY_EXTRACT_API_KEY || env.OPENAI_API_KEY || '' }}
-      extractModel: ${{ env.MEMORY_EXTRACT_MODEL || 'deepseek-chat' }}
+      extractBaseUrl: ${{ env.MEMORY_EXTRACT_BASE_URL || 'https://api.siliconflow.cn/v1' }}
+      extractApiKey: ${{ env.MEMORY_EXTRACT_API_KEY || '' }}
+      extractModel: ${{ env.MEMORY_EXTRACT_MODEL || 'moonshotai/Kimi-K2-Instruct-0905' }}
       extractTimeoutMs: ${{ +env.MEMORY_EXTRACT_TIMEOUT_MS || 15000 }}
       embedBaseUrl: ${{ env.MEMORY_EMBED_BASE_URL || 'https://api.siliconflow.cn/v1' }}
       embedApiKey: ${{ env.MEMORY_EMBED_API_KEY || '' }}

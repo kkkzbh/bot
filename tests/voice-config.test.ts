@@ -16,6 +16,9 @@ describe('qq voice config wiring', () => {
     expect(content).toContain("enabled: ${{ env.QQ_VOICE_ENABLED !== 'false' }}");
     expect(content).toContain("asrBaseUrl: ${{ env.QQ_VOICE_ASR_BASE_URL || 'http://127.0.0.1:5161' }}");
     expect(content).toContain("ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || 'http://127.0.0.1:5162' }}");
+    expect(content).toContain('defaultModel: >-');
+    expect(content).toContain("${{ env.CHATLUNA_DEFAULT_MODEL || 'siliconflow/Pro/moonshotai/Kimi-K2.5'");
+    expect(content).not.toContain('defaultModel: siliconflow/inclusionAI/Ring-flash-2.0');
   });
 
   it('declares loopback voice services and persisted voice data paths in compose', () => {

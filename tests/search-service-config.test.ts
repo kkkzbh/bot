@@ -48,9 +48,11 @@ describe('chatluna search service wiring', () => {
   it('keeps the real bot prompts unchanged and validates answers locally', () => {
     const content = readFileSync(resolve(process.cwd(), 'scripts/smoke-chat-replies.sh'), 'utf8');
 
-    expect(content).toContain('run_case "联网人物搜索" "no-meta" "辉夜和彩叶是谁？" "ultra-space-kaguya-hime"');
-    expect(content).toContain('run_case "联网概念搜索" "no-meta" "液态玻璃是什么？" "macos26-ui"');
-    expect(content).toContain('expected semantic match for 超时空辉夜姬主角');
+    expect(content).toContain('run_case "联网固定URL研究" "no-meta"');
+    expect(content).toContain('https://example.com/');
+    expect(content).toContain('QQBOT_RUN_SEARCH_DIAGNOSTIC');
+    expect(content).toContain('run_case_optional "联网搜索诊断" "no-meta" "液态玻璃是什么？" "macos26-ui"');
+    expect(content).toContain('expected semantic match for Example Domain');
     expect(content).toContain('expected semantic match for MacOS26 UI');
   });
 

@@ -16,6 +16,9 @@ Description:
 Environment:
   FAKE_USER_ID          Fake private chat user id (default: derived from timestamp)
   BOT_TIMEOUT_SECONDS   Max seconds to wait for reply stability (default: 40)
+  QQBOT_PREPARE_DEBUG_CHAT_MODE
+                       If set, prepare the fake user's debug room to this chatMode
+                       before dispatching the probe message
   KEEP_INSPECTOR        Set to 1 to keep inspector open after the probe
 EOF
 }
@@ -76,6 +79,10 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../../.." && pwd)"
 cd "$repo_root"
+
+if [[ -n "${QQBOT_PREPARE_DEBUG_CHAT_MODE:-}" ]]; then
+  FAKE_USER_ID="$fake_user_id" bash "$repo_root/scripts/prepare-debug-chat-state.sh" "$QQBOT_PREPARE_DEBUG_CHAT_MODE" >/dev/null
+fi
 
 worker_pid="$(ps -ef | awk '/koishi\/lib\/worker/ && !/awk/ {print $2; exit}')"
 if [[ -z "$worker_pid" ]]; then
