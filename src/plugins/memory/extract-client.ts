@@ -35,6 +35,104 @@ export interface MemoryExtractionResult {
   drop: string[];
 }
 
+const MEMORY_EXTRACTION_JSON_SCHEMA = {
+  name: 'memory_extraction_v1',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      facts: {
+        type: 'array',
+        description:
+          '只记录用户相关、未来仍值得保留的稳定事实、偏好、长期计划、持续关系、明确禁忌。不得记录助手 persona、角色设定、说话风格、台词、临时情绪、挑衅演绎、普通寒暄或一次性指令。',
+        maxItems: 6,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            topicKey: {
+              type: 'string',
+              description: '稳定英文或 kebab-case 主题键，例如 preference-music、plan-job-change。',
+            },
+            content: {
+              type: 'string',
+              description: '对用户长期记忆的简洁陈述。',
+            },
+            keywords: {
+              type: 'array',
+              items: { type: 'string' },
+              maxItems: 12,
+            },
+            importance: {
+              type: 'number',
+              minimum: 0,
+              maximum: 1,
+            },
+            confidence: {
+              type: 'number',
+              minimum: 0,
+              maximum: 1,
+            },
+          },
+          required: ['topicKey', 'content', 'keywords', 'importance', 'confidence'],
+        },
+      },
+      episodes: {
+        type: 'array',
+        description:
+          '只记录可供以后回忆的阶段性事件。不要记录普通寒暄、无意义重复、纯角色扮演冲突，或仅反映助手 persona 的内容。',
+        maxItems: 6,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            title: {
+              type: 'string',
+              description: '简短事件标题。',
+            },
+            summary: {
+              type: 'string',
+              description: '可供以后回忆的事件摘要，不要复制原文。',
+            },
+            keywords: {
+              type: 'array',
+              items: { type: 'string' },
+              maxItems: 12,
+            },
+            importance: {
+              type: 'number',
+              minimum: 0,
+              maximum: 1,
+            },
+            confidence: {
+              type: 'number',
+              minimum: 0,
+              maximum: 1,
+            },
+            periodStart: {
+              type: ['string', 'null'],
+              description: 'YYYY-MM-DD 或 null。',
+            },
+            periodEnd: {
+              type: ['string', 'null'],
+              description: 'YYYY-MM-DD 或 null。',
+            },
+          },
+          required: ['title', 'summary', 'keywords', 'importance', 'confidence', 'periodStart', 'periodEnd'],
+        },
+      },
+      drop: {
+        type: 'array',
+        description: '明确说明被丢弃的信息类型或原因。',
+        items: { type: 'string' },
+        maxItems: 12,
+      },
+    },
+    required: ['facts', 'episodes', 'drop'],
+  },
+} as const;
+
 interface ChatCompletionResponse {
   choices?: Array<{
     message?: {
@@ -131,19 +229,7 @@ function buildExtractionPrompt(turns: MemoryConversationTurn[]): string {
     .map((turn) => `${turn.role === 'human' ? '用户' : '助手'}: ${turn.text}`)
     .join('\n');
 
-  return [
-    '你负责把聊天提炼成长期记忆。',
-    '只保留以后仍值得记住的稳定事实或阶段事件，不要保留普通寒暄、一次性问题、泛泛情绪、无意义闲聊。',
-    'facts 只收稳定背景、偏好、长期计划、持续关系、明确禁忌等。',
-    'episodes 只收阶段性事件，标题要短，summary 要可供以后回忆，不要复制原文。',
-    'topicKey 使用稳定的英文或 kebab-case 主题键，例如 preference-music、plan-job-change。',
-    '如果没有值得长期保存的内容，返回空数组。',
-    '严格只输出 JSON，不要加解释。',
-    'JSON 结构如下：',
-    '{"facts":[{"topicKey":"string","content":"string","keywords":["string"],"importance":0.0,"confidence":0.0}],"episodes":[{"title":"string","summary":"string","keywords":["string"],"importance":0.0,"confidence":0.0,"periodStart":"YYYY-MM-DD|null","periodEnd":"YYYY-MM-DD|null"}],"drop":["string"]}',
-    '',
-    transcript,
-  ].join('\n');
+  return ['对话记录：', transcript].join('\n');
 }
 
 export async function extractLongMemory(
@@ -166,11 +252,14 @@ export async function extractLongMemory(
       body: JSON.stringify({
         model: runtime.model,
         temperature: 0.2,
+        response_format: {
+          type: 'json_schema',
+          json_schema: MEMORY_EXTRACTION_JSON_SCHEMA,
+        },
         messages: [
           {
             role: 'system',
-            content:
-              '你是长期记忆提炼器。你的唯一输出必须是合法 JSON，不能有解释、不能有 Markdown、不能有额外文字。',
+            content: '请根据提供的 schema 提取长期记忆。',
           },
           {
             role: 'user',

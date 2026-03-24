@@ -22,22 +22,40 @@ import {
   createBotMessageDispatchers,
   createKeyedStrandRunner,
   dispatchOutboundMessagePlan,
-  resolveSessionStrandKey,
+  resolveReplyActorKey,
+  resolveReplyQueueKey,
   sanitizeStructuredReplySegmentContent,
   sendBotMessageByNormalizedContent,
   type OutboundMessagePlan,
   type OutboundMessageSegment,
   type ReplyTransportPlan,
 } from '../../shared/outbound/index.js';
-import { registerPromptFragment } from '../../shared/prompt-context/index.js';
-import { resolveSessionDisplayName } from '../../shared/session/index.js';
 import {
-  parseReplyPlanFromToolResultDetailed,
-} from '../plan/parser.js';
+  clearPromptAssemblyTurn,
+  peekPromptFragments,
+  registerPromptFragment,
+  type PromptEnvelopeMessage,
+} from '../../shared/prompt-context/index.js';
+import {
+  registerReplyToolMemoryFragment,
+} from '../pipeline/protocol.js';
+import { normalizeReplyChatMode } from '../compat.js';
+import { ReplyOrchestratorService } from '../pipeline/orchestrator.js';
+import { buildReplyTurnInput, normalizeReplyRouteHint } from '../pipeline/context-builder.js';
+import { supportsStructuredReplyJsonSchema } from '../../shared/llm/index.js';
+import {
+  STRUCTURED_REPLY_V1_JSON_SCHEMA,
+  type ReplyRoute,
+  type ResolvedAction,
+  type TurnContext,
+} from '../pipeline/types.js';
+import {
+  buildReplyPromptCompilerInput,
+  compileReplyPromptEnvelope,
+} from '../prompt/compiler.js';
 import {
   ReplyRuntime,
   type ReplyTurnContinuationContext,
-  type ReplyTurnInput,
   type ReplyRunMode,
   type ReplyRuntimeRoomLike,
 } from '../runtime/index.js';
@@ -129,11 +147,16 @@ interface ReplyTransportState {
   runId?: string;
 }
 
+interface ReplyV2State {
+  route?: ReplyRoute;
+}
+
 type SessionWithVoiceState = Session & {
   stripped?: { content?: string };
   state?: Record<string, unknown> & {
     qqVoice?: QqVoiceState;
     qqReplyTransport?: ReplyTransportState;
+    qqReplyV2?: ReplyV2State;
     qqSticker?: StickerCapabilityState;
   };
 };
@@ -226,6 +249,26 @@ type ReplyPlanDeliveryResult =
 type ChatLunaLike = {
   chat?: unknown;
   stopChat?: (room: unknown, requestId: string) => Promise<boolean>;
+  createChatModel?: (fullModelName: string) => Promise<{ value?: { invoke: (input: unknown, options?: Record<string, unknown>) => Promise<{ content?: unknown }> } | undefined }>;
+  contextManager?: {
+    inject: (options: {
+      name: string;
+      value: unknown;
+      once?: boolean;
+      conversationId?: string;
+      stage?: string;
+    }) => void;
+  };
+  normalizeResearchReplyHistory?: (
+    room: unknown,
+    finalVisibleText: string,
+    updatedAt?: Date,
+  ) => Promise<unknown>;
+  normalizeReplyAgentHistory?: (
+    room: unknown,
+    finalVisibleText: string,
+    updatedAt?: Date,
+  ) => Promise<unknown>;
   chatChain?: {
     middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => {
       after: (name: string) => { before: (name: string) => unknown };
@@ -557,6 +600,36 @@ function removeStickerSegments(plan: ReplyTransportPlan): ReplyTransportPlan {
   };
 }
 
+function buildReplyTransportPlanFromResolvedActions(actions: ResolvedAction[]): ReplyTransportPlan {
+  const segments: ReplyTransportPlan['segments'] = [];
+
+  for (const action of actions) {
+    if (action.kind === 'no_reply') {
+      continue;
+    }
+    if (action.kind === 'voice') {
+      segments.push({
+        kind: 'voice' as const,
+        content: action.content,
+      });
+      continue;
+    }
+    if (action.kind === 'sticker') {
+      segments.push({
+        kind: 'sticker' as const,
+        content: action.intent,
+      });
+      continue;
+    }
+    segments.push({
+      kind: 'text' as const,
+      content: action.content,
+    });
+  }
+
+  return { segments };
+}
+
 function renderReplyPlanSegmentTextForFallback(segment: ReplyTransportPlan['segments'][number]): string {
   if (segment.kind === 'sticker') return '';
   if (segment.kind === 'image') {
@@ -629,17 +702,20 @@ function buildPlannedUnitHistoryLines(args: {
   });
 }
 
-async function normalizeReplyAgentHistory(
+async function normalizeResearchReplyHistory(
   ctx: Context,
   room: Record<string, unknown> | undefined,
   messageText: string,
 ): Promise<void> {
   const chatluna = (ctx.get?.('chatluna') ?? (ctx as { chatluna?: any }).chatluna) as
-    | { normalizeReplyAgentHistory?: (room: Record<string, unknown>, finalVisibleText: string) => Promise<unknown> }
+    | {
+        normalizeResearchReplyHistory?: (room: Record<string, unknown>, finalVisibleText: string) => Promise<unknown>;
+      }
     | undefined;
   const conversationId = typeof room?.conversationId === 'string' ? room.conversationId.trim() : '';
-  if (!chatluna?.normalizeReplyAgentHistory || !conversationId) return;
-  await chatluna.normalizeReplyAgentHistory(room!, messageText.trim());
+  const normalizeHistory = chatluna?.normalizeResearchReplyHistory?.bind(chatluna);
+  if (!normalizeHistory || !conversationId) return;
+  await normalizeHistory(room!, messageText.trim());
 }
 
 async function ensureCanSendRecord(
@@ -717,6 +793,35 @@ function setReplyRunId(session: SessionWithVoiceState, runId: string): void {
   getReplyTransportState(session).runId = runId;
 }
 
+function getReplyV2State(session: SessionWithVoiceState): ReplyV2State {
+  const current = session.state ?? {};
+  const replyV2 = current.qqReplyV2 ?? {};
+  current.qqReplyV2 = replyV2;
+  session.state = current;
+  return replyV2;
+}
+
+function getReplyRouteState(session: SessionWithVoiceState): ReplyRoute | null {
+  const route = session.state?.qqReplyV2?.route;
+  return route ?? null;
+}
+
+function setReplyRouteState(session: SessionWithVoiceState, route: ReplyRoute): void {
+  getReplyV2State(session).route = route;
+}
+
+function buildTurnCapabilitySnapshot(session: SessionWithVoiceState, snapshot: ReplyCapabilitySnapshot): NonNullable<TurnContext['capabilitySnapshot']> {
+  const stickerState = session.state?.qqSticker;
+  const stickerAvailableCount = stickerState?.availableCount ?? 0;
+  return {
+    canMultiline: snapshot.canMultiline,
+    canVoice: snapshot.canVoice,
+    canSticker: stickerAvailableCount > 0,
+    stickerAvailableCount,
+    source: snapshot.source,
+  };
+}
+
 function resolveBooleanEnv(value: unknown, fallback = false): boolean {
   if (typeof value === 'boolean') return value;
   const normalized = String(value ?? '').trim().toLowerCase();
@@ -724,13 +829,29 @@ function resolveBooleanEnv(value: unknown, fallback = false): boolean {
   return normalized !== 'false';
 }
 
-function createReplyTurnInput(session: SessionWithVoiceState): ReplyTurnInput {
-  const text = getTextInputContent(session).trim() || String(session.content ?? '').trim();
-  return {
-    text,
-    displayName: resolveSessionDisplayName(session),
-    userId: session.userId?.trim() || '用户',
-    isDirect: Boolean(session.isDirect),
+function ensureReplyPluginRoom(room: ReplyRuntimeRoomLike | undefined): void {
+  const chatMode = String((room as { chatMode?: unknown } | undefined)?.chatMode ?? '').trim();
+  if (chatMode === 'plugin') return;
+
+  throw new Error(`qqbot reply requires room.chatMode=plugin, got ${chatMode || 'unknown'}.`);
+}
+
+function ensureStructuredReplyJsonSchemaModel(room: ReplyRuntimeRoomLike | undefined): void {
+  const model = typeof room?.model === 'string' ? room.model.trim() : '';
+  if (supportsStructuredReplyJsonSchema(model)) return;
+
+  throw new Error(`qqbot reply structured output requires SiliconFlow Kimi-K2.5, got ${model || 'unknown'}.`);
+}
+
+function applyReplyStructuredOutputRequest(
+  inputMessage: NonNullable<MiddlewareContextLike['options']>['inputMessage'] | undefined,
+): void {
+  if (!inputMessage) return;
+
+  inputMessage.additional_kwargs = {
+    ...(inputMessage.additional_kwargs ?? {}),
+    qqbot_reply_mode: 'agent',
+    qqbot_final_response_schema: STRUCTURED_REPLY_V1_JSON_SCHEMA,
   };
 }
 
@@ -784,51 +905,30 @@ function registerReplyTurnStateFragment(
   });
 }
 
-function serializeReplyPlanRawOutput(raw: unknown): string {
-  if (typeof raw === 'string') return raw;
-  if (Array.isArray(raw)) {
-    try {
-      return JSON.stringify(raw, null, 2);
-    } catch {
-      return String(raw);
-    }
+function injectReplyPromptEnvelope(args: {
+  chatluna: ChatLunaLike;
+  conversationId: string;
+  turnContext: Pick<TurnContext, 'input' | 'policySnapshot' | 'capabilitySnapshot' | 'continuationContext'>;
+}): PromptEnvelopeMessage[] {
+  const contextManager = args.chatluna.contextManager;
+  if (!contextManager) {
+    throw new Error('reply prompt compiler requires chatluna.contextManager.');
   }
-  if (raw && typeof raw === 'object') {
-    try {
-      return JSON.stringify(raw, null, 2);
-    } catch {
-      return String(raw);
-    }
-  }
-  return String(raw ?? '');
-}
 
-function trimOptionalText(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim();
-  return normalized || null;
-}
+  const workingContext = peekPromptFragments(args.conversationId);
+  const envelope = compileReplyPromptEnvelope(buildReplyPromptCompilerInput(args.turnContext, workingContext));
+  clearPromptAssemblyTurn(args.conversationId);
+  if (!envelope?.messages.length) return [];
 
-function buildReplyPlanDebugPayload(
-  context: MiddlewareContextLike,
-  details: Record<string, unknown>,
-): Record<string, unknown> {
-  const room = context.options?.room;
-  return {
-    conversationId: trimOptionalText(room?.conversationId) ?? null,
-    roomId: room?.roomId ?? null,
-    roomModel: trimOptionalText(room?.model) ?? null,
-    preset: trimOptionalText(room?.preset) ?? null,
-    ...details,
-  };
-}
+  contextManager.inject({
+    name: 'qqbot_reply_prompt_envelope',
+    value: envelope.messages,
+    once: true,
+    conversationId: args.conversationId,
+    stage: 'after_scratchpad',
+  });
 
-function logReplyPlanDebug(
-  context: MiddlewareContextLike,
-  stage: string,
-  details: Record<string, unknown>,
-): void {
-  logger.warn('reply-plan-debug %s', JSON.stringify(buildReplyPlanDebugPayload(context, { stage, ...details })));
+  return envelope.messages;
 }
 
 function rememberReplyCapabilitySnapshot(
@@ -837,9 +937,9 @@ function rememberReplyCapabilitySnapshot(
   replyCapabilitySnapshots: Map<string, ReplyCapabilitySnapshot>,
 ): void {
   setReplyCapabilitySnapshot(session, snapshot);
-  const strandKey = resolveSessionStrandKey(session);
-  if (strandKey) {
-    replyCapabilitySnapshots.set(strandKey, snapshot);
+  const queueKey = resolveReplyQueueKey(session);
+  if (queueKey) {
+    replyCapabilitySnapshots.set(queueKey, snapshot);
   }
 }
 
@@ -850,9 +950,9 @@ function getAuthorizedReplyCapabilitySnapshot(
   const sessionSnapshot = getReplyCapabilitySnapshot(session as SessionWithVoiceState);
   if (sessionSnapshot) return sessionSnapshot;
 
-  const strandKey = resolveSessionStrandKey(session);
-  if (!strandKey) return undefined;
-  return replyCapabilitySnapshots.get(strandKey);
+  const queueKey = resolveReplyQueueKey(session);
+  if (!queueKey) return undefined;
+  return replyCapabilitySnapshots.get(queueKey);
 }
 
 function getTtsCapabilityState(
@@ -967,59 +1067,6 @@ async function resolveReplyCapabilitySnapshot(args: {
 
   snapshot.canVoice = ttsState.lastKnownHealthy === true;
   return snapshot;
-}
-
-export function buildReplyTransportCapabilityState(
-  snapshot: ReplyCapabilitySnapshot,
-  outputMaxWords: number,
-  outputMaxSeconds: number,
-): Record<string, unknown> {
-  return {
-    reply_plan: {
-      enabled: true,
-      multiline_available: true,
-      schema: {
-        segments: [
-          {
-            kind: 'text|multiline|voice|sticker|image',
-            content: 'string (text|multiline|voice|sticker only)',
-            asset_ref: 'string (image only)',
-            alt: 'string? (image only)',
-          },
-        ],
-      },
-      terminal_tool: 'submit_reply_plan',
-    },
-    voice: {
-      enabled: snapshot.canVoice,
-      source: snapshot.source,
-      max_words: outputMaxWords,
-      max_seconds: outputMaxSeconds,
-      sequence_mode: 'ordered_segments',
-    },
-  };
-}
-
-export function buildReplyTransportExecutionRules(
-  snapshot: ReplyCapabilitySnapshot,
-  outputMaxWords: number,
-  outputMaxSeconds: number,
-): string {
-  const lines = [
-    '最终只能调用 submit_reply_plan，不要输出普通文本或裸 JSON。',
-    'submit_reply_plan 参数格式：{"segments":[...]}。',
-    'text / multiline / voice / sticker 段必须提供 content。',
-    'image 段必须提供 asset_ref，可选 alt；没有现成图片资产时不要提交 image 段。',
-  ];
-
-  if (snapshot.canVoice) {
-    lines.push(`如果要发语音，就提交 voice 段。单个 voice 段上限约 ${outputMaxWords} 词、${outputMaxSeconds} 秒；较长内容拆成多个 voice 段。`);
-    lines.push(
-      '文本 + voice 混排示例：submit_reply_plan({"segments":[{"kind":"text","content":"先说一句"},{"kind":"voice","content":"接着用语音继续"},{"kind":"text","content":"最后补一句"}]})',
-    );
-  }
-
-  return lines.join('\n');
 }
 
 function hasVoiceSegments(plan: OutboundMessagePlan): boolean {
@@ -1265,9 +1312,9 @@ async function deliverReplyPlan(args: {
   };
 
   try {
-    const strandKey = resolveSessionStrandKey(session);
-    if (strandKey) {
-      await sendStrand.run(strandKey, sendTask);
+    const queueKey = resolveReplyQueueKey(session);
+    if (queueKey) {
+      await sendStrand.run(queueKey, sendTask);
     } else {
       await sendTask();
     }
@@ -1297,6 +1344,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
   const featurePolicy = (ctx as ContextWithChatLuna).featurePolicy;
   const sendStrand = createKeyedStrandRunner();
+  const replyOrchestrator = new ReplyOrchestratorService();
   const canSendRecordCache = new Map<string, boolean>();
   const ttsCapabilityStates = new Map<string, TtsCapabilityState>();
   const replyCapabilitySnapshots = new Map<string, ReplyCapabilitySnapshot>();
@@ -1447,20 +1495,33 @@ export function apply(ctx: Context, config: Config = {}): void {
 
         const room = context.options?.room as ReplyRuntimeRoomLike | undefined;
         const conversationId = room?.conversationId?.trim();
-        const strandKey = resolveSessionStrandKey(session);
-        if (!room || !conversationId || !strandKey) {
+        const queueKey = resolveReplyQueueKey(session);
+        const actorKey = resolveReplyActorKey(session);
+        if (!room || !conversationId || !queueKey || !actorKey) {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
-        const runMode = await resolveReplyRunMode(session);
+        ensureReplyPluginRoom(room);
+        ensureStructuredReplyJsonSchemaModel(room);
+        const turnInput = buildReplyTurnInput(session, room);
+        const routeHint = normalizeReplyRouteHint(normalizeReplyChatMode((room as { chatMode?: unknown }).chatMode));
+        const orchestration = await replyOrchestrator.handle(turnInput, session, {
+          routeHint,
+        });
+        setReplyRouteState(session, orchestration.route);
+        if (orchestration.status === 'no_reply') {
+          return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
+        }
 
+        const runMode = await resolveReplyRunMode(session);
         const runId = `qqreply:${randomUUID()}`;
         const prepared = await replyRuntime.prepareRun({
           runId,
-          strandKey,
+          queueKey,
+          actorKey,
           conversationId,
           room,
           mode: runMode,
-          input: createReplyTurnInput(session),
+          input: turnInput,
         });
         if (prepared.action === 'stop') {
           return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
@@ -1478,6 +1539,23 @@ export function apply(ctx: Context, config: Config = {}): void {
     prepareBuilder.before('qqbot_memory_v2');
     prepareBuilder.before('qqbot_reply_transport_policy');
 
+    const toolMemoryBuilder = chain.middleware('qqbot_reply_tool_memory_state', async (rawSession, rawContext) => {
+        const session = rawSession as SessionWithVoiceState;
+        const context = rawContext as MiddlewareContextLike;
+        if (!isReplyPlanSessionAvailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        if (!session.userId || session.userId === session.bot?.selfId) {
+          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        }
+
+        const conversationId = context.options?.room?.conversationId?.trim();
+        if (!conversationId) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+
+        await registerReplyToolMemoryFragment(ctx, conversationId, logger);
+        return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+      }) as ChatLunaChainBuilderLike;
+    toolMemoryBuilder.after('qqbot_reply_runtime_prepare');
+    toolMemoryBuilder.before('qqbot_reply_transport_policy');
+
     const policyBuilder = chain.middleware('qqbot_reply_transport_policy', async (rawSession, rawContext) => {
         const session = rawSession as SessionWithVoiceState;
         const context = rawContext as MiddlewareContextLike;
@@ -1489,7 +1567,9 @@ export function apply(ctx: Context, config: Config = {}): void {
         const room = context.options?.room;
         const conversationId = room?.conversationId;
         if (!conversationId || !room) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        room.chatMode = 'reply-agent';
+        if (getReplyRouteState(session) !== 'agent') {
+          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        }
         const voiceFeatureState = await resolveVoiceFeatureState(session);
 
         const snapshot =
@@ -1502,43 +1582,60 @@ export function apply(ctx: Context, config: Config = {}): void {
             voiceOutputEnabled: voiceFeatureState.enabled && voiceFeatureState.outputEnabled,
           }));
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
-        registerPromptFragment(conversationId, {
-          source: 'qqbot_reply_transport_capability',
-          title: 'Reply Transport Capability State',
-          authority: 'runtime_contract',
-          trust: 'trusted',
-          ttl: 'turn',
-          payload: {
-            kind: 'json',
-            value: buildReplyTransportCapabilityState(
-              snapshot,
-              runtime.outputMaxWords,
-              runtime.outputMaxSeconds,
-            ),
-          },
-        });
-        const executionRules = buildReplyTransportExecutionRules(
-          snapshot,
-          runtime.outputMaxWords,
-          runtime.outputMaxSeconds,
-        );
-        if (executionRules) {
-          registerPromptFragment(conversationId, {
-            source: 'qqbot_reply_transport_execution_rules',
-            title: 'Reply Transport Execution Rules',
-            authority: 'runtime_contract',
-            trust: 'trusted',
-            ttl: 'turn',
-            payload: {
-              kind: 'text',
-              value: executionRules,
-            },
-          });
-        }
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       }) as ChatLunaChainBuilderLike;
-    policyBuilder.after('read_chat_message');
+    policyBuilder.after('qqbot_reply_tool_memory_state');
+    policyBuilder.after('chatluna_time_context');
+    policyBuilder.after('qqbot_memory_v2');
+    policyBuilder.after('qqbot_sticker_policy');
     policyBuilder.before('lifecycle-handle_command');
+
+    const promptCompilerBuilder = chain.middleware('qqbot_reply_prompt_compiler', async (rawSession, rawContext) => {
+        const session = rawSession as SessionWithVoiceState;
+        const context = rawContext as MiddlewareContextLike;
+        if (!isReplyPlanSessionAvailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        if (!session.userId || session.userId === session.bot?.selfId) {
+          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        }
+
+        const route = getReplyRouteState(session);
+        if (route !== 'agent') {
+          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        }
+
+        const room = context.options?.room as ReplyRuntimeRoomLike | undefined;
+        const conversationId = room?.conversationId?.trim();
+        const chatlunaService = resolveChatLunaService();
+        if (!room || !conversationId || !chatlunaService) {
+          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        }
+        ensureReplyPluginRoom(room);
+        ensureStructuredReplyJsonSchemaModel(room);
+
+        const capability = getAuthorizedReplyCapabilitySnapshot(session, replyCapabilitySnapshots);
+        injectReplyPromptEnvelope({
+          chatluna: chatlunaService,
+          conversationId,
+          turnContext: {
+            input: buildReplyTurnInput(session, room),
+            policySnapshot: {
+              route,
+              toolRouteProfile: route,
+            },
+            capabilitySnapshot: capability ? buildTurnCapabilitySnapshot(session, capability) : null,
+            continuationContext: null,
+          },
+        });
+        applyReplyStructuredOutputRequest(context.options?.inputMessage);
+        return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+      }) as ChatLunaChainBuilderLike;
+    promptCompilerBuilder.after('qqbot_reply_transport_policy');
+    promptCompilerBuilder.after('qqbot_reply_tool_memory_state');
+    promptCompilerBuilder.after('chatluna_time_context');
+    promptCompilerBuilder.after('qqbot_memory_v2');
+    promptCompilerBuilder.after('qqbot_sticker_policy');
+    promptCompilerBuilder.before('qqbot_prompt_envelope');
+    promptCompilerBuilder.before('lifecycle-handle_command');
 
     const executorBuilder = chain.middleware('qqbot_reply_plan_executor', async (rawSession, rawContext) => {
         const session = rawSession as SessionWithVoiceState;
@@ -1550,13 +1647,16 @@ export function apply(ctx: Context, config: Config = {}): void {
 
         const responseMessage = context.options?.responseMessage;
         if (!responseMessage) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+        const room = context.options?.room as ReplyRuntimeRoomLike | undefined;
+        const conversationId = room?.conversationId?.trim();
+        ensureReplyPluginRoom(room);
+        ensureStructuredReplyJsonSchemaModel(room);
         const runMode = await resolveReplyRunMode(session);
         let runId = getReplyRunId(session);
         if (!runId) {
-          const room = context.options?.room as ReplyRuntimeRoomLike | undefined;
-          const conversationId = room?.conversationId?.trim();
-          const strandKey = resolveSessionStrandKey(session);
-          if (!room || !conversationId || !strandKey) {
+          const queueKey = resolveReplyQueueKey(session);
+          const actorKey = resolveReplyActorKey(session);
+          if (!room || !conversationId || !queueKey || !actorKey) {
             if (context.options) {
               context.options.responseMessage = null;
             }
@@ -1565,11 +1665,12 @@ export function apply(ctx: Context, config: Config = {}): void {
           runId = `qqreply:${randomUUID()}`;
           const prepared = await replyRuntime.prepareRun({
             runId,
-            strandKey,
+            queueKey,
+            actorKey,
             conversationId,
             room,
             mode: runMode,
-            input: createReplyTurnInput(session),
+            input: buildReplyTurnInput(session, room),
           });
           if (prepared.action === 'stop') {
             if (context.options) {
@@ -1589,17 +1690,8 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
         }
 
-        const parsedPlan = parseReplyPlanFromToolResultDetailed(responseMessage);
-        if (!parsedPlan.plan) {
-          logReplyPlanDebug(context, 'terminal_tool_missing_or_invalid', {
-            parseError: parsedPlan.error,
-            terminalToolName: parsedPlan.terminalToolName,
-            rawOutputText: serializeReplyPlanRawOutput(responseMessage.content),
-            terminalToolPayload: responseMessage.additional_kwargs?.chatluna_agent_terminal_tool ?? null,
-          });
-          replyRuntime.finishRun(runId);
-          throw new Error(parsedPlan.error ?? 'reply-agent 未提交合法的 submit_reply_plan。');
-        }
+        const turnInput = buildReplyTurnInput(session, room);
+        const routeHint = normalizeReplyRouteHint(normalizeReplyChatMode((room as { chatMode?: unknown }).chatMode));
         const voiceFeatureState = await resolveVoiceFeatureState(session);
 
         const snapshot =
@@ -1612,11 +1704,33 @@ export function apply(ctx: Context, config: Config = {}): void {
             voiceOutputEnabled: voiceFeatureState.enabled && voiceFeatureState.outputEnabled,
           }));
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
+        const turnCapabilitySnapshot = buildTurnCapabilitySnapshot(session, snapshot);
+        const orchestration = await replyOrchestrator.handle(turnInput, session, {
+          responseMessage,
+          promptFragments: [],
+          capabilitySnapshot: turnCapabilitySnapshot,
+          continuationContext: null,
+          routeHint,
+        });
 
-        const executablePlan =
-          snapshot.canVoice || !parsedPlan.plan.segments.some((segment) => segment.kind === 'voice')
-            ? parsedPlan.plan
-            : downgradeVoiceSegmentsToText(parsedPlan.plan);
+        if (orchestration.status === 'no_reply') {
+          if (context.options) {
+            context.options.responseMessage = null;
+          }
+          return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
+        }
+        if (orchestration.status !== 'ready') {
+          throw new Error(`reply v2 orchestrator expected ready status, got ${orchestration.status}.`);
+        }
+        if (orchestration.actions.length === 1 && orchestration.actions[0]?.kind === 'no_reply') {
+          if (context.options) {
+            context.options.responseMessage = null;
+          }
+          replyRuntime.finishRun(runId);
+          return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
+        }
+
+        const executablePlan = buildReplyTransportPlanFromResolvedActions(orchestration.actions);
         try {
           const result = await deliverReplyPlan({
             runtime,
@@ -1629,7 +1743,6 @@ export function apply(ctx: Context, config: Config = {}): void {
             runId,
           });
 
-          const room = context.options?.room;
           if (result.status === 'failed_before_send') {
             if (responseMessage) {
               responseMessage.content = result.fallbackText;
@@ -1639,9 +1752,9 @@ export function apply(ctx: Context, config: Config = {}): void {
           }
 
           try {
-            await normalizeReplyAgentHistory(ctx, room, result.historyText);
+            await normalizeResearchReplyHistory(ctx, room, result.historyText);
           } catch (error) {
-            logger.warn('reply-agent history normalization failed: %s', (error as Error).message);
+            logger.warn('research reply history normalization failed: %s', (error as Error).message);
           }
 
           if (result.status === 'failed_before_send') {

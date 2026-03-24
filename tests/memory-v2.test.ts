@@ -15,6 +15,7 @@ vi.mock('koishi', () => ({
 import { MemoryV2StatusService, createUnavailableMemoryV2StatusSnapshot } from '../src/plugins/memory/status.js';
 import {
   embedTexts,
+  extractLongMemory,
   parseExtractionResponse,
   type MemoryEmbedRuntime,
 } from '../src/plugins/memory/llm.js';
@@ -213,6 +214,53 @@ describe('memory-v2 core behavior', () => {
     expect(parsed).toBeNull();
   });
 
+  it('calls memory extraction with json_schema structured output and minimal prompt injection', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '{"facts":[],"episodes":[],"drop":[]}',
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await expect(
+      extractLongMemory(
+        {
+          baseUrl: 'https://api.siliconflow.cn/v1',
+          apiKey: 'sk-test',
+          model: 'moonshotai/Kimi-K2-Instruct-0905',
+          timeoutMs: 5000,
+        },
+        [
+          { id: 'm1', role: 'human', text: '我好像每天都睡得很晚。' },
+          { id: 'm2', role: 'ai', text: '这样对身体不太好。' },
+        ],
+      ),
+    ).resolves.toEqual({ facts: [], episodes: [], drop: [] });
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const body =
+      init && typeof init === 'object' && 'body' in init && typeof init.body === 'string'
+        ? JSON.parse(init.body)
+        : null;
+
+    expect(body?.response_format?.type).toBe('json_schema');
+    expect(body?.response_format?.json_schema?.name).toBe('memory_extraction_v1');
+    expect(body?.response_format?.json_schema?.strict).toBe(true);
+    expect(body?.response_format?.json_schema?.schema?.properties?.facts?.description).toContain('不得记录助手 persona');
+    expect(body?.messages?.[0]?.content).toBe('请根据提供的 schema 提取长期记忆。');
+    expect(body?.messages?.[1]?.content).toContain('对话记录：');
+    expect(body?.messages?.[1]?.content).not.toContain('严格只输出 JSON');
+    expect(body?.messages?.[1]?.content).not.toContain('JSON 结构如下');
+  });
+
   it('calls SiliconFlow embeddings with batched input', async () => {
     const runtime: MemoryEmbedRuntime = {
       baseUrl: 'https://api.siliconflow.cn/v1',
@@ -366,7 +414,8 @@ describe('memory-v2 configuration cleanup', () => {
     expect(composeContent).not.toContain('OLLAMA_PORT');
     expect(envContent).toContain('MEMORY_EMBED_BASE_URL=https://api.siliconflow.cn/v1');
     expect(envContent).toContain('MEMORY_EMBED_MODEL=Qwen/Qwen3-Embedding-8B');
-    expect(serverEnvContent).toContain('MEMORY_EXTRACT_MODEL=deepseek-chat');
+    expect(serverEnvContent).toContain('MEMORY_EXTRACT_BASE_URL=https://api.siliconflow.cn/v1');
+    expect(serverEnvContent).toContain('MEMORY_EXTRACT_MODEL=moonshotai/Kimi-K2-Instruct-0905');
     expect(serverEnvContent).not.toContain('CHATLUNA_LONG_MEMORY_EXTRACT_MODEL');
   });
 });

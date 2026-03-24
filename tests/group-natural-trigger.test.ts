@@ -47,14 +47,15 @@ type AllowReplyResolver = (arg: { session: Record<string, any>; context: unknown
 
 function createHarness(
   overrides: Record<string, unknown> = {},
-  options: { chatlunaAvailable?: boolean } = {},
+  options: { attachedChatlunaAvailable?: boolean; getterChatlunaAvailable?: boolean } = {},
 ): {
   middleware: Middleware;
   registerAllowReplyResolver: ReturnType<typeof vi.fn>;
   disposeAllowReplyResolver: ReturnType<typeof vi.fn>;
   runReady: () => Promise<void>;
   runDispose: () => Promise<void>;
-  setChatLunaAvailable: (available: boolean) => void;
+  setAttachedChatLunaAvailable: (available: boolean) => void;
+  setGetterChatLunaAvailable: (available: boolean) => void;
 } {
   const middlewares: Middleware[] = [];
   const listeners = new Map<string, EventListener[]>();
@@ -66,6 +67,8 @@ function createHarness(
     return disposeAllowReplyResolver;
   });
   const chatlunaService = { registerAllowReplyResolver };
+  let attachedChatlunaService = options.attachedChatlunaAvailable === false ? undefined : chatlunaService;
+  let getterChatlunaService = options.getterChatlunaAvailable ? chatlunaService : undefined;
   const ctx: Record<string, unknown> = {
     middleware: vi.fn((handler: Middleware) => {
       middlewares.push(handler);
@@ -75,9 +78,10 @@ function createHarness(
       bucket.push(handler);
       listeners.set(name, bucket);
     }),
+    get: vi.fn((name: string) => (name === 'chatluna' ? getterChatlunaService : undefined)),
   };
 
-  ctx.chatluna = options.chatlunaAvailable === false ? undefined : chatlunaService;
+  ctx.chatluna = attachedChatlunaService;
 
   apply(ctx as never, {
     enabled: true,
@@ -105,8 +109,12 @@ function createHarness(
     disposeAllowReplyResolver,
     runReady: () => runHook('ready'),
     runDispose: () => runHook('dispose'),
-    setChatLunaAvailable: (available: boolean) => {
-      ctx.chatluna = available ? chatlunaService : undefined;
+    setAttachedChatLunaAvailable: (available: boolean) => {
+      attachedChatlunaService = available ? chatlunaService : undefined;
+      ctx.chatluna = attachedChatlunaService;
+    },
+    setGetterChatLunaAvailable: (available: boolean) => {
+      getterChatlunaService = available ? chatlunaService : undefined;
     },
   };
 }
@@ -312,17 +320,72 @@ describe('group natural trigger middleware', () => {
   it('retries allow-reply resolver registration until chatluna becomes available', async () => {
     vi.useFakeTimers();
 
-    const { registerAllowReplyResolver, runReady, setChatLunaAvailable, runDispose, disposeAllowReplyResolver } =
-      createHarness({}, { chatlunaAvailable: false });
+    const {
+      registerAllowReplyResolver,
+      runReady,
+      setAttachedChatLunaAvailable,
+      runDispose,
+      disposeAllowReplyResolver,
+    } = createHarness({}, { attachedChatlunaAvailable: false });
 
     await runReady();
     expect(registerAllowReplyResolver).not.toHaveBeenCalled();
 
-    setChatLunaAvailable(true);
+    setAttachedChatLunaAvailable(true);
     await vi.advanceTimersByTimeAsync(250);
     expect(registerAllowReplyResolver).toHaveBeenCalledTimes(1);
 
     await runDispose();
     expect(disposeAllowReplyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers the allow-reply resolver on demand via ctx.get when ready-time discovery misses chatluna', async () => {
+    const { middleware, registerAllowReplyResolver, runReady, setGetterChatLunaAvailable } = createHarness(
+      { replyIntervalMs: 0 },
+      { attachedChatlunaAvailable: false, getterChatlunaAvailable: false },
+    );
+
+    await runReady();
+    expect(registerAllowReplyResolver).not.toHaveBeenCalled();
+
+    setGetterChatLunaAvailable(true);
+
+    const first = await runAndCapture(
+      middleware,
+      createSession({
+        content: '请帮我总结一下',
+      }),
+    );
+    const second = await runAndCapture(
+      middleware,
+      createSession({
+        userId: 'u2',
+        content: '请告诉我今天要做什么',
+      }),
+    );
+
+    expect(registerAllowReplyResolver).toHaveBeenCalledTimes(1);
+    expect(first.naturalTrigger).toEqual({ reason: 'rule', explicit: true });
+    expect(second.naturalTrigger).toEqual({ reason: 'rule', explicit: true });
+  });
+
+  it('does not mark a message as naturally triggered when the allow-reply bridge is still unavailable', async () => {
+    const { middleware, registerAllowReplyResolver, runReady } = createHarness(
+      { replyIntervalMs: 0 },
+      { attachedChatlunaAvailable: false, getterChatlunaAvailable: false },
+    );
+
+    await runReady();
+
+    const captured = await runAndCapture(
+      middleware,
+      createSession({
+        content: '请帮我看一下这个问题',
+      }),
+    );
+
+    expect(registerAllowReplyResolver).not.toHaveBeenCalled();
+    expect(captured.content).toBe('请帮我看一下这个问题');
+    expect(captured.naturalTrigger).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import type {
   MemoryV2StatusServiceLike,
   MemoryV2StatusSnapshot,
 } from '../../types/memory-v2.js';
+export { createUnavailableMemoryV2StatusSnapshot } from '../shared/memory-v2-status.js';
 import type { MemoryEmbedRuntime, MemoryExtractRuntime } from './llm.js';
 import { isEmbedRuntimeConfigured, isExtractRuntimeConfigured } from './llm.js';
 
@@ -67,25 +68,6 @@ function toOperationSnapshot(
     lastLatencyMs: draft.lastLatencyMs,
     lastError: draft.lastError,
     consecutiveFailures: draft.consecutiveFailures,
-  };
-}
-
-export function createUnavailableMemoryV2StatusSnapshot(
-  overrides: Partial<MemoryV2StatusSnapshot> = {},
-): MemoryV2StatusSnapshot {
-  return {
-    available: false,
-    enabled: false,
-    extractConfigured: false,
-    embedConfigured: false,
-    extractModel: '',
-    embedBaseUrl: '',
-    embedModel: '',
-    jobs: createUnavailableQueueSummary(),
-    lastArchiveAt: null,
-    extract: toOperationSnapshot(createEmptyOperationStatus(), false),
-    embed: toOperationSnapshot(createEmptyOperationStatus(), false),
-    ...overrides,
   };
 }
 

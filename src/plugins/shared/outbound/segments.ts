@@ -196,6 +196,10 @@ function resolveSessionStrandScope(session: SessionStrandLike): string | null {
 }
 
 export function resolveSessionStrandKey(session: SessionStrandLike): string | null {
+  return resolveReplyQueueKey(session);
+}
+
+export function resolveReplyQueueKey(session: SessionStrandLike): string | null {
   const platform = session.platform?.trim();
   if (!platform) return null;
 
@@ -204,6 +208,19 @@ export function resolveSessionStrandKey(session: SessionStrandLike): string | nu
   if (!scope) return null;
 
   return `${platform}:${botSelfId}:${scope}`;
+}
+
+export function resolveReplyActorKey(session: SessionStrandLike): string | null {
+  const queueKey = resolveReplyQueueKey(session);
+  if (!queueKey) return null;
+
+  const scope = resolveSessionStrandScope(session);
+  if (!scope) return null;
+  if (scope.startsWith('private:')) return queueKey;
+
+  const userId = session.userId?.trim();
+  if (!userId) return null;
+  return `${queueKey}:user:${userId}`;
 }
 
 export function createBypassLineSplitOptions(session?: Session): Universal.SendOptions {

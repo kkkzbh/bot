@@ -1,4 +1,5 @@
 export { Config, apply, inject, name, type Config as ReplyConfig } from './voice/generation.js';
+export { formatStructuredLogBlock } from './pipeline/debug.js';
 export {
   buildNaturalTriggerReference,
   buildProactiveOpeningState,

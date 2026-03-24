@@ -9,6 +9,8 @@ import {
   dropLeadingLeakedReasoningLines,
   looksLikeLeakedReasoningLine,
   normalizeOutboundMessage,
+  resolveReplyActorKey,
+  resolveReplyQueueKey,
   resolveSessionStrandKey,
   sanitizeLeakedReasoningMessage,
   sendByLinesWithSmartInterval,
@@ -116,6 +118,60 @@ describe('message send utils', () => {
         userId: '1405359129',
       }),
     ).toBe('onebot:bot-1:private:1405359129');
+  });
+
+  it('builds reply queue keys by session scope', () => {
+    expect(
+      resolveReplyQueueKey({
+        platform: 'onebot',
+        isDirect: false,
+        channelId: 'group-100',
+        userId: 'u1',
+        bot: { selfId: 'bot-1' },
+      }),
+    ).toBe('onebot:bot-1:group:group-100');
+
+    expect(
+      resolveReplyQueueKey({
+        platform: 'onebot',
+        isDirect: true,
+        channelId: 'private-u1',
+        userId: 'u1',
+        bot: { selfId: 'bot-1' },
+      }),
+    ).toBe('onebot:bot-1:private:private-u1');
+  });
+
+  it('distinguishes group actors while keeping private actors aligned with queue scope', () => {
+    expect(
+      resolveReplyActorKey({
+        platform: 'onebot',
+        isDirect: false,
+        channelId: 'group-100',
+        userId: 'u1',
+        bot: { selfId: 'bot-1' },
+      }),
+    ).toBe('onebot:bot-1:group:group-100:user:u1');
+
+    expect(
+      resolveReplyActorKey({
+        platform: 'onebot',
+        isDirect: false,
+        channelId: 'group-100',
+        userId: 'u2',
+        bot: { selfId: 'bot-1' },
+      }),
+    ).toBe('onebot:bot-1:group:group-100:user:u2');
+
+    expect(
+      resolveReplyActorKey({
+        platform: 'onebot',
+        isDirect: true,
+        channelId: 'private-u1',
+        userId: 'u1',
+        bot: { selfId: 'bot-1' },
+      }),
+    ).toBe('onebot:bot-1:private:private-u1');
   });
 
   it('replaces prompt leakage with fixed human-style fallback', () => {

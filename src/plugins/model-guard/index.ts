@@ -1,6 +1,7 @@
 import { type Context, Logger, type Session } from 'koishi';
 import {
   buildNaturalTriggerReference,
+  formatStructuredLogBlock,
   buildProactiveOpeningState,
   buildUserContextReference,
   resolveUserTurnIntentState,
@@ -8,7 +9,7 @@ import {
 import { inferPlatformFromBaseUrl, normalizeRawModelName, resolvePlatform } from '../shared/llm/index.js';
 import { beginPromptAssemblyTurn, registerPromptFragment } from '../shared/prompt-context/index.js';
 import { resolveSessionDisplayName } from '../shared/session/index.js';
-import { getNaturalTriggerState } from '../triggers/group-natural/state.js';
+import { getNaturalTriggerState } from '../triggers/group-natural/index.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -86,6 +87,7 @@ function resolveDefaultModelForGuard(): string | null {
 function resolvePreferredPlatformForGuard(defaultModel: string | null): string | null {
   return (
     resolvePlatform(defaultModel ?? undefined) ??
+    inferPlatformFromBaseUrl(process.env.CHATLUNA_BASE_URL) ??
     inferPlatformFromBaseUrl(process.env.OPENAI_BASE_URL) ??
     null
   );
@@ -195,8 +197,8 @@ export function apply(ctx: Context, config: Config = {}): void {
             );
           }
           logger.info(
-            'reply-plan-debug %s',
-            JSON.stringify({
+            '%s',
+            formatStructuredLogBlock('reply-plan-debug', {
               stage: 'model_guard_effective_model',
               roomId: room.roomId ?? null,
               conversationId: trimOptionalText(room.conversationId) ?? null,
@@ -207,13 +209,16 @@ export function apply(ctx: Context, config: Config = {}): void {
           );
           if (trimOptionalText(room.model) === 'deepseek/deepseek-chat') {
             logger.warn(
-              'reply-plan-debug %s',
-              JSON.stringify({
+              '%s',
+              formatStructuredLogBlock('reply-plan-debug', {
                 stage: 'model_guard_model_compatibility_risk',
                 roomId: room.roomId ?? null,
                 conversationId: trimOptionalText(room.conversationId) ?? null,
                 effectiveModel: trimOptionalText(room.model),
-                providerBaseUrl: trimOptionalText(process.env.OPENAI_BASE_URL) ?? null,
+                providerBaseUrl:
+                  trimOptionalText(process.env.CHATLUNA_BASE_URL) ??
+                  trimOptionalText(process.env.OPENAI_BASE_URL) ??
+                  null,
               }),
             );
           }

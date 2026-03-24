@@ -1,9 +1,15 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('koishi', () => ({
-  Context: class {},
-  h: {},
+vi.mock('koishi-plugin-chatluna', () => ({
+  logger: {
+    debug: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+  },
 }));
 
 vi.mock('koishi-plugin-chatluna/utils/string', async () => {
@@ -99,14 +105,29 @@ function createHistory(args: { conversationId: string; latestId: string; message
 
 async function createChatHistory(args: { conversationId: string; latestId: string; messages: Row[] }) {
   const { ctx, database } = createHistory(args);
-  // @ts-expect-error local built chatluna bundle does not ship a resolvable .mjs declaration path here
-  const { KoishiChatMessageHistory } = await import('../../chatluna/packages/core/lib/llm-core/memory/message/index.mjs');
+  const historyModule = (await import('koishi-plugin-chatluna/llm-core/memory/message')) as {
+    KoishiChatMessageHistory: new (ctx: unknown, conversationId: string, maxMessagesCount: number) => any;
+  };
+  const { KoishiChatMessageHistory } = historyModule;
   const history = new KoishiChatMessageHistory(ctx as never, args.conversationId, 10_000);
   return { history, database };
 }
 
-describe('reply-agent history normalization', () => {
-  it('collapses an ai tool-call tail into one normalized ai message', async () => {
+function normalizeHistory(history: {
+  normalizeResearchReplyHistory?: (text: string, updatedAt?: Date) => Promise<any>;
+  normalizeReplyAgentHistory?: (text: string, updatedAt?: Date) => Promise<any>;
+}, finalVisibleText: string, updatedAt?: Date) {
+  const normalize =
+    history.normalizeResearchReplyHistory?.bind(history) ??
+    history.normalizeReplyAgentHistory?.bind(history);
+  if (!normalize) {
+    throw new Error('missing research history normalization method');
+  }
+  return normalize(finalVisibleText, updatedAt);
+}
+
+describe('research reply history compatibility', () => {
+  it('collapses a legacy ai tool-call tail into one normalized ai message', async () => {
     const { history, database } = await createChatHistory({
       conversationId: 'conv-1',
       latestId: 'msg-tool-1',
@@ -138,7 +159,7 @@ describe('reply-agent history normalization', () => {
     });
 
     const updatedAt = new Date('2026-03-22T11:00:00.000Z');
-    const result = await history.normalizeReplyAgentHistory('收到', updatedAt);
+    const result = await normalizeHistory(history, '收到', updatedAt);
 
     expect(result.deletedMessageIds).toEqual(['msg-tool-1', 'msg-ai-1']);
     expect(result.latestId).toBe(result.normalizedMessageId);
@@ -217,7 +238,7 @@ describe('reply-agent history normalization', () => {
       ],
     });
 
-    const result = await history.normalizeReplyAgentHistory('最终回复');
+    const result = await normalizeHistory(history, '最终回复');
     await history.addUserMessage('下一句');
 
     const [conversation] = await database.get('chathub_conversation', { id: 'conv-2' });
@@ -233,7 +254,7 @@ describe('reply-agent history normalization', () => {
     );
   });
 
-  it('deletes the current reply-agent tail when there is no final visible text', async () => {
+  it('deletes the current research tail when there is no final visible text', async () => {
     const { history, database } = await createChatHistory({
       conversationId: 'conv-3',
       latestId: 'msg-tool-1',
@@ -264,7 +285,7 @@ describe('reply-agent history normalization', () => {
       ],
     });
 
-    const result = await history.normalizeReplyAgentHistory('');
+    const result = await normalizeHistory(history, '');
 
     expect(result).toEqual({
       deletedMessageIds: ['msg-tool-1', 'msg-ai-1'],
@@ -285,5 +306,150 @@ describe('reply-agent history normalization', () => {
     ).toEqual([
       { role: 'human', content: '查一下液态玻璃' },
     ]);
+  });
+
+  it('appends the visible ai reply when no research tail was persisted', async () => {
+    const { history, database } = await createChatHistory({
+      conversationId: 'conv-4',
+      latestId: 'msg-human-1',
+      messages: [
+        {
+          id: 'msg-human-1',
+          role: 'human',
+          parent: null,
+          conversation: 'conv-4',
+          content: encodeStoredContent('你知道液态玻璃吗'),
+        },
+      ],
+    });
+
+    const result = await normalizeHistory(history, '知道，是一种界面风格说法');
+
+    expect(result.deletedMessageIds).toEqual([]);
+    expect(result.normalizedText).toBe('知道，是一种界面风格说法');
+
+    const visibleMessages = await history.getMessages();
+    expect(
+      visibleMessages.map((message: { getType: () => string; content: unknown }) => ({
+        role: message.getType(),
+        content: message.content,
+      })),
+    ).toEqual([
+      { role: 'human', content: '你知道液态玻璃吗' },
+      { role: 'ai', content: '知道，是一种界面风格说法' },
+    ]);
+
+    const [conversation] = await database.get('chathub_conversation', { id: 'conv-4' });
+    expect(conversation.latestId).toBe(result.normalizedMessageId);
+  });
+
+  it('stores only successful reusable tool results in bounded hidden tool memory', async () => {
+    const { history, database } = await createChatHistory({
+      conversationId: 'conv-5',
+      latestId: 'msg-human-1',
+      messages: [
+        {
+          id: 'msg-human-1',
+          role: 'human',
+          parent: null,
+          conversation: 'conv-5',
+          content: encodeStoredContent('查一下液态玻璃'),
+        },
+      ],
+    });
+
+    const TOOL_MEMORY_STORAGE_KEY = '__chatluna_internal_tool_memory_v1';
+    const firstEntries = [
+      {
+        turnId: 'turn-1',
+        createdAt: '2026-03-23T06:00:00.000Z',
+        toolName: 'web_search',
+        inputDigest: '{"query":"液态玻璃"}',
+        snippetFormat: 'text' as const,
+        snippet: '搜索结果 A',
+        freshnessHint: '2026-03-23T06:00:00.000Z',
+      },
+    ];
+
+    await history.storeToolMemoryEntries(firstEntries, {
+      storageKey: TOOL_MEMORY_STORAGE_KEY,
+      maxEntries: 3,
+    });
+
+    await history.storeToolMemoryEntries(
+      [
+        {
+          ...firstEntries[0],
+          createdAt: '2026-03-23T06:01:00.000Z',
+          snippet: '搜索结果 A（更新版）',
+        },
+        {
+          turnId: 'turn-2',
+          createdAt: '2026-03-23T06:02:00.000Z',
+          toolName: 'web_search',
+          inputDigest: '{"query":"另一条"}',
+          snippetFormat: 'text',
+          snippet: '搜索结果 B',
+          freshnessHint: '2026-03-23T06:02:00.000Z',
+        },
+        {
+          turnId: 'turn-3',
+          createdAt: '2026-03-23T06:03:00.000Z',
+          toolName: 'web_browser',
+          inputDigest: '{"url":"https://example.com"}',
+          snippetFormat: 'text',
+          snippet: '页面摘要',
+          freshnessHint: '2026-03-23T06:03:00.000Z',
+        },
+        {
+          turnId: 'turn-4',
+          createdAt: '2026-03-23T06:04:00.000Z',
+          toolName: 'weather',
+          inputDigest: '{"location":"上海"}',
+          snippetFormat: 'json',
+          snippet: '{"temp":23}',
+          freshnessHint: '2026-03-23T06:04:00.000Z',
+        },
+      ],
+      {
+        storageKey: TOOL_MEMORY_STORAGE_KEY,
+        maxEntries: 3,
+      },
+    );
+
+    const [conversation] = await database.get('chathub_conversation', { id: 'conv-5' });
+    const additionalArgs = JSON.parse(String(conversation.additional_kwargs ?? '{}'));
+    const storedEntries = JSON.parse(String(additionalArgs[TOOL_MEMORY_STORAGE_KEY] ?? '[]'));
+
+    expect(storedEntries).toHaveLength(3);
+    expect(storedEntries.map((entry: { toolName: string; snippet: string }) => [entry.toolName, entry.snippet])).toEqual([
+      ['weather', '{"temp":23}'],
+      ['web_browser', '页面摘要'],
+      ['web_search', '搜索结果 B'],
+    ]);
+  });
+});
+
+describe('chatluna room auto-update', () => {
+  it('drops legacy reply-mode preservation helpers during template sync', () => {
+    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
+    const packageRoot = dirname(packageJsonPath);
+    const resolveRoomSource = readFileSync(join(packageRoot, 'src/middlewares/room/resolve_room.ts'), 'utf8');
+
+    expect(resolveRoomSource).not.toContain('shouldPreserveExplicitReplyChatMode');
+    expect(resolveRoomSource).not.toContain('isResearchReplyChatMode');
+    expect(resolveRoomSource).not.toContain('normalizeLegacyReplyChatMode');
+    expect(resolveRoomSource).toContain("export type ChatMode =");
+    expect(resolveRoomSource).toContain("'plugin'");
+    expect(resolveRoomSource).toContain("'browsing'");
+  });
+
+  it('passes qqbot research follow-up prompts through after_user_message', () => {
+    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
+    const packageRoot = dirname(packageJsonPath);
+    const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
+
+    expect(pluginChainSource).toContain('qqbot_after_user_message');
+    expect(pluginChainSource).toContain("requests['after_user_message'] = afterUserMessage");
   });
 });

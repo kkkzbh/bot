@@ -9,6 +9,7 @@ import { resolveSessionDisplayName } from '../src/plugins/shared/session/index.j
 describe('resolvePlatform', () => {
   it('returns platform from provider/model format', () => {
     expect(resolvePlatform('deepseek/deepseek-chat')).toBe('deepseek');
+    expect(resolvePlatform('siliconflow/Pro/moonshotai/Kimi-K2.5')).toBe('siliconflow');
   });
 
   it('returns null for invalid model values', () => {
@@ -23,6 +24,15 @@ describe('resolvePlatform', () => {
 describe('normalizeRawModelName', () => {
   it('keeps provider/model unchanged', () => {
     expect(normalizeRawModelName('deepseek/deepseek-chat')).toBe('deepseek/deepseek-chat');
+  });
+
+  it('normalizes vendor/model names through the preferred platform', () => {
+    expect(
+      normalizeRawModelName('Pro/moonshotai/Kimi-K2.5', {
+        availableModels: ['siliconflow/Pro/moonshotai/Kimi-K2.5'],
+        preferredPlatform: 'siliconflow',
+      }),
+    ).toBe('siliconflow/Pro/moonshotai/Kimi-K2.5');
   });
 
   it('resolves plain model by available model suffix', () => {
@@ -49,10 +59,19 @@ describe('normalizeRawModelName', () => {
       }),
     ).toBe('deepseek/deepseek-chat');
   });
+
+  it('treats the chatluna none sentinel as missing model', () => {
+    expect(
+      normalizeRawModelName('无', {
+        defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+      }),
+    ).toBe('siliconflow/Pro/moonshotai/Kimi-K2.5');
+  });
 });
 
 describe('inferPlatformFromBaseUrl', () => {
   it('infers platform from base url', () => {
+    expect(inferPlatformFromBaseUrl('https://api.siliconflow.cn/v1')).toBe('siliconflow');
     expect(inferPlatformFromBaseUrl('https://api.deepseek.com/v1')).toBe('deepseek');
     expect(inferPlatformFromBaseUrl('https://api.openai.com/v1')).toBe('openai');
     expect(inferPlatformFromBaseUrl('https://api.anthropic.com')).toBe('anthropic');

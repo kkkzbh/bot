@@ -79,7 +79,7 @@ function createHarness() {
   const chatluna = {
     platform: {
       listAllModels: vi.fn(() => ({
-        value: [{ toModelName: () => 'deepseek/deepseek-chat' }],
+        value: [{ toModelName: () => 'siliconflow/Pro/moonshotai/Kimi-K2.5' }],
       })),
     },
     awaitLoadPlatform: vi.fn(async () => undefined),

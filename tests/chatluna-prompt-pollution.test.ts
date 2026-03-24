@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { buildReplyPromptCompilerInput, compileReplyPromptEnvelope } from '../src/plugins/reply/prompt/compiler.js';
 import {
   beginPromptAssemblyTurn,
   clearPromptAssemblyTurn,
@@ -38,12 +39,47 @@ describe('chatluna prompt pollution regression', () => {
     ).toBe(false);
   });
 
-  it('uses a chatluna build without pseudo system after_user_message injection', () => {
+  it('builds agent reply prompt messages without legacy finish-tool protocol text', () => {
+    const envelope = compileReplyPromptEnvelope(
+      buildReplyPromptCompilerInput(
+        {
+          input: {
+            text: '只回复一句',
+            displayName: '小祥',
+            userId: 'u1',
+            isDirect: true,
+          },
+          capabilitySnapshot: null,
+          continuationContext: null,
+        },
+        [
+          {
+            source: 'chatluna_time_context',
+            title: 'User Turn Metadata',
+            authority: 'reference',
+            trust: 'trusted',
+            ttl: 'turn',
+            payload: {
+              kind: 'text',
+              value: '现在是晚上',
+            },
+          },
+        ],
+      ),
+    );
+
+    expect(envelope?.messages.every((message) => message.role === 'system')).toBe(true);
+    expect(envelope?.messages.some((message) => String(message.content).includes('submit_reply_plan'))).toBe(false);
+    expect(envelope?.messages.some((message) => String(message.content).includes('submit_working_state'))).toBe(false);
+  });
+
+  it('uses a chatluna build without pseudo natural-language after_user_message injection', () => {
     const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
     const packageRoot = dirname(packageJsonPath);
     const builtEntry = readFileSync(join(packageRoot, 'lib/index.cjs'), 'utf8');
 
-    expect(builtEntry).not.toContain('requests["after_user_message"]');
+    expect(builtEntry).toContain('requests["after_user_message"] = afterUserMessage');
+    expect(builtEntry).toContain('qqbot_after_user_message');
     expect(builtEntry).not.toContain('AGENT_AFTER_USER_PROMPT');
     expect(builtEntry).not.toContain('Respond naturally according to your system prompt');
   });
@@ -60,6 +96,48 @@ describe('chatluna prompt pollution regression', () => {
     expect(pluginChainSource).toContain('toolMask,\n            finishContract');
   });
 
+  it('removes the legacy reply_plan module and switches executor to final json_schema responses', () => {
+    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
+    const packageRoot = dirname(packageJsonPath);
+    const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/executor.ts'), 'utf8');
+
+    expect(existsSync(join(packageRoot, 'src/llm-core/agent/reply_plan.ts'))).toBe(false);
+    expect(executorSource).not.toContain('finishContract.maxRetries');
+    expect(executorSource).not.toContain('finishContract.retryMessage');
+    expect(executorSource).toContain("type: 'json_schema'");
+    expect(executorSource).toContain('qqbot_final_response_schema');
+  });
+
+  it('removes plugin chat chain whole-turn retry loop', () => {
+    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
+    const packageRoot = dirname(packageJsonPath);
+    const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
+    const builtEntry = readFileSync(join(packageRoot, 'lib/index.cjs'), 'utf8');
+
+    expect(pluginChainSource).not.toContain('for (let i = 0; i < 3; i++)');
+    expect(pluginChainSource).toContain('response = await request()');
+    expect(builtEntry).not.toContain('for (let i = 0; i < 3; i++)');
+    expect(builtEntry).toContain('response = await request2();');
+  });
+
+  it('wires structured reply schema through the plugin request path', () => {
+    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
+    const packageRoot = dirname(packageJsonPath);
+    const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
+    const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/executor.ts'), 'utf8');
+
+    expect(pluginChainSource).toContain("requests['qqbot_final_response_schema'] = finalResponseSchema");
+    expect(pluginChainSource).toContain("requests['qqbot_final_response_instruction'] =");
+    expect(executorSource).toContain("type: 'json_schema'");
+    expect(executorSource).toContain('buildFinalResponseOverrideRequestParams');
+    expect(executorSource).not.toContain('buildFinalResponseMessage');
+    expect(executorSource).not.toContain("tool_choice: 'none'");
+    expect(executorSource).not.toContain('finalResponseMode');
+    expect(executorSource).toContain('buildAgentPlanningConfig');
+    expect(executorSource).toContain('const planConfig = buildAgentPlanningConfig(input, config)');
+    expect(executorSource).toContain('overrideRequestParams');
+  });
+
   it('uses a chatluna context manager build that accepts plain prompt message objects', () => {
     const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
     const packageRoot = dirname(packageJsonPath);
@@ -70,12 +148,13 @@ describe('chatluna prompt pollution regression', () => {
     expect(contextManagerSource).toContain('createMessageFromPlainObject');
   });
 
-  it('suppresses tool call thought rendering in reply-agent mode', () => {
+  it('suppresses tool call thought rendering in qqbot agent reply mode', () => {
     const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
     const packageRoot = dirname(packageJsonPath);
     const requestModelSource = readFileSync(join(packageRoot, 'src/middlewares/model/request_model.ts'), 'utf8');
 
-    expect(requestModelSource).toContain("context.options.room?.chatMode === 'reply-agent'");
+    expect(requestModelSource).toContain("context.options.inputMessage?.additional_kwargs?.qqbot_reply_mode ===");
+    expect(requestModelSource).toContain("'agent'");
     expect(requestModelSource).toContain('return');
   });
 
@@ -89,5 +168,17 @@ describe('chatluna prompt pollution regression', () => {
     expect(sharedAdapterSource).not.toContain("rawMessage.content === '' ? null : rawMessage.content");
     expect(sharedAdapterBundle).toContain('rawMessage.content == null ? "" : rawMessage.content');
     expect(sharedAdapterBundle).not.toContain('rawMessage.content === "" ? null : rawMessage.content');
+  });
+
+  it('keeps research history normalization bundle aligned with AIMessage imports', () => {
+    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
+    const packageRoot = dirname(packageJsonPath);
+    const messageHistoryBundle = readFileSync(
+      join(packageRoot, 'lib', 'llm-core', 'memory', 'message', 'index.cjs'),
+      'utf8',
+    );
+
+    expect(messageHistoryBundle).toContain('new import_messages.AIMessage(normalizedText2)');
+    expect(messageHistoryBundle).not.toContain('new import_messages2.AIMessage(normalizedText2)');
   });
 });
