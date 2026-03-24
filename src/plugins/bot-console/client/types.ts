@@ -162,7 +162,7 @@ export interface DeleteConversationRoomResult {
 
 // ─── Tool Policy ─────────────────────────────────────────────────────────────
 
-export type ToolRouteProfile = "chat" | "automation";
+export type ToolRouteProfile = "agent" | "automation";
 export type ToolPolicyScopeKind =
   | "global_default"
   | "private_default"
@@ -183,6 +183,7 @@ export interface ToolCatalogEntry {
   hardDependencies: string[];
   relatedTools: string[];
   riskLevel: ToolRiskLevel;
+  source?: "project" | "chatluna_runtime";
   availableRoutes: ToolRouteProfile[];
   defaultEnabledByRoute?: Record<ToolRouteProfile, boolean>;
 }
@@ -219,8 +220,21 @@ export interface ToolPolicyOverrideInput {
 export interface BotConsoleToolPolicyState {
   routeProfiles: ToolRouteProfile[];
   catalog: ToolCatalogEntry[];
+  routeProfileInfo?: Array<{
+    id: ToolRouteProfile;
+    title: string;
+    description: string;
+    note?: string;
+  }>;
+  defaultScopes?: Array<{
+    scopeKind: ToolPolicyScopeKind;
+    scopeId: string;
+    title: string;
+    description: string;
+  }>;
   scopes: ToolPolicyScope[];
   overrides: ToolPolicyOverrideRecord[];
+  conversationTargets?: ConversationTarget[];
 }
 
 // ─── Bot Console State ────────────────────────────────────────────────────────

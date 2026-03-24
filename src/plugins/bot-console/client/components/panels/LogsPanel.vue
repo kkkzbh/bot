@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted } from 'vue'
+import { ref, nextTick, onMounted, computed } from 'vue'
 import { send } from '@koishijs/client'
 import { useToast } from '../../composables/useToast'
 import type { GetRecentLogsResponse } from '../../types'
@@ -13,6 +13,12 @@ const logEl    = ref<HTMLDivElement | null>(null)
 // ── Log line classification ──────────────────────────────────────────────────
 
 type LineClass = 'is-error' | 'is-warn' | 'is-debug' | ''
+type DisplayLine = {
+  raw: string
+  className: LineClass
+  prefix: string
+  prettyJson: string | null
+}
 
 function classifyLine(line: string): LineClass {
   const low = line.toLowerCase()
@@ -22,6 +28,35 @@ function classifyLine(line: string): LineClass {
   if (/\b(debug|trace|verbose)\b/.test(low)) return 'is-debug'
   return ''
 }
+
+function extractPrettyJson(line: string): { prefix: string; prettyJson: string | null } {
+  const match = line.match(/^(.*?)(\{.*\})\s*$/)
+  if (!match) {
+    return { prefix: line, prettyJson: null }
+  }
+
+  try {
+    const parsed = JSON.parse(match[2])
+    return {
+      prefix: match[1].trimEnd(),
+      prettyJson: JSON.stringify(parsed, null, 2),
+    }
+  } catch {
+    return { prefix: line, prettyJson: null }
+  }
+}
+
+const displayLines = computed<DisplayLine[]>(() =>
+  lines.value.map((line) => {
+    const { prefix, prettyJson } = extractPrettyJson(line)
+    return {
+      raw: line,
+      className: classifyLine(line),
+      prefix,
+      prettyJson,
+    }
+  }),
+)
 
 // ── Data fetching ────────────────────────────────────────────────────────────
 
@@ -101,10 +136,13 @@ onMounted(fetchLogs)
       <!-- Log lines -->
       <template v-else>
         <span
-          v-for="(line, idx) in lines"
-          :key="idx"
-          :class="['bc-log-line', classifyLine(line)]"
-        >{{ line }}</span>
+          v-for="(line, idx) in displayLines"
+          :key="`${idx}:${line.raw}`"
+          :class="['bc-log-entry', line.className]"
+        >
+          <span class="bc-log-line">{{ line.prefix }}</span>
+          <pre v-if="line.prettyJson" class="bc-log-json">{{ line.prettyJson }}</pre>
+        </span>
       </template>
     </div>
 

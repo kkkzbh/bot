@@ -23,7 +23,7 @@ import type {
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
 import type { MemoryV2StatusServiceLike } from '../../types/memory-v2.js';
 import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
-import { createUnavailableMemoryV2StatusSnapshot } from '../memory/status.js';
+import { createUnavailableMemoryV2StatusSnapshot } from '../shared/memory-v2-status.js';
 
 const logger = new Logger('bot-console');
 

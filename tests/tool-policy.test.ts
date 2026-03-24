@@ -143,28 +143,28 @@ function createHarness(
 }
 
 describe('tool policy service', () => {
-  it('resolves scoped overrides for chat route with private and group precedence', async () => {
+  it('resolves scoped overrides for agent with private and group precedence', async () => {
     const { ctx } = createHarness();
     const service = ctx.toolPolicy!;
 
     await service.saveToolOverrides([
       {
         toolName: 'web_search',
-        routeProfile: 'chat',
+        routeProfile: 'agent',
         scopeKind: 'global_default',
         scopeId: GLOBAL_DEFAULT_SCOPE_ID,
         enabled: false,
       },
       {
         toolName: 'web_search',
-        routeProfile: 'chat',
+        routeProfile: 'agent',
         scopeKind: 'private_default',
         scopeId: PRIVATE_DEFAULT_SCOPE_ID,
         enabled: true,
       },
       {
         toolName: 'user_confirm',
-        routeProfile: 'chat',
+        routeProfile: 'agent',
         scopeKind: 'group',
         scopeId: '1091078473',
         enabled: false,
@@ -174,7 +174,7 @@ describe('tool policy service', () => {
     await expect(
       service.resolveAllowedTools({
         session: { isDirect: true, userId: 'u1', channelId: 'private-1' },
-        routeProfile: 'chat',
+        routeProfile: 'agent',
         toolNames: ['web_search', 'user_confirm'],
         room: { roomId: 7, conversationId: 'conv-private' },
       }),
@@ -186,7 +186,7 @@ describe('tool policy service', () => {
     await expect(
       service.resolveAllowedTools({
         session: { isDirect: false, userId: 'u1', guildId: '1091078473', channelId: '1091078473' },
-        routeProfile: 'chat',
+        routeProfile: 'agent',
         toolNames: ['web_search', 'user_confirm'],
         room: { roomId: 101, conversationId: 'conv-group' },
       }),
@@ -203,11 +203,11 @@ describe('tool policy service', () => {
     const state = await service.getToolPolicyState();
     expect(state.catalog.length).toBe(3);
     expect(state.routeProfiles).toEqual([
-      'chat',
+      'agent',
       'automation',
     ]);
     expect(state.routeProfileInfo).toEqual([
-      expect.objectContaining({ id: 'chat' }),
+      expect.objectContaining({ id: 'agent' }),
       expect.objectContaining({ id: 'automation' }),
     ]);
     expect(state.defaultScopes).toEqual([
@@ -226,7 +226,7 @@ describe('tool policy service', () => {
     await expect(
       service.resolveAllowedTools({
         session: { isDirect: false, userId: 'u1', guildId: '1', channelId: '1' },
-        routeProfile: 'chat',
+        routeProfile: 'agent',
         toolNames: ['web_search', 'unknown_runtime_tool'],
       }),
     ).resolves.toEqual({
@@ -235,13 +235,13 @@ describe('tool policy service', () => {
     });
   });
 
-  it('registers a chat route tool-mask resolver and filters disallowed tools', async () => {
+  it('registers a route-aware tool-mask resolver and filters agent/tools separately', async () => {
     const { ctx, registerToolMaskResolver, runReady } = createHarness();
     const service = ctx.toolPolicy!;
     await service.saveToolOverrides([
       {
         toolName: 'user_confirm',
-        routeProfile: 'chat',
+        routeProfile: 'agent',
         scopeKind: 'group',
         scopeId: '1091330365',
         enabled: false,
@@ -253,7 +253,7 @@ describe('tool policy service', () => {
     const resolver = registerToolMaskResolver.mock.calls[0]?.[1] as
       | ((arg: {
           session: { isDirect: boolean; userId: string; guildId: string; channelId: string };
-          room: { roomId: number; conversationId: string };
+          room: { roomId: number; conversationId: string; chatMode?: string };
         }) => Promise<unknown>)
       | undefined;
     expect(resolver).toBeTypeOf('function');
@@ -265,6 +265,22 @@ describe('tool policy service', () => {
       resolver({
         session: { isDirect: false, userId: 'u1', guildId: '1091330365', channelId: '1091330365' },
         room: { roomId: 115, conversationId: 'conv-group' },
+      }),
+    ).resolves.toEqual({
+      mode: 'allow',
+      allow: ['question', 'web_search'],
+      deny: [],
+      toolCallMask: {
+        mode: 'allow',
+        allow: ['question', 'web_search'],
+        deny: [],
+      },
+    });
+
+    await expect(
+      resolver({
+        session: { isDirect: false, userId: 'u1', guildId: '1091330365', channelId: '1091330365' },
+        room: { roomId: 115, conversationId: 'conv-group', chatMode: 'plugin' },
       }),
     ).resolves.toEqual({
       mode: 'allow',
@@ -297,7 +313,7 @@ describe('tool policy service', () => {
         {
           id: 1,
           toolName: 'built_question',
-          routeProfile: 'chat',
+          routeProfile: 'agent',
           scopeKind: 'global_default',
           scopeId: GLOBAL_DEFAULT_SCOPE_ID,
           enabled: 1,
@@ -306,7 +322,7 @@ describe('tool policy service', () => {
         {
           id: 2,
           toolName: 'question',
-          routeProfile: 'chat',
+          routeProfile: 'agent',
           scopeKind: 'global_default',
           scopeId: GLOBAL_DEFAULT_SCOPE_ID,
           enabled: 0,
@@ -315,7 +331,7 @@ describe('tool policy service', () => {
         {
           id: 3,
           toolName: 'built_user_toast',
-          routeProfile: 'chat',
+          routeProfile: 'agent',
           scopeKind: 'group',
           scopeId: '1001',
           enabled: 1,
@@ -324,7 +340,7 @@ describe('tool policy service', () => {
         {
           id: 4,
           toolName: 'web_poster',
-          routeProfile: 'chat',
+          routeProfile: 'agent',
           scopeKind: 'group',
           scopeId: '1002',
           enabled: 1,
@@ -338,7 +354,7 @@ describe('tool policy service', () => {
       expect.objectContaining({
         id: 2,
         toolName: 'question',
-        routeProfile: 'chat',
+        routeProfile: 'agent',
         scopeKind: 'global_default',
         scopeId: GLOBAL_DEFAULT_SCOPE_ID,
         enabled: 0,
@@ -349,7 +365,7 @@ describe('tool policy service', () => {
       expect.objectContaining({
         id: 2,
         toolName: 'question',
-        routeProfile: 'chat',
+        routeProfile: 'agent',
         scopeKind: 'global_default',
         scopeId: GLOBAL_DEFAULT_SCOPE_ID,
       }),

@@ -70,7 +70,7 @@ const routeHint = computed(() => {
   if (toolRouteProfile.value === 'automation') {
     return '自动化链路当前通常不会消费工具，这里主要用于预留和未来接入。'
   }
-  return '普通聊天是当前主要会暴露工具的链路。这里的设置会直接影响 ReplyPlan 生成。'
+  return '直答是当前真实主链路。这里的设置会直接影响 Reply V2 的工具暴露面。'
 })
 
 const defaultScopes = computed(() =>

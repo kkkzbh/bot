@@ -140,7 +140,7 @@ async function handleProbe() {
         </div>
         <div class="bc-overview-kv">
           <span>默认模型</span>
-          <strong>{{ env['CHATLUNA_DEFAULT_MODEL'] || env['OPENAI_MODEL'] || '未设置' }}</strong>
+          <strong>{{ env['CHATLUNA_DEFAULT_MODEL'] || '未设置' }}</strong>
         </div>
         <div class="bc-overview-kv">
           <span>默认预设</span>
@@ -148,7 +148,7 @@ async function handleProbe() {
         </div>
         <div class="bc-overview-kv">
           <span>模型接口</span>
-          <strong>{{ env['OPENAI_BASE_URL'] || '未设置' }}</strong>
+          <strong>{{ env['CHATLUNA_BASE_URL'] || '未设置' }}</strong>
         </div>
       </article>
 

@@ -2,7 +2,7 @@ import 'koishi';
 import type { Session } from 'koishi';
 import type { ConversationTarget } from './feature-policy.js';
 
-export type ToolRouteProfile = 'chat' | 'automation';
+export type ToolRouteProfile = 'agent' | 'automation';
 
 export type ToolScopeKind =
   | 'global_default'

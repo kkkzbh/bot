@@ -57,13 +57,15 @@ export const PRIVATE_DEFAULT_SCOPE_ID = 'private-default'
 export const PRIVATE_UNSUPPORTED_FEATURE_KEYS = ['CHAT_NATURAL_TRIGGER_ENABLED'] as const
 
 export const MODEL_KEYS = [
+  'CHATLUNA_BASE_URL',
+  'CHATLUNA_API_KEY',
+  'CHATLUNA_DEFAULT_MODEL',
   'OPENAI_BASE_URL',
   'OPENAI_API_KEY',
   'OPENAI_MODEL',
   'TASK_AUTOMATION_INTENT_MODEL',
   'TASK_AUTOMATION_DELIVERY_MODEL',
   'TASK_AUTOMATION_CHAT_REPLY_MODEL',
-  'CHATLUNA_DEFAULT_MODEL',
   'CHATLUNA_DEFAULT_PRESET',
 ] as const
 
@@ -278,7 +280,7 @@ export function useBotConsole() {
   const servicePending = reactive<Record<string, string | null>>({})
 
   /** Currently edited tool route profile. */
-  const toolRouteProfile = ref<ToolRouteProfile>('chat')
+  const toolRouteProfile = ref<ToolRouteProfile>('agent')
 
   /** Currently selected tool policy scope. */
   const selectedToolScopeKey = ref<string>(
@@ -431,7 +433,7 @@ export function useBotConsole() {
       }
 
       if (!toolRoutes.includes(toolRouteProfile.value)) {
-        toolRouteProfile.value = toolRoutes[0] ?? 'chat'
+        toolRouteProfile.value = toolRoutes[0] ?? 'agent'
       }
 
       const foundToolScope = toolScopes.find(scope => buildToolScopeKey(scope) === selectedToolScopeKey.value)

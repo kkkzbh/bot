@@ -9,13 +9,15 @@ export const FIELD_LABELS: Record<string, string> = {
   QQBOT_REPLY_INTERRUPT_ENABLED: '回复期中断',
   CHATLUNA_COMMON_FS: '文件系统工具总开关',
   CHATLUNA_COMMON_FS_SCOPE_PATH: '文件系统作用域目录',
-  OPENAI_BASE_URL: '模型接口地址',
-  OPENAI_API_KEY: '模型接口密钥',
-  OPENAI_MODEL: '默认模型',
+  CHATLUNA_BASE_URL: '对话模型接口地址',
+  CHATLUNA_API_KEY: '对话模型接口密钥',
+  CHATLUNA_DEFAULT_MODEL: '对话默认模型',
+  OPENAI_BASE_URL: '通用模型接口地址',
+  OPENAI_API_KEY: '通用模型接口密钥',
+  OPENAI_MODEL: '通用默认模型',
   TASK_AUTOMATION_INTENT_MODEL: '任务意图模型',
   TASK_AUTOMATION_DELIVERY_MODEL: '任务投递模型',
   TASK_AUTOMATION_CHAT_REPLY_MODEL: '任务回复模型',
-  CHATLUNA_DEFAULT_MODEL: '对话默认模型',
   CHATLUNA_DEFAULT_PRESET: '默认预设',
   CHAT_ENABLED_GROUPS: '自动化启用群',
   CHAT_NATURAL_TRIGGER_GROUPS: '自然触发群',
@@ -24,6 +26,10 @@ export const FIELD_LABELS: Record<string, string> = {
 }
 
 export const FIELD_HINTS: Record<string, string> = {
+  CHATLUNA_BASE_URL:
+    '普通聊天默认走这里配置的接口地址。它只影响 ChatLuna 主聊天链路，不会覆盖任务自动化、自然触发判定和记忆抽取。',
+  CHATLUNA_API_KEY:
+    '普通聊天默认走这里配置的接口密钥。主聊天切换供应商时，优先改这里，不要直接改 OPENAI_*。',
   TASK_AUTOMATION_INTENT_MODEL:
     '用于识别一段消息是不是任务需求，以及应该进入哪条任务自动化链路。更适合选择理解能力强、分类稳定的模型。',
   TASK_AUTOMATION_DELIVERY_MODEL:
@@ -35,7 +41,7 @@ export const FIELD_HINTS: Record<string, string> = {
   CHATLUNA_COMMON_FS_SCOPE_PATH:
     '限制文件系统工具默认可访问的根目录。留空时会跟随 Koishi 启动目录，也就是当前 bot 的工作目录。',
   CHATLUNA_DEFAULT_MODEL:
-    '普通聊天默认走这里配置的模型。未单独指定其它模型的日常对话，会优先使用它。',
+    '普通聊天默认走这里配置的模型。建议填写完整规范名，例如 siliconflow/Pro/moonshotai/Kimi-K2.5。',
 }
 
 export const ROLE_LABELS: Record<string, string> = {

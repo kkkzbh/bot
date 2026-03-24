@@ -22,6 +22,7 @@ import {
   TOOL_DEFAULT_SCOPES,
   TOOL_ROUTE_PROFILES,
 } from './catalog.js';
+import { normalizeReplyChatMode } from '../shared/reply-chat-mode.js';
 
 export const name = 'tool-policy';
 export const inject = { required: ['database', 'chatluna'], optional: ['featurePolicy'] } as const;
@@ -78,7 +79,7 @@ function nowTimestamp(): number {
 }
 
 function isToolRouteProfile(value: string): value is ToolRouteProfile {
-  return value === 'chat' || value === 'automation';
+  return value === 'agent' || value === 'automation';
 }
 
 function isToolScopeKind(value: string): value is ToolScopeKind {
@@ -390,7 +391,7 @@ export class ToolPolicyService implements ToolPolicyServiceLike {
     const catalog = this.getRuntimeCatalog();
     const catalogMap = new Map(catalog.map((tool) => [tool.toolName, tool]));
     for (const tool of catalog) {
-      for (const routeProfile of ['chat', 'automation'] as const) {
+      for (const routeProfile of ['agent', 'automation'] as const) {
         desired.set(
           `${tool.toolName}:${routeProfile}:global_default:${GLOBAL_DEFAULT_SCOPE_ID}`,
           tool.defaultEnabledByRoute[routeProfile],
@@ -625,9 +626,15 @@ export function apply(ctx: Context): void {
             roomId: (room as DatabaseRow).roomId as number | string | null | undefined,
             conversationId: (room as DatabaseRow).conversationId as string | null | undefined,
             groupId: (room as DatabaseRow).groupId as string | null | undefined,
+            chatMode: (room as DatabaseRow).chatMode as string | null | undefined,
           } satisfies RoomLike)
         : null;
-      return service.resolveToolMask(session, 'chat', resolvedRoom);
+      const normalizedChatMode = normalizeReplyChatMode(resolvedRoom?.chatMode);
+      const routeProfile =
+        normalizedChatMode === 'automation'
+          ? 'automation'
+          : 'agent';
+      return service.resolveToolMask(session, routeProfile, resolvedRoom);
     });
   };
 
@@ -648,6 +655,7 @@ type ToolMaskArg = {
     roomId?: number | string | null;
     conversationId?: string | null;
     groupId?: string | null;
+    chatMode?: string | null;
     [key: string]: unknown;
   };
 };

@@ -28,32 +28,32 @@ describe('bot-console env helpers', () => {
   it('preserves comments and unknown lines while patching managed keys', () => {
     const content = [
       '# comment',
-      'OPENAI_BASE_URL=https://api.deepseek.com/v1',
+      'CHATLUNA_BASE_URL=https://api.siliconflow.cn/v1',
       'UNMANAGED_FLAG=keep-me',
       'QQ_VOICE_ENABLED=true',
       '',
     ].join('\n');
 
     const next = applyEnvPatchToContent(content, {
-      OPENAI_BASE_URL: 'https://example.com/v1',
+      CHATLUNA_BASE_URL: 'https://example.com/v1',
       QQ_VOICE_ENABLED: 'false',
     });
 
     expect(next).toContain('# comment');
     expect(next).toContain('UNMANAGED_FLAG=keep-me');
-    expect(next).toContain('OPENAI_BASE_URL=https://example.com/v1');
+    expect(next).toContain('CHATLUNA_BASE_URL=https://example.com/v1');
     expect(next).toContain('QQ_VOICE_ENABLED=false');
   });
 
   it('keeps the original file when atomic write fails', async () => {
     const dir = createTempDir();
     const filePath = join(dir, '.env.local');
-    writeFileSync(filePath, 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(filePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     await expect(
       writeFileAtomicWithBackup(
         filePath,
-        'OPENAI_MODEL=deepseek/deepseek-reasoner\n',
+        'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5-preview\n',
         {
           access: async () => undefined,
           copyFile: async (...args) => writeFile(args[1] as string, readFileSync(args[0] as string, 'utf8'), 'utf8'),
@@ -71,7 +71,7 @@ describe('bot-console env helpers', () => {
       ),
     ).rejects.toThrow('disk full');
 
-    expect(readFileSync(filePath, 'utf8')).toBe('OPENAI_MODEL=deepseek/deepseek-chat\n');
+    expect(readFileSync(filePath, 'utf8')).toBe('CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n');
   });
 });
 
@@ -167,7 +167,7 @@ describe('bot-console manager', () => {
   it('rejects unsupported env keys when saving env', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await expect(manager.saveEnv({ HACKED: '1' } as any)).rejects.toThrow('不支持这个配置项');
@@ -176,7 +176,7 @@ describe('bot-console manager', () => {
   it('accepts QQBOT_REPLY_INTERRUPT_ENABLED through managed env saves', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await expect(manager.saveEnv({ QQBOT_REPLY_INTERRUPT_ENABLED: 'false' })).resolves.toMatchObject({
@@ -187,7 +187,7 @@ describe('bot-console manager', () => {
   it('accepts file system env controls through managed env saves', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await expect(
@@ -204,7 +204,7 @@ describe('bot-console manager', () => {
   it('schedules qqbot.target restart through a transient user unit', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     const execFile = vi
       .fn()
       .mockResolvedValueOnce({ stdout: '', stderr: '' })
@@ -240,7 +240,7 @@ describe('bot-console manager', () => {
   it('reads recent koishi logs from journalctl output', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     const execFile = vi.fn().mockResolvedValue({
       stdout: 'line one\nline two\n\n',
       stderr: '',

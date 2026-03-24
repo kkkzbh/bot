@@ -56,7 +56,7 @@ describe('bot-console plugin', () => {
   it('registers console entry and protected listeners', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -85,7 +85,7 @@ describe('bot-console plugin', () => {
   it('rejects unsupported env writes through the save-env listener', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -109,7 +109,7 @@ describe('bot-console plugin', () => {
   it('includes runtime memory status in get-state payload when the service is available', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -184,12 +184,12 @@ describe('bot-console plugin', () => {
               relatedTools: [],
               riskLevel: 'medium',
               source: 'project',
-              availableRoutes: ['chat', 'automation'],
-              defaultEnabledByRoute: { chat: true, automation: true },
+              availableRoutes: ['agent', 'automation'],
+              defaultEnabledByRoute: { agent: true, automation: true },
             },
           ],
-          routeProfiles: [{ id: 'chat', title: '普通聊天', description: 'desc' }],
-          routeProfileInfo: [{ id: 'chat', title: '普通聊天', description: 'desc' }],
+          routeProfiles: ['agent', 'automation'],
+          routeProfileInfo: [{ id: 'agent', title: 'Agent 回复', description: 'desc' }],
           defaultScopes: [{ scopeKind: 'global_default', scopeId: 'global-default', title: '全局默认', description: 'desc' }],
           scopes: [],
           overrides: [],
@@ -217,7 +217,7 @@ describe('bot-console plugin', () => {
   it('routes manual probe requests to memory-v2 status service', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -288,7 +288,7 @@ describe('bot-console plugin', () => {
   it('returns recent koishi logs through the protected listener', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -320,7 +320,7 @@ describe('bot-console plugin', () => {
   it('routes scoped override and conversation clear listeners to feature policy service', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -358,7 +358,7 @@ describe('bot-console plugin', () => {
       {
         id: 9,
         toolName: 'user_confirm',
-        routeProfile: 'chat',
+        routeProfile: 'agent',
         scopeKind: 'group',
         scopeId: '1091330365',
         enabled: 0,
@@ -420,11 +420,11 @@ describe('bot-console plugin', () => {
     const saveToolOverridesListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/save-tool-overrides')?.[1];
     await expect(
       saveToolOverridesListener({
-        overrides: [{ toolName: 'user_confirm', routeProfile: 'chat', scopeKind: 'group', scopeId: '1091330365', enabled: false }],
+        overrides: [{ toolName: 'user_confirm', routeProfile: 'agent', scopeKind: 'group', scopeId: '1091330365', enabled: false }],
       }),
     ).resolves.toEqual({
       overrides: [
-        expect.objectContaining({ toolName: 'user_confirm', routeProfile: 'chat', scopeKind: 'group', scopeId: '1091330365' }),
+        expect.objectContaining({ toolName: 'user_confirm', routeProfile: 'agent', scopeKind: 'group', scopeId: '1091330365' }),
       ],
     });
     expect(saveToolOverrides).toHaveBeenCalledTimes(1);
@@ -452,7 +452,7 @@ describe('bot-console plugin', () => {
   it('routes preset reorder listener to bot console manager', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'OPENAI_MODEL=deepseek/deepseek-chat\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',

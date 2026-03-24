@@ -1373,14 +1373,39 @@
     color: color-mix(in srgb, var(--k-page-bg) 90%, var(--k-text-light));
 }
 
+.bc-log-entry {
+    display: block;
+    padding: 0.18rem 0;
+}
+
+.bc-log-json {
+    margin: 0.32rem 0 0.18rem 1.05rem;
+    padding: 0.5rem 0.7rem;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--k-text-light) 10%, transparent);
+    background: color-mix(in srgb, var(--k-page-bg) 7%, transparent);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+    color: inherit;
+    font: inherit;
+    line-height: 1.55;
+}
+
+.bc-log-entry.is-error .bc-log-line,
+.bc-log-entry.is-error .bc-log-json,
 .bc-log-line.is-error {
     color: var(--k-color-danger);
 }
 
+.bc-log-entry.is-warn .bc-log-line,
+.bc-log-entry.is-warn .bc-log-json,
 .bc-log-line.is-warn {
     color: var(--k-color-warning);
 }
 
+.bc-log-entry.is-debug .bc-log-line,
+.bc-log-entry.is-debug .bc-log-json,
 .bc-log-line.is-debug {
     color: color-mix(in srgb, var(--k-page-bg) 60%, var(--k-text-light));
 }
