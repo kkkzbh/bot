@@ -1,4 +1,4 @@
-import type { Session, Universal } from 'koishi';
+import { h, type Session, type Universal } from 'koishi';
 
 const MIN_SMART_SEND_DELAY_MS = 1000;
 const MAX_SMART_SEND_DELAY_MS = 4000;
@@ -87,6 +87,8 @@ export type ReplyTransportSegment =
 export interface ReplyTransportPlan {
   segments: ReplyTransportSegment[];
 }
+
+export type BotMessageContent = string | ReturnType<typeof h> | Array<ReturnType<typeof h>>;
 
 export type BotMessageSender = {
   sendMessage: (
@@ -238,13 +240,31 @@ export function createBotMessageDispatchers(
   channelId: string,
   session?: Session,
 ): {
-  sendWhole: (content: string) => Promise<unknown>;
-  sendLine: (line: string) => Promise<unknown>;
+  sendWhole: (content: BotMessageContent) => Promise<unknown>;
+  sendLine: (line: BotMessageContent) => Promise<unknown>;
 } {
   return {
-    sendWhole: async (content: string) => bot.sendMessage(channelId, content, undefined, createBypassLineSplitOptions(session)),
-    sendLine: async (line: string) => bot.sendMessage(channelId, line, undefined, createBypassLineSplitOptions(session)),
+    sendWhole: async (content: BotMessageContent) =>
+      bot.sendMessage(channelId, content as never, undefined, createBypassLineSplitOptions(session)),
+    sendLine: async (line: BotMessageContent) =>
+      bot.sendMessage(channelId, line as never, undefined, createBypassLineSplitOptions(session)),
   };
+}
+
+function toMessageElements(content: BotMessageContent): Array<ReturnType<typeof h>> {
+  if (Array.isArray(content)) {
+    return [...content];
+  }
+  if (typeof content === 'string') {
+    return [h.text(content)];
+  }
+  return [content];
+}
+
+export function createQuotedMessageContent(content: BotMessageContent, targetMessageId?: string | null): BotMessageContent {
+  const normalizedTarget = typeof targetMessageId === 'string' ? targetMessageId.trim() : '';
+  if (!normalizedTarget) return content;
+  return [h('quote', { id: normalizedTarget }), ...toMessageElements(content)];
 }
 
 function normalizeLineEndings(message: string): string {

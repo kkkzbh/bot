@@ -26,6 +26,12 @@ export interface ReplyRuntimePrepareResult {
   continuationContext?: ReplyTurnContinuationContext;
 }
 
+export interface ReplyRuntimeFirstReplyQuote {
+  enabled: boolean;
+  targetMessageId: string | null;
+  consumed: boolean;
+}
+
 export interface ReplyRuntimeRun {
   id: string;
   queueKey: string;
@@ -39,6 +45,7 @@ export interface ReplyRuntimeRun {
   plannedUnitHistoryLines: string[];
   committedHistoryLines: string[];
   requestId: string;
+  firstReplyQuote: ReplyRuntimeFirstReplyQuote;
   sendAbortController?: AbortController;
 }
 
@@ -62,6 +69,7 @@ interface PendingTurnEntry {
   conversationId?: string;
   room: ReplyRuntimeRoomLike;
   input: ReplyTurnInput;
+  firstReplyQuote: ReplyRuntimeFirstReplyQuote;
   resolve: (result: ReplyRuntimePrepareResult) => void;
 }
 
@@ -138,6 +146,7 @@ export class ReplyRuntime {
     mode?: ReplyRunMode;
   }): Promise<ReplyRuntimePrepareResult> {
     const { mode = 'interrupt' } = args;
+    const firstReplyQuote = this.resolveFirstReplyQuote(args.queueKey, args.actorKey, args.input);
 
     if (mode === 'queue') {
       while (true) {
@@ -146,7 +155,7 @@ export class ReplyRuntime {
         await this.waitForRunCompletion(blockingRunId);
       }
 
-      const run = this.createRun(args);
+      const run = this.createRun({ ...args, firstReplyQuote });
       return {
         action: 'continue',
         run,
@@ -159,7 +168,7 @@ export class ReplyRuntime {
     if (activeRun && !activeRun.cancelled) {
       const snapshot = this.captureContinuationSnapshot(activeRun);
       const pendingState = this.getOrCreatePendingState(args, snapshot, 'cooldown');
-      const pendingPromise = this.enqueuePendingTurn(pendingState, args);
+      const pendingPromise = this.enqueuePendingTurn(pendingState, { ...args, firstReplyQuote });
       await this.interruptRun(activeRun);
       this.enterCooldown(pendingState);
       this.tryStartNextCompute(args.queueKey);
@@ -168,7 +177,7 @@ export class ReplyRuntime {
 
     const existingPendingState = this.pendingStatesByActorKey.get(args.actorKey);
     if (existingPendingState) {
-      const pendingPromise = this.enqueuePendingTurn(existingPendingState, args);
+      const pendingPromise = this.enqueuePendingTurn(existingPendingState, { ...args, firstReplyQuote });
       if (existingPendingState.status === 'cooldown') {
         this.enterCooldown(existingPendingState);
       }
@@ -176,7 +185,7 @@ export class ReplyRuntime {
     }
 
     if (this.canStartCompute(args.queueKey)) {
-      const run = this.createRun(args);
+      const run = this.createRun({ ...args, firstReplyQuote });
       return {
         action: 'continue',
         run,
@@ -189,7 +198,7 @@ export class ReplyRuntime {
       pendingUnitTexts: [],
       hasModelOutput: false,
     }, 'queued');
-    const pendingPromise = this.enqueuePendingTurn(pendingState, args);
+    const pendingPromise = this.enqueuePendingTurn(pendingState, { ...args, firstReplyQuote });
     this.enqueueActorIfMissing(args.queueKey, args.actorKey);
     this.tryStartNextCompute(args.queueKey);
     return pendingPromise;
@@ -263,6 +272,15 @@ export class ReplyRuntime {
     return run.committedHistoryLines.join('\n').trim();
   }
 
+  consumeFirstReplyQuote(runId: string | undefined, supported: boolean): string | null {
+    const run = this.getRun(runId);
+    if (!run) return null;
+    if (run.firstReplyQuote.consumed) return null;
+    run.firstReplyQuote.consumed = true;
+    if (!supported || !run.firstReplyQuote.enabled) return null;
+    return run.firstReplyQuote.targetMessageId;
+  }
+
   finishRun(runId: string | undefined): ReplyRuntimeRun | null {
     const run = this.getRun(runId);
     if (!run) return null;
@@ -295,6 +313,7 @@ export class ReplyRuntime {
     conversationId?: string;
     room: ReplyRuntimeRoomLike;
     input: ReplyTurnInput;
+    firstReplyQuote: ReplyRuntimeFirstReplyQuote;
   }): ReplyRuntimeRun {
     const created: ReplyRuntimeRun = {
       id: args.runId,
@@ -309,6 +328,7 @@ export class ReplyRuntime {
       plannedUnitHistoryLines: [],
       committedHistoryLines: [],
       requestId: args.runId,
+      firstReplyQuote: { ...args.firstReplyQuote },
     };
     this.ensureCompletionTracking(args.runId);
     this.runs.set(args.runId, created);
@@ -385,6 +405,7 @@ export class ReplyRuntime {
       conversationId?: string;
       room: ReplyRuntimeRoomLike;
       input: ReplyTurnInput;
+      firstReplyQuote?: ReplyRuntimeFirstReplyQuote;
     },
   ): Promise<ReplyRuntimePrepareResult> {
     if (state.pending.length >= this.maxPendingInputs) {
@@ -399,6 +420,7 @@ export class ReplyRuntime {
         conversationId: args.conversationId,
         room: args.room,
         input: args.input,
+        firstReplyQuote: { ...(args.firstReplyQuote ?? this.resolveFirstReplyQuote(args.queueKey, args.actorKey, args.input)) },
         resolve,
       });
     });
@@ -478,6 +500,7 @@ export class ReplyRuntime {
       conversationId: carrier.conversationId,
       room: carrier.room,
       input: carrier.input,
+      firstReplyQuote: carrier.firstReplyQuote,
     });
 
     carrier.resolve({
@@ -534,6 +557,39 @@ export class ReplyRuntime {
       return;
     }
     this.queueActorOrder.set(queueKey, nextQueue);
+  }
+
+  private resolveFirstReplyQuote(
+    queueKey: string,
+    actorKey: string,
+    input: ReplyTurnInput,
+  ): ReplyRuntimeFirstReplyQuote {
+    const targetMessageId = typeof input.messageId === 'string' && input.messageId.trim() ? input.messageId.trim() : null;
+    if (input.isDirect || !targetMessageId) {
+      return {
+        enabled: false,
+        targetMessageId,
+        consumed: false,
+      };
+    }
+
+    const activeActors = new Set<string>();
+    for (const [activeActorKey, runId] of this.activeRunByActorKey.entries()) {
+      const run = this.runs.get(runId);
+      if (!run || run.queueKey !== queueKey || run.cancelled) continue;
+      activeActors.add(activeActorKey);
+    }
+    for (const pendingState of this.pendingStatesByActorKey.values()) {
+      if (pendingState.queueKey !== queueKey) continue;
+      activeActors.add(pendingState.actorKey);
+    }
+    activeActors.add(actorKey);
+
+    return {
+      enabled: activeActors.size >= 2,
+      targetMessageId,
+      consumed: false,
+    };
   }
 }
 

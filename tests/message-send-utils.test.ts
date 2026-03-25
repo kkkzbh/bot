@@ -1,7 +1,30 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { vi } from 'vitest';
+
+vi.mock('koishi', () => {
+  const hFactory = ((type: string, attrs: Record<string, unknown> = {}, children: unknown[] = []) => ({
+    type,
+    attrs,
+    children,
+  })) as unknown as {
+    (type: string, attrs?: Record<string, unknown>, children?: unknown[]): Record<string, unknown>;
+    text: (content: string) => Record<string, unknown>;
+  };
+  hFactory.text = (content: string) => ({
+    type: 'text',
+    attrs: { content },
+    children: [],
+  });
+
+  return {
+    h: hFactory,
+  };
+});
+
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildOutboundMessagePlanFromReplyPlan,
   calculateSmartSendDelayMs,
+  createQuotedMessageContent,
   createTextOnlyOutboundMessagePlan,
   createKeyedStrandRunner,
   dispatchOutboundMessagePlan,
@@ -179,6 +202,21 @@ describe('message send utils', () => {
       mode: 'split',
       content: '你在说什么怪话……我听不懂',
     });
+  });
+
+  it('builds quoted text content as quote + text elements', () => {
+    expect(createQuotedMessageContent('今晚先这样吧', 'msg-1')).toEqual([
+      expect.objectContaining({ type: 'quote', attrs: expect.objectContaining({ id: 'msg-1' }) }),
+      expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: '今晚先这样吧' }) }),
+    ]);
+  });
+
+  it('prepends quote to non-text element content without stringifying it', () => {
+    const image = { type: 'img', attrs: { src: 'asset://image-1' }, children: [] };
+    expect(createQuotedMessageContent(image as never, 'msg-2')).toEqual([
+      expect.objectContaining({ type: 'quote', attrs: expect.objectContaining({ id: 'msg-2' }) }),
+      image,
+    ]);
   });
 
   it('keeps normal lines that merely start with 用户', () => {

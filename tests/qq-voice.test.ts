@@ -80,6 +80,45 @@ vi.mock('koishi', () => {
     }
   }
 
+  const hFactory = ((type: string, attrs: Record<string, unknown> = {}, children: unknown[] = []) => ({
+    type,
+    attrs,
+    children,
+  })) as unknown as {
+    (type: string, attrs?: Record<string, unknown>, children?: unknown[]): Record<string, unknown>;
+    parse: typeof parse;
+    text: (content: string) => Record<string, unknown>;
+    audio: (src: string) => Record<string, unknown>;
+    image: (source: string | Buffer, mime?: string) => Record<string, unknown>;
+  };
+  hFactory.parse = parse;
+  hFactory.text = (content: string) => ({
+    type: 'text',
+    attrs: { content },
+    children: [],
+    toString: () => content,
+  });
+  hFactory.audio = (src: string) => ({
+    type: 'audio',
+    attrs: { src },
+    children: [],
+    toString: () => `<audio src="${src}"/>`,
+  });
+  hFactory.image = (source: string | Buffer, mime?: string) => ({
+    type: 'img',
+    attrs: {
+      src:
+        typeof source === 'string'
+          ? source
+          : `data:${mime};base64,${source.toString('base64')}`,
+    },
+    children: [],
+    toString: () =>
+      typeof source === 'string'
+        ? `<img src="${source}" />`
+        : `<img src="data:${mime};base64,${source.toString('base64')}" />`,
+  });
+
   return {
     Context: class {},
     Logger: MockLogger,
@@ -93,18 +132,7 @@ vi.mock('koishi', () => {
       union: () => createSchemaNode(),
       const: () => createSchemaNode(),
     },
-    h: {
-      parse,
-      audio: (src: string) => ({
-        toString: () => `<audio src="${src}"/>`,
-      }),
-      image: (source: string | Buffer, mime?: string) => ({
-        toString: () =>
-          typeof source === 'string'
-            ? `<img src="${source}" />`
-            : `<img src="data:${mime};base64,${source.toString('base64')}" />`,
-      }),
-    },
+    h: hFactory,
   };
 });
 
@@ -121,6 +149,7 @@ vi.mock('../src/plugins/shared/prompt-context/index.js', async () => {
 });
 
 import { apply, inject } from '../src/plugins/reply/index.js';
+import { ReplyRuntime } from '../src/plugins/reply/runtime/index.js';
 
 type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
 type EventHandler = (...args: any[]) => Promise<unknown> | unknown;
@@ -995,6 +1024,45 @@ describe('qq voice plugin', () => {
     );
   });
 
+  it('quotes only the first dispatched text segment when the runtime exposes a first-reply quote target', async () => {
+    const { ready, getPrepare, getExecutor, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const quoteSpy = vi.spyOn(ReplyRuntime.prototype, 'consumeFirstReplyQuote');
+    quoteSpy.mockImplementationOnce(() => 'msg-b').mockImplementationOnce(() => null);
+
+    try {
+      const session = createSession(bot, {
+        userId: 'u2',
+        content: 'B1',
+        strippedContent: 'B1',
+        messageId: 'msg-b',
+      });
+      const context = {
+        options: {
+          room: createPluginRoom('conv-quote-text'),
+          responseMessage: createReplyV2Response('第一句\n第二句'),
+        },
+      };
+
+      await executor?.(session, context);
+
+      const calls = bot.sendMessage.mock.calls as any[][];
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.[1]).toEqual([
+        expect.objectContaining({ type: 'quote', attrs: expect.objectContaining({ id: 'msg-b' }) }),
+        expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: '第一句' }) }),
+      ]);
+      expect(calls[1]?.[1]).toBe('第二句');
+    } finally {
+      quoteSpy.mockRestore();
+    }
+  });
+
   it('executes a voice structured reply through the executor', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal(
@@ -1049,6 +1117,71 @@ describe('qq voice plugin', () => {
       expect.objectContaining({ conversationId: 'conv-voice' }),
       '（发送语音：收到。）',
     );
+  });
+
+  it('does not backfill quote after a first voice segment even when the runtime exposes a quote target', async () => {
+    const { ready, getPrepare, getExecutor, bot } = createHarness();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === 'http://127.0.0.1:8082/healthz') {
+          return new Response('ok', { status: 200 });
+        }
+        if (url === 'http://127.0.0.1:8082/synthesize') {
+          return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 });
+        }
+        return new Response('ok', { status: 200 });
+      }),
+    );
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const quoteSpy = vi.spyOn(ReplyRuntime.prototype, 'consumeFirstReplyQuote');
+    quoteSpy.mockImplementationOnce(() => 'msg-b').mockImplementationOnce(() => null);
+
+    try {
+      const session = createSession(bot, {
+        userId: 'u2',
+        content: 'B1',
+        strippedContent: 'B1',
+        messageId: 'msg-b',
+        state: {
+          qqReplyTransport: {
+            capabilitySnapshot: {
+              canMultiline: true,
+              canVoice: true,
+              source: 'cached',
+              refreshedAt: Date.now(),
+            },
+          },
+        },
+      });
+      const context = {
+        options: {
+          room: createPluginRoom('conv-quote-voice'),
+          responseMessage: createReplyV2Response({
+            decision: 'reply',
+            messages: [
+              { modality: 'voice', content: '收到。' },
+              { modality: 'text', content: '第二句' },
+            ],
+          }),
+        },
+      };
+
+      await executor?.(session, context);
+
+      const calls = bot.sendMessage.mock.calls as any[][];
+      expect(calls).toHaveLength(2);
+      expect(Array.isArray(calls[0]?.[1])).toBe(false);
+      expect(String(calls[0]?.[1] ?? '')).toContain('audio');
+      expect(calls[1]?.[1]).toBe('第二句');
+    } finally {
+      quoteSpy.mockRestore();
+    }
   });
 
   it('rejects voice structured replies when voice capability is unavailable', async () => {
@@ -1135,6 +1268,57 @@ describe('qq voice plugin', () => {
       expect.objectContaining({ conversationId: 'conv-sticker' }),
       '……随你\n（发送表情包：无语少女）',
     );
+  });
+
+  it('quotes the first sticker segment when the runtime exposes a first-reply quote target', async () => {
+    const { ready, getPrepare, getExecutor, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const quoteSpy = vi.spyOn(ReplyRuntime.prototype, 'consumeFirstReplyQuote').mockReturnValueOnce('msg-b');
+
+    try {
+      const session = createSession(bot, {
+        userId: 'u2',
+        content: 'B1',
+        strippedContent: 'B1',
+        messageId: 'msg-b',
+        state: {
+          qqReplyTransport: {
+            capabilitySnapshot: {
+              canMultiline: true,
+              canVoice: false,
+              source: 'cached',
+              refreshedAt: Date.now(),
+            },
+          },
+          qqSticker: createStickerState(),
+        },
+      });
+      const context = {
+        options: {
+          room: createPluginRoom('conv-quote-sticker'),
+          responseMessage: createReplyV2Response({
+            decision: 'reply',
+            messages: [{ modality: 'meme', content: '无语地看对方一眼' }],
+          }),
+        },
+      };
+
+      await executor?.(session, context);
+
+      const calls = bot.sendMessage.mock.calls as any[][];
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[1]).toEqual([
+        expect.objectContaining({ type: 'quote', attrs: expect.objectContaining({ id: 'msg-b' }) }),
+        expect.objectContaining({ type: 'img' }),
+      ]);
+    } finally {
+      quoteSpy.mockRestore();
+    }
   });
 
   it('rejects meme structured replies when sticker capability is unavailable', async () => {

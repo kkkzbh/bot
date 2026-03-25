@@ -20,6 +20,7 @@ import {
   buildOutboundMessagePlanFromReplyPlan,
   createBypassLineSplitOptions,
   createBotMessageDispatchers,
+  createQuotedMessageContent,
   createKeyedStrandRunner,
   dispatchOutboundMessagePlan,
   resolveReplyActorKey,
@@ -1313,16 +1314,17 @@ async function deliverReplyPlan(args: {
     const { sendWhole, sendLine } = createBotMessageDispatchers(bot, session.channelId!, session);
     await dispatchOutboundMessagePlan(outboundPlan, async (segment) => {
       const historyLine = plannedUnitHistoryLines[outboundPlan.segments.indexOf(segment)] ?? '';
+      const quoteTargetMessageId = replyRuntime.consumeFirstReplyQuote(runId, segment.kind !== 'voice-block');
       if (segment.kind === 'multiline-block') {
         beganSending = true;
-        await sendWhole(segment.content);
+        await sendWhole(createQuotedMessageContent(segment.content, quoteTargetMessageId));
         replyRuntime.recordCommittedUnit(runId, historyLine);
         return;
       }
 
       if (segment.kind === 'text-line') {
         beganSending = true;
-        await sendLine(segment.content);
+        await sendLine(createQuotedMessageContent(segment.content, quoteTargetMessageId));
         replyRuntime.recordCommittedUnit(runId, historyLine);
         return;
       }
@@ -1334,24 +1336,14 @@ async function deliverReplyPlan(args: {
         }
 
         beganSending = true;
-        await bot.sendMessage(
-          session.channelId!,
-          String(h.image(prepared.buffer, prepared.mime)),
-          undefined,
-          createBypassLineSplitOptions(session),
-        );
+        await sendWhole(createQuotedMessageContent(h.image(prepared.buffer, prepared.mime), quoteTargetMessageId));
         replyRuntime.recordCommittedUnit(runId, historyLine);
         return;
       }
 
       if (segment.kind === 'image-block') {
         beganSending = true;
-        await bot.sendMessage(
-          session.channelId!,
-          String(h.image(segment.assetRef)),
-          undefined,
-          createBypassLineSplitOptions(session),
-        );
+        await sendWhole(createQuotedMessageContent(h.image(segment.assetRef), quoteTargetMessageId));
         replyRuntime.recordCommittedUnit(runId, historyLine);
         return;
       }
@@ -1362,12 +1354,7 @@ async function deliverReplyPlan(args: {
       }
 
       beganSending = true;
-      await bot.sendMessage(
-        session.channelId!,
-        String(h.audio(createAudioDataUri(prepared.wav))),
-        undefined,
-        createBypassLineSplitOptions(session),
-      );
+      await sendWhole(h.audio(createAudioDataUri(prepared.wav)));
       replyRuntime.recordCommittedUnit(runId, historyLine);
     }, {
       abortSignal: sendAbortSignal,

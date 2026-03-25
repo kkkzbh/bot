@@ -98,6 +98,130 @@ describe('ReplyRuntime', () => {
     });
   });
 
+  it('does not enable first-reply quote for single-speaker group runs', async () => {
+    const runtime = new ReplyRuntime({
+      stopChat: vi.fn(async () => undefined),
+    });
+
+    const first = await runtime.prepareRun({
+      ...createArgs({
+        input: {
+          text: 'A',
+          hasImageInput: false,
+          imageCount: 0,
+          displayName: '甲',
+          userId: 'u1',
+          isDirect: false,
+          messageId: 'msg-a',
+        },
+      }),
+      mode: 'interrupt',
+    });
+
+    expect(first.run?.firstReplyQuote).toEqual({
+      enabled: false,
+      targetMessageId: 'msg-a',
+      consumed: false,
+    });
+  });
+
+  it('snapshots first-reply quote for queued multi-speaker group runs', async () => {
+    const runtime = new ReplyRuntime({
+      stopChat: vi.fn(async () => undefined),
+      collectWindowMs: 50,
+    });
+
+    await runtime.prepareRun({
+      ...createArgs({
+        input: {
+          text: 'A',
+          hasImageInput: false,
+          imageCount: 0,
+          displayName: '甲',
+          userId: 'u1',
+          isDirect: false,
+          messageId: 'msg-a',
+        },
+      }),
+      mode: 'interrupt',
+    });
+
+    const secondPromise = runtime.prepareRun({
+      ...createArgs({
+        runId: 'run-2',
+        actorKey: 'queue:group-1:user:u2',
+        input: {
+          text: 'B',
+          hasImageInput: false,
+          imageCount: 0,
+          displayName: '乙',
+          userId: 'u2',
+          isDirect: false,
+          messageId: 'msg-b',
+        },
+      }),
+      mode: 'interrupt',
+    });
+
+    runtime.finishRun('run-1');
+    await expect(secondPromise).resolves.toMatchObject({
+      action: 'continue',
+      run: expect.objectContaining({
+        firstReplyQuote: {
+          enabled: true,
+          targetMessageId: 'msg-b',
+          consumed: false,
+        },
+      }),
+    });
+  });
+
+  it('consumes first-reply quote on the first dispatched segment even when unsupported', async () => {
+    const runtime = new ReplyRuntime({
+      stopChat: vi.fn(async () => undefined),
+      collectWindowMs: 50,
+    });
+
+    await runtime.prepareRun({
+      ...createArgs({
+        input: {
+          text: 'A',
+          hasImageInput: false,
+          imageCount: 0,
+          displayName: '甲',
+          userId: 'u1',
+          isDirect: false,
+          messageId: 'msg-a',
+        },
+      }),
+      mode: 'interrupt',
+    });
+
+    const secondPromise = runtime.prepareRun({
+      ...createArgs({
+        runId: 'run-2',
+        actorKey: 'queue:group-1:user:u2',
+        input: {
+          text: 'B',
+          hasImageInput: false,
+          imageCount: 0,
+          displayName: '乙',
+          userId: 'u2',
+          isDirect: false,
+          messageId: 'msg-b',
+        },
+      }),
+      mode: 'interrupt',
+    });
+
+    runtime.finishRun('run-1');
+    const second = await secondPromise;
+
+    const secondRunId = second.run?.id;
+    expect(runtime.consumeFirstReplyQuote(secondRunId, false)).toBeNull();
+    expect(runtime.consumeFirstReplyQuote(secondRunId, true)).toBeNull();
+  });
+
   it('starts computing the next queued speaker while the previous speaker is sending', async () => {
     const runtime = new ReplyRuntime({
       stopChat: vi.fn(async () => undefined),
