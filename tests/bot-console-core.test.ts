@@ -237,6 +237,42 @@ describe('bot-console manager', () => {
     expect(status.activeState).toBe('active');
   });
 
+  it('schedules qqbot-koishi.service restart through a transient user unit', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    const execFile = vi
+      .fn()
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })
+      .mockResolvedValueOnce({
+        stdout: [
+          'Description=QQBot Koishi Service',
+          'LoadState=loaded',
+          'ActiveState=active',
+          'SubState=running',
+          'UnitFileState=enabled',
+        ].join('\n'),
+        stderr: '',
+      });
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath, execFile });
+    const status = await manager.runServiceAction('qqbot-koishi.service', 'restart');
+
+    expect(execFile).toHaveBeenNthCalledWith(
+      1,
+      'systemd-run',
+      ['--user', '--quiet', '--on-active=1s', expect.stringMatching(/^--unit=qqbot-koishi-service-restart-\d+$/), 'systemctl', '--user', 'restart', 'qqbot-koishi.service'],
+      expect.objectContaining({ cwd: dir, timeout: 15_000 }),
+    );
+    expect(execFile).toHaveBeenNthCalledWith(
+      2,
+      'systemctl',
+      ['--user', 'show', 'qqbot-koishi.service', '--property', 'Description,LoadState,ActiveState,SubState,UnitFileState'],
+      expect.objectContaining({ cwd: dir, timeout: 15_000 }),
+    );
+    expect(status.activeState).toBe('active');
+  });
+
   it('reads recent koishi logs from journalctl output', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');

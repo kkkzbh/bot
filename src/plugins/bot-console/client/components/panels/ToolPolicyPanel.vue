@@ -229,9 +229,7 @@ async function handleSaveAll(restartAfter: boolean) {
     if (hadToolChanges) {
       await bc.saveToolOverrides()
     }
-    if (restartAfter) {
-      await bc.runServiceAction('qqbot.target', 'restart')
-    }
+    if (restartAfter) await bc.restartBot()
 
     if (hadGlobalChanges && hadToolChanges) {
       toastAdd(restartAfter ? '工具配置与全局设置已保存，正在重启机器人…' : '工具配置与全局设置已保存', 'success')

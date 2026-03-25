@@ -113,6 +113,11 @@ export const BOT_CONSOLE_SERVICE_UNITS: readonly BotServiceUnit[] = [
   'qqbot-voice-tts-tailnet.service',
 ] as const;
 
+const ASYNC_RESTART_UNITS = new Set<BotServiceUnit>([
+  'qqbot.target',
+  'qqbot-koishi.service',
+]);
+
 function defaultFs(): FsLike {
   return {
     access,
@@ -463,8 +468,8 @@ export class BotConsoleManager {
     return this.sortPresetSummaries(presets, uniqueNames);
   }
 
-  async scheduleTargetRestart(unit: Extract<BotServiceUnit, 'qqbot.target'>): Promise<void> {
-    const transientUnit = `qqbot-target-restart-${Date.now()}`;
+  async scheduleRestart(unit: BotServiceUnit): Promise<void> {
+    const transientUnit = `${unit.replaceAll(/[^A-Za-z0-9]+/g, '-')}-restart-${Date.now()}`;
     await this.execFile(
       'systemd-run',
       [
@@ -483,10 +488,10 @@ export class BotConsoleManager {
 
   async runServiceAction(unit: BotServiceUnit, action: ServiceAction): Promise<BotServiceStatus> {
     validateServiceAction(unit, action);
-    if (unit === 'qqbot.target' && action === 'restart') {
-      // Hand the restart off to a transient user unit so the console request can
-      // return before Koishi is terminated as part of the target restart.
-      await this.scheduleTargetRestart(unit);
+    if (action === 'restart' && ASYNC_RESTART_UNITS.has(unit)) {
+      // Hand restarts that can terminate the current request off to a transient
+      // user unit so the console response can return before systemd stops Koishi.
+      await this.scheduleRestart(unit);
       return this.getServiceStatus(unit);
     }
     await this.execFile('systemctl', ['--user', action, unit], { cwd: this.rootDir, timeout: 15_000 });

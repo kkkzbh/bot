@@ -61,7 +61,7 @@ export const SERVICE_LABELS: Record<string, string> = {
 
 export const SERVICE_HINTS: Record<string, string> = {
   'qqbot.target':
-    '推荐直接操作这一项。它已经包含主机器人服务和依赖服务栈，不再单独拆开操作。',
+    '整套本地链路总控，用于一键启动、停止或全栈重启主机器人和依赖服务。',
   'qqbot-koishi.service': '机器人主程序。大多数聊天和控制功能依赖它。',
   'qqbot-stack.service': '依赖组件服务。桥接、外部接口或容器能力需要它。',
   'qqbot-voice-tts.service': '只有用到语音播报或语音回复时才需要。',

@@ -77,6 +77,7 @@ export const BASIC_KEYS = [
 ] as const
 
 export const ALL_ENV_KEYS = [...FEATURE_KEYS, ...FILE_SYSTEM_CONTROL_KEYS, ...MODEL_KEYS, ...BASIC_KEYS] as const
+const BOT_RUNTIME_UNIT = 'qqbot-koishi.service'
 
 // ─── Exported helpers ─────────────────────────────────────────────────────────
 
@@ -461,7 +462,7 @@ export function useBotConsole() {
 
   /**
    * Saves all managed env keys to the backend.
-   * Optionally restarts qqbot.target immediately after saving.
+   * Optionally restarts the Koishi runtime immediately after saving.
    */
   async function saveEnvPatch(keys: readonly string[], restartAfter = false): Promise<SaveEnvResponse> {
     const payload: Record<string, string> = {}
@@ -478,9 +479,7 @@ export function useBotConsole() {
     }
     Object.assign(envDraft, result?.env ?? {})
 
-    if (restartAfter) {
-      await runServiceAction('qqbot.target', 'restart')
-    }
+    if (restartAfter) await restartBot()
 
     return result
   }
@@ -539,9 +538,7 @@ export function useBotConsole() {
     if (canSaveFeatureOverrides.value) {
       await saveFeatureOverrides()
     }
-    if (restartAfter) {
-      await runServiceAction('qqbot.target', 'restart')
-    }
+    if (restartAfter) await restartBot()
   }
 
   function getToolOverrideMode(scope: ToolPolicyScope, routeProfile: ToolRouteProfile, toolName: string): ToolOverrideMode {
@@ -811,6 +808,10 @@ export function useBotConsole() {
     }
   }
 
+  async function restartBot(): Promise<ServiceActionResponse | undefined> {
+    return runServiceAction(BOT_RUNTIME_UNIT, 'restart')
+  }
+
   /**
    * Runs an embedding health probe, updates the in-memory memoryV2 snapshot,
    * and returns the full probe result for callers to handle toasts / feedback.
@@ -899,6 +900,7 @@ export function useBotConsole() {
     deletePreset,
     reorderPresets,
     runServiceAction,
+    restartBot,
     probeEmbedding,
   }
 }

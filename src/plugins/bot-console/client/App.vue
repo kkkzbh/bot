@@ -83,8 +83,8 @@ async function handleRefresh() {
 
 async function handleRestart() {
   try {
-    await bc.runServiceAction('qqbot.target', 'restart')
-    toast.add('机器人总控已触发重启', 'success')
+    await bc.restartBot()
+    toast.add('机器人主程序已触发重启', 'success')
   } catch (err: unknown) {
     toast.add(err instanceof Error ? err.message : '重启失败', 'error')
   }
@@ -123,10 +123,10 @@ const { loading, botState } = bc
           <button
             class="bc-btn bc-btn-primary"
             type="button"
-            :disabled="!!bc.servicePending['qqbot.target']"
+            :disabled="!!bc.servicePending['qqbot-koishi.service']"
             @click="handleRestart"
           >
-            {{ bc.servicePending['qqbot.target'] ? '重启中…' : '重启机器人' }}
+            {{ bc.servicePending['qqbot-koishi.service'] ? '重启中…' : '重启机器人' }}
           </button>
         </div>
       </section>

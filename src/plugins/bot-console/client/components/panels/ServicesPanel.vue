@@ -51,6 +51,13 @@ function pendingActionLabel(unit: string): string {
   return labels[action] ?? '操作中…'
 }
 
+function restartButtonLabel(unit: string): string {
+  if (servicePending[unit] === 'restart') {
+    return unit === 'qqbot.target' ? '全栈重启中…' : '重启中…'
+  }
+  return unit === 'qqbot.target' ? '全栈重启' : '重启'
+}
+
 // ── Actions ───────────────────────────────────────────────────────────────────
 
 async function handleAction(unit: string, action: string) {
@@ -63,7 +70,7 @@ async function handleAction(unit: string, action: string) {
       enable: '已启用开机自启',
     }
     if (unit === 'qqbot.target' && action === 'restart') {
-      toastAdd(`${getServiceLabel(unit)} 已触发重启`, 'success')
+      toastAdd(`${getServiceLabel(unit)} 已触发全栈重启`, 'success')
       return
     }
     toastAdd(`${getServiceLabel(unit)} ${doneLabels[action] ?? action}`, 'success')
@@ -79,7 +86,7 @@ async function handleAction(unit: string, action: string) {
       <div>
         <h2>运行控制</h2>
         <p class="bc-muted">
-          通常只需要操作"机器人总控"。主机器人和依赖服务已并入总控，不再单独显示。
+          这里保留全栈启停与依赖服务视图。日常改配置后的“重启机器人”只会重启主机器人进程，不会连带重启依赖栈。
         </p>
       </div>
     </div>
@@ -182,7 +189,7 @@ async function handleAction(unit: string, action: string) {
               :disabled="!service.canRestart || isPending(service.unit)"
               @click="handleAction(service.unit, 'restart')"
             >
-              {{ servicePending[service.unit] === 'restart' ? '重启中…' : '重启' }}
+              {{ restartButtonLabel(service.unit) }}
             </button>
             <button
               type="button"
