@@ -130,6 +130,7 @@ function createSession(overrides: Record<string, unknown> = {}): Record<string, 
     content,
     stripped: { content },
     bot: { selfId: 'bot-1' },
+    elements: [],
     ...overrides,
   };
 }
@@ -227,6 +228,39 @@ describe('group natural trigger middleware', () => {
     expect(captured).toBe('祥子 帮我看下');
     expect(naturalTrigger).toEqual({ reason: 'alias', explicit: true });
     await expect(pending).resolves.toBe('祥子 帮我看下');
+  });
+
+  it('allows quoted image-only messages to enter the main chain', async () => {
+    const { middleware } = createHarness({ replyIntervalMs: 0 });
+
+    const result = await runAndCapture(
+      middleware,
+      createSession({
+        content: '',
+        stripped: { content: '' },
+        elements: [{ type: 'img', attrs: { src: 'https://example.com/1.png' }, children: [] }],
+        quote: { user: { id: 'bot-1' } },
+      }),
+    );
+
+    expect(result.content).toBe('');
+    expect(result.naturalTrigger).toEqual({ reason: 'quote', explicit: true });
+  });
+
+  it('does not trigger image-only group messages without an existing trigger condition', async () => {
+    const { middleware } = createHarness({ replyIntervalMs: 0 });
+
+    const result = await runAndCapture(
+      middleware,
+      createSession({
+        content: '',
+        stripped: { content: '' },
+        elements: [{ type: 'img', attrs: { src: 'https://example.com/1.png' }, children: [] }],
+      }),
+    );
+
+    expect(result.content).toBe('');
+    expect(result.naturalTrigger).toBeNull();
   });
 
   it('waits for the same-group reply interval instead of dropping focused messages', async () => {

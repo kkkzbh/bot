@@ -99,6 +99,8 @@ function buildReplyWorkingContext(
   const fragments: PromptFragment[] = [
     createJsonFragment('qqbot_reply_turn_input', 'Reply Turn Input', 'reference', 'turn', {
       text: turnContext.input.text,
+      hasImageInput: turnContext.input.hasImageInput,
+      imageCount: turnContext.input.imageCount,
       displayName: turnContext.input.displayName,
       userId: turnContext.input.userId,
       isDirect: turnContext.input.isDirect,

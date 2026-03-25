@@ -45,6 +45,8 @@ describe('chatluna prompt pollution regression', () => {
         {
           input: {
             text: '只回复一句',
+            hasImageInput: true,
+            imageCount: 1,
             displayName: '小祥',
             userId: 'u1',
             isDirect: true,
@@ -156,6 +158,28 @@ describe('chatluna prompt pollution regression', () => {
     expect(requestModelSource).toContain("context.options.inputMessage?.additional_kwargs?.qqbot_reply_mode ===");
     expect(requestModelSource).toContain("'agent'");
     expect(requestModelSource).toContain('return');
+  });
+
+  it('keeps multimodal content structured through request_model and shared-adapter boundaries', () => {
+    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
+    const packageRoot = dirname(packageJsonPath);
+    const readChatMessageSource = readFileSync(join(packageRoot, 'src/middlewares/chat/read_chat_message.ts'), 'utf8');
+    const requestModelSource = readFileSync(join(packageRoot, 'src/middlewares/model/request_model.ts'), 'utf8');
+    const chatServiceSource = readFileSync(join(packageRoot, 'src/services/chat.ts'), 'utf8');
+    const sharedAdapterSource = readFileSync(join(packageRoot, '..', 'shared-adapter', 'src', 'utils.ts'), 'utf8');
+    const sharedAdapterRequesterSource = readFileSync(join(packageRoot, '..', 'shared-adapter', 'src', 'requester.ts'), 'utf8');
+
+    expect(readChatMessageSource).toContain("url.startsWith('base64://')");
+    expect(readChatMessageSource).toContain("data:${ext ?? 'image/jpeg'};base64,${base64}");
+    expect(requestModelSource).toContain('qqbot_input_content_meta');
+    expect(requestModelSource).toContain('ensureImageContentIntegrity');
+    expect(requestModelSource).toContain('originContent.map(async (message) =>');
+    expect(requestModelSource).not.toContain('sortContentByType(');
+    expect(chatServiceSource).toContain('ensureMessageImageIntegrity(message)');
+    expect(sharedAdapterSource).toContain("detail: 'high'");
+    expect(sharedAdapterSource).not.toContain("detail: 'low'");
+    expect(sharedAdapterRequesterSource).toContain('summarizeLastUserMessage');
+    expect(sharedAdapterRequesterSource).toContain('hasImageUrl');
   });
 
   it('keeps tool-call history content as strings for OpenAI-compatible request payloads', () => {

@@ -8,6 +8,25 @@ type SessionWithContent = Session & {
   stripped?: { content?: string };
 };
 
+type InputMessageLike = {
+  content?: unknown;
+} | null | undefined;
+
+type ContentPart = {
+  type?: unknown;
+  text?: unknown;
+};
+
+function sanitizeInputText(text: string): string {
+  return text
+    .replace(/<img\b[^>]*>/gi, ' ')
+    .replace(/\[CQ:image,[^\]]+\]/gi, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
 export interface BuildReplyTurnContextOptions {
   room?: ReplyRuntimeRoomLike | null;
   promptFragments?: PromptFragment[];
@@ -24,14 +43,44 @@ export function normalizeReplyRouteHint(chatMode: unknown): ReplyRoute | null {
   return null;
 }
 
+function collectInputContentInfo(content: unknown): { text: string; imageCount: number } {
+  if (typeof content === 'string') {
+    return { text: sanitizeInputText(content), imageCount: 0 };
+  }
+
+  if (!Array.isArray(content)) {
+    return { text: '', imageCount: 0 };
+  }
+
+  let text = '';
+  let imageCount = 0;
+
+  for (const part of content as ContentPart[]) {
+    if (!part || typeof part !== 'object') continue;
+    if (part.type === 'text' && typeof part.text === 'string') {
+      text += part.text;
+      continue;
+    }
+    if (part.type === 'image_url') {
+      imageCount += 1;
+    }
+  }
+
+  return { text: sanitizeInputText(text), imageCount };
+}
+
 export function buildReplyTurnInput(
   session: SessionWithContent,
   room?: Pick<ReplyRuntimeRoomLike, 'conversationId'> | null,
+  inputMessage?: InputMessageLike,
 ): TurnInput {
   const stripped = typeof session.stripped?.content === 'string' ? session.stripped.content : '';
-  const rawText = stripped.trim() || String(session.content ?? '').trim();
+  const { text: inputMessageText, imageCount } = collectInputContentInfo(inputMessage?.content);
+  const rawText = inputMessageText.trim() || stripped.trim() || String(session.content ?? '').trim();
   return {
     text: rawText,
+    hasImageInput: imageCount > 0,
+    imageCount,
     displayName: resolveSessionDisplayName(session),
     userId: session.userId?.trim() || '用户',
     isDirect: Boolean(session.isDirect),

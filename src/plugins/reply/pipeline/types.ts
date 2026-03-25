@@ -14,6 +14,8 @@ export type PromptAssemblyRouteProfile = ReplyToolRouteProfile | 'automation';
 
 export interface TurnInput {
   text: string;
+  hasImageInput: boolean;
+  imageCount: number;
   displayName: string;
   userId: string;
   isDirect: boolean;
@@ -204,7 +206,7 @@ export function normalizeStructuredReplyV1(raw: unknown): StructuredReplyV1 | nu
 }
 
 export function classifyReplyRoute(input: TurnInput, routeHint?: ReplyRoute | null): ReplyRoute {
-  if (!input.text.trim()) return 'no_reply';
+  if (!input.text.trim() && !input.hasImageInput) return 'no_reply';
   if (routeHint === 'automation') return 'automation';
   if (routeHint === 'agent') return 'agent';
   return 'agent';

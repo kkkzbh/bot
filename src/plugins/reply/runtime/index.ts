@@ -1,7 +1,7 @@
 import type { TurnInput } from '../pipeline/types.js';
 import type { OutboundMessageSegment } from '../../shared/outbound/index.js';
 
-export type ReplyRunState = 'generating' | 'sending';
+export type ReplyRunState = 'computing' | 'computed' | 'sending';
 export type ReplyRunMode = 'interrupt' | 'queue';
 
 export interface ReplyRuntimeRoomLike {
@@ -34,6 +34,8 @@ export interface ReplyRuntimeRun {
   room: ReplyRuntimeRoomLike;
   input: ReplyTurnInput;
   state: ReplyRunState;
+  hasComputedOutput: boolean;
+  cancelled: boolean;
   plannedUnitHistoryLines: string[];
   committedHistoryLines: string[];
   requestId: string;
@@ -68,7 +70,7 @@ interface ReplyRuntimePendingState {
   actorKey: string;
   snapshot: ReplyRuntimeContinuationSnapshot;
   pending: PendingTurnEntry[];
-  ready: boolean;
+  status: 'queued' | 'cooldown';
   timer?: NodeJS.Timeout;
 }
 
@@ -109,7 +111,9 @@ function buildSupplementalMessages(inputs: ReplyTurnInput[]): string[] {
 }
 
 export class ReplyRuntime {
-  private readonly currentRunByQueueKey = new Map<string, string>();
+  private readonly currentComputeByQueueKey = new Map<string, string>();
+  private readonly currentComputedByQueueKey = new Map<string, string>();
+  private readonly currentSendByQueueKey = new Map<string, string>();
   private readonly activeRunByActorKey = new Map<string, string>();
   private readonly runs = new Map<string, ReplyRuntimeRun>();
   private readonly completionResolvers = new Map<string, () => void>();
@@ -137,9 +141,9 @@ export class ReplyRuntime {
 
     if (mode === 'queue') {
       while (true) {
-        const previousRunId = this.currentRunByQueueKey.get(args.queueKey);
-        if (!previousRunId) break;
-        await this.waitForRunCompletion(previousRunId);
+        const blockingRunId = this.getBlockingRunId(args.queueKey);
+        if (!blockingRunId) break;
+        await this.waitForRunCompletion(blockingRunId);
       }
 
       const run = this.createRun(args);
@@ -152,22 +156,26 @@ export class ReplyRuntime {
 
     const activeRunId = this.activeRunByActorKey.get(args.actorKey);
     const activeRun = activeRunId ? this.runs.get(activeRunId) : null;
-    if (activeRun) {
+    if (activeRun && !activeRun.cancelled) {
       const snapshot = this.captureContinuationSnapshot(activeRun);
-      const pendingState = this.getOrCreatePendingState(args, snapshot);
+      const pendingState = this.getOrCreatePendingState(args, snapshot, 'cooldown');
       const pendingPromise = this.enqueuePendingTurn(pendingState, args);
-      this.moveActorToQueueTail(args.queueKey, args.actorKey);
       await this.interruptRun(activeRun);
-      this.tryStartNext(args.queueKey);
+      this.enterCooldown(pendingState);
+      this.tryStartNextCompute(args.queueKey);
       return pendingPromise;
     }
 
     const existingPendingState = this.pendingStatesByActorKey.get(args.actorKey);
     if (existingPendingState) {
-      return this.enqueuePendingTurn(existingPendingState, args);
+      const pendingPromise = this.enqueuePendingTurn(existingPendingState, args);
+      if (existingPendingState.status === 'cooldown') {
+        this.enterCooldown(existingPendingState);
+      }
+      return pendingPromise;
     }
 
-    if (!this.currentRunByQueueKey.get(args.queueKey) && !this.getQueue(args.queueKey).length) {
+    if (this.canStartCompute(args.queueKey)) {
       const run = this.createRun(args);
       return {
         action: 'continue',
@@ -180,10 +188,10 @@ export class ReplyRuntime {
       alreadySentText: '',
       pendingUnitTexts: [],
       hasModelOutput: false,
-    });
+    }, 'queued');
     const pendingPromise = this.enqueuePendingTurn(pendingState, args);
     this.enqueueActorIfMissing(args.queueKey, args.actorKey);
-    this.tryStartNext(args.queueKey);
+    this.tryStartNextCompute(args.queueKey);
     return pendingPromise;
   }
 
@@ -194,18 +202,37 @@ export class ReplyRuntime {
 
   isCurrentRun(runId: string | undefined): boolean {
     const run = this.getRun(runId);
-    if (!run) return false;
+    if (!run || run.cancelled) return false;
     return (
-      this.currentRunByQueueKey.get(run.queueKey) === run.id &&
-      this.activeRunByActorKey.get(run.actorKey) === run.id
+      this.currentComputeByQueueKey.get(run.queueKey) === run.id ||
+      this.currentComputedByQueueKey.get(run.queueKey) === run.id ||
+      this.currentSendByQueueKey.get(run.queueKey) === run.id
     );
+  }
+
+  completeCompute(runId: string): boolean {
+    const run = this.getRun(runId);
+    if (!run || run.cancelled) return false;
+    if (run.state !== 'computing') return false;
+    if (this.currentComputeByQueueKey.get(run.queueKey) !== run.id) return false;
+
+    this.currentComputeByQueueKey.delete(run.queueKey);
+    run.state = 'computed';
+    run.hasComputedOutput = true;
+    this.currentComputedByQueueKey.set(run.queueKey, run.id);
+    return true;
   }
 
   beginSending(runId: string): AbortSignal | null {
     const run = this.getRun(runId);
-    if (!run) return null;
+    if (!run || run.cancelled) return null;
+    if (this.currentComputedByQueueKey.get(run.queueKey) !== run.id) return null;
+
+    this.currentComputedByQueueKey.delete(run.queueKey);
+    this.currentSendByQueueKey.set(run.queueKey, run.id);
     run.state = 'sending';
     run.sendAbortController = new AbortController();
+    this.tryStartNextCompute(run.queueKey);
     return run.sendAbortController.signal;
   }
 
@@ -226,6 +253,7 @@ export class ReplyRuntime {
   wasInterrupted(runId: string | undefined): boolean {
     const run = this.getRun(runId);
     if (!run) return true;
+    if (run.cancelled) return true;
     return !this.isCurrentRun(runId) || run.sendAbortController?.signal.aborted === true;
   }
 
@@ -238,17 +266,25 @@ export class ReplyRuntime {
   finishRun(runId: string | undefined): ReplyRuntimeRun | null {
     const run = this.getRun(runId);
     if (!run) return null;
-    if (this.currentRunByQueueKey.get(run.queueKey) === run.id) {
-      this.currentRunByQueueKey.delete(run.queueKey);
+
+    if (this.currentComputeByQueueKey.get(run.queueKey) === run.id) {
+      this.currentComputeByQueueKey.delete(run.queueKey);
+    }
+    if (this.currentComputedByQueueKey.get(run.queueKey) === run.id) {
+      this.currentComputedByQueueKey.delete(run.queueKey);
+    }
+    if (this.currentSendByQueueKey.get(run.queueKey) === run.id) {
+      this.currentSendByQueueKey.delete(run.queueKey);
     }
     if (this.activeRunByActorKey.get(run.actorKey) === run.id) {
       this.activeRunByActorKey.delete(run.actorKey);
     }
+
     this.runs.delete(run.id);
     this.completionResolvers.get(run.id)?.();
     this.completionResolvers.delete(run.id);
     this.completionPromises.delete(run.id);
-    this.tryStartNext(run.queueKey);
+    this.tryStartNextCompute(run.queueKey);
     return run;
   }
 
@@ -267,14 +303,16 @@ export class ReplyRuntime {
       conversationId: args.conversationId,
       room: args.room,
       input: args.input,
-      state: 'generating',
+      state: 'computing',
+      hasComputedOutput: false,
+      cancelled: false,
       plannedUnitHistoryLines: [],
       committedHistoryLines: [],
       requestId: args.runId,
     };
     this.ensureCompletionTracking(args.runId);
     this.runs.set(args.runId, created);
-    this.currentRunByQueueKey.set(args.queueKey, args.runId);
+    this.currentComputeByQueueKey.set(args.queueKey, args.runId);
     this.activeRunByActorKey.set(args.actorKey, args.runId);
     return created;
   }
@@ -285,20 +323,28 @@ export class ReplyRuntime {
     return {
       alreadySentText,
       pendingUnitTexts,
-      hasModelOutput: run.plannedUnitHistoryLines.length > 0,
-      baseInput: run.plannedUnitHistoryLines.length > 0 ? undefined : run.input,
+      hasModelOutput: run.hasComputedOutput || run.plannedUnitHistoryLines.length > 0,
+      baseInput: run.hasComputedOutput || run.plannedUnitHistoryLines.length > 0 ? undefined : run.input,
     };
   }
 
   private async interruptRun(run: ReplyRuntimeRun): Promise<void> {
-    if (this.currentRunByQueueKey.get(run.queueKey) === run.id) {
-      this.currentRunByQueueKey.delete(run.queueKey);
+    run.cancelled = true;
+
+    if (this.currentComputeByQueueKey.get(run.queueKey) === run.id) {
+      this.currentComputeByQueueKey.delete(run.queueKey);
+    }
+    if (this.currentComputedByQueueKey.get(run.queueKey) === run.id) {
+      this.currentComputedByQueueKey.delete(run.queueKey);
+    }
+    if (this.currentSendByQueueKey.get(run.queueKey) === run.id) {
+      this.currentSendByQueueKey.delete(run.queueKey);
     }
     if (this.activeRunByActorKey.get(run.actorKey) === run.id) {
       this.activeRunByActorKey.delete(run.actorKey);
     }
 
-    if (run.state === 'generating') {
+    if (run.state === 'computing') {
       await this.options.stopChat(run.room, run.requestId).catch(() => undefined);
     }
 
@@ -311,16 +357,20 @@ export class ReplyRuntime {
       actorKey: string;
     },
     snapshot: ReplyRuntimeContinuationSnapshot,
+    status: ReplyRuntimePendingState['status'],
   ): ReplyRuntimePendingState {
     const existing = this.pendingStatesByActorKey.get(args.actorKey);
-    if (existing) return existing;
+    if (existing) {
+      existing.status = status;
+      return existing;
+    }
 
     const state: ReplyRuntimePendingState = {
       queueKey: args.queueKey,
       actorKey: args.actorKey,
       snapshot,
       pending: [],
-      ready: false,
+      status,
     };
     this.pendingStatesByActorKey.set(args.actorKey, state);
     return state;
@@ -351,24 +401,29 @@ export class ReplyRuntime {
         input: args.input,
         resolve,
       });
-      this.schedulePendingState(state);
     });
   }
 
-  private schedulePendingState(state: ReplyRuntimePendingState): void {
-    state.ready = false;
+  private enterCooldown(state: ReplyRuntimePendingState): void {
+    state.status = 'cooldown';
+    this.removeActorFromQueue(state.queueKey, state.actorKey);
     if (state.timer) {
       clearTimeout(state.timer);
     }
     state.timer = setTimeout(() => {
       state.timer = undefined;
-      state.ready = true;
-      this.tryStartNext(state.queueKey);
+      state.status = 'queued';
+      this.enqueueActorIfMissing(state.queueKey, state.actorKey);
+      this.tryStartNextCompute(state.queueKey);
     }, this.collectWindowMs);
   }
 
-  private tryStartNext(queueKey: string): void {
-    if (this.currentRunByQueueKey.has(queueKey)) return;
+  private canStartCompute(queueKey: string): boolean {
+    return !this.currentComputeByQueueKey.has(queueKey) && !this.currentComputedByQueueKey.has(queueKey);
+  }
+
+  private tryStartNextCompute(queueKey: string): void {
+    if (!this.canStartCompute(queueKey)) return;
 
     const queue = this.getQueue(queueKey);
     while (queue.length > 0) {
@@ -378,7 +433,7 @@ export class ReplyRuntime {
         queue.shift();
         continue;
       }
-      if (!state.ready) {
+      if (state.status !== 'queued') {
         return;
       }
       this.startPendingState(state);
@@ -395,7 +450,7 @@ export class ReplyRuntime {
     this.removeActorFromQueue(state.queueKey, state.actorKey);
 
     if (!state.pending.length) {
-      this.tryStartNext(state.queueKey);
+      this.tryStartNextCompute(state.queueKey);
       return;
     }
 
@@ -447,6 +502,15 @@ export class ReplyRuntime {
     await this.completionPromises.get(runId);
   }
 
+  private getBlockingRunId(queueKey: string): string | null {
+    return (
+      this.currentComputeByQueueKey.get(queueKey) ??
+      this.currentComputedByQueueKey.get(queueKey) ??
+      this.currentSendByQueueKey.get(queueKey) ??
+      null
+    );
+  }
+
   private getQueue(queueKey: string): string[] {
     const existing = this.queueActorOrder.get(queueKey);
     if (existing) return existing;
@@ -460,13 +524,6 @@ export class ReplyRuntime {
     const queue = this.getQueue(queueKey);
     if (queue.includes(actorKey)) return;
     queue.push(actorKey);
-  }
-
-  private moveActorToQueueTail(queueKey: string, actorKey: string): void {
-    const queue = this.getQueue(queueKey);
-    const filtered = queue.filter((key) => key !== actorKey);
-    filtered.push(actorKey);
-    this.queueActorOrder.set(queueKey, filtered);
   }
 
   private removeActorFromQueue(queueKey: string, actorKey: string): void {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeReplyChatMode } from '../src/plugins/reply/compat.js';
-import { buildReplyTurnContext, normalizeReplyRouteHint } from '../src/plugins/reply/pipeline/context-builder.js';
+import { buildReplyTurnContext, buildReplyTurnInput, normalizeReplyRouteHint } from '../src/plugins/reply/pipeline/context-builder.js';
 import { ReplyOrchestratorService } from '../src/plugins/reply/pipeline/orchestrator.js';
 
 function createStructuredResponse(content: unknown) {
@@ -12,6 +12,8 @@ function createStructuredResponse(content: unknown) {
 function createTurnInput(text: string) {
   return {
     text,
+    hasImageInput: false,
+    imageCount: 0,
     displayName: '小祥',
     userId: 'u1',
     isDirect: true,
@@ -33,6 +35,60 @@ describe('reply pipeline v3', () => {
       routeHint: 'agent',
     });
     expect(route).toBe('no_reply');
+  });
+
+  it('keeps image metadata in turn input and routes image-only turns to agent', () => {
+    const turnInput = buildReplyTurnInput(
+      {
+        content: '',
+        stripped: { content: '' },
+        userId: 'u1',
+        isDirect: true,
+        messageId: 'msg-1',
+      } as never,
+      { conversationId: 'conv-1' },
+      {
+        content: [
+          { type: 'text', text: '' },
+          { type: 'image_url', image_url: { url: 'https://example.com/1.png' } },
+        ],
+      },
+    );
+
+    expect(turnInput).toMatchObject({
+      text: '',
+      hasImageInput: true,
+      imageCount: 1,
+    });
+
+    const { route } = buildReplyTurnContext(turnInput, {
+      routeHint: 'agent',
+    });
+    expect(route).toBe('agent');
+  });
+
+  it('strips raw image tags from turn input text while preserving image metadata', () => {
+    const turnInput = buildReplyTurnInput(
+      {
+        content: '<img src="https://example.com/1.png"/> 这是什么',
+        stripped: { content: '<img src="https://example.com/1.png"/> 这是什么' },
+        userId: 'u1',
+        isDirect: true,
+      } as never,
+      { conversationId: 'conv-1' },
+      {
+        content: [
+          { type: 'text', text: '<img src="https://example.com/1.png"/> 这是什么' },
+          { type: 'image_url', image_url: { url: 'https://example.com/1.png' } },
+        ],
+      },
+    );
+
+    expect(turnInput).toMatchObject({
+      text: '这是什么',
+      hasImageInput: true,
+      imageCount: 1,
+    });
   });
 
   it('returns await_model before the structured reply is available', async () => {

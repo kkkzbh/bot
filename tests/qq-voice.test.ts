@@ -575,6 +575,67 @@ describe('qq voice plugin', () => {
     expect(contextA2.options.inputMessage.content).toBe('A1\nA2');
   });
 
+  it('preserves image_url content when prepare rewrites aggregated input text', async () => {
+    vi.useFakeTimers();
+    const { ready, getPrepare, getExecutor, bot } = createHarness({ replyInterruptEnabled: true });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const prepare = getPrepare();
+    const executor = getExecutor();
+    const room = createPluginRoom('conv-image-preserve');
+    const sessionA1 = createSession(bot, {
+      userId: 'u1',
+      content: '先看一下',
+      strippedContent: '先看一下',
+      author: { nick: '甲', name: '甲' },
+    });
+    const sessionA2 = createSession(bot, {
+      userId: 'u1',
+      content: '这张图里是什么？',
+      strippedContent: '这张图里是什么？',
+      author: { nick: '甲', name: '甲' },
+    });
+    const contextA1 = {
+      options: {
+        room: { ...room },
+        inputMessage: { content: '先看一下', additional_kwargs: {} },
+      },
+    };
+    const contextA2 = {
+      options: {
+        room: { ...room },
+        inputMessage: {
+          content: [
+            { type: 'text', text: '这张图里是什么？' },
+            { type: 'image_url', image_url: { url: 'https://example.com/1.png' } },
+          ],
+          additional_kwargs: {},
+        },
+      },
+    };
+
+    await prepare?.(sessionA1, contextA1);
+
+    let prepareResolved = false;
+    const pendingPrepare = prepare?.(sessionA2, contextA2).then((result) => {
+      prepareResolved = true;
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(450);
+    await flushMicrotasks();
+    expect(prepareResolved).toBe(true);
+
+    await pendingPrepare;
+    expect(contextA2.options.inputMessage.content).toEqual([
+      { type: 'text', text: '先看一下\n这张图里是什么？' },
+      { type: 'image_url', image_url: { url: 'https://example.com/1.png' } },
+    ]);
+  });
+
   it('transcribes first incoming audio and merges it into session content', async () => {
     const { inbound, bot } = createHarness();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

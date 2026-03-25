@@ -182,6 +182,21 @@ function normalizeMessageContent(session: Session): string {
   return session.content?.trim() ?? '';
 }
 
+function hasImageInput(session: Session): boolean {
+  const elements = Array.isArray(session.elements) ? session.elements : [];
+  if (
+    elements.some((element) => {
+      const type = typeof element?.type === 'string' ? element.type.toLowerCase() : '';
+      return type === 'img' || type === 'image';
+    })
+  ) {
+    return true;
+  }
+
+  const rawContent = String(session.content ?? '');
+  return /<img\b/i.test(rawContent) || /\[CQ:image,[^\]]+\]/i.test(rawContent);
+}
+
 function isQuotedToBot(session: Session): boolean {
   const quote = session.quote as { user?: { id?: string } } | undefined;
   return Boolean(quote?.user?.id && quote.user.id === session.bot?.selfId);
@@ -348,11 +363,12 @@ export function apply(ctx: Context, config: Config): void {
     if (featurePolicy && !(await featurePolicy.resolveFeatureEnabled(session, 'CHAT_NATURAL_TRIGGER_ENABLED'))) {
       return next();
     }
-    if (!session.userId || !session.content || session.userId === session.bot?.selfId) return next();
+    if (!session.userId || session.userId === session.bot?.selfId) return next();
     if (!shouldHandleGroup(session, runtime)) return next();
 
     const content = normalizeMessageContent(session);
-    if (!content) return next();
+    const imageInput = hasImageInput(session);
+    if (!content && !imageInput) return next();
 
     const now = Date.now();
     const spamKey = buildSpamKey(session);
@@ -377,8 +393,8 @@ export function apply(ctx: Context, config: Config): void {
     const focusUntil = focusExpires.get(groupScopeKey) ?? 0;
     const inFocus = focusUntil > now;
     const quotedToBot = isQuotedToBot(session);
-    const hasAlias = containsAlias(content, runtime.aliases);
-    const ruleTriggered = shouldTriggerByRule(content, runtime.aliases, quotedToBot);
+    const hasAlias = content ? containsAlias(content, runtime.aliases) : false;
+    const ruleTriggered = content ? shouldTriggerByRule(content, runtime.aliases, quotedToBot) : quotedToBot && imageInput;
     let triggerReason: NaturalTriggerReason | null = directHit ? 'direct' : null;
     let explicitTrigger = false;
     let modelDecision: TriggerDecisionResult | null = null;
@@ -399,7 +415,7 @@ export function apply(ctx: Context, config: Config): void {
       }
     }
 
-    if (!shouldTrigger && !inFocus) {
+    if (!shouldTrigger && !inFocus && content) {
       modelDecision = await shouldTriggerByModel(content, runtime);
       shouldTrigger = modelDecision.trigger;
       if (shouldTrigger) {

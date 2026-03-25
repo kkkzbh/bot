@@ -204,6 +204,16 @@ type MiddlewareContextLike = {
   };
 };
 
+type InputMessageContentPart = {
+  type?: unknown;
+  text?: unknown;
+};
+
+type ReplyInputContentMeta = {
+  hasImageInput: boolean;
+  imageCount: number;
+};
+
 interface DownloadedAudioPayload {
   bytes: Uint8Array;
   source: string;
@@ -702,6 +712,14 @@ function buildPlannedUnitHistoryLines(args: {
   });
 }
 
+function buildOptimisticPlannedUnitHistoryLines(plan: ReplyTransportPlan): string[] {
+  return buildPlannedUnitHistoryLines({
+    outboundPlan: buildOutboundMessagePlanFromReplyPlan(plan),
+    preparedVoiceByRaw: new Map(),
+    preparedStickerByRaw: new Map(),
+  });
+}
+
 async function normalizeResearchReplyHistory(
   ctx: Context,
   room: Record<string, unknown> | undefined,
@@ -855,6 +873,21 @@ function applyReplyStructuredOutputRequest(
   };
 }
 
+function applyReplyTurnInputMetadata(
+  inputMessage: NonNullable<MiddlewareContextLike['options']>['inputMessage'] | undefined,
+  turnInput: Pick<ReplyInputContentMeta, 'hasImageInput' | 'imageCount'>,
+): void {
+  if (!inputMessage) return;
+
+  inputMessage.additional_kwargs = {
+    ...(inputMessage.additional_kwargs ?? {}),
+    qqbot_input_content_meta: {
+      hasImageInput: turnInput.hasImageInput,
+      imageCount: turnInput.imageCount,
+    } satisfies ReplyInputContentMeta,
+  };
+}
+
 function applyPreparedInputText(
   session: SessionWithVoiceState,
   context: MiddlewareContextLike,
@@ -865,7 +898,35 @@ function applyPreparedInputText(
 
   session.content = normalized;
   if (context.options?.inputMessage) {
-    context.options.inputMessage.content = normalized;
+    const currentContent = context.options.inputMessage.content;
+    if (!Array.isArray(currentContent)) {
+      context.options.inputMessage.content = normalized;
+      return;
+    }
+
+    let textUpdated = false;
+    context.options.inputMessage.content = currentContent.map((part) => {
+      if (
+        !textUpdated &&
+        part &&
+        typeof part === 'object' &&
+        (part as InputMessageContentPart).type === 'text'
+      ) {
+        textUpdated = true;
+        return {
+          ...(part as Record<string, unknown>),
+          text: normalized,
+        };
+      }
+      return part;
+    });
+
+    if (!textUpdated) {
+      context.options.inputMessage.content = [
+        { type: 'text', text: normalized },
+        ...currentContent,
+      ];
+    }
   }
 }
 
@@ -1240,13 +1301,15 @@ async function deliverReplyPlan(args: {
     preparedStickerByRaw: preparedSticker.preparedByRaw,
   });
   replyRuntime.setPlannedUnitHistory(runId, plannedUnitHistoryLines);
-  const sendAbortSignal = replyRuntime.beginSending(runId);
-  if (!sendAbortSignal || !replyRuntime.isCurrentRun(runId)) {
-    return { status: 'interrupted', historyText: replyRuntime.getCommittedHistoryText(runId) };
-  }
-
   let beganSending = false;
+  let sendAbortSignal: AbortSignal | null = null;
+  const wasSendAborted = () => (sendAbortSignal as AbortSignal | null)?.aborted === true;
   const sendTask = async () => {
+    sendAbortSignal = replyRuntime.beginSending(runId);
+    if (!sendAbortSignal || !replyRuntime.isCurrentRun(runId)) {
+      return;
+    }
+
     const { sendWhole, sendLine } = createBotMessageDispatchers(bot, session.channelId!, session);
     await dispatchOutboundMessagePlan(outboundPlan, async (segment) => {
       const historyLine = plannedUnitHistoryLines[outboundPlan.segments.indexOf(segment)] ?? '';
@@ -1320,7 +1383,7 @@ async function deliverReplyPlan(args: {
     }
   } catch (error) {
     logger.warn('reply plan delivery failed: %s', (error as Error).message);
-    if (sendAbortSignal.aborted || replyRuntime.wasInterrupted(runId)) {
+    if (wasSendAborted() || replyRuntime.wasInterrupted(runId)) {
       return { status: 'interrupted', historyText: replyRuntime.getCommittedHistoryText(runId) };
     }
     if (beganSending) {
@@ -1329,7 +1392,7 @@ async function deliverReplyPlan(args: {
     return { status: 'failed_before_send', fallbackText: effectiveFallbackText, historyText: effectiveFallbackText };
   }
 
-  if (sendAbortSignal.aborted || replyRuntime.wasInterrupted(runId)) {
+  if (!sendAbortSignal || wasSendAborted() || replyRuntime.wasInterrupted(runId)) {
     return { status: 'interrupted', historyText: replyRuntime.getCommittedHistoryText(runId) };
   }
 
@@ -1502,7 +1565,8 @@ export function apply(ctx: Context, config: Config = {}): void {
         }
         ensureReplyPluginRoom(room);
         ensureStructuredReplyJsonSchemaModel(room);
-        const turnInput = buildReplyTurnInput(session, room);
+        const turnInput = buildReplyTurnInput(session, room, context.options?.inputMessage);
+        applyReplyTurnInputMetadata(context.options?.inputMessage, turnInput);
         const routeHint = normalizeReplyRouteHint(normalizeReplyChatMode((room as { chatMode?: unknown }).chatMode));
         const orchestration = await replyOrchestrator.handle(turnInput, session, {
           routeHint,
@@ -1613,11 +1677,13 @@ export function apply(ctx: Context, config: Config = {}): void {
         ensureStructuredReplyJsonSchemaModel(room);
 
         const capability = getAuthorizedReplyCapabilitySnapshot(session, replyCapabilitySnapshots);
+        const turnInput = buildReplyTurnInput(session, room, context.options?.inputMessage);
+        applyReplyTurnInputMetadata(context.options?.inputMessage, turnInput);
         injectReplyPromptEnvelope({
           chatluna: chatlunaService,
           conversationId,
           turnContext: {
-            input: buildReplyTurnInput(session, room),
+            input: turnInput,
             policySnapshot: {
               route,
               toolRouteProfile: route,
@@ -1670,7 +1736,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             conversationId,
             room,
             mode: runMode,
-            input: buildReplyTurnInput(session, room),
+            input: buildReplyTurnInput(session, room, context.options?.inputMessage),
           });
           if (prepared.action === 'stop') {
             if (context.options) {
@@ -1690,48 +1756,56 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
         }
 
-        const turnInput = buildReplyTurnInput(session, room);
-        const routeHint = normalizeReplyRouteHint(normalizeReplyChatMode((room as { chatMode?: unknown }).chatMode));
-        const voiceFeatureState = await resolveVoiceFeatureState(session);
-
-        const snapshot =
-          getAuthorizedReplyCapabilitySnapshot(session, replyCapabilitySnapshots) ??
-          (await resolveReplyCapabilitySnapshot({
-            runtime,
-            session,
-            canSendRecordCache,
-            ttsCapabilityStates,
-            voiceOutputEnabled: voiceFeatureState.enabled && voiceFeatureState.outputEnabled,
-          }));
-        rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
-        const turnCapabilitySnapshot = buildTurnCapabilitySnapshot(session, snapshot);
-        const orchestration = await replyOrchestrator.handle(turnInput, session, {
-          responseMessage,
-          promptFragments: [],
-          capabilitySnapshot: turnCapabilitySnapshot,
-          continuationContext: null,
-          routeHint,
-        });
-
-        if (orchestration.status === 'no_reply') {
-          if (context.options) {
-            context.options.responseMessage = null;
-          }
-          return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
-        }
-        if (orchestration.status !== 'ready') {
-          throw new Error(`reply v2 orchestrator expected ready status, got ${orchestration.status}.`);
-        }
-        if (orchestration.actions.length === 1 && orchestration.actions[0]?.kind === 'no_reply') {
-          if (context.options) {
-            context.options.responseMessage = null;
-          }
-          replyRuntime.finishRun(runId);
-          return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
-        }
-
-        const executablePlan = buildReplyTransportPlanFromResolvedActions(orchestration.actions);
         try {
+          const turnInput = buildReplyTurnInput(session, room, context.options?.inputMessage);
+          applyReplyTurnInputMetadata(context.options?.inputMessage, turnInput);
+          const routeHint = normalizeReplyRouteHint(normalizeReplyChatMode((room as { chatMode?: unknown }).chatMode));
+          const voiceFeatureState = await resolveVoiceFeatureState(session);
+
+          const snapshot =
+            getAuthorizedReplyCapabilitySnapshot(session, replyCapabilitySnapshots) ??
+            (await resolveReplyCapabilitySnapshot({
+              runtime,
+              session,
+              canSendRecordCache,
+              ttsCapabilityStates,
+              voiceOutputEnabled: voiceFeatureState.enabled && voiceFeatureState.outputEnabled,
+            }));
+          rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
+          const turnCapabilitySnapshot = buildTurnCapabilitySnapshot(session, snapshot);
+          const orchestration = await replyOrchestrator.handle(turnInput, session, {
+            responseMessage,
+            promptFragments: [],
+            capabilitySnapshot: turnCapabilitySnapshot,
+            continuationContext: null,
+            routeHint,
+          });
+
+          if (orchestration.status === 'no_reply') {
+            if (context.options) {
+              context.options.responseMessage = null;
+            }
+            return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
+          }
+          if (orchestration.status !== 'ready') {
+            throw new Error(`reply v2 orchestrator expected ready status, got ${orchestration.status}.`);
+          }
+          if (orchestration.actions.length === 1 && orchestration.actions[0]?.kind === 'no_reply') {
+            if (context.options) {
+              context.options.responseMessage = null;
+            }
+            return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
+          }
+
+          const executablePlan = buildReplyTransportPlanFromResolvedActions(orchestration.actions);
+          replyRuntime.setPlannedUnitHistory(runId, buildOptimisticPlannedUnitHistoryLines(executablePlan));
+          if (!replyRuntime.completeCompute(runId)) {
+            if (context.options) {
+              context.options.responseMessage = null;
+            }
+            return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
+          }
+
           const result = await deliverReplyPlan({
             runtime,
             session,

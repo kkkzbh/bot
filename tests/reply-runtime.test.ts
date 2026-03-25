@@ -8,7 +8,7 @@ function createArgs(overrides: Record<string, unknown> = {}) {
     actorKey: 'queue:group-1:user:u1',
     conversationId: 'conv-1',
     room: { conversationId: 'conv-1' },
-    input: { text: '第一条', displayName: '用户', userId: 'u1', isDirect: true },
+    input: { text: '第一条', hasImageInput: false, imageCount: 0, displayName: '用户', userId: 'u1', isDirect: true },
     ...overrides,
   };
 }
@@ -37,7 +37,7 @@ describe('ReplyRuntime', () => {
     const nextRunPromise = runtime.prepareRun({
       ...createArgs({
         runId: 'run-2',
-        input: { text: '第二条', displayName: '用户', userId: 'u1', isDirect: true },
+        input: { text: '第二条', hasImageInput: false, imageCount: 0, displayName: '用户', userId: 'u1', isDirect: true },
       }),
       mode: 'queue',
     }).then((result) => {
@@ -65,7 +65,7 @@ describe('ReplyRuntime', () => {
 
     const first = await runtime.prepareRun({
       ...createArgs({
-        input: { text: 'A', displayName: '甲', userId: 'u1', isDirect: false },
+        input: { text: 'A', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
       }),
       mode: 'interrupt',
     });
@@ -76,7 +76,7 @@ describe('ReplyRuntime', () => {
       ...createArgs({
         runId: 'run-2',
         actorKey: 'queue:group-1:user:u2',
-        input: { text: 'B', displayName: '乙', userId: 'u2', isDirect: false },
+        input: { text: 'B', hasImageInput: false, imageCount: 0, displayName: '乙', userId: 'u2', isDirect: false },
       }),
       mode: 'interrupt',
     }).then((result) => {
@@ -98,6 +98,112 @@ describe('ReplyRuntime', () => {
     });
   });
 
+  it('starts computing the next queued speaker while the previous speaker is sending', async () => {
+    const runtime = new ReplyRuntime({
+      stopChat: vi.fn(async () => undefined),
+      collectWindowMs: 50,
+    });
+
+    await runtime.prepareRun({
+      ...createArgs({
+        input: { text: 'A1', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
+      }),
+      mode: 'interrupt',
+    });
+
+    const speakerBPromise = runtime.prepareRun({
+      ...createArgs({
+        runId: 'run-2',
+        actorKey: 'queue:group-1:user:u2',
+        input: { text: 'B1', hasImageInput: false, imageCount: 0, displayName: '乙', userId: 'u2', isDirect: false },
+      }),
+      mode: 'interrupt',
+    });
+
+    await vi.advanceTimersByTimeAsync(60);
+    expect(runtime.completeCompute('run-1')).toBe(true);
+
+    const sendSignal = runtime.beginSending('run-1');
+    expect(sendSignal).not.toBeNull();
+
+    await expect(speakerBPromise).resolves.toMatchObject({
+      action: 'continue',
+      run: expect.objectContaining({ id: 'run-2' }),
+      inputText: 'B1',
+    });
+  });
+
+  it('drops stale compute results and refreshes the cooldown window for repeated self-interruptions', async () => {
+    const stopChat = vi.fn(async () => undefined);
+    const runtime = new ReplyRuntime({
+      stopChat,
+      collectWindowMs: 50,
+    });
+
+    await runtime.prepareRun({
+      ...createArgs({
+        input: { text: 'A1', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
+      }),
+      mode: 'interrupt',
+    });
+    expect(runtime.completeCompute('run-1')).toBe(true);
+    expect(runtime.beginSending('run-1')).not.toBeNull();
+
+    const speakerB = await runtime.prepareRun({
+      ...createArgs({
+        runId: 'run-2',
+        actorKey: 'queue:group-1:user:u2',
+        input: { text: 'B1', hasImageInput: false, imageCount: 0, displayName: '乙', userId: 'u2', isDirect: false },
+      }),
+      mode: 'interrupt',
+    });
+    expect(speakerB).toMatchObject({
+      action: 'continue',
+      run: expect.objectContaining({ id: 'run-2' }),
+      inputText: 'B1',
+    });
+
+    let latestResolved = false;
+    const earlierPromise = runtime.prepareRun({
+      ...createArgs({
+        runId: 'run-3',
+        actorKey: 'queue:group-1:user:u2',
+        input: { text: 'B2', hasImageInput: false, imageCount: 0, displayName: '乙', userId: 'u2', isDirect: false },
+      }),
+      mode: 'interrupt',
+    });
+
+    expect(stopChat).toHaveBeenCalledTimes(1);
+    expect(runtime.completeCompute('run-2')).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(40);
+    await Promise.resolve();
+
+    const latestPromise = runtime.prepareRun({
+      ...createArgs({
+        runId: 'run-4',
+        actorKey: 'queue:group-1:user:u2',
+        input: { text: 'B3', hasImageInput: false, imageCount: 0, displayName: '乙', userId: 'u2', isDirect: false },
+      }),
+      mode: 'interrupt',
+    }).then((result) => {
+      latestResolved = true;
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(40);
+    await Promise.resolve();
+    expect(latestResolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(earlierPromise).resolves.toEqual({ action: 'stop' });
+    await expect(latestPromise).resolves.toMatchObject({
+      action: 'continue',
+      inputText: 'B1\nB2\nB3',
+      continuationContext: undefined,
+    });
+  });
+
   it('requeues self-interruption to the group tail behind other queued speakers', async () => {
     const stopChat = vi.fn(async () => undefined);
     const runtime = new ReplyRuntime({
@@ -107,7 +213,7 @@ describe('ReplyRuntime', () => {
 
     await runtime.prepareRun({
       ...createArgs({
-        input: { text: 'A1', displayName: '甲', userId: 'u1', isDirect: false },
+        input: { text: 'A1', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
       }),
       mode: 'interrupt',
     });
@@ -116,7 +222,7 @@ describe('ReplyRuntime', () => {
       ...createArgs({
         runId: 'run-2',
         actorKey: 'queue:group-1:user:u2',
-        input: { text: 'B1', displayName: '乙', userId: 'u2', isDirect: false },
+        input: { text: 'B1', hasImageInput: false, imageCount: 0, displayName: '乙', userId: 'u2', isDirect: false },
       }),
       mode: 'interrupt',
     });
@@ -127,7 +233,7 @@ describe('ReplyRuntime', () => {
     const selfRerunPromise = runtime.prepareRun({
       ...createArgs({
         runId: 'run-3',
-        input: { text: 'A2', displayName: '甲', userId: 'u1', isDirect: false },
+        input: { text: 'A2', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
       }),
       mode: 'interrupt',
     }).then((result) => {
@@ -163,7 +269,7 @@ describe('ReplyRuntime', () => {
 
     await runtime.prepareRun({
       ...createArgs({
-        input: { text: 'A1', displayName: '甲', userId: 'u1', isDirect: false },
+        input: { text: 'A1', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
       }),
       mode: 'interrupt',
     });
@@ -172,7 +278,7 @@ describe('ReplyRuntime', () => {
       ...createArgs({
         runId: 'run-2',
         actorKey: 'queue:group-1:user:u2',
-        input: { text: 'B1', displayName: '乙', userId: 'u2', isDirect: false },
+        input: { text: 'B1', hasImageInput: false, imageCount: 0, displayName: '乙', userId: 'u2', isDirect: false },
       }),
       mode: 'interrupt',
     });
@@ -182,7 +288,7 @@ describe('ReplyRuntime', () => {
     const earlierSelfPromise = runtime.prepareRun({
       ...createArgs({
         runId: 'run-3',
-        input: { text: 'A2', displayName: '甲', userId: 'u1', isDirect: false },
+        input: { text: 'A2', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
       }),
       mode: 'interrupt',
     });
@@ -190,7 +296,7 @@ describe('ReplyRuntime', () => {
     const latestSelfPromise = runtime.prepareRun({
       ...createArgs({
         runId: 'run-4',
-        input: { text: 'A3', displayName: '甲', userId: 'u1', isDirect: false },
+        input: { text: 'A3', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
       }),
       mode: 'interrupt',
     });
@@ -216,11 +322,12 @@ describe('ReplyRuntime', () => {
 
     await runtime.prepareRun({
       ...createArgs({
-        input: { text: '第一条', displayName: '甲', userId: 'u1', isDirect: false },
+        input: { text: '第一条', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
       }),
       mode: 'interrupt',
     });
     runtime.setPlannedUnitHistory('run-1', ['第一句', '第二句', '第三句']);
+    expect(runtime.completeCompute('run-1')).toBe(true);
     const sendSignal = runtime.beginSending('run-1');
     runtime.recordCommittedUnit('run-1', '第一句');
 
@@ -228,7 +335,7 @@ describe('ReplyRuntime', () => {
       ...createArgs({
         runId: 'run-2',
         actorKey: 'queue:group-1:user:u2',
-        input: { text: 'B1', displayName: '乙', userId: 'u2', isDirect: false },
+        input: { text: 'B1', hasImageInput: false, imageCount: 0, displayName: '乙', userId: 'u2', isDirect: false },
       }),
       mode: 'interrupt',
     });
@@ -236,7 +343,7 @@ describe('ReplyRuntime', () => {
     const earlierSelfPromise = runtime.prepareRun({
       ...createArgs({
         runId: 'run-3',
-        input: { text: '补充一', displayName: '甲', userId: 'u1', isDirect: false },
+        input: { text: '补充一', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
       }),
       mode: 'interrupt',
     });
@@ -244,7 +351,7 @@ describe('ReplyRuntime', () => {
     const latestSelfPromise = runtime.prepareRun({
       ...createArgs({
         runId: 'run-4',
-        input: { text: '最新问题', displayName: '甲', userId: 'u1', isDirect: false },
+        input: { text: '最新问题', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
       }),
       mode: 'interrupt',
     });

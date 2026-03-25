@@ -126,6 +126,8 @@ describe('prompt assembly', () => {
         {
           input: {
             text: '当前是 agent reply 主链路',
+            hasImageInput: true,
+            imageCount: 1,
             displayName: '小祥',
             userId: 'u1',
             isDirect: true,
@@ -155,6 +157,8 @@ describe('prompt assembly', () => {
     expect(compiledContent).not.toContain('最终输出遵循结构化响应');
     expect(compiledContent).toContain('voice.content');
     expect(compiledContent).toContain('meme.content');
+    expect(compiledContent).toContain('"hasImageInput": true');
+    expect(compiledContent).toContain('"imageCount": 1');
     expect(compiledContent).not.toContain('submit_reply_plan');
     expect(compiledContent).not.toContain('submit_working_state');
   });
