@@ -23,6 +23,7 @@ export interface ReplyRuntimePrepareResult {
   action: 'continue' | 'stop';
   run?: ReplyRuntimeRun;
   inputText?: string;
+  inputTextSpeakerTagged?: boolean;
   continuationContext?: ReplyTurnContinuationContext;
 }
 
@@ -89,29 +90,44 @@ function normalizeInputText(text: string): string {
   return text.replace(/\r\n?/g, '\n').trim();
 }
 
+function formatSpeakerName(name: string): string {
+  return JSON.stringify(name);
+}
+
 function formatInputWithIdentity(input: ReplyTurnInput): string {
   const text = normalizeInputText(input.text);
   if (!text) return '';
   if (input.isDirect) return text;
-  return `[${input.displayName}/${input.userId}] ${text}`;
+  return `[speaker_id=${input.userId} speaker_name=${formatSpeakerName(input.displayName)}] ${text}`;
 }
 
-function renderAggregatedInput(inputs: ReplyTurnInput[]): string {
+function renderAggregatedInput(inputs: ReplyTurnInput[]): { text: string; speakerTagged: boolean } {
   const normalized = inputs
     .map((input) => ({
       ...input,
       text: normalizeInputText(input.text),
     }))
     .filter((input) => input.text);
-  if (!normalized.length) return '';
+  if (!normalized.length) {
+    return {
+      text: '',
+      speakerTagged: false,
+    };
+  }
 
   const firstUserId = normalized[0].userId;
   const sameUser = normalized.every((input) => input.userId === firstUserId);
   if (sameUser) {
-    return normalized.map((input) => input.text).join('\n').trim();
+    return {
+      text: normalized.map((input) => input.text).join('\n').trim(),
+      speakerTagged: false,
+    };
   }
 
-  return normalized.map((input) => formatInputWithIdentity(input)).filter(Boolean).join('\n').trim();
+  return {
+    text: normalized.map((input) => formatInputWithIdentity(input)).filter(Boolean).join('\n').trim(),
+    speakerTagged: true,
+  };
 }
 
 function buildSupplementalMessages(inputs: ReplyTurnInput[]): string[] {
@@ -160,6 +176,7 @@ export class ReplyRuntime {
         action: 'continue',
         run,
         inputText: normalizeInputText(args.input.text),
+        inputTextSpeakerTagged: false,
       };
     }
 
@@ -190,6 +207,7 @@ export class ReplyRuntime {
         action: 'continue',
         run,
         inputText: normalizeInputText(args.input.text),
+        inputTextSpeakerTagged: false,
       };
     }
 
@@ -487,8 +505,11 @@ export class ReplyRuntime {
           supplementalMessages: buildSupplementalMessages(earlier.map((entry) => entry.input)),
         }
       : undefined;
-    const inputText = state.snapshot.hasModelOutput
-      ? normalizeInputText(carrier.input.text)
+    const aggregatedInput = state.snapshot.hasModelOutput
+      ? {
+          text: normalizeInputText(carrier.input.text),
+          speakerTagged: false,
+        }
       : renderAggregatedInput([
           ...(state.snapshot.baseInput ? [state.snapshot.baseInput] : []),
           ...state.pending.map((entry) => entry.input),
@@ -506,7 +527,8 @@ export class ReplyRuntime {
     carrier.resolve({
       action: 'continue',
       run,
-      inputText,
+      inputText: aggregatedInput.text,
+      inputTextSpeakerTagged: aggregatedInput.speakerTagged,
       continuationContext,
     });
   }

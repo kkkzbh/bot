@@ -883,11 +883,21 @@ describe('qq voice plugin', () => {
     expect(injectedEnvelope).toBeDefined();
 
     const envelopeText = (injectedEnvelope?.value ?? []).map((message: { content?: unknown }) => String(message?.content ?? '')).join('\n');
-    expect(envelopeText).toContain('[] 内是发言者身份标记');
-    expect(envelopeText).toContain('不同标记的消息当成同一个人');
-    expect(envelopeText).toContain('当前主输入对应的发言者才是本轮直接回应对象');
-    expect(envelopeText).toContain('"displayName": "小祥"');
-    expect(envelopeText).toContain('"userId": "u2"');
+    expect(envelopeText).toContain('speaker_id=<id>');
+    expect(envelopeText).toContain('不同 speaker_id 的消息当成同一个人');
+    expect(envelopeText).toContain('最新一条真实用户消息对应本轮直接回应对象');
+    expect(envelopeText).not.toContain('"displayName": "小祥"');
+    expect(envelopeText).not.toContain('"userId": "u2"');
+    expect(context.options.inputMessage.additional_kwargs).toEqual(
+      expect.objectContaining({
+        qqbot_speaker_format: {
+          version: 'speaker_id_v1',
+          speakerId: 'u2',
+          speakerName: '小祥',
+          isDirect: false,
+        },
+      }),
+    );
   });
 
   it('rejects non-plugin rooms during prepare before the model runs', async () => {

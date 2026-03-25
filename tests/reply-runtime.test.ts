@@ -499,7 +499,7 @@ describe('ReplyRuntime', () => {
       continuationContext: {
         alreadySentText: '第一句',
         pendingUnitTexts: ['第二句', '第三句'],
-        supplementalMessages: ['[甲/u1] 补充一'],
+        supplementalMessages: ['[speaker_id=u1 speaker_name="甲"] 补充一'],
       },
     });
   });

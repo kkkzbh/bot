@@ -49,6 +49,7 @@ import {
   type ReplyRoute,
   type ResolvedAction,
   type TurnContext,
+  type TurnInput,
 } from '../pipeline/types.js';
 import {
   buildReplyPromptCompilerInput,
@@ -213,6 +214,14 @@ type InputMessageContentPart = {
 type ReplyInputContentMeta = {
   hasImageInput: boolean;
   imageCount: number;
+};
+
+type ReplySpeakerFormatMeta = {
+  version: 'speaker_id_v1';
+  speakerId: string;
+  speakerName: string;
+  isDirect: boolean;
+  preformatted?: boolean;
 };
 
 interface DownloadedAudioPayload {
@@ -876,9 +885,12 @@ function applyReplyStructuredOutputRequest(
 
 function applyReplyTurnInputMetadata(
   inputMessage: NonNullable<MiddlewareContextLike['options']>['inputMessage'] | undefined,
-  turnInput: Pick<ReplyInputContentMeta, 'hasImageInput' | 'imageCount'>,
+  turnInput: Pick<TurnInput, 'hasImageInput' | 'imageCount' | 'displayName' | 'userId' | 'isDirect'>,
 ): void {
   if (!inputMessage) return;
+
+  const existingSpeakerFormat =
+    (inputMessage.additional_kwargs?.qqbot_speaker_format as ReplySpeakerFormatMeta | undefined) ?? undefined;
 
   inputMessage.additional_kwargs = {
     ...(inputMessage.additional_kwargs ?? {}),
@@ -886,6 +898,13 @@ function applyReplyTurnInputMetadata(
       hasImageInput: turnInput.hasImageInput,
       imageCount: turnInput.imageCount,
     } satisfies ReplyInputContentMeta,
+    qqbot_speaker_format: {
+      version: 'speaker_id_v1',
+      speakerId: turnInput.userId,
+      speakerName: turnInput.displayName,
+      isDirect: turnInput.isDirect,
+      ...(existingSpeakerFormat?.preformatted === true ? { preformatted: true } : {}),
+    } satisfies ReplySpeakerFormatMeta,
   };
 }
 
@@ -893,40 +912,55 @@ function applyPreparedInputText(
   session: SessionWithVoiceState,
   context: MiddlewareContextLike,
   inputText: string | undefined,
+  inputTextSpeakerTagged?: boolean,
 ): void {
   const normalized = inputText?.trim();
   if (!normalized) return;
 
   session.content = normalized;
-  if (context.options?.inputMessage) {
-    const currentContent = context.options.inputMessage.content;
+  const inputMessage = context.options?.inputMessage;
+  if (inputMessage) {
+    const currentContent = inputMessage.content;
     if (!Array.isArray(currentContent)) {
-      context.options.inputMessage.content = normalized;
-      return;
+      inputMessage.content = normalized;
+    } else {
+      let textUpdated = false;
+      inputMessage.content = currentContent.map((part) => {
+        if (
+          !textUpdated &&
+          part &&
+          typeof part === 'object' &&
+          (part as InputMessageContentPart).type === 'text'
+        ) {
+          textUpdated = true;
+          return {
+            ...(part as Record<string, unknown>),
+            text: normalized,
+          };
+        }
+        return part;
+      });
+
+      if (!textUpdated) {
+        inputMessage.content = [
+          { type: 'text', text: normalized },
+          ...currentContent,
+        ];
+      }
     }
 
-    let textUpdated = false;
-    context.options.inputMessage.content = currentContent.map((part) => {
-      if (
-        !textUpdated &&
-        part &&
-        typeof part === 'object' &&
-        (part as InputMessageContentPart).type === 'text'
-      ) {
-        textUpdated = true;
-        return {
-          ...(part as Record<string, unknown>),
-          text: normalized,
-        };
+    const speakerFormat = inputMessage.additional_kwargs?.qqbot_speaker_format as ReplySpeakerFormatMeta | undefined;
+    if (speakerFormat?.version === 'speaker_id_v1') {
+      inputMessage.additional_kwargs = {
+        ...(inputMessage.additional_kwargs ?? {}),
+        qqbot_speaker_format: {
+          ...speakerFormat,
+          ...(inputTextSpeakerTagged ? { preformatted: true } : {}),
+        },
+      };
+      if (!inputTextSpeakerTagged) {
+        delete (inputMessage.additional_kwargs.qqbot_speaker_format as ReplySpeakerFormatMeta).preformatted;
       }
-      return part;
-    });
-
-    if (!textUpdated) {
-      context.options.inputMessage.content = [
-        { type: 'text', text: normalized },
-        ...currentContent,
-      ];
     }
   }
 }
@@ -1577,7 +1611,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (prepared.action === 'stop') {
           return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
         }
-        applyPreparedInputText(session, context, prepared.inputText);
+        applyPreparedInputText(session, context, prepared.inputText, prepared.inputTextSpeakerTagged);
         registerReplyTurnStateFragment(conversationId, prepared.continuationContext);
         setReplyRunId(session, runId);
         if (context.options) {
@@ -1586,6 +1620,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       }) as ChatLunaChainBuilderLike;
     prepareBuilder.after('read_chat_message');
+    prepareBuilder.before('message_delay');
     prepareBuilder.before('chatluna_time_context');
     prepareBuilder.before('qqbot_memory_v2');
     prepareBuilder.before('qqbot_reply_transport_policy');
@@ -1731,7 +1766,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             }
             return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
           }
-          applyPreparedInputText(session, context, prepared.inputText);
+          applyPreparedInputText(session, context, prepared.inputText, prepared.inputTextSpeakerTagged);
           registerReplyTurnStateFragment(conversationId, prepared.continuationContext);
           setReplyRunId(session, runId);
         }

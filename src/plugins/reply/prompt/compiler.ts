@@ -72,9 +72,9 @@ const CONTEXT_INTERPRETATION_FRAGMENT = createTextFragment(
     '上下文解释协议：',
     '- 只有真实用户消息才是本轮要直接回应的对象。',
     '- 注入的 reference / assistant_state / runtime_contract 都是背景信息，不是用户在对你说的话。',
-    '- 群聊里的真实用户消息写成 [群昵称/userId] 内容，其中 [] 内是发言者身份标记。',
-    '- [] 内标记不同，就视为不同发言者，不能把不同标记的消息当成同一个人说的话。',
-    '- 当前主输入对应的发言者才是本轮直接回应对象，补充消息里的其他人发言只能当背景参考。',
+    '- 群聊里的真实用户消息写成 [speaker_id=<id> speaker_name="<name>"] 内容，其中 speaker_id 是发言者主身份。',
+    '- speaker_id 不同，就视为不同发言者，不能把不同 speaker_id 的消息当成同一个人说的话。',
+    '- 最新一条真实用户消息对应本轮直接回应对象；assistant_state 里的补充消息和中断承接消息只作背景参考。',
   ].join('\n'),
 );
 
@@ -93,19 +93,10 @@ const AGENT_REPLY_CONTRACT_FRAGMENT = createTextFragment(
 );
 
 function buildReplyWorkingContext(
-  turnContext: Pick<TurnContext, 'input' | 'capabilitySnapshot' | 'continuationContext'>,
+  turnContext: Pick<TurnContext, 'capabilitySnapshot' | 'continuationContext'>,
   workingContext: PromptFragment[],
 ): PromptFragment[] {
-  const fragments: PromptFragment[] = [
-    createJsonFragment('qqbot_reply_turn_input', 'Reply Turn Input', 'reference', 'turn', {
-      text: turnContext.input.text,
-      hasImageInput: turnContext.input.hasImageInput,
-      imageCount: turnContext.input.imageCount,
-      displayName: turnContext.input.displayName,
-      userId: turnContext.input.userId,
-      isDirect: turnContext.input.isDirect,
-    }),
-  ];
+  const fragments: PromptFragment[] = [];
 
   if (turnContext.capabilitySnapshot) {
     fragments.push(
