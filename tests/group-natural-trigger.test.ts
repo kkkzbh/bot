@@ -153,6 +153,7 @@ async function runAndCapture(
 describe('group natural trigger middleware', () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it('shares focus within the same group and keeps other groups isolated', async () => {
@@ -245,6 +246,49 @@ describe('group natural trigger middleware', () => {
 
     expect(result.content).toBe('');
     expect(result.naturalTrigger).toEqual({ reason: 'quote', explicit: true });
+  });
+
+  it('sends only the user message content to the decision model', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '{"trigger":true,"confidence":0.9}',
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { middleware } = createHarness({
+      replyIntervalMs: 0,
+      decisionEnabled: true,
+      decisionBaseUrl: 'https://decision.example/v1',
+      decisionApiKey: 'test-key',
+      decisionModel: 'test-model',
+    });
+
+    const result = await runAndCapture(
+      middleware,
+      createSession({
+        content: '普通闲聊一下',
+      }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const requestBody = JSON.parse(String(requestInit?.body ?? '{}')) as {
+      messages?: Array<{ role?: string; content?: string }>;
+    };
+
+    expect(requestBody.messages?.[1]?.role).toBe('user');
+    expect(requestBody.messages?.[1]?.content).toBe('消息: 普通闲聊一下');
+    expect(result.naturalTrigger).toEqual({ reason: 'model', explicit: false });
   });
 
   it('does not trigger image-only group messages without an existing trigger condition', async () => {

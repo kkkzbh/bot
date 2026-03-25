@@ -228,7 +228,7 @@ async function shouldTriggerByModel(content: string, runtime: RuntimeConfig): Pr
           { role: 'system', content: systemPrompt },
           {
             role: 'user',
-            content: `机器人别名: ${runtime.aliases.join(', ')}\n消息: ${content}`,
+            content: `消息: ${content}`,
           },
         ],
       }),
