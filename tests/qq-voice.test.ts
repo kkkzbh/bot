@@ -1024,6 +1024,45 @@ describe('qq voice plugin', () => {
     );
   });
 
+  it('treats empty text structured replies as no_reply and dispatches nothing', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '先别说了',
+      strippedContent: '先别说了',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-empty-reply'),
+        responseMessage: createReplyV2Response({
+          decision: 'reply',
+          messages: [{ modality: 'text', content: '' }],
+        }),
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeResearchReplyHistory).not.toHaveBeenCalled();
+  });
+
   it('quotes only the first dispatched text segment when the runtime exposes a first-reply quote target', async () => {
     const { ready, getPrepare, getExecutor, bot } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));

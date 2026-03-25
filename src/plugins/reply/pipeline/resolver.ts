@@ -20,7 +20,7 @@ export class ActionResolverService {
     for (const message of messages) {
       const content = sanitizeStructuredReplySegmentContent(message.content);
       if (!content) {
-        throw new Error(`structured reply ${message.modality} message is empty after normalization.`);
+        continue;
       }
 
       if (message.modality === 'voice') {
@@ -43,7 +43,7 @@ export class ActionResolverService {
     }
 
     if (!resolved.length) {
-      throw new Error('structured reply resolved to zero executable actions.');
+      return [{ kind: 'no_reply' }];
     }
 
     return resolved;

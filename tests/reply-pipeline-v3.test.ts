@@ -1,4 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('koishi', () => ({
+  h: {
+    parse: () => [],
+  },
+}));
+
 import { normalizeReplyChatMode } from '../src/plugins/reply/compat.js';
 import { buildReplyTurnContext, buildReplyTurnInput, normalizeReplyRouteHint } from '../src/plugins/reply/pipeline/context-builder.js';
 import { ReplyOrchestratorService } from '../src/plugins/reply/pipeline/orchestrator.js';
@@ -154,6 +161,27 @@ describe('reply pipeline v3', () => {
         }),
       }),
     ).rejects.toThrow('must include at least one message');
+  });
+
+  it('treats reply outputs with only empty normalized messages as no_reply', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+
+    await expect(
+      orchestrator.handle(createTurnInput('回一句'), {} as never, {
+        routeHint: 'agent',
+        responseMessage: createStructuredResponse({
+          decision: 'reply',
+          messages: [{ modality: 'text', content: '' }],
+        }),
+      }),
+    ).resolves.toMatchObject({
+      status: 'ready',
+      reply: {
+        decision: 'reply',
+        messages: [{ modality: 'text', content: '' }],
+      },
+      actions: [{ kind: 'no_reply' }],
+    });
   });
 
   it('accepts strict JSON strings and rejects non-JSON text immediately', async () => {
