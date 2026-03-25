@@ -3,7 +3,12 @@ import {
   buildProactiveOpeningState,
   resolveUserTurnIntentState,
 } from '../src/plugins/reply/prompt/time-context.js';
-import { inferPlatformFromBaseUrl, normalizeRawModelName, resolvePlatform } from '../src/plugins/shared/llm/index.js';
+import {
+  buildSiliconFlowKimiK25NonThinkingOverride,
+  inferPlatformFromBaseUrl,
+  normalizeRawModelName,
+  resolvePlatform,
+} from '../src/plugins/shared/llm/index.js';
 import { resolveSessionDisplayName } from '../src/plugins/shared/session/index.js';
 
 describe('resolvePlatform', () => {
@@ -66,6 +71,21 @@ describe('normalizeRawModelName', () => {
         defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
       }),
     ).toBe('siliconflow/Pro/moonshotai/Kimi-K2.5');
+  });
+});
+
+describe('buildSiliconFlowKimiK25NonThinkingOverride', () => {
+  it('returns a non-thinking override for SiliconFlow Kimi K2.5', () => {
+    expect(buildSiliconFlowKimiK25NonThinkingOverride('siliconflow/Pro/moonshotai/Kimi-K2.5')).toEqual({
+      thinking: {
+        type: 'disabled',
+      },
+    });
+  });
+
+  it('returns null for non-Kimi-K2.5 models', () => {
+    expect(buildSiliconFlowKimiK25NonThinkingOverride('deepseek/deepseek-chat')).toBeNull();
+    expect(buildSiliconFlowKimiK25NonThinkingOverride('siliconflow/Pro/moonshotai/Kimi-K2-Instruct-0905')).toBeNull();
   });
 });
 

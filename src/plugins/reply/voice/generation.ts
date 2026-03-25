@@ -43,7 +43,10 @@ import {
 import { normalizeReplyChatMode } from '../compat.js';
 import { ReplyOrchestratorService } from '../pipeline/orchestrator.js';
 import { buildReplyTurnInput, normalizeReplyRouteHint } from '../pipeline/context-builder.js';
-import { supportsStructuredReplyJsonSchema } from '../../shared/llm/index.js';
+import {
+  buildSiliconFlowKimiK25NonThinkingOverride,
+  supportsStructuredReplyJsonSchema,
+} from '../../shared/llm/index.js';
 import {
   STRUCTURED_REPLY_V1_JSON_SCHEMA,
   type ReplyRoute,
@@ -872,15 +875,42 @@ function ensureStructuredReplyJsonSchemaModel(room: ReplyRuntimeRoomLike | undef
 }
 
 function applyReplyStructuredOutputRequest(
+  room: ReplyRuntimeRoomLike | undefined,
   inputMessage: NonNullable<MiddlewareContextLike['options']>['inputMessage'] | undefined,
 ): void {
   if (!inputMessage) return;
+
+  const overrideRequestParams = mergeReplyOverrideRequestParams(
+    inputMessage.additional_kwargs,
+    buildSiliconFlowKimiK25NonThinkingOverride(room?.model),
+  );
 
   inputMessage.additional_kwargs = {
     ...(inputMessage.additional_kwargs ?? {}),
     qqbot_reply_mode: 'agent',
     qqbot_final_response_schema: STRUCTURED_REPLY_V1_JSON_SCHEMA,
+    ...(overrideRequestParams ? { overrideRequestParams } : {}),
   };
+}
+
+function mergeReplyOverrideRequestParams(
+  additionalKwargs: Record<string, unknown> | undefined,
+  overridePatch: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  const existingOverride =
+    asPlainRecord(additionalKwargs?.overrideRequestParams) ??
+    asPlainRecord(additionalKwargs?.qqbot_override_request_params);
+
+  if (!existingOverride && !overridePatch) return null;
+  return {
+    ...(existingOverride ?? {}),
+    ...(overridePatch ?? {}),
+  };
+}
+
+function asPlainRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
 }
 
 function applyReplyTurnInputMetadata(
@@ -1714,7 +1744,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             continuationContext: null,
           },
         });
-        applyReplyStructuredOutputRequest(context.options?.inputMessage);
+        applyReplyStructuredOutputRequest(room, context.options?.inputMessage);
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       }) as ChatLunaChainBuilderLike;
     promptCompilerBuilder.after('qqbot_reply_transport_policy');

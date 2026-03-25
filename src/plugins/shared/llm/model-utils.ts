@@ -19,6 +19,19 @@ export function inferPlatformFromBaseUrl(baseUrl?: string): string | null {
 }
 
 export function supportsStructuredReplyJsonSchema(model?: string | null): boolean {
+  return isSiliconFlowKimiK25Model(model);
+}
+
+export function buildSiliconFlowKimiK25NonThinkingOverride(model?: string | null): Record<string, unknown> | null {
+  if (!isSiliconFlowKimiK25Model(model)) return null;
+  return {
+    thinking: {
+      type: 'disabled',
+    },
+  };
+}
+
+function isSiliconFlowKimiK25Model(model?: string | null): boolean {
   const value = model?.trim();
   if (!value) return false;
   return resolvePlatform(value) === 'siliconflow' && /kimi-k2\.5/i.test(value);

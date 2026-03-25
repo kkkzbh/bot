@@ -140,6 +140,14 @@ describe('chatluna prompt pollution regression', () => {
     expect(executorSource).toContain('overrideRequestParams');
   });
 
+  it('forces SiliconFlow Kimi K2.5 structured reply requests into non-thinking mode', () => {
+    const generationSource = readFileSync(join(process.cwd(), 'src/plugins/reply/voice/generation.ts'), 'utf8');
+
+    expect(generationSource).toContain('buildSiliconFlowKimiK25NonThinkingOverride');
+    expect(generationSource).toContain('mergeReplyOverrideRequestParams');
+    expect(generationSource).toContain('overrideRequestParams');
+  });
+
   it('uses a chatluna context manager build that accepts plain prompt message objects', () => {
     const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
     const packageRoot = dirname(packageJsonPath);
