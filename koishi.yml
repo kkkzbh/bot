@@ -250,7 +250,7 @@ plugins:
       extractBaseUrl: ${{ env.MEMORY_EXTRACT_BASE_URL || 'https://api.siliconflow.cn/v1' }}
       extractApiKey: ${{ env.MEMORY_EXTRACT_API_KEY || '' }}
       extractModel: ${{ env.MEMORY_EXTRACT_MODEL || 'moonshotai/Kimi-K2-Instruct-0905' }}
-      extractTimeoutMs: ${{ +env.MEMORY_EXTRACT_TIMEOUT_MS || 15000 }}
+      extractTimeoutMs: ${{ +env.MEMORY_EXTRACT_TIMEOUT_MS || 60000 }}
       embedBaseUrl: ${{ env.MEMORY_EMBED_BASE_URL || 'https://api.siliconflow.cn/v1' }}
       embedApiKey: ${{ env.MEMORY_EMBED_API_KEY || '' }}
       embedModel: ${{ env.MEMORY_EMBED_MODEL || 'Qwen/Qwen3-Embedding-8B' }}

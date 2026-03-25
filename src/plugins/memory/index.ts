@@ -57,7 +57,7 @@ export const Config: Schema<Config> = Schema.object({
   extractBaseUrl: Schema.string().description('长期记忆提炼用 OpenAI 兼容 Base URL。'),
   extractApiKey: Schema.string().role('secret').description('长期记忆提炼用 API Key。'),
   extractModel: Schema.string().description('长期记忆提炼模型。'),
-  extractTimeoutMs: Schema.natural().role('time').default(15000).description('长期记忆提炼请求超时（毫秒）。'),
+  extractTimeoutMs: Schema.natural().role('time').default(60000).description('长期记忆提炼请求超时（毫秒）。'),
   embedBaseUrl: Schema.string().role('link').default(DEFAULT_EMBED_BASE_URL).description('embedding 服务 Base URL。'),
   embedApiKey: Schema.string().role('secret').description('embedding 服务 API Key。'),
   embedModel: Schema.string().default('Qwen/Qwen3-Embedding-8B').description('embedding 模型。'),
@@ -140,7 +140,7 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
       baseUrl: String(config.extractBaseUrl ?? '').trim(),
       apiKey: String(config.extractApiKey ?? '').trim(),
       model: String(config.extractModel ?? '').trim(),
-      timeoutMs: clampNatural(config.extractTimeoutMs, 15000, 3000),
+      timeoutMs: clampNatural(config.extractTimeoutMs, 60000, 3000),
     },
     embed: {
       baseUrl: String(config.embedBaseUrl ?? DEFAULT_EMBED_BASE_URL).trim(),
