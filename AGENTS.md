@@ -26,6 +26,8 @@
 - 服务器运行态使用 `root` 的 user-level systemd：unit 位于 `/root/.config/systemd/user`，目标仍是 `qqbot.target`。
 - 不要重建旧的 `/etc/systemd/system/qqbot*.service` 或 `/etc/systemd/system/qqbot.target`；线上只认 root user-level unit。
 - 线上环境变量文件为 `/opt/qqbot/current/.env.server`，来源是 GitHub secret `QQBOT_DOTENV`。
+- 服务器部署不支持 voice：不要在服务器上构建或启动 `voice-asr`，并保持 `QQ_VOICE_ENABLED=false`。
+- 服务器容器栈只拉起 `pmhq + llonebot`；voice 仅保留本地环境。
 - 当前常用线上排查命令：`ssh -o ClearAllForwardings=yes bot 'systemctl --user status qqbot.target qqbot-stack.service qqbot-koishi.service'`
 - 当前本机已约定 `ssh bot` 作为入口，并自带 SSH 隧道：本地 `13080 -> 服务器 3080`（WebUI），本地 `15140 -> 服务器 5140`（Koishi 控制台）。
 - 若需要只执行远程命令而不占用本地转发端口，追加 `-o ClearAllForwardings=yes`。

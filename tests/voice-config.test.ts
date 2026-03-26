@@ -44,12 +44,15 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('VOICE_TTS_REF_BLACK=/data/voice/tts/references/black_sakiko.wav');
   });
 
-  it('ships a dedicated server env template with tailnet TTS routing', () => {
+  it('ships a server env template with voice disabled', () => {
     const content = readFileSync(resolve(process.cwd(), '.env.server.example'), 'utf8');
 
-    expect(content).toContain('QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161');
-    expect(content).toContain('QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162');
-    expect(content).toContain('QQ_VOICE_TTS_API_KEY=qqbot-voice-tts-token');
+    expect(content).toContain('QQ_VOICE_ENABLED=false');
+    expect(content).toContain('QQ_VOICE_INPUT_ENABLED=false');
+    expect(content).toContain('QQ_VOICE_OUTPUT_ENABLED=false');
+    expect(content).toContain('QQ_VOICE_ASR_BASE_URL=');
+    expect(content).toContain('QQ_VOICE_TTS_BASE_URL=');
+    expect(content).toContain('# Server deploy does not run voice-asr.');
   });
 
   it('ships a laptop-local TTS env template and user service example', () => {
@@ -104,23 +107,25 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('<qqbot-voice>');
   });
 
-  it('restarts the full compose stack during deploy instead of a hard-coded subset', () => {
+  it('deploys a server stack without voice-asr and forces server voice off', () => {
     const content = readFileSync(resolve(process.cwd(), '.github/workflows/deploy.yml'), 'utf8');
 
     expect(content).toContain('PODMAN_COMPOSE_BIN="$(command -v podman-compose)"');
     expect(content).toContain('PODMAN_NETWORK_NAME="qqbot-stack_app_network"');
     expect(content).toContain("podman network exists ${PODMAN_NETWORK_NAME} >/dev/null 2>&1 || podman network create ${PODMAN_NETWORK_NAME} >/dev/null");
     expect(content).toContain(`sed -i 's/\\"cniVersion\\": \\"1.0.0\\"/\\"cniVersion\\": \\"0.4.0\\"/' '\${PODMAN_CNI_CONFIG}'`);
+    expect(content).toContain('podman rm -f qqbot-voice-asr >/dev/null 2>&1 || true');
     expect(content).toContain('retry_cmd() {');
     expect(content).toContain('ConnectTimeout=30');
     expect(content).toContain('ConnectionAttempts=5');
-    expect(content).toContain('ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --build');
-    expect(content).toContain('ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop');
+    expect(content).toContain('ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --force-recreate pmhq llbot');
+    expect(content).toContain('ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop pmhq llbot');
     expect(content).toContain("--exclude='.env.local'");
     expect(content).toContain("--exclude='.env.server'");
     expect(content).toContain("cat > '${DEPLOY_APP_DIR}/.env.server'");
     expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
-    expect(content).not.toContain('up -d ollama pmhq llbot');
+    expect(content).toContain('export QQ_VOICE_ENABLED=false QQ_VOICE_INPUT_ENABLED=false QQ_VOICE_OUTPUT_ENABLED=false');
+    expect(content).not.toContain('up -d --build --force-recreate');
   });
 
   it('lets stickers sync resolve local env first and server env second', () => {

@@ -345,9 +345,9 @@ jobs:
           Type=oneshot
           WorkingDirectory=${APP_DIR}
           Environment=CONTAINERS_CONF=${APP_DIR}/config/podman/containers.conf
-          ExecStartPre=/usr/bin/env bash -lc "podman network exists ${PODMAN_NETWORK_NAME} >/dev/null 2>&1 || podman network create ${PODMAN_NETWORK_NAME} >/dev/null; if [ -f '${PODMAN_CNI_CONFIG}' ]; then sed -i 's/\"cniVersion\": \"1.0.0\"/\"cniVersion\": \"0.4.0\"/' '${PODMAN_CNI_CONFIG}'; fi"
-          ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --build --force-recreate
-          ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop
+          ExecStartPre=/usr/bin/env bash -lc "podman network exists ${PODMAN_NETWORK_NAME} >/dev/null 2>&1 || podman network create ${PODMAN_NETWORK_NAME} >/dev/null; if [ -f '${PODMAN_CNI_CONFIG}' ]; then sed -i 's/\"cniVersion\": \"1.0.0\"/\"cniVersion\": \"0.4.0\"/' '${PODMAN_CNI_CONFIG}'; fi; podman rm -f qqbot-voice-asr >/dev/null 2>&1 || true"
+          ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --force-recreate pmhq llbot
+          ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop pmhq llbot
           RemainAfterExit=yes
 
           [Install]
@@ -365,7 +365,7 @@ jobs:
           Type=simple
           WorkingDirectory=${APP_DIR}
           EnvironmentFile=${APP_DIR}/.env.server
-          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && QQBOT_ENV_FILE=${APP_DIR}/.env.server pnpm start'
+          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && export QQ_VOICE_ENABLED=false QQ_VOICE_INPUT_ENABLED=false QQ_VOICE_OUTPUT_ENABLED=false QQ_VOICE_ASR_BASE_URL= QQ_VOICE_ASR_API_KEY= QQ_VOICE_TTS_BASE_URL= QQ_VOICE_TTS_API_KEY=; QQBOT_ENV_FILE=${APP_DIR}/.env.server pnpm start'
           Restart=always
           RestartSec=5
 
