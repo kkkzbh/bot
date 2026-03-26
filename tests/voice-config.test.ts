@@ -149,6 +149,12 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('mkdir -p "${CHATLUNA_DIR}/.yarn-cache"');
     expect(content).toContain('YARN_CACHE_FOLDER="${CHATLUNA_DIR}/.yarn-cache"');
     expect(content).toContain('corepack yarn install --frozen-lockfile');
+    expect(content).toContain('command -v google-chrome >/dev/null 2>&1');
+    expect(content).toContain('google-chrome-stable_current_amd64.deb');
+    expect(content).toContain('apt-get purge -y chromium-browser >/dev/null 2>&1 || true');
+    expect(content).toContain('snap remove --purge chromium >/dev/null 2>&1 || true');
+    expect(content).not.toContain('apt-get install -y chromium-browser');
+    expect(content).not.toContain('apt-get install -y chromium');
     expect(content).not.toContain('pnpm install --no-frozen-lockfile');
     expect(content).not.toContain('up -d --build --force-recreate');
   });

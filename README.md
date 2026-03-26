@@ -516,12 +516,19 @@ sudo chown -R root:root /opt/qqbot
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y curl git podman podman-compose rsync sqlite3
+sudo apt-get install -y curl git podman podman-compose rsync sqlite3 wget
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
+wget -q -O /tmp/google-chrome-stable_current_amd64.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+sudo apt-get install -y /tmp/google-chrome-stable_current_amd64.deb
+sudo apt-get purge -y chromium-browser || true
+sudo snap remove --purge chromium || true
 sudo corepack enable
 sudo corepack prepare pnpm@9.15.4 --activate
 ```
+
+Server deploy is pinned to `.deb` Google Chrome for Puppeteer. Do not install the
+`chromium-browser` transition package or rely on the Chromium snap on Ubuntu.
 
 3. Enable linger so `systemd --user` services survive logout:
 
@@ -576,6 +583,10 @@ GitHub repo -> `Actions` -> `Deploy` -> `Run workflow`.
   - install Node.js/corepack on server, or ensure `pnpm` is in the deploy user's `PATH`.
 - `podman-compose is not installed on target host`:
   - install Podman and `podman-compose` on server.
+- `Error: no chrome installations found`:
+  - server Puppeteer requires `.deb` Google Chrome in `PATH`; do not use Ubuntu's `chromium-browser` snap transition package.
+- `Cannot find module '/opt/qqbot/chatluna/node_modules/@chatluna/.../lib/index.cjs'`:
+  - update to the latest `qqbot` scripts and redeploy; startup now auto-builds linked ChatLuna workspace runtime dependencies recursively.
 - voice containers fail during startup:
   - confirm `./data/voice/**` exists on server and contains the required models/reference audio before restarting `qqbot.target`.
 - SSH failure:

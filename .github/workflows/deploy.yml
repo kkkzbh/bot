@@ -318,6 +318,31 @@ jobs:
             exit 1
           fi
 
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            if ! command -v apt-get >/dev/null 2>&1; then
+              echo "google-chrome is missing on target host and automatic .deb install requires apt-get" >&2
+              exit 1
+            fi
+
+            export DEBIAN_FRONTEND=noninteractive
+            if ! command -v wget >/dev/null 2>&1; then
+              apt-get update
+              apt-get install -y wget
+            fi
+
+            CHROME_DEB="/tmp/google-chrome-stable_current_amd64.deb"
+            rm -f "${CHROME_DEB}"
+            wget -q -O "${CHROME_DEB}" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            apt-get update
+            apt-get install -y "${CHROME_DEB}"
+            rm -f "${CHROME_DEB}"
+          fi
+
+          apt-get purge -y chromium-browser >/dev/null 2>&1 || true
+          if command -v snap >/dev/null 2>&1; then
+            snap remove --purge chromium >/dev/null 2>&1 || true
+          fi
+
           chown -R "$(id -u):$(id -g)" "${APP_DIR}" >/dev/null 2>&1 || true
           if [ -d "${CHATLUNA_DIR}" ]; then
             chown -R "$(id -u):$(id -g)" "${CHATLUNA_DIR}" >/dev/null 2>&1 || true

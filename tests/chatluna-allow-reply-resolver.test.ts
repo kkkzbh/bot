@@ -30,6 +30,9 @@ describe('chatluna allow_reply resolver source and type export', () => {
     const content = readFileSync(resolve(process.cwd(), 'scripts/ensure-chatluna-build.sh'), 'utf8');
 
     expect(content).toContain("linked_prefix = 'link:../chatluna/packages/'");
+    expect(content).toContain('workspace_packages');
+    expect(content).toContain("for dependency_name in package_data.get('dependencies', {})");
+    expect(content).toContain('visit(dep_dir)');
     expect(content).toContain('package_dir.name');
     expect(content).toContain('pnpm run fast-build "${BUILD_TARGETS[@]}"');
   });

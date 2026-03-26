@@ -26,9 +26,27 @@ qqbot_package_json = Path(sys.argv[1])
 chatluna_root = Path(sys.argv[2])
 linked_prefix = 'link:../chatluna/packages/'
 
-qqbot_package = json.loads(qqbot_package_json.read_text(encoding='utf-8'))
+def load_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding='utf-8'))
+
+qqbot_package = load_json(qqbot_package_json)
 dependencies = qqbot_package.get('dependencies', {})
-build_targets: list[str] = []
+workspace_root = chatluna_root / 'packages'
+workspace_packages: dict[str, Path] = {}
+root_targets: list[Path] = []
+
+for package_json_path in workspace_root.glob('*/package.json'):
+    package_dir = package_json_path.parent
+    package_data = load_json(package_json_path)
+    package_name = package_data.get('name')
+    if isinstance(package_name, str) and package_name:
+        workspace_packages[package_name] = package_dir
+
+def ensure_buildable_package_dir(package_dir: Path) -> None:
+    src_dir = package_dir / 'src'
+    package_json = package_dir / 'package.json'
+    if not src_dir.is_dir() or not package_json.is_file():
+        raise SystemExit(f'missing src or package.json for linked ChatLuna package: {package_dir}')
 
 for _, spec in dependencies.items():
     if not isinstance(spec, str) or not spec.startswith(linked_prefix):
@@ -38,13 +56,47 @@ for _, spec in dependencies.items():
     if not relative_path:
         continue
 
-    package_dir = chatluna_root / 'packages' / relative_path
+    package_dir = workspace_root / relative_path
+    ensure_buildable_package_dir(package_dir)
+    root_targets.append(package_dir)
+
+ordered_packages: list[Path] = []
+visiting: set[Path] = set()
+visited: set[Path] = set()
+
+def visit(package_dir: Path) -> None:
+    if package_dir in visited:
+        return
+
+    if package_dir in visiting:
+        raise SystemExit(f'cyclic ChatLuna workspace dependency detected: {package_dir}')
+
+    ensure_buildable_package_dir(package_dir)
+    package_data = load_json(package_dir / 'package.json')
+    visiting.add(package_dir)
+
+    for dependency_name in package_data.get('dependencies', {}):
+        dep_dir = workspace_packages.get(dependency_name)
+        if dep_dir is None:
+            continue
+        dep_package_json = dep_dir / 'package.json'
+        dep_src_dir = dep_dir / 'src'
+        if dep_package_json.is_file() and dep_src_dir.is_dir():
+            visit(dep_dir)
+
+    visiting.remove(package_dir)
+    visited.add(package_dir)
+    ordered_packages.append(package_dir)
+
+for package_dir in root_targets:
+    visit(package_dir)
+
+build_targets: list[str] = []
+
+for package_dir in ordered_packages:
     src_dir = package_dir / 'src'
     lib_dir = package_dir / 'lib'
     package_json = package_dir / 'package.json'
-
-    if not src_dir.is_dir() or not package_json.is_file():
-        raise SystemExit(f'missing src or package.json for linked ChatLuna package: {package_dir}')
 
     src_files = [package_json, *src_dir.rglob('*')]
     runtime_files = [*lib_dir.rglob('*.cjs'), *lib_dir.rglob('*.mjs')]
