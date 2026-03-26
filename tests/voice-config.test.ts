@@ -144,11 +144,14 @@ describe('qq voice config wiring', () => {
     expect(content).toContain("cat > '${DEPLOY_APP_DIR}/.env.server'");
     expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
     expect(content).toContain('export QQ_VOICE_ENABLED=false QQ_VOICE_INPUT_ENABLED=false QQ_VOICE_OUTPUT_ENABLED=false');
+    expect(content).toContain('QQBOT_ENV_FILE=${APP_DIR}/.env.server');
+    expect(content).toContain('exec pnpm exec koishi start koishi.yml');
+    expect(content).not.toContain('QQBOT_ENV_FILE=${APP_DIR}/.env.server pnpm start');
     expect(content).toContain('cd "${CHATLUNA_DIR}"');
-    expect(content).toContain('rm -rf node_modules');
     expect(content).toContain('mkdir -p "${CHATLUNA_DIR}/.yarn-cache"');
     expect(content).toContain('YARN_CACHE_FOLDER="${CHATLUNA_DIR}/.yarn-cache"');
     expect(content).toContain('corepack yarn install --frozen-lockfile');
+    expect(content).not.toContain('rm -rf node_modules');
     expect(content).toContain('command -v google-chrome >/dev/null 2>&1');
     expect(content).toContain('google-chrome-stable_current_amd64.deb');
     expect(content).toContain('apt-get purge -y chromium-browser >/dev/null 2>&1 || true');
