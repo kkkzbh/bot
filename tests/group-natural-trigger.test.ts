@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { apply } from '../src/plugins/triggers/group-natural/index.js';
+import { apply, inject } from '../src/plugins/triggers/group-natural/index.js';
 import type { NaturalTriggerState } from '../src/plugins/triggers/group-natural/state.js';
 
 vi.mock('koishi', () => {
@@ -47,15 +47,12 @@ type AllowReplyResolver = (arg: { session: Record<string, any>; context: unknown
 
 function createHarness(
   overrides: Record<string, unknown> = {},
-  options: { attachedChatlunaAvailable?: boolean; getterChatlunaAvailable?: boolean } = {},
 ): {
   middleware: Middleware;
   registerAllowReplyResolver: ReturnType<typeof vi.fn>;
   disposeAllowReplyResolver: ReturnType<typeof vi.fn>;
   runReady: () => Promise<void>;
   runDispose: () => Promise<void>;
-  setAttachedChatLunaAvailable: (available: boolean) => void;
-  setGetterChatLunaAvailable: (available: boolean) => void;
 } {
   const middlewares: Middleware[] = [];
   const listeners = new Map<string, EventListener[]>();
@@ -67,8 +64,6 @@ function createHarness(
     return disposeAllowReplyResolver;
   });
   const chatlunaService = { registerAllowReplyResolver };
-  let attachedChatlunaService = options.attachedChatlunaAvailable === false ? undefined : chatlunaService;
-  let getterChatlunaService = options.getterChatlunaAvailable ? chatlunaService : undefined;
   const ctx: Record<string, unknown> = {
     middleware: vi.fn((handler: Middleware) => {
       middlewares.push(handler);
@@ -78,10 +73,8 @@ function createHarness(
       bucket.push(handler);
       listeners.set(name, bucket);
     }),
-    get: vi.fn((name: string) => (name === 'chatluna' ? getterChatlunaService : undefined)),
+    chatluna: chatlunaService,
   };
-
-  ctx.chatluna = attachedChatlunaService;
 
   apply(ctx as never, {
     enabled: true,
@@ -109,13 +102,6 @@ function createHarness(
     disposeAllowReplyResolver,
     runReady: () => runHook('ready'),
     runDispose: () => runHook('dispose'),
-    setAttachedChatLunaAvailable: (available: boolean) => {
-      attachedChatlunaService = available ? chatlunaService : undefined;
-      ctx.chatluna = attachedChatlunaService;
-    },
-    setGetterChatLunaAvailable: (available: boolean) => {
-      getterChatlunaService = available ? chatlunaService : undefined;
-    },
   };
 }
 
@@ -154,6 +140,10 @@ describe('group natural trigger middleware', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('declares chatluna as a required injection', () => {
+    expect(inject).toEqual({ required: ['chatluna'], optional: ['featurePolicy'] });
   });
 
   it('shares focus within the same group and keeps other groups isolated', async () => {
@@ -374,7 +364,9 @@ describe('group natural trigger middleware', () => {
   });
 
   it('registers an allow-reply resolver that only allows active natural triggers', async () => {
-    const { middleware, registerAllowReplyResolver, runReady } = createHarness({ replyIntervalMs: 0 });
+    const { middleware, registerAllowReplyResolver, runReady, runDispose, disposeAllowReplyResolver } = createHarness({
+      replyIntervalMs: 0,
+    });
 
     await runReady();
 
@@ -394,77 +386,8 @@ describe('group natural trigger middleware', () => {
 
     expect(allowResult).toBe(true);
     await expect(Promise.resolve(resolver({ session: createSession({ content: '普通闲聊' }), context: {} }))).resolves.toBeUndefined();
-  });
-
-  it('retries allow-reply resolver registration until chatluna becomes available', async () => {
-    vi.useFakeTimers();
-
-    const {
-      registerAllowReplyResolver,
-      runReady,
-      setAttachedChatLunaAvailable,
-      runDispose,
-      disposeAllowReplyResolver,
-    } = createHarness({}, { attachedChatlunaAvailable: false });
-
-    await runReady();
-    expect(registerAllowReplyResolver).not.toHaveBeenCalled();
-
-    setAttachedChatLunaAvailable(true);
-    await vi.advanceTimersByTimeAsync(250);
-    expect(registerAllowReplyResolver).toHaveBeenCalledTimes(1);
 
     await runDispose();
     expect(disposeAllowReplyResolver).toHaveBeenCalledTimes(1);
-  });
-
-  it('registers the allow-reply resolver on demand via ctx.get when ready-time discovery misses chatluna', async () => {
-    const { middleware, registerAllowReplyResolver, runReady, setGetterChatLunaAvailable } = createHarness(
-      { replyIntervalMs: 0 },
-      { attachedChatlunaAvailable: false, getterChatlunaAvailable: false },
-    );
-
-    await runReady();
-    expect(registerAllowReplyResolver).not.toHaveBeenCalled();
-
-    setGetterChatLunaAvailable(true);
-
-    const first = await runAndCapture(
-      middleware,
-      createSession({
-        content: '请帮我总结一下',
-      }),
-    );
-    const second = await runAndCapture(
-      middleware,
-      createSession({
-        userId: 'u2',
-        content: '请告诉我今天要做什么',
-      }),
-    );
-
-    expect(registerAllowReplyResolver).toHaveBeenCalledTimes(1);
-    expect(first.naturalTrigger).toEqual({ reason: 'rule', explicit: true });
-    expect(second.naturalTrigger).toEqual({ reason: 'rule', explicit: true });
-  });
-
-  it('does not mark a message as naturally triggered when the allow-reply bridge is still unavailable', async () => {
-    const { middleware, registerAllowReplyResolver, runReady } = createHarness(
-      { replyIntervalMs: 0 },
-      { attachedChatlunaAvailable: false, getterChatlunaAvailable: false },
-    );
-
-    await runReady();
-
-    const captured = await runAndCapture(
-      middleware,
-      createSession({
-        content: '请帮我看一下这个问题',
-      }),
-    );
-
-    expect(registerAllowReplyResolver).not.toHaveBeenCalled();
-    expect(captured.content).toBe('请帮我看一下这个问题');
-    expect(captured.naturalTrigger).toBeNull();
   });
 });

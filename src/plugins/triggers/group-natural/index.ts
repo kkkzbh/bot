@@ -21,7 +21,7 @@ const logger = new Logger('group-natural-trigger');
 const allowReplyResolverName = 'group-natural-trigger';
 
 export const name = 'group-natural-trigger';
-export const inject = { optional: ['featurePolicy', 'chatluna'] } as const;
+export const inject = { required: ['chatluna'], optional: ['featurePolicy'] } as const;
 export {
   getNaturalTriggerState,
   setNaturalTriggerState,
@@ -108,16 +108,13 @@ interface TriggerDecisionResult {
 
 type ContextWithFeaturePolicy = Context & {
   featurePolicy?: FeaturePolicyServiceLike;
-  get?: (name: string) => unknown;
-  chatluna?: {
-    registerAllowReplyResolver?: (
+  chatluna: {
+    registerAllowReplyResolver: (
       name: string,
       resolver: (arg: { session: Session; context: unknown }) => boolean | void | Promise<boolean | void>,
     ) => () => void;
   };
 };
-
-type ChatLunaAllowReplyService = NonNullable<ContextWithFeaturePolicy['chatluna']>;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -299,15 +296,6 @@ function shouldHandleGroup(session: Session, runtime: RuntimeConfig): boolean {
   return runtime.enabledGroups.has(groupId);
 }
 
-function resolveChatLunaService(ctx: ContextWithFeaturePolicy): ChatLunaAllowReplyService | undefined {
-  const getter = ctx.get;
-  if (typeof getter === 'function') {
-    const service = getter.call(ctx, 'chatluna');
-    if (service) return service as ChatLunaAllowReplyService;
-  }
-  return ctx.chatluna;
-}
-
 export function apply(ctx: Context, config: Config): void {
   const runtime = toRuntimeConfig(config);
   const serviceCtx = ctx as ContextWithFeaturePolicy;
@@ -316,22 +304,10 @@ export function apply(ctx: Context, config: Config): void {
   const spamStates = new Map<string, SpamState>();
   const nextReplyAt = new Map<string, number>();
   let disposeAllowReplyResolver: (() => void) | null = null;
-  let retryTimer: ReturnType<typeof setTimeout> | null = null;
-  let warnedUnavailable = false;
 
-  const clearRetryTimer = () => {
-    if (!retryTimer) return;
-    clearTimeout(retryTimer);
-    retryTimer = null;
-  };
-
-  const ensureAllowReplyResolverRegistered = (source: 'ready' | 'retry' | 'trigger'): boolean => {
-    if (disposeAllowReplyResolver) return true;
-    const chatluna = resolveChatLunaService(serviceCtx);
-    const registerResolver = chatluna?.registerAllowReplyResolver?.bind(chatluna);
-    if (typeof registerResolver !== 'function') return false;
-    warnedUnavailable = false;
-    disposeAllowReplyResolver = registerResolver(allowReplyResolverName, ({ session }) => {
+  const ensureAllowReplyResolverRegistered = (): void => {
+    if (disposeAllowReplyResolver) return;
+    disposeAllowReplyResolver = serviceCtx.chatluna.registerAllowReplyResolver(allowReplyResolverName, ({ session }) => {
       const naturalTrigger = getNaturalTriggerState(session as unknown as Record<string, unknown>);
       if (!naturalTrigger) return;
       logger.info(
@@ -343,19 +319,7 @@ export function apply(ctx: Context, config: Config): void {
       );
       return true;
     });
-    clearRetryTimer();
-    logger.info('natural trigger allow resolver registered: source=%s', source);
-    return true;
-  };
-
-  const scheduleRegisterRetry = () => {
-    if (disposeAllowReplyResolver || retryTimer) return;
-    retryTimer = setTimeout(() => {
-      retryTimer = null;
-      if (!ensureAllowReplyResolverRegistered('retry')) {
-        scheduleRegisterRetry();
-      }
-    }, 250);
+    logger.info('natural trigger allow resolver registered.');
   };
 
   ctx.middleware(async (session, next) => {
@@ -435,18 +399,6 @@ export function apply(ctx: Context, config: Config): void {
       explicit: explicitTrigger,
     };
 
-    if (!ensureAllowReplyResolverRegistered('trigger')) {
-      scheduleRegisterRetry();
-      logger.warn(
-        'natural trigger allow resolver unavailable: source=trigger channel=%s user=%s reason=%s explicit=%s',
-        session.channelId,
-        session.userId,
-        naturalTrigger.reason,
-        String(naturalTrigger.explicit),
-      );
-      return next();
-    }
-
     const replyReadyAt = nextReplyAt.get(groupScopeKey) ?? 0;
     if (replyReadyAt > now) {
       await sleep(replyReadyAt - now);
@@ -472,13 +424,7 @@ export function apply(ctx: Context, config: Config): void {
   });
 
   ctx.on('ready', () => {
-    if (!ensureAllowReplyResolverRegistered('ready')) {
-      if (!warnedUnavailable) {
-        warnedUnavailable = true;
-        logger.warn('chatluna service is unavailable at ready, postpone allow-reply resolver registration.');
-      }
-      scheduleRegisterRetry();
-    }
+    ensureAllowReplyResolverRegistered();
     logger.info(
       'group natural trigger loaded: groups=%d, aliases=%d, direct=%s, focusWindowMs=%d, replyIntervalMs=%d, spam=%d/%dms mute=%dms',
       runtime.enabledGroups.size,
@@ -493,7 +439,6 @@ export function apply(ctx: Context, config: Config): void {
   });
 
   ctx.on('dispose', () => {
-    clearRetryTimer();
     if (disposeAllowReplyResolver) {
       disposeAllowReplyResolver();
       disposeAllowReplyResolver = null;

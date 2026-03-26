@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { resolve } from 'node:path';
 
 const CHATLUNA_CORE_ROOT = '/home/kkkzbh/code/chatluna/packages/core';
 
@@ -23,5 +24,13 @@ describe('chatluna allow_reply resolver source and type export', () => {
     const content = readFileSync(`${CHATLUNA_CORE_ROOT}/lib/index.d.ts`, 'utf8');
 
     expect(content).toContain("import './services/types';");
+  });
+
+  it('build script discovers linked chatluna packages from qqbot package metadata', () => {
+    const content = readFileSync(resolve(process.cwd(), 'scripts/ensure-chatluna-build.sh'), 'utf8');
+
+    expect(content).toContain("linked_prefix = 'link:../chatluna/packages/'");
+    expect(content).toContain('package_dir.name');
+    expect(content).toContain('pnpm run fast-build "${BUILD_TARGETS[@]}"');
   });
 });
