@@ -125,6 +125,8 @@ describe('qq voice config wiring', () => {
     expect(content).toContain("cat > '${DEPLOY_APP_DIR}/.env.server'");
     expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
     expect(content).toContain('export QQ_VOICE_ENABLED=false QQ_VOICE_INPUT_ENABLED=false QQ_VOICE_OUTPUT_ENABLED=false');
+    expect(content).toContain('cd "${CHATLUNA_DIR}"');
+    expect(content).toContain('pnpm install --no-frozen-lockfile');
     expect(content).not.toContain('up -d --build --force-recreate');
   });
 

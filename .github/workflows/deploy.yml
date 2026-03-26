@@ -321,6 +321,10 @@ jobs:
           chown -R "$(id -u):$(id -g)" "${APP_DIR}" >/dev/null 2>&1 || true
           if [ -d "${CHATLUNA_DIR}" ]; then
             chown -R "$(id -u):$(id -g)" "${CHATLUNA_DIR}" >/dev/null 2>&1 || true
+            (
+              cd "${CHATLUNA_DIR}"
+              pnpm install --no-frozen-lockfile
+            )
           fi
 
           if [ "${SYSTEMD_TARGET}" = "qqbot.target" ]; then
