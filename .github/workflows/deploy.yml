@@ -128,10 +128,23 @@ jobs:
       - name: Sync project files
         run: |
           set -euo pipefail
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
-          ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_APP_DIR}'"
-          rsync -az --delete \
+          retry_cmd() {
+            local attempt=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -ge 6 ]; then
+                return 1
+              fi
+              sleep "$((attempt * 10))"
+              attempt="$((attempt + 1))"
+            done
+          }
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
+          retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_APP_DIR}'"
+          retry_cmd rsync -az --delete \
             --exclude='.git' \
             --exclude='node_modules' \
             --exclude='dist' \
@@ -149,11 +162,24 @@ jobs:
       - name: Sync linked ChatLuna files
         run: |
           set -euo pipefail
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
+          retry_cmd() {
+            local attempt=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -ge 6 ]; then
+                return 1
+              fi
+              sleep "$((attempt * 10))"
+              attempt="$((attempt + 1))"
+            done
+          }
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
           DEPLOY_CHATLUNA_DIR="$(dirname "${DEPLOY_APP_DIR}")/chatluna"
-          ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_CHATLUNA_DIR}'"
-          rsync -az --delete \
+          retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_CHATLUNA_DIR}'"
+          retry_cmd rsync -az --delete \
             --exclude='.git' \
             --exclude='node_modules' \
             --exclude='.idea' \
@@ -163,11 +189,24 @@ jobs:
       - name: Sync bundled preset files
         run: |
           set -euo pipefail
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
+          retry_cmd() {
+            local attempt=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -ge 6 ]; then
+                return 1
+              fi
+              sleep "$((attempt * 10))"
+              attempt="$((attempt + 1))"
+            done
+          }
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
           if [ -d "./data/chathub/presets" ]; then
-            ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_APP_DIR}/data/chathub/presets'"
-            rsync -az \
+            retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_APP_DIR}/data/chathub/presets'"
+            retry_cmd rsync -az \
               -e "${RSYNC_RSH}" \
               ./data/chathub/presets/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_APP_DIR}/data/chathub/presets/"
           fi
@@ -175,12 +214,25 @@ jobs:
       - name: Sync sticker files
         run: |
           set -euo pipefail
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
+          retry_cmd() {
+            local attempt=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -ge 6 ]; then
+                return 1
+              fi
+              sleep "$((attempt * 10))"
+              attempt="$((attempt + 1))"
+            done
+          }
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
           if [ -d "./data/chathub/stickers" ]; then
-            ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
               "mkdir -p '${DEPLOY_APP_DIR}/data/chathub/stickers'"
-            rsync -az \
+            retry_cmd rsync -az \
               -e "${RSYNC_RSH}" \
               ./data/chathub/stickers/ \
               "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_APP_DIR}/data/chathub/stickers/"
@@ -189,15 +241,54 @@ jobs:
       - name: Sync runtime .env.server
         run: |
           set -euo pipefail
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          printf "%s" "${DEPLOY_DOTENV}" | ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "cat > '${DEPLOY_APP_DIR}/.env.server'"
-          ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "chmod 600 '${DEPLOY_APP_DIR}/.env.server'"
+          retry_ssh_pipe() {
+            local attempt=1
+            while true; do
+              if printf "%s" "${DEPLOY_DOTENV}" | ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "cat > '${DEPLOY_APP_DIR}/.env.server'"; then
+                return 0
+              fi
+              if [ "${attempt}" -ge 6 ]; then
+                return 1
+              fi
+              sleep "$((attempt * 10))"
+              attempt="$((attempt + 1))"
+            done
+          }
+          retry_cmd() {
+            local attempt=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -ge 6 ]; then
+                return 1
+              fi
+              sleep "$((attempt * 10))"
+              attempt="$((attempt + 1))"
+            done
+          }
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          retry_ssh_pipe
+          retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "chmod 600 '${DEPLOY_APP_DIR}/.env.server'"
 
       - name: Install, build and restart service on server
         run: |
           set -euo pipefail
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+          retry_cmd() {
+            local attempt=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -ge 6 ]; then
+                return 1
+              fi
+              sleep "$((attempt * 10))"
+              attempt="$((attempt + 1))"
+            done
+          }
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' DEPLOY_SYSTEMD_TARGET='${DEPLOY_SYSTEMD_TARGET}' bash -s" <<'EOF'
           set -euo pipefail
 
