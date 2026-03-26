@@ -8,6 +8,7 @@ import {
   BotConsoleManager,
   parsePresetDocument,
   parseSystemdShowOutput,
+  resolveBotEnvFilePath,
   serializePresetDocument,
   writeFileAtomicWithBackup,
 } from '../src/plugins/bot-console/server.js';
@@ -15,6 +16,7 @@ import {
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -72,6 +74,23 @@ describe('bot-console env helpers', () => {
     ).rejects.toThrow('disk full');
 
     expect(readFileSync(filePath, 'utf8')).toBe('CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n');
+  });
+
+  it('falls back to .env.server when .env.local is absent', () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.server');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=deepseek-chat\n', 'utf8');
+
+    expect(resolveBotEnvFilePath(dir)).toBe(envFilePath);
+  });
+
+  it('prefers QQBOT_ENV_FILE when explicitly set', () => {
+    const dir = createTempDir();
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=local-model\n', 'utf8');
+    writeFileSync(join(dir, '.env.server'), 'CHATLUNA_DEFAULT_MODEL=server-model\n', 'utf8');
+    vi.stubEnv('QQBOT_ENV_FILE', '.env.server');
+
+    expect(resolveBotEnvFilePath(dir)).toBe(join(dir, '.env.server'));
   });
 });
 
@@ -198,6 +217,24 @@ describe('bot-console manager', () => {
     ).resolves.toMatchObject({
       CHATLUNA_COMMON_FS: 'true',
       CHATLUNA_COMMON_FS_SCOPE_PATH: '/tmp/qqbot-scope',
+    });
+  });
+
+  it('reads state from .env.server when that is the active runtime env file', async () => {
+    const dir = createTempDir();
+    const presetDir = join(dir, 'data/chathub/presets');
+    mkdirSync(presetDir, { recursive: true });
+    writeFileSync(join(dir, '.env.server'), 'CHATLUNA_DEFAULT_MODEL=server-model\nCHATLUNA_DEFAULT_PRESET=sakiko\n', 'utf8');
+    writeFileSync(join(presetDir, 'sakiko.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: hi\n', 'utf8');
+    vi.stubEnv('QQBOT_ENV_FILE', '.env.server');
+
+    const manager = new BotConsoleManager({ rootDir: dir });
+    await expect(manager.getState()).resolves.toMatchObject({
+      env: expect.objectContaining({
+        CHATLUNA_DEFAULT_MODEL: 'server-model',
+        CHATLUNA_DEFAULT_PRESET: 'sakiko',
+      }),
+      defaultPreset: 'sakiko',
     });
   });
 

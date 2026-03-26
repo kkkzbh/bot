@@ -1,4 +1,4 @@
-import { constants as fsConstants } from 'node:fs';
+import { constants as fsConstants, existsSync } from 'node:fs';
 import {
   access,
   copyFile,
@@ -74,7 +74,8 @@ type PresetOrderDocument = {
 };
 
 const DEFAULT_ROOT_DIR = resolve(process.cwd());
-const ENV_FILE_BASENAME = '.env.local';
+const LOCAL_ENV_FILE_BASENAME = '.env.local';
+const SERVER_ENV_FILE_BASENAME = '.env.server';
 const PRESET_DIR_RELATIVE = 'data/chathub/presets';
 const PRESET_ORDER_FILENAME = '.bot-console-preset-order.json';
 const PRESET_ROLE_SET = new Set(['system', 'user', 'assistant', 'tool']);
@@ -222,6 +223,25 @@ export function applyEnvPatchToContent(content: string, patch: EnvPatch): string
   return `${output.join('\n').replace(/\n+$/g, '')}\n`;
 }
 
+export function resolveBotEnvFilePath(rootDir: string, env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.QQBOT_ENV_FILE?.trim();
+  if (explicit) {
+    return explicit.startsWith('/') ? explicit : resolve(rootDir, explicit);
+  }
+
+  const localEnvPath = join(rootDir, LOCAL_ENV_FILE_BASENAME);
+  if (existsSync(localEnvPath)) {
+    return localEnvPath;
+  }
+
+  const serverEnvPath = join(rootDir, SERVER_ENV_FILE_BASENAME);
+  if (existsSync(serverEnvPath)) {
+    return serverEnvPath;
+  }
+
+  return localEnvPath;
+}
+
 export async function writeFileAtomicWithBackup(
   filePath: string,
   content: string,
@@ -359,7 +379,7 @@ export class BotConsoleManager {
 
   constructor(options: BotConsoleManagerOptions = {}) {
     this.rootDir = options.rootDir ? resolve(options.rootDir) : DEFAULT_ROOT_DIR;
-    this.envFilePath = options.envFilePath ?? join(this.rootDir, ENV_FILE_BASENAME);
+    this.envFilePath = options.envFilePath ?? resolveBotEnvFilePath(this.rootDir);
     this.presetDirPath = options.presetDirPath ?? join(this.rootDir, PRESET_DIR_RELATIVE);
     this.fs = options.fs ?? defaultFs();
     this.execFile = options.execFile ?? defaultExec;
