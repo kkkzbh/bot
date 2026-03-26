@@ -145,7 +145,11 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
     expect(content).toContain('export QQ_VOICE_ENABLED=false QQ_VOICE_INPUT_ENABLED=false QQ_VOICE_OUTPUT_ENABLED=false');
     expect(content).toContain('cd "${CHATLUNA_DIR}"');
-    expect(content).toContain('pnpm install --no-frozen-lockfile');
+    expect(content).toContain('rm -rf node_modules');
+    expect(content).toContain('mkdir -p "${CHATLUNA_DIR}/.yarn-cache"');
+    expect(content).toContain('YARN_CACHE_FOLDER="${CHATLUNA_DIR}/.yarn-cache"');
+    expect(content).toContain('corepack yarn install --frozen-lockfile');
+    expect(content).not.toContain('pnpm install --no-frozen-lockfile');
     expect(content).not.toContain('up -d --build --force-recreate');
   });
 

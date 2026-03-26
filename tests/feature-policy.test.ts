@@ -114,6 +114,22 @@ function createHarness(seed: Record<string, Row[]> = {}) {
 }
 
 describe('feature policy service', () => {
+  it('registers feature policy and chathub table models', () => {
+    const { extend } = createHarness();
+    const tables = extend.mock.calls.map((call) => call[0]);
+
+    expect(tables).toEqual(
+      expect.arrayContaining([
+        'chathub_conversation',
+        'chathub_message',
+        'chathub_room',
+        'chathub_room_group_member',
+        'chathub_user',
+        'feature_scope_override',
+      ]),
+    );
+  });
+
   it('resolves defaults and scoped overrides', async () => {
     const { ctx } = createHarness();
     const service = ctx.featurePolicy as NonNullable<typeof ctx.featurePolicy>;

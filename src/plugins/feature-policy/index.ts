@@ -29,6 +29,96 @@ export const SCOPED_FEATURE_KEYS = [
 
 export const PRIVATE_DEFAULT_SCOPE_ID = 'private-default';
 
+function registerChatHubTableModels(model: { extend?: (...args: any[]) => unknown } | undefined): void {
+  if (typeof model?.extend !== 'function') return;
+
+  model.extend(
+    'chathub_conversation',
+    {
+      id: { type: 'char', length: 255 },
+      latestId: { type: 'char', length: 255, nullable: true },
+      additional_kwargs: { type: 'text', nullable: true },
+      updatedAt: { type: 'timestamp', nullable: false, initial: new Date() },
+    },
+    {
+      autoInc: false,
+      primary: 'id',
+      unique: ['id'],
+    },
+  );
+
+  model.extend(
+    'chathub_message',
+    {
+      id: { type: 'char', length: 255 },
+      text: { type: 'text', nullable: true },
+      content: { type: 'binary', nullable: true },
+      parent: { type: 'char', length: 255, nullable: true },
+      role: { type: 'char', length: 20 },
+      conversation: { type: 'char', length: 255 },
+      additional_kwargs: { type: 'text', nullable: true },
+      additional_kwargs_binary: { type: 'binary', nullable: true },
+      tool_call_id: 'string',
+      tool_calls: 'json',
+      name: { type: 'char', length: 255, nullable: true },
+      rawId: { type: 'char', length: 255, nullable: true },
+    },
+    {
+      autoInc: false,
+      primary: 'id',
+      unique: ['id'],
+    },
+  );
+
+  model.extend(
+    'chathub_room',
+    {
+      roomId: { type: 'integer' },
+      roomName: 'string',
+      conversationId: { type: 'char', length: 255, nullable: true },
+      roomMasterId: { type: 'char', length: 255 },
+      visibility: { type: 'char', length: 20 },
+      preset: { type: 'char', length: 255 },
+      model: { type: 'char', length: 100 },
+      chatMode: { type: 'char', length: 20 },
+      password: { type: 'char', length: 100 },
+      autoUpdate: { type: 'boolean', initial: false },
+      updatedTime: { type: 'timestamp', nullable: false, initial: new Date() },
+    },
+    {
+      autoInc: false,
+      primary: 'roomId',
+      unique: ['roomId'],
+    },
+  );
+
+  model.extend(
+    'chathub_room_group_member',
+    {
+      groupId: { type: 'char', length: 255 },
+      roomId: { type: 'integer' },
+      roomVisibility: { type: 'char', length: 20 },
+    },
+    {
+      autoInc: false,
+      primary: ['groupId', 'roomId'],
+    },
+  );
+
+  model.extend(
+    'chathub_user',
+    {
+      userId: { type: 'char', length: 255 },
+      defaultRoomId: { type: 'integer' },
+      groupId: { type: 'char', length: 255, nullable: true },
+    },
+    {
+      autoInc: false,
+      primary: ['userId', 'groupId'],
+    },
+  );
+}
+
 type RoomRow = {
   roomId?: number | string | null;
   roomName?: string | null;
@@ -481,6 +571,7 @@ export function apply(ctx: Context): void {
 
   const model = (ctx as { model?: { extend?: (...args: any[]) => unknown } }).model;
   if (typeof model?.extend === 'function') {
+    registerChatHubTableModels(model);
     model.extend(
       'feature_scope_override',
       {

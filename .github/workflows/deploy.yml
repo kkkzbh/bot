@@ -323,7 +323,13 @@ jobs:
             chown -R "$(id -u):$(id -g)" "${CHATLUNA_DIR}" >/dev/null 2>&1 || true
             (
               cd "${CHATLUNA_DIR}"
-              pnpm install --no-frozen-lockfile
+              if ! command -v corepack >/dev/null 2>&1; then
+                echo "corepack is not installed on target host" >&2
+                exit 1
+              fi
+              rm -rf node_modules
+              mkdir -p "${CHATLUNA_DIR}/.yarn-cache"
+              YARN_CACHE_FOLDER="${CHATLUNA_DIR}/.yarn-cache" corepack yarn install --frozen-lockfile
             )
           fi
 
