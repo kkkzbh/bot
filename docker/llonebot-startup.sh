@@ -6,6 +6,8 @@ cd /app/llbot
 FILE="default_config.json"
 WEBUI_PORT="${WEBUI_PORT:-3080}"
 LLONEBOT_WS_PORT="${LLONEBOT_WS_PORT:-3001}"
+PMHQ_HOST="${pmhq_host:-${PMHQ_HOST:-host.containers.internal}}"
+PMHQ_PORT="${pmhq_port:-${PMHQ_PORT:-13000}}"
 
 node <<'EOF_NODE'
 const { readFileSync, writeFileSync } = require('node:fs')
@@ -59,4 +61,6 @@ EOF_NODE
 
 mkdir -p /app/llbot/data
 
-exec node --enable-source-maps ./llbot.js
+exec node --enable-source-maps ./llbot.js \
+  "--pmhq-host=${PMHQ_HOST}" \
+  "--pmhq-port=${PMHQ_PORT}"

@@ -38,6 +38,15 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('"127.0.0.1:${VOICE_TTS_PORT:-5162}:8080"');
   });
 
+  it('starts llonebot with explicit PMHQ host and port CLI args', () => {
+    const content = readFileSync(resolve(process.cwd(), 'docker/llonebot-startup.sh'), 'utf8');
+
+    expect(content).toContain('PMHQ_HOST="${pmhq_host:-${PMHQ_HOST:-host.containers.internal}}"');
+    expect(content).toContain('PMHQ_PORT="${pmhq_port:-${PMHQ_PORT:-13000}}"');
+    expect(content).toContain('"--pmhq-host=${PMHQ_HOST}"');
+    expect(content).toContain('"--pmhq-port=${PMHQ_PORT}"');
+  });
+
   it('documents local voice env vars in .env.example', () => {
     const content = readFileSync(resolve(process.cwd(), '.env.example'), 'utf8');
 
