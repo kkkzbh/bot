@@ -239,6 +239,8 @@ jobs:
             fi
 
             PODMAN_COMPOSE_BIN="$(command -v podman-compose)"
+            PODMAN_NETWORK_NAME="qqbot-stack_app_network"
+            PODMAN_CNI_CONFIG="/etc/cni/net.d/${PODMAN_NETWORK_NAME}.conflist"
             mkdir -p "${USER_SYSTEMD_DIR}"
 
             cat > "${USER_SYSTEMD_DIR}/qqbot-stack.service" <<UNIT
@@ -252,6 +254,7 @@ jobs:
           Type=oneshot
           WorkingDirectory=${APP_DIR}
           Environment=CONTAINERS_CONF=${APP_DIR}/config/podman/containers.conf
+          ExecStartPre=/usr/bin/env bash -lc "podman network exists ${PODMAN_NETWORK_NAME} >/dev/null 2>&1 || podman network create ${PODMAN_NETWORK_NAME} >/dev/null; if [ -f '${PODMAN_CNI_CONFIG}' ]; then sed -i 's/\"cniVersion\": \"1.0.0\"/\"cniVersion\": \"0.4.0\"/' '${PODMAN_CNI_CONFIG}'; fi"
           ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --build --force-recreate
           ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop
           RemainAfterExit=yes

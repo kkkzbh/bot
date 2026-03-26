@@ -19,6 +19,17 @@
 - 容器日志：`podman compose -f /home/kkkzbh/code/qqbot/compose.yaml logs -f pmhq`
 - 另有独立的 `qqbot-voice-tts.service`，用于本机 TTS 网关；它不属于 `qqbot.target`，需要单独管理。
 
+## 服务器最小化部署现状
+- 服务器固定为 `root@47.98.228.125`，不再使用 `qqbot` 用户。
+- 服务器部署代码来源固定为 GitHub Actions checkout + 同步，不再从当前工作区直接 `rsync` 到线上。
+- 线上应用目录固定为 `/opt/qqbot/current`，联动的本地 fork `chatluna` 目录为 `/opt/qqbot/chatluna`。
+- 服务器运行态使用 `root` 的 user-level systemd：unit 位于 `/root/.config/systemd/user`，目标仍是 `qqbot.target`。
+- 不要重建旧的 `/etc/systemd/system/qqbot*.service` 或 `/etc/systemd/system/qqbot.target`；线上只认 root user-level unit。
+- 线上环境变量文件为 `/opt/qqbot/current/.env.server`，来源是 GitHub secret `QQBOT_DOTENV`。
+- 当前常用线上排查命令：`ssh -o ClearAllForwardings=yes bot 'systemctl --user status qqbot.target qqbot-stack.service qqbot-koishi.service'`
+- 当前本机已约定 `ssh bot` 作为入口，并自带 SSH 隧道：本地 `13080 -> 服务器 3080`（WebUI），本地 `15140 -> 服务器 5140`（Koishi 控制台）。
+- 若需要只执行远程命令而不占用本地转发端口，追加 `-o ClearAllForwardings=yes`。
+
 ## 注意
 1. 不要忽略 bot 的双环境配置；新增或修改 bot 环境变量时，必须同步检查 `.env.example`（本地模板）、`.env.server.example`（服务器模板）、`.env.local`、`.env.server`
 2. 我不希望代码中出现大量任何手动兜底清洗的句子，当出现BUG/模型回复效果差/功能异常，你首要任务是想办法让模型做出正确的行为，而不是自己写代码兜底/清洗/纠正错误的模型输出，你要基于这个原则去解决BUG

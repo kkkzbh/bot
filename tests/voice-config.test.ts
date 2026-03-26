@@ -108,6 +108,9 @@ describe('qq voice config wiring', () => {
     const content = readFileSync(resolve(process.cwd(), '.github/workflows/deploy.yml'), 'utf8');
 
     expect(content).toContain('PODMAN_COMPOSE_BIN="$(command -v podman-compose)"');
+    expect(content).toContain('PODMAN_NETWORK_NAME="qqbot-stack_app_network"');
+    expect(content).toContain("podman network exists ${PODMAN_NETWORK_NAME} >/dev/null 2>&1 || podman network create ${PODMAN_NETWORK_NAME} >/dev/null");
+    expect(content).toContain(`sed -i 's/\\"cniVersion\\": \\"1.0.0\\"/\\"cniVersion\\": \\"0.4.0\\"/' '\${PODMAN_CNI_CONFIG}'`);
     expect(content).toContain('ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --build');
     expect(content).toContain('ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop');
     expect(content).toContain("--exclude='.env.local'");
