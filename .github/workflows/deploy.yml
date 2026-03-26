@@ -10,6 +10,10 @@ on:
         description: "Deploy branch/ref (default: main)"
         required: false
         type: string
+      chatluna_ref:
+        description: "ChatLuna branch/ref (default: repo variable or v1-dev)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -28,6 +32,8 @@ jobs:
       DEPLOY_PORT: ${{ vars.QQBOT_SERVER_PORT || '22' }}
       DEPLOY_APP_DIR: ${{ vars.QQBOT_SERVER_APP_DIR || '/opt/qqbot/current' }}
       DEPLOY_SYSTEMD_TARGET: ${{ vars.QQBOT_SYSTEMD_TARGET || 'qqbot.target' }}
+      DEPLOY_CHATLUNA_REPO: ${{ vars.QQBOT_CHATLUNA_REPO || 'kkkzbh/chatluna' }}
+      DEPLOY_CHATLUNA_REF: ${{ github.event.inputs.chatluna_ref || vars.QQBOT_CHATLUNA_REF || 'v1-dev' }}
       DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.QQBOT_SSH_PRIVATE_KEY }}
       DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.QQBOT_SSH_KNOWN_HOSTS }}
       DEPLOY_DOTENV: ${{ secrets.QQBOT_DOTENV }}
@@ -36,6 +42,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.deploy_ref || github.ref }}
+
+      - name: Checkout linked ChatLuna
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DEPLOY_CHATLUNA_REPO }}
+          ref: ${{ env.DEPLOY_CHATLUNA_REF }}
+          path: chatluna-src
+
+      - name: Prepare linked ChatLuna workspace
+        run: |
+          set -euo pipefail
+          ln -sfn "${GITHUB_WORKSPACE}/chatluna-src" "${GITHUB_WORKSPACE}/../chatluna"
+          test -f "${GITHUB_WORKSPACE}/../chatluna/packages/core/package.json"
 
       - name: Validate required secrets
         run: |
@@ -112,8 +131,23 @@ jobs:
             --exclude='downloads' \
             --exclude='zpix.ttf' \
             --exclude='koishi-runtime.log' \
+            --exclude='chatluna-src' \
             -e "${RSYNC_RSH}" \
             ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_APP_DIR}/"
+
+      - name: Sync linked ChatLuna files
+        run: |
+          set -euo pipefail
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
+          DEPLOY_CHATLUNA_DIR="$(dirname "${DEPLOY_APP_DIR}")/chatluna"
+          ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_CHATLUNA_DIR}'"
+          rsync -az --delete \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='.idea' \
+            -e "${RSYNC_RSH}" \
+            ./chatluna-src/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_CHATLUNA_DIR}/"
 
       - name: Sync bundled preset files
         run: |

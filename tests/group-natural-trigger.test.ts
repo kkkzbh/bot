@@ -281,7 +281,8 @@ describe('group natural trigger middleware', () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const firstCall = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined] | undefined;
+    const requestInit = firstCall?.[1];
     const requestBody = JSON.parse(String(requestInit?.body ?? '{}')) as {
       messages?: Array<{ role?: string; content?: string }>;
     };
