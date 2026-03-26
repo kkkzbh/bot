@@ -358,6 +358,8 @@ pnpm build
 - This project is built for Podman (not Docker Desktop).
 - `compose.yaml` uses `:Z` on bind mount for SELinux Enforcing.
 - Container should call host via `host.containers.internal`, not `127.0.0.1`.
+- If `llonebot` reaches `pmhq` through `host.containers.internal`, bind `PMHQ_BIND_HOST`
+  to the Podman bridge gateway (server currently uses `10.88.0.1`) instead of pure loopback.
 
 ## 14. Troubleshooting
 
@@ -383,7 +385,7 @@ pnpm build
   - `chatluna.*`：确认账号 authority >= `CHATLUNA_COMMAND_AUTHORITY`。
   - `task.*`：若 `TASK_AUTOMATION_PERMISSION=authority3`，确认账号 authority >= 3。
 - QQ 语音不可用：
-  - 确认服务器 `voice-asr` 容器已启动并健康：`podman compose ps`
+  - 服务器部署默认禁用语音；不要在服务器上排查 `voice-asr`，它不应该存在。
   - 确认笔记本 `qqbot-voice-tts.service` 已启动：`systemctl --user status qqbot-voice-tts.service`
   - 确认笔记本 TTS 可以在 tailnet 内访问：`curl -H "Authorization: Bearer $QQ_VOICE_TTS_API_KEY" http://<laptop-tailnet-host>:5162/healthz`
   - 确认 `QQ_VOICE_*` 地址与 token 和当前运行角色对应的 env 文件一致：本地看 `.env.local`，服务器看 `.env.server`
@@ -484,7 +486,7 @@ Behavior:
 - `CI` runs on every `push` / `pull_request` (`pnpm typecheck`, `pnpm test`, `pnpm build`).
 - `Deploy` runs on `push` to `main` (or manual `workflow_dispatch`).
 - `Deploy` SSHes to your server, `rsync`s project files, then runs `pnpm install`, `pnpm build`, and restarts `qqbot.target`.
-- The generated `qqbot-stack.service` now runs `podman-compose up -d --build`, so server-local images (including `voice-asr`) are rebuilt on deploy together with the rest of the stack.
+- The generated `qqbot-stack.service` now runs `podman-compose up -d --force-recreate pmhq llbot`, so server deploy keeps only the text bot stack and never starts `voice-asr`.
 - Laptop-local `qqbot-voice-tts.service` is not managed by GitHub Actions and must be updated separately on your own machine.
 
 ### 18.1 GitHub Actions secrets (required)
@@ -503,31 +505,40 @@ Behavior:
 
 ### 18.3 One-time server preparation
 
-1. Prepare deploy directory (example uses default path):
+1. Prepare deploy directory (example uses default path, root user deploy):
 
 ```bash
-sudo mkdir -p /opt/qqbot/current
-sudo chown -R <server_user>:<server_user> /opt/qqbot
+sudo mkdir -p /opt/qqbot/current /opt/qqbot/chatluna /root/.config/systemd/user
+sudo chown -R root:root /opt/qqbot
 ```
 
 2. Install runtime dependencies on server (Ubuntu example):
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y podman podman-compose
+sudo apt-get install -y curl git podman podman-compose rsync sqlite3
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo corepack enable
+sudo corepack prepare pnpm@9.15.4 --activate
 ```
 
 3. Enable linger so `systemd --user` services survive logout:
 
 ```bash
-sudo loginctl enable-linger <server_user>
+sudo loginctl enable-linger root
 ```
 
 4. In GitHub repo settings, set secret `QQBOT_DOTENV` to your production `.env.server` content.
 
 `Deploy` will sync this secret to `${QQBOT_SERVER_APP_DIR}/.env.server` every run.
 
-5. Ensure your target user can run `sudo -n` for `loginctl enable-linger` (optional but recommended).
+5. Ensure root user-level systemd is usable:
+
+```bash
+sudo -i systemctl --user daemon-reload
+sudo -i systemctl --user status
+```
 
 6. `Deploy` will auto-provision user units (`qqbot-stack.service`, `qqbot-koishi.service`, `qqbot.target`)
 when `QQBOT_SYSTEMD_TARGET=qqbot.target`.
@@ -540,7 +551,7 @@ when `QQBOT_SYSTEMD_TARGET=qqbot.target`.
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable qqbot.target
-loginctl enable-linger <server_user>
+loginctl enable-linger root
 ```
 
 ### 18.4 First push to GitHub

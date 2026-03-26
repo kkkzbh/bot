@@ -20,7 +20,7 @@
 - 另有独立的 `qqbot-voice-tts.service`，用于本机 TTS 网关；它不属于 `qqbot.target`，需要单独管理。
 
 ## 服务器最小化部署现状
-- 服务器固定为 `root@47.98.228.125`，不再使用 `qqbot` 用户。
+- 服务器固定为 `root@8.217.82.246`，不再使用 `qqbot` 用户。
 - 服务器部署代码来源固定为 GitHub Actions checkout + 同步，不再从当前工作区直接 `rsync` 到线上。
 - 线上应用目录固定为 `/opt/qqbot/current`，联动的本地 fork `chatluna` 目录为 `/opt/qqbot/chatluna`。
 - 服务器运行态使用 `root` 的 user-level systemd：unit 位于 `/root/.config/systemd/user`，目标仍是 `qqbot.target`。

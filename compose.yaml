@@ -11,6 +11,8 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - qq_volume:/root/.config/QQ
+    ports:
+      - "${PMHQ_BIND_HOST:-127.0.0.1}:${PMHQ_PORT:-13000}:13000"
     networks:
       - app_network
     restart: unless-stopped
@@ -25,8 +27,11 @@ services:
     image: ${LLBOT_IMAGE:-docker.io/linyuchen/llbot}:${LLBOT_TAG:-latest}
     container_name: llonebot
     environment:
-      PMHQ_HOST: pmhq
+      pmhq_host: ${PMHQ_HOST:-host.containers.internal}
+      pmhq_port: ${PMHQ_PORT:-13000}
       WEBUI_PORT: ${LLONEBOT_WEBUI_PORT:-3080}
+      LLONEBOT_WS_PORT: ${LLONEBOT_WS_PORT:-3001}
+      ONEBOT_TOKEN: ${ONEBOT_TOKEN:-}
       TZ: ${TZ:-Asia/Shanghai}
     ports:
       - "${LLONEBOT_WEBUI_PORT:-3080}:${LLONEBOT_WEBUI_PORT:-3080}"
@@ -34,6 +39,8 @@ services:
     volumes:
       - qq_volume:/root/.config/QQ
       - ./data/llonebot:/app/llbot/data:Z
+      - ./docker/llonebot-startup.sh:/startup.sh:Z
+    command: ["/startup.sh"]
     networks:
       - app_network
     depends_on:

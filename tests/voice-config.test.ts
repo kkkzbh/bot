@@ -24,9 +24,16 @@ describe('qq voice config wiring', () => {
   it('declares loopback voice services and persisted voice data paths in compose', () => {
     const content = readFileSync(resolve(process.cwd(), 'compose.yaml'), 'utf8');
 
+    expect(content).toContain('"${PMHQ_BIND_HOST:-127.0.0.1}:${PMHQ_PORT:-13000}:13000"');
+    expect(content).toContain('pmhq_host: ${PMHQ_HOST:-host.containers.internal}');
+    expect(content).toContain('pmhq_port: ${PMHQ_PORT:-13000}');
+    expect(content).toContain('LLONEBOT_WS_PORT: ${LLONEBOT_WS_PORT:-3001}');
+    expect(content).toContain('ONEBOT_TOKEN: ${ONEBOT_TOKEN:-}');
     expect(content).toContain('voice-asr:');
     expect(content).toContain('"127.0.0.1:${VOICE_ASR_PORT:-5161}:8080"');
     expect(content).toContain('./data/voice/asr:/data/voice/asr:Z');
+    expect(content).toContain('./docker/llonebot-startup.sh:/startup.sh:Z');
+    expect(content).toContain('command: ["/startup.sh"]');
     expect(content).not.toContain('voice-tts:');
     expect(content).not.toContain('"127.0.0.1:${VOICE_TTS_PORT:-5162}:8080"');
   });
@@ -40,6 +47,7 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('QQ_VOICE_OUTPUT_MAX_WORDS=80');
     expect(content).toContain('QQ_VOICE_OUTPUT_MAX_SECONDS=45');
     expect(content).toContain('QQ_VOICE_SYNTH_TIMEOUT_MS=300000');
+    expect(content).toContain('PMHQ_BIND_HOST=127.0.0.1');
     expect(content).not.toContain('VOICE_TTS_GPT_WEIGHTS=/data/voice/tts/models/sakiko_v2pp-e15.ckpt');
     expect(content).not.toContain('VOICE_TTS_REF_BLACK=/data/voice/tts/references/black_sakiko.wav');
   });
@@ -52,6 +60,7 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('QQ_VOICE_OUTPUT_ENABLED=false');
     expect(content).toContain('QQ_VOICE_ASR_BASE_URL=');
     expect(content).toContain('QQ_VOICE_TTS_BASE_URL=');
+    expect(content).toContain('PMHQ_BIND_HOST=10.88.0.1');
     expect(content).toContain('# Server deploy does not run voice-asr.');
   });
 
@@ -118,6 +127,7 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('retry_cmd() {');
     expect(content).toContain('ConnectTimeout=30');
     expect(content).toContain('ConnectionAttempts=5');
+    expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
     expect(content).toContain('ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --force-recreate pmhq llbot');
     expect(content).toContain('ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop pmhq llbot');
     expect(content).toContain("--exclude='.env.local'");

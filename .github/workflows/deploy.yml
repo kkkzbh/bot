@@ -348,6 +348,7 @@ jobs:
           [Service]
           Type=oneshot
           WorkingDirectory=${APP_DIR}
+          EnvironmentFile=${APP_DIR}/.env.server
           Environment=CONTAINERS_CONF=${APP_DIR}/config/podman/containers.conf
           ExecStartPre=/usr/bin/env bash -lc "podman network exists ${PODMAN_NETWORK_NAME} >/dev/null 2>&1 || podman network create ${PODMAN_NETWORK_NAME} >/dev/null; if [ -f '${PODMAN_CNI_CONFIG}' ]; then sed -i 's/\"cniVersion\": \"1.0.0\"/\"cniVersion\": \"0.4.0\"/' '${PODMAN_CNI_CONFIG}'; fi; podman rm -f qqbot-voice-asr >/dev/null 2>&1 || true"
           ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --force-recreate pmhq llbot
