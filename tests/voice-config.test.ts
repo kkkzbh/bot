@@ -107,8 +107,9 @@ describe('qq voice config wiring', () => {
   it('restarts the full compose stack during deploy instead of a hard-coded subset', () => {
     const content = readFileSync(resolve(process.cwd(), '.github/workflows/deploy.yml'), 'utf8');
 
-    expect(content).toContain('ExecStart=/usr/bin/podman-compose -f ${APP_DIR}/compose.yaml up -d --build');
-    expect(content).toContain('ExecStop=/usr/bin/podman-compose -f ${APP_DIR}/compose.yaml stop');
+    expect(content).toContain('PODMAN_COMPOSE_BIN="$(command -v podman-compose)"');
+    expect(content).toContain('ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --build');
+    expect(content).toContain('ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop');
     expect(content).toContain("--exclude='.env.local'");
     expect(content).toContain("--exclude='.env.server'");
     expect(content).toContain("cat > '${DEPLOY_APP_DIR}/.env.server'");

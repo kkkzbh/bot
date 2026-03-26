@@ -202,6 +202,7 @@ jobs:
           set -euo pipefail
 
           APP_DIR="${DEPLOY_APP_DIR}"
+          CHATLUNA_DIR="$(dirname "${APP_DIR}")/chatluna"
           SYSTEMD_TARGET="${DEPLOY_SYSTEMD_TARGET}"
           USER_SYSTEMD_DIR="${HOME}/.config/systemd/user"
 
@@ -226,12 +227,18 @@ jobs:
             exit 1
           fi
 
+          chown -R "$(id -u):$(id -g)" "${APP_DIR}" >/dev/null 2>&1 || true
+          if [ -d "${CHATLUNA_DIR}" ]; then
+            chown -R "$(id -u):$(id -g)" "${CHATLUNA_DIR}" >/dev/null 2>&1 || true
+          fi
+
           if [ "${SYSTEMD_TARGET}" = "qqbot.target" ]; then
             if ! command -v podman-compose >/dev/null 2>&1; then
               echo "podman-compose is not installed on target host" >&2
               exit 1
             fi
 
+            PODMAN_COMPOSE_BIN="$(command -v podman-compose)"
             mkdir -p "${USER_SYSTEMD_DIR}"
 
             cat > "${USER_SYSTEMD_DIR}/qqbot-stack.service" <<UNIT
@@ -245,8 +252,8 @@ jobs:
           Type=oneshot
           WorkingDirectory=${APP_DIR}
           Environment=CONTAINERS_CONF=${APP_DIR}/config/podman/containers.conf
-          ExecStart=/usr/bin/podman-compose -f ${APP_DIR}/compose.yaml up -d --build --force-recreate
-          ExecStop=/usr/bin/podman-compose -f ${APP_DIR}/compose.yaml stop
+          ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --build --force-recreate
+          ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop
           RemainAfterExit=yes
 
           [Install]
@@ -309,4 +316,23 @@ jobs:
           systemctl --user enable "${SYSTEMD_TARGET}" >/dev/null 2>&1 || true
           systemctl --user restart "${SYSTEMD_TARGET}"
           systemctl --user is-active --quiet "${SYSTEMD_TARGET}"
+
+          if [ "${SYSTEMD_TARGET}" = "qqbot.target" ]; then
+            for unit in qqbot-stack.service qqbot-koishi.service; do
+              for _ in $(seq 1 60); do
+                if systemctl --user is-active --quiet "${unit}"; then
+                  break
+                fi
+                if systemctl --user is-failed --quiet "${unit}"; then
+                  systemctl --user status "${unit}" --no-pager >&2 || true
+                  exit 1
+                fi
+                sleep 1
+              done
+              if ! systemctl --user is-active --quiet "${unit}"; then
+                systemctl --user status "${unit}" --no-pager >&2 || true
+                exit 1
+              fi
+            done
+          fi
           EOF
