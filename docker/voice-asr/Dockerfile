@@ -1,4 +1,4 @@
-FROM python:3.11-slim-bookworm
+FROM docker.1ms.run/library/python:3.11-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
