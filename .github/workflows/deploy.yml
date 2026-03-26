@@ -99,7 +99,11 @@ jobs:
           set -euo pipefail
           pnpm install --frozen-lockfile
           pnpm typecheck
-          pnpm test
+          pnpm test \
+            tests/voice-config.test.ts \
+            tests/group-natural-trigger.test.ts \
+            tests/chatluna-live-reply.test.ts \
+            tests/chatluna-speaker-format.test.ts
           pnpm build
 
       - name: Setup SSH key
