@@ -75,7 +75,12 @@ def visit(package_dir: Path) -> None:
     package_data = load_json(package_dir / 'package.json')
     visiting.add(package_dir)
 
-    for dependency_name in package_data.get('dependencies', {}):
+    local_dependency_names = [
+        *package_data.get('dependencies', {}),
+        *package_data.get('peerDependencies', {}),
+    ]
+
+    for dependency_name in local_dependency_names:
         dep_dir = workspace_packages.get(dependency_name)
         if dep_dir is None:
             continue
