@@ -56,6 +56,13 @@ jobs:
           ln -sfn "${GITHUB_WORKSPACE}/chatluna-src" "${GITHUB_WORKSPACE}/../chatluna"
           test -f "${GITHUB_WORKSPACE}/../chatluna/packages/core/package.json"
 
+      - name: Install linked ChatLuna dependencies
+        run: |
+          set -euo pipefail
+          corepack enable
+          cd chatluna-src
+          yarn install --frozen-lockfile
+
       - name: Validate required secrets
         run: |
           set -euo pipefail
