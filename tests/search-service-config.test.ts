@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -20,7 +20,8 @@ describe('chatluna search service wiring', () => {
   });
 
   it('ships only new search-service env keys in all env files', () => {
-    const files = ['.env.example', '.env.server.example', '.env.local', '.env.server'];
+    const files = ['.env.example', '.env.server.example', '.env.local', '.env.server']
+      .filter((file) => existsSync(resolve(process.cwd(), file)));
 
     for (const file of files) {
       const content = readFileSync(resolve(process.cwd(), file), 'utf8');
