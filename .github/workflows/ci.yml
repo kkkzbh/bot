@@ -18,9 +18,25 @@ jobs:
   checks:
     name: Typecheck + Test + Build + Smoke
     runs-on: ubuntu-latest
+    env:
+      CHATLUNA_REPO: kkkzbh/chatluna
+      CHATLUNA_REF: v1-dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Checkout linked ChatLuna
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CHATLUNA_REPO }}
+          ref: ${{ env.CHATLUNA_REF }}
+          path: chatluna-src
+
+      - name: Prepare linked ChatLuna workspace
+        run: |
+          set -euo pipefail
+          ln -sfn "${GITHUB_WORKSPACE}/chatluna-src" "${GITHUB_WORKSPACE}/../chatluna"
+          test -f "${GITHUB_WORKSPACE}/../chatluna/packages/core/package.json"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -35,6 +51,16 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Install linked ChatLuna dependencies
+        run: |
+          set -euo pipefail
+          corepack enable
+          cd chatluna-src
+          yarn install --frozen-lockfile
+
+      - name: Ensure linked ChatLuna runtime builds
+        run: bash ./scripts/ensure-chatluna-build.sh
 
       - name: Typecheck
         run: pnpm typecheck
