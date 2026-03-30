@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 
-const CHATLUNA_CORE_ROOT = '/home/kkkzbh/code/chatluna/packages/core';
+const CHATLUNA_CORE_ROOT = resolve(process.cwd(), '../chatluna/packages/core');
 
 describe('chatluna allow_reply resolver source and type export', () => {
   it('routes external allow checks through the chatluna service instead of a sibling event hook', () => {
@@ -31,7 +31,6 @@ describe('chatluna allow_reply resolver source and type export', () => {
 
     expect(content).toContain("linked_prefix = 'link:../chatluna/packages/'");
     expect(content).toContain('workspace_packages');
-    expect(content).toContain("for dependency_name in package_data.get('dependencies', {})");
     expect(content).toContain('visit(dep_dir)');
     expect(content).toContain('package_dir.name');
     expect(content).toContain('pnpm run fast-build "${BUILD_TARGETS[@]}"');

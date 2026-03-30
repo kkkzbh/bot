@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('koishi', () => ({
+  h: (...args: unknown[]) => args,
+}));
+
 import { sanitizeLeakedReasoningMessage } from '../src/plugins/shared/outbound/index.js';
 import { formatAutomationTimestamp, parseAutomationIntentByRule } from '../src/plugins/automation/scheduler.js';
 
@@ -91,7 +96,7 @@ function emitDueOnce(state: SimState, now: number): string[] {
 describe('QBOT context scenario regression', () => {
   it('replays deterministic user-QBOT conversation without API key (create reply passes through)', () => {
     const now = Date.parse('2026-03-01T16:40:16+08:00');
-    const state: SimState = { tasks: [] as SimTask[], nextId: 1 };
+    const state: SimState = { tasks: [], nextId: 1 };
 
     const transcript = [
       {
