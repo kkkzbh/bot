@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
 
 describe('chatluna responses input regression', () => {
   it('keeps responses-mode multimodal content mapped to input_* item types', () => {
