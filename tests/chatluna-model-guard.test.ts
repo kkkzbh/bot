@@ -103,6 +103,7 @@ describe('buildStructuredReplyModelOverride', () => {
     });
     expect(buildStructuredReplyModelOverride('openai/gpt-5.4-medium-thinking')).toEqual({
       qqbot_request_mode: 'responses',
+      qqbot_tool_profile: 'qqbot_openai_main_chat',
       reasoning: {
         effort: 'medium',
       },
