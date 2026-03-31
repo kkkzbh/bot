@@ -50,9 +50,15 @@ const loginTimeoutPatches = [
 ]
 
 for (const patch of loginTimeoutPatches) {
-  if (!bundle.includes(patch.from)) {
-    throw new Error(`Missing llbot.js patch target: ${patch.from}`)
+  if (bundle.includes(patch.to)) {
+    continue
   }
+
+  if (!bundle.includes(patch.from)) {
+    console.warn(`[llonebot-startup] Skip login timeout patch; target not found: ${patch.from}`)
+    continue
+  }
+
   bundle = bundle.replace(patch.from, patch.to)
 }
 

@@ -6,6 +6,7 @@ node_modules
 .runtime/
 .playwright-cli/
 .tmp/
+.tmp-llbot-*.png
 .pnpm-store
 coverage
 dist
