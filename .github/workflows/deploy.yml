@@ -56,12 +56,26 @@ jobs:
           ln -sfn "${GITHUB_WORKSPACE}/chatluna-src" "${GITHUB_WORKSPACE}/../chatluna"
           test -f "${GITHUB_WORKSPACE}/../chatluna/packages/core/package.json"
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
       - name: Install linked ChatLuna dependencies
         run: |
           set -euo pipefail
           corepack enable
           cd chatluna-src
           yarn install --frozen-lockfile
+
+      - name: Ensure linked ChatLuna runtime builds
+        run: bash ./scripts/ensure-chatluna-build.sh
 
       - name: Validate required secrets
         run: |
@@ -82,17 +96,6 @@ jobs:
             echo "Missing required secret: QQBOT_DOTENV" >&2
             exit 1
           fi
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: pnpm
 
       - name: Quality gates
         run: |
@@ -355,6 +358,10 @@ jobs:
               mkdir -p "${CHATLUNA_DIR}/.yarn-cache"
               YARN_CACHE_FOLDER="${CHATLUNA_DIR}/.yarn-cache" corepack yarn install --frozen-lockfile
             )
+          fi
+
+          if [ -d "${CHATLUNA_DIR}" ]; then
+            CHATLUNA_ROOT_DIR="${CHATLUNA_DIR}" bash "${APP_DIR}/scripts/ensure-chatluna-build.sh"
           fi
 
           if [ "${SYSTEMD_TARGET}" = "qqbot.target" ]; then
