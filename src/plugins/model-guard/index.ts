@@ -8,6 +8,7 @@ import {
 } from '../reply/index.js';
 import {
   inferPlatformFromBaseUrl,
+  isSupportedMainChatModelForTab,
   normalizeRawModelName,
   resolveMainChatRuntimeProfileFromEnv,
   resolvePlatform,
@@ -190,20 +191,38 @@ export function apply(ctx: Context, config: Config = {}): void {
           const room = context.options?.room;
           if (!room) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
 
+          const profile = resolveMainChatRuntimeProfileFromEnv(process.env);
           const originalRoomModel = trimOptionalText(room.model);
-          const defaultModel = resolveDefaultModelForGuard();
+          const defaultModel = profile.defaultModel || resolveDefaultModelForGuard();
           const preferredPlatform = resolvePreferredPlatformForGuard(defaultModel);
           const normalizedModel = normalizeRawModelName(room.model, {
             availableModels: listAllLlmModels(chatluna),
             preferredPlatform,
             defaultModel,
           });
+          let shouldPersistRoom = false;
           if (normalizedModel && normalizedModel !== room.model?.trim()) {
             room.model = normalizedModel;
+            shouldPersistRoom = true;
             logger.info(
               'normalized room model for guard (roomId=%s, model=%s).',
               String(room.roomId ?? ''),
               normalizedModel,
+            );
+          }
+          const effectiveModel = trimOptionalText(room.model);
+          if (
+            effectiveModel &&
+            defaultModel &&
+            !isSupportedMainChatModelForTab(profile.tabId, effectiveModel)
+          ) {
+            room.model = defaultModel;
+            shouldPersistRoom = true;
+            logger.warn(
+              'room model is unsupported for qqbot main chat (roomId=%s, model=%s), fallback to %s.',
+              String(room.roomId ?? ''),
+              effectiveModel,
+              defaultModel,
             );
           }
           logger.info(
@@ -217,6 +236,11 @@ export function apply(ctx: Context, config: Config = {}): void {
               preset: trimOptionalText(room.preset) ?? null,
             }),
           );
+          if (shouldPersistRoom) {
+            await (
+              ctx.database as unknown as { upsert: (table: string, rows: unknown[]) => Promise<unknown> }
+            ).upsert('chathub_room', [room]);
+          }
           if (trimOptionalText(room.model) === 'deepseek/deepseek-chat') {
             logger.warn(
               '%s',
