@@ -32,8 +32,8 @@ jobs:
       DEPLOY_PORT: ${{ vars.QQBOT_SERVER_PORT || '22' }}
       DEPLOY_APP_DIR: ${{ vars.QQBOT_SERVER_APP_DIR || '/opt/qqbot/current' }}
       DEPLOY_SYSTEMD_TARGET: ${{ vars.QQBOT_SYSTEMD_TARGET || 'qqbot.target' }}
-      DEPLOY_CHATLUNA_REPO: ${{ vars.QQBOT_CHATLUNA_REPO || 'kkkzbh/chatluna' }}
-      DEPLOY_CHATLUNA_REF: ${{ github.event.inputs.chatluna_ref || vars.QQBOT_CHATLUNA_REF || 'v1-dev' }}
+      DEPLOY_CHATLUNA_REPO: kkkzbh/chatluna
+      DEPLOY_CHATLUNA_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chatluna_ref || 'v1-dev' }}
       DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.QQBOT_SSH_PRIVATE_KEY }}
       DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.QQBOT_SSH_KNOWN_HOSTS }}
       DEPLOY_DOTENV: ${{ secrets.QQBOT_DOTENV }}
