@@ -78,7 +78,7 @@ function createHarness(
 
   apply(ctx as never, {
     enabled: true,
-    enabledGroups: '',
+    enabledGroups: '100,200',
     aliases: '祥子',
     directTriggerProbability: 0,
     focusWindowMs: 300_000,
@@ -182,6 +182,21 @@ describe('group natural trigger middleware', () => {
     expect(sameGroup.naturalTrigger).toEqual({ reason: 'focus', explicit: false });
     expect(otherGroup.content).toBe('我也补充一下');
     expect(otherGroup.naturalTrigger).toBeNull();
+  });
+
+  it('requires an explicit whitelist group before natural trigger can fire', async () => {
+    const { middleware } = createHarness({ enabledGroups: '', replyIntervalMs: 0 });
+
+    const result = await runAndCapture(
+      middleware,
+      createSession({
+        channelId: '100',
+        guildId: '100',
+        content: '祥子 在吗',
+      }),
+    );
+
+    expect(result.naturalTrigger).toBeNull();
   });
 
   it('keeps reply interval isolated by group', async () => {

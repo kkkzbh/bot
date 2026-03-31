@@ -50,8 +50,8 @@ export interface Config {
 export const Config: Schema<Config> = Schema.object({
   enabled: Schema.boolean().default(true).description('是否启用群聊自然触发。'),
   enabledGroups: Schema.union([
-    Schema.array(Schema.string()).role('table').description('启用自然触发的群号列表。留空表示全部群。'),
-    Schema.string().description('启用自然触发的群号（逗号分隔，留空表示全部群）。'),
+    Schema.array(Schema.string()).role('table').description('启用自然触发的白名单群号列表。留空表示不在任何群自动触发。'),
+    Schema.string().description('启用自然触发的白名单群号（逗号分隔，留空表示不在任何群自动触发）。'),
   ]),
   aliases: Schema.union([
     Schema.array(Schema.string()).role('table').description('可触发机器人对话的称呼列表。'),
@@ -292,7 +292,7 @@ function shouldHandleGroup(session: Session, runtime: RuntimeConfig): boolean {
   if (session.isDirect) return false;
   const groupId = resolveGroupId(session);
   if (!groupId) return false;
-  if (!runtime.enabledGroups.size) return true;
+  if (!runtime.enabledGroups.size) return false;
   return runtime.enabledGroups.has(groupId);
 }
 

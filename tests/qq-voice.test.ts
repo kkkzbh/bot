@@ -334,7 +334,6 @@ function createHarness(overrides: {
   };
 
   apply(ctx as never, {
-    enabled: true,
     inputEnabled: true,
     outputEnabled: true,
     asrBaseUrl: 'http://127.0.0.1:8081',

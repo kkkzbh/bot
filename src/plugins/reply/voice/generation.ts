@@ -83,7 +83,6 @@ export const name = 'qq-voice';
 export const inject = { required: ['chatluna', 'database'], optional: ['featurePolicy'] } as const;
 
 export interface Config {
-  enabled?: boolean;
   inputEnabled?: boolean;
   outputEnabled?: boolean;
   asrBaseUrl?: string;
@@ -100,7 +99,6 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  enabled: Schema.boolean().default(true).description('是否启用 QQ 语音能力。'),
   inputEnabled: Schema.boolean().default(true).description('是否启用 QQ 语音转文字。'),
   outputEnabled: Schema.boolean().default(true).description('是否启用 QQ 文本附带语音回复。'),
   asrBaseUrl: Schema.string().role('link').description('ASR HTTP 服务地址（默认复用 QQ_VOICE_ASR_BASE_URL）。'),
@@ -117,7 +115,6 @@ export const Config: Schema<Config> = Schema.object({
 });
 
 interface RuntimeConfig {
-  enabled: boolean;
   inputEnabled: boolean;
   outputEnabled: boolean;
   asrBaseUrl: string;
@@ -318,7 +315,6 @@ function clampNatural(input: unknown, fallback: number): number {
 
 function toRuntimeConfig(config: Config): RuntimeConfig {
   return {
-    enabled: config.enabled ?? String(process.env.QQ_VOICE_ENABLED ?? 'true').toLowerCase() !== 'false',
     inputEnabled: config.inputEnabled ?? String(process.env.QQ_VOICE_INPUT_ENABLED ?? 'true').toLowerCase() !== 'false',
     outputEnabled:
       config.outputEnabled ?? String(process.env.QQ_VOICE_OUTPUT_ENABLED ?? 'true').toLowerCase() !== 'false',
@@ -797,7 +793,7 @@ async function ensureCanSendRecord(
 }
 
 function isVoiceOutputConfigured(runtime: RuntimeConfig): boolean {
-  return runtime.enabled && runtime.outputEnabled && Boolean(runtime.ttsBaseUrl);
+  return Boolean(runtime.ttsBaseUrl);
 }
 
 function getReplyTransportState(session: SessionWithVoiceState): ReplyTransportState {
@@ -1479,26 +1475,22 @@ export function apply(ctx: Context, config: Config = {}): void {
   };
 
   const resolveVoiceFeatureState = async (session: SessionWithVoiceState): Promise<{
-    enabled: boolean;
     inputEnabled: boolean;
     outputEnabled: boolean;
   }> => {
-    const overallEnabled = !featurePolicy || (await featurePolicy.resolveFeatureEnabled(session, 'QQ_VOICE_ENABLED'));
-    if (!overallEnabled) {
+    if (!featurePolicy) {
       return {
-        enabled: false,
-        inputEnabled: false,
-        outputEnabled: false,
+        inputEnabled: runtime.inputEnabled,
+        outputEnabled: runtime.outputEnabled,
       };
     }
 
     const [inputEnabled, outputEnabled] = await Promise.all([
-      !featurePolicy || featurePolicy.resolveFeatureEnabled(session, 'QQ_VOICE_INPUT_ENABLED'),
-      !featurePolicy || featurePolicy.resolveFeatureEnabled(session, 'QQ_VOICE_OUTPUT_ENABLED'),
+      featurePolicy.resolveFeatureEnabled(session, 'QQ_VOICE_INPUT_ENABLED'),
+      featurePolicy.resolveFeatureEnabled(session, 'QQ_VOICE_OUTPUT_ENABLED'),
     ]);
 
     return {
-      enabled: runtime.enabled && overallEnabled,
       inputEnabled,
       outputEnabled,
     };
@@ -1526,7 +1518,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     async (rawSession, next) => {
       const session = rawSession as SessionWithVoiceState;
       const voiceFeatureState = await resolveVoiceFeatureState(session);
-      if (!runtime.enabled || !runtime.inputEnabled || !voiceFeatureState.enabled || !voiceFeatureState.inputEnabled) {
+      if (!voiceFeatureState.inputEnabled) {
         return next();
       }
       if (session.platform !== 'onebot') return next();
@@ -1579,7 +1571,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         session,
         canSendRecordCache,
         ttsCapabilityStates,
-        voiceOutputEnabled: voiceFeatureState.enabled && voiceFeatureState.outputEnabled,
+        voiceOutputEnabled: voiceFeatureState.outputEnabled,
       });
       rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
       return next();
@@ -1703,7 +1695,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             session,
             canSendRecordCache,
             ttsCapabilityStates,
-            voiceOutputEnabled: voiceFeatureState.enabled && voiceFeatureState.outputEnabled,
+            voiceOutputEnabled: voiceFeatureState.outputEnabled,
           }));
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
@@ -1829,7 +1821,7 @@ export function apply(ctx: Context, config: Config = {}): void {
               session,
               canSendRecordCache,
               ttsCapabilityStates,
-              voiceOutputEnabled: voiceFeatureState.enabled && voiceFeatureState.outputEnabled,
+              voiceOutputEnabled: voiceFeatureState.outputEnabled,
             }));
           rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
           const turnCapabilitySnapshot = buildTurnCapabilitySnapshot(session, snapshot);

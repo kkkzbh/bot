@@ -136,13 +136,13 @@ describe('feature policy service', () => {
 
     await service.saveFeatureOverrides([
       {
-        featureKey: 'QQ_VOICE_ENABLED',
+        featureKey: 'QQ_VOICE_INPUT_ENABLED',
         scopeKind: 'private_default',
         scopeId: PRIVATE_DEFAULT_SCOPE_ID,
         enabled: false,
       },
       {
-        featureKey: 'QQ_VOICE_ENABLED',
+        featureKey: 'QQ_VOICE_INPUT_ENABLED',
         scopeKind: 'group',
         scopeId: '10001',
         enabled: false,
@@ -152,14 +152,14 @@ describe('feature policy service', () => {
     await expect(
       service.resolveFeatureEnabled(
         { isDirect: true, userId: 'u1', channelId: 'p1' } as any,
-        'QQ_VOICE_ENABLED',
+        'QQ_VOICE_INPUT_ENABLED',
       ),
     ).resolves.toBe(false);
 
     await expect(
       service.resolveFeatureEnabled(
         { isDirect: false, userId: 'u1', guildId: '10001', channelId: '10001' } as any,
-        'QQ_VOICE_ENABLED',
+        'QQ_VOICE_INPUT_ENABLED',
       ),
     ).resolves.toBe(false);
 
@@ -213,7 +213,7 @@ describe('feature policy service', () => {
       feature_scope_override: [
         {
           id: 1,
-          featureKey: 'QQ_VOICE_ENABLED',
+          featureKey: 'QQ_VOICE_INPUT_ENABLED',
           scopeKind: 'group',
           scopeId: '20002',
           enabled: 1,

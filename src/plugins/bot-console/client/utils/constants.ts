@@ -1,7 +1,6 @@
 // ─── Label maps ───────────────────────────────────────────────────────────────
 
 export const FIELD_LABELS: Record<string, string> = {
-  QQ_VOICE_ENABLED: 'QQ 语音总开关',
   QQ_VOICE_INPUT_ENABLED: '语音转文字',
   QQ_VOICE_OUTPUT_ENABLED: '语音回复',
   CHAT_NATURAL_TRIGGER_ENABLED: '群聊自然触发',
@@ -28,7 +27,7 @@ export const FIELD_LABELS: Record<string, string> = {
   TASK_AUTOMATION_CHAT_REPLY_MODEL: '任务回复模型',
   CHATLUNA_DEFAULT_PRESET: '默认预设',
   CHAT_ENABLED_GROUPS: '自动化启用群',
-  CHAT_NATURAL_TRIGGER_GROUPS: '自然触发群',
+  CHAT_NATURAL_TRIGGER_GROUPS: '自然触发白名单群',
   CHAT_NATURAL_TRIGGER_ALIASES: '触发别名',
   CHATLUNA_COMMAND_AUTHORITY: '命令权限等级',
 }
@@ -52,6 +51,8 @@ export const FIELD_HINTS: Record<string, string> = {
     '普通聊天默认走这里配置的模型。建议填写完整规范名，例如 siliconflow/Pro/moonshotai/Kimi-K2.5。',
   CHATLUNA_OPENAI_DEFAULT_MODEL:
     'OpenAI Tab 当前按 OpenAI 兼容 provider 处理，默认推荐 openai/gpt-5.4-medium-thinking。',
+  CHAT_NATURAL_TRIGGER_GROUPS:
+    '只有填在这里的群号才会命中群聊自然触发。多个群号用英文逗号分隔；留空时不会在任何群自动触发。',
 }
 
 export const ROLE_LABELS: Record<string, string> = {
@@ -131,7 +132,8 @@ export const UNIT_FILE_STATE_LABELS: Record<string, string> = {
 
 /** Items shown in the Overview panel's features chip list. */
 export const OVERVIEW_FEATURE_ITEMS: [string, string][] = [
-  ['QQ_VOICE_ENABLED', '语音'],
+  ['QQ_VOICE_INPUT_ENABLED', '语音转文字'],
+  ['QQ_VOICE_OUTPUT_ENABLED', '语音回复'],
   ['CHAT_NATURAL_TRIGGER_ENABLED', '自然触发'],
   ['TASK_AUTOMATION_INTENT_ENABLED', '任务意图'],
   ['QQBOT_REPLY_INTERRUPT_ENABLED', '回复期中断'],

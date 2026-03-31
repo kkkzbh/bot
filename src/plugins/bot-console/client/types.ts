@@ -115,7 +115,6 @@ export interface MemoryV2ProbeResult {
 // ─── Scoped Feature Policy ────────────────────────────────────────────────────
 
 export type ScopedFeatureKey =
-  | "QQ_VOICE_ENABLED"
   | "QQ_VOICE_INPUT_ENABLED"
   | "QQ_VOICE_OUTPUT_ENABLED"
   | "CHAT_NATURAL_TRIGGER_ENABLED"

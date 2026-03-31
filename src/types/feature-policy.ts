@@ -2,7 +2,6 @@ import 'koishi';
 import type { Session } from 'koishi';
 
 export type ScopedFeatureKey =
-  | 'QQ_VOICE_ENABLED'
   | 'QQ_VOICE_INPUT_ENABLED'
   | 'QQ_VOICE_OUTPUT_ENABLED'
   | 'CHAT_NATURAL_TRIGGER_ENABLED'

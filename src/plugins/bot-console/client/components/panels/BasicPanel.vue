@@ -35,7 +35,7 @@ async function handleSaveAndRestart() {
     <div class="bc-panel-head">
       <div>
         <h2>基础配置</h2>
-        <p>群号、触发词和权限设置。修改后点击保存，通常需要重启才会生效。</p>
+        <p>触发词和权限设置。修改后点击保存，通常需要重启才会生效。</p>
       </div>
       <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
         <span
@@ -103,18 +103,12 @@ async function handleSaveAndRestart() {
           :max="key === 'CHATLUNA_COMMAND_AUTHORITY' ? 5 : undefined"
           spellcheck="false"
           :placeholder="
-            key === 'CHAT_ENABLED_GROUPS' ? '群号之间用英文逗号分隔，如 123456,789012'
-            : key === 'CHAT_NATURAL_TRIGGER_GROUPS' ? '群号之间用英文逗号分隔'
-            : key === 'CHATLUNA_COMMAND_AUTHORITY' ? '0–5，默认 1'
+            key === 'CHATLUNA_COMMAND_AUTHORITY' ? '0–5，默认 1'
             : ''
           "
           @input="(e) => { envDraft[key] = (e.target as HTMLInputElement).value }"
         />
 
-        <em
-          v-if="key === 'CHAT_ENABLED_GROUPS' || key === 'CHAT_NATURAL_TRIGGER_GROUPS'"
-          class="bc-field-note"
-        >填写群号，多个用英文逗号分隔。留空表示所有群。</em>
         <em
           v-if="key === 'CHATLUNA_COMMAND_AUTHORITY'"
           class="bc-field-note"

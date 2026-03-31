@@ -141,6 +141,9 @@ session key quotas on the host.
   - local bot: set `QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162` in `.env.local`
   - server bot: set `QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162` in `.env.server`
   - keep `QQ_VOICE_TTS_API_KEY` identical between the bot env file in use and `config/voice-tts.local.env`
+- Server deploy no longer force-disables voice output in systemd.
+  - if `QQ_VOICE_OUTPUT_ENABLED=true` on the server, it is expected to call your laptop-local TTS over Tailnet
+  - if the laptop-local TTS gateway or its Tailnet publish layer is unavailable, server voice reply should be treated as unavailable rather than silently downgraded to a fake enabled state
 - The local TTS gateway itself should only listen on loopback:
   - set `VOICE_TTS_HOST=127.0.0.1` in `config/voice-tts.local.env`
   - do not bind the model process directly to a Tailscale IP
@@ -312,7 +315,7 @@ bash ./scripts/cleanup-debug-chat-state.sh
 ## 10. Group natural trigger environment variables
 
 - `CHAT_NATURAL_TRIGGER_ENABLED`：是否开启群聊自然触发（默认 `true`）。
-- `CHAT_NATURAL_TRIGGER_GROUPS`：自然触发生效群（逗号分隔，空表示所有群）。
+- `CHAT_NATURAL_TRIGGER_GROUPS`：自然触发白名单群（逗号分隔，留空表示不在任何群自动触发）。
 - `CHAT_NATURAL_TRIGGER_ALIASES`：别名列表（逗号分隔）。
 - `CHAT_NATURAL_TRIGGER_DIRECT_PROBABILITY`：任意消息直接触发概率（默认 `0.25`）。
 - `CHAT_NATURAL_TRIGGER_FOCUS_WINDOW_MS`：会话焦点窗口（默认 `300000`，同群共享）。
@@ -349,11 +352,10 @@ bash ./scripts/cleanup-debug-chat-state.sh
 
 ### QQ voice environment variables
 
-- `QQ_VOICE_ENABLED`：是否启用语音插件总开关（默认 `true`）。
 - `QQ_VOICE_INPUT_ENABLED`：是否允许 QQ 语音转写输入（默认 `true`）。
 - `QQ_VOICE_OUTPUT_ENABLED`：是否允许可选语音回复（默认 `true`）。
 - `QQ_VOICE_ASR_BASE_URL` / `QQ_VOICE_ASR_API_KEY`：Koishi 访问本机 ASR 服务的地址与 token。
-- `QQ_VOICE_TTS_BASE_URL` / `QQ_VOICE_TTS_API_KEY`：Koishi 访问笔记本 Tailscale TTS 网关的地址与 token。
+- `QQ_VOICE_TTS_BASE_URL` / `QQ_VOICE_TTS_API_KEY`：Koishi 访问 TTS 网关的地址与 token。本地通常指向 `127.0.0.1:5162`；服务器开启语音回复时应指向笔记本 Tailnet TTS 地址。
 - `QQ_VOICE_INPUT_MAX_SECONDS`：单条入站语音最大时长（默认 `60` 秒）。
 - `QQ_VOICE_OUTPUT_MAX_WORDS`：单个语音段最大词数（默认 `80`；超过时应由模型主动拆成多段语音）。
 - `QQ_VOICE_OUTPUT_MAX_SECONDS`：单个语音段最大时长（默认 `45` 秒）。

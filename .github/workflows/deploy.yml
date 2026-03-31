@@ -407,7 +407,7 @@ jobs:
           Type=simple
           WorkingDirectory=${APP_DIR}
           EnvironmentFile=${APP_DIR}/.env.server
-          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && export QQ_VOICE_ENABLED=false QQ_VOICE_INPUT_ENABLED=false QQ_VOICE_OUTPUT_ENABLED=false QQ_VOICE_ASR_BASE_URL= QQ_VOICE_ASR_API_KEY= QQ_VOICE_TTS_BASE_URL= QQ_VOICE_TTS_API_KEY= QQBOT_ENV_FILE=${APP_DIR}/.env.server; exec pnpm exec koishi start koishi.yml'
+          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && export QQBOT_ENV_FILE=${APP_DIR}/.env.server; exec pnpm exec koishi start koishi.yml'
           Restart=always
           RestartSec=5
 

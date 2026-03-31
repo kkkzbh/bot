@@ -13,7 +13,6 @@ describe('qq voice config wiring', () => {
     expect(triggerIndex).toBeGreaterThan(voiceIndex);
     expect(chatlunaIndex).toBeGreaterThan(triggerIndex);
 
-    expect(content).toContain("enabled: ${{ env.QQ_VOICE_ENABLED !== 'false' }}");
     expect(content).toContain("asrBaseUrl: ${{ env.QQ_VOICE_ASR_BASE_URL || 'http://127.0.0.1:5161' }}");
     expect(content).toContain("ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || 'http://127.0.0.1:5162' }}");
     expect(content).toContain('defaultModel: >-');
@@ -51,7 +50,6 @@ describe('qq voice config wiring', () => {
   it('documents local voice env vars in .env.example', () => {
     const content = readFileSync(resolve(process.cwd(), '.env.example'), 'utf8');
 
-    expect(content).toContain('QQ_VOICE_ENABLED=true');
     expect(content).toContain('QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161');
     expect(content).toContain('QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162');
     expect(content).toContain('QQ_VOICE_OUTPUT_MAX_WORDS=80');
@@ -69,7 +67,6 @@ describe('qq voice config wiring', () => {
   it('ships a server env template with voice disabled', () => {
     const content = readFileSync(resolve(process.cwd(), '.env.server.example'), 'utf8');
 
-    expect(content).toContain('QQ_VOICE_ENABLED=false');
     expect(content).toContain('QQ_VOICE_INPUT_ENABLED=false');
     expect(content).toContain('QQ_VOICE_OUTPUT_ENABLED=false');
     expect(content).toContain('QQ_VOICE_ASR_BASE_URL=');
@@ -132,7 +129,7 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('<qqbot-voice>');
   });
 
-  it('deploys a server stack without voice-asr and forces server voice off', () => {
+  it('deploys a server stack without voice-asr and keeps koishi voice settings sourced from .env.server', () => {
     const content = readFileSync(resolve(process.cwd(), '.github/workflows/deploy.yml'), 'utf8');
 
     expect(content).toContain('PODMAN_COMPOSE_BIN="$(command -v podman-compose)"');
@@ -150,7 +147,6 @@ describe('qq voice config wiring', () => {
     expect(content).toContain("--exclude='.env.server'");
     expect(content).toContain("cat > '${DEPLOY_APP_DIR}/.env.server'");
     expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
-    expect(content).toContain('export QQ_VOICE_ENABLED=false QQ_VOICE_INPUT_ENABLED=false QQ_VOICE_OUTPUT_ENABLED=false');
     expect(content).toContain('QQBOT_ENV_FILE=${APP_DIR}/.env.server');
     expect(content).toContain('exec pnpm exec koishi start koishi.yml');
     expect(content).not.toContain('QQBOT_ENV_FILE=${APP_DIR}/.env.server pnpm start');

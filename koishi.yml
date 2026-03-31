@@ -58,7 +58,6 @@ plugins:
       chatReplyMaxTokens: ${{ +env.TASK_AUTOMATION_CHAT_REPLY_MAX_TOKENS || 10000 }}
       chatReplySystemPrompt: ${{ env.TASK_AUTOMATION_CHAT_REPLY_SYSTEM_PROMPT || '' }}
     ./dist/plugins/reply:voice:
-      enabled: ${{ env.QQ_VOICE_ENABLED !== 'false' }}
       inputEnabled: ${{ env.QQ_VOICE_INPUT_ENABLED !== 'false' }}
       outputEnabled: ${{ env.QQ_VOICE_OUTPUT_ENABLED !== 'false' }}
       asrBaseUrl: ${{ env.QQ_VOICE_ASR_BASE_URL || 'http://127.0.0.1:5161' }}

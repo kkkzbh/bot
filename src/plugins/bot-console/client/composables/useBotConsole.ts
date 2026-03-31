@@ -45,12 +45,15 @@ import {
 // ─── Env key groups ───────────────────────────────────────────────────────────
 
 export const FEATURE_KEYS = [
-  'QQ_VOICE_ENABLED',
   'QQ_VOICE_INPUT_ENABLED',
   'QQ_VOICE_OUTPUT_ENABLED',
   'CHAT_NATURAL_TRIGGER_ENABLED',
   'TASK_AUTOMATION_INTENT_ENABLED',
   'QQBOT_REPLY_INTERRUPT_ENABLED',
+] as const
+
+export const FEATURE_TEXT_KEYS = [
+  'CHAT_NATURAL_TRIGGER_GROUPS',
 ] as const
 
 export const FILE_SYSTEM_CONTROL_KEYS = [
@@ -74,13 +77,17 @@ export const MODEL_SHARED_KEYS = [
 export const MODEL_TAB_IDS = ['siliconflow', 'openai'] as const satisfies readonly BotConsoleModelTabId[]
 
 export const BASIC_KEYS = [
-  'CHAT_ENABLED_GROUPS',
-  'CHAT_NATURAL_TRIGGER_GROUPS',
   'CHAT_NATURAL_TRIGGER_ALIASES',
   'CHATLUNA_COMMAND_AUTHORITY',
 ] as const
 
-export const ALL_ENV_KEYS = [...FEATURE_KEYS, ...FILE_SYSTEM_CONTROL_KEYS, ...MODEL_SHARED_KEYS, ...BASIC_KEYS] as const
+export const ALL_ENV_KEYS = [
+  ...FEATURE_KEYS,
+  ...FEATURE_TEXT_KEYS,
+  ...FILE_SYSTEM_CONTROL_KEYS,
+  ...MODEL_SHARED_KEYS,
+  ...BASIC_KEYS,
+] as const
 const BOT_RUNTIME_UNIT = 'qqbot-koishi.service'
 
 // ─── Exported helpers ─────────────────────────────────────────────────────────

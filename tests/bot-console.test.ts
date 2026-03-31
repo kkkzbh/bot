@@ -386,7 +386,7 @@ describe('bot-console plugin', () => {
     const saveFeatureOverrides = vi.fn().mockResolvedValue([
       {
         id: 1,
-        featureKey: 'QQ_VOICE_ENABLED',
+        featureKey: 'QQ_VOICE_INPUT_ENABLED',
         scopeKind: 'private_default',
         scopeId: 'private-default',
         enabled: 0,
@@ -452,11 +452,11 @@ describe('bot-console plugin', () => {
     const saveOverridesListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/save-feature-overrides')?.[1];
     await expect(
       saveOverridesListener({
-        overrides: [{ featureKey: 'QQ_VOICE_ENABLED', scopeKind: 'private_default', scopeId: 'private-default', enabled: false }],
+        overrides: [{ featureKey: 'QQ_VOICE_INPUT_ENABLED', scopeKind: 'private_default', scopeId: 'private-default', enabled: false }],
       }),
     ).resolves.toEqual({
       overrides: [
-        expect.objectContaining({ featureKey: 'QQ_VOICE_ENABLED', scopeKind: 'private_default', scopeId: 'private-default' }),
+        expect.objectContaining({ featureKey: 'QQ_VOICE_INPUT_ENABLED', scopeKind: 'private_default', scopeId: 'private-default' }),
       ],
     });
     expect(saveFeatureOverrides).toHaveBeenCalledTimes(1);

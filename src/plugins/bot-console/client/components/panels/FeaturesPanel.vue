@@ -3,10 +3,11 @@ import { computed, inject, reactive, ref } from 'vue'
 import { useToast } from '../../composables/useToast'
 import {
   FEATURE_KEYS,
+  FEATURE_TEXT_KEYS,
   normalizeBoolean,
   type FeatureOverrideMode,
 } from '../../composables/useBotConsole'
-import { getFieldLabel } from '../../utils/constants'
+import { getFieldHint, getFieldLabel } from '../../utils/constants'
 import type { useBotConsole } from '../../composables/useBotConsole'
 import type { ConsoleFeatureScope, ConversationTarget, ScopedFeatureKey } from '../../types'
 import InlineConfirm from '../InlineConfirm.vue'
@@ -284,6 +285,46 @@ async function handleBatchDelete(targets: ConversationTarget[]) {
         :is-dirty="changedKeys.has(key)"
         @update:model-value="(value) => { envDraft[key] = String(value) }"
       />
+    </div>
+
+    <div
+      v-if="FEATURE_TEXT_KEYS.length > 0"
+      class="bc-field-grid"
+      style="margin-top: 1rem;"
+    >
+      <label
+        v-for="key in FEATURE_TEXT_KEYS"
+        :key="key"
+        class="bc-field bc-field-span"
+      >
+        <span class="bc-field-label">
+          {{ getFieldLabel(key) }}
+          <span
+            v-if="getFieldHint(key)"
+            class="bc-field-help"
+            tabindex="0"
+            role="note"
+            :aria-label="getFieldHint(key)"
+          >
+            <span aria-hidden="true">!</span>
+            <span class="bc-field-tooltip" role="tooltip">{{ getFieldHint(key) }}</span>
+          </span>
+          <span
+            v-if="changedKeys.has(key)"
+            class="bc-field-modified"
+          >已修改</span>
+        </span>
+
+        <input
+          type="text"
+          :value="envDraft[key] ?? ''"
+          spellcheck="false"
+          placeholder="群号之间用英文逗号分隔，如 123456,789012"
+          @input="(event) => { envDraft[key] = (event.target as HTMLInputElement).value }"
+        />
+
+        <em class="bc-field-note">留空时不会在任何群自动触发；必须明确填写白名单群号。</em>
+      </label>
     </div>
 
     <div class="bc-panel-subhead" style="margin-top: 1.25rem;">

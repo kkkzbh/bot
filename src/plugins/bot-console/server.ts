@@ -94,10 +94,10 @@ const PRESET_ORDER_FILENAME = '.bot-console-preset-order.json';
 const PRESET_ROLE_SET = new Set(['system', 'user', 'assistant', 'tool']);
 
 export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
-  { key: 'QQ_VOICE_ENABLED', label: 'QQ 语音总开关', type: 'toggle', section: 'features' },
   { key: 'QQ_VOICE_INPUT_ENABLED', label: '语音转文字', type: 'toggle', section: 'features' },
   { key: 'QQ_VOICE_OUTPUT_ENABLED', label: '语音回复', type: 'toggle', section: 'features' },
   { key: 'CHAT_NATURAL_TRIGGER_ENABLED', label: '群聊自然触发', type: 'toggle', section: 'features' },
+  { key: 'CHAT_NATURAL_TRIGGER_GROUPS', label: '自然触发白名单群', type: 'text', section: 'features' },
   { key: 'TASK_AUTOMATION_INTENT_ENABLED', label: '任务意图识别', type: 'toggle', section: 'features' },
   { key: 'QQBOT_REPLY_INTERRUPT_ENABLED', label: '回复期中断', type: 'toggle', section: 'features' },
   { key: 'CHATLUNA_COMMON_FS', label: '文件系统工具总开关', type: 'toggle', section: 'features' },
@@ -121,7 +121,6 @@ export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
   { key: 'TASK_AUTOMATION_CHAT_REPLY_MODEL', label: '任务回复模型', type: 'text', section: 'model' },
   { key: 'CHATLUNA_DEFAULT_PRESET', label: '默认预设', type: 'text', section: 'model' },
   { key: 'CHAT_ENABLED_GROUPS', label: '自动化启用群', type: 'text', section: 'basic' },
-  { key: 'CHAT_NATURAL_TRIGGER_GROUPS', label: '自然触发群', type: 'text', section: 'basic' },
   { key: 'CHAT_NATURAL_TRIGGER_ALIASES', label: '触发别名', type: 'text', section: 'basic' },
   { key: 'CHATLUNA_COMMAND_AUTHORITY', label: '命令权限等级', type: 'number', section: 'basic' },
 ];

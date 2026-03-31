@@ -19,7 +19,6 @@ export const inject = ['database'];
 const logger = new Logger(name);
 
 export const SCOPED_FEATURE_KEYS = [
-  'QQ_VOICE_ENABLED',
   'QQ_VOICE_INPUT_ENABLED',
   'QQ_VOICE_OUTPUT_ENABLED',
   'CHAT_NATURAL_TRIGGER_ENABLED',
@@ -186,8 +185,6 @@ function defaultFeatureEnabled(featureKey: ScopedFeatureKey): boolean {
   switch (featureKey) {
     case 'QQBOT_REPLY_INTERRUPT_ENABLED':
       return normalizeBoolean(process.env.QQBOT_REPLY_INTERRUPT_ENABLED, false);
-    case 'QQ_VOICE_ENABLED':
-      return normalizeBoolean(process.env.QQ_VOICE_ENABLED, true);
     case 'QQ_VOICE_INPUT_ENABLED':
       return normalizeBoolean(process.env.QQ_VOICE_INPUT_ENABLED, true);
     case 'QQ_VOICE_OUTPUT_ENABLED':

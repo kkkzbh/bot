@@ -33,19 +33,19 @@ describe('bot-console env helpers', () => {
       '# comment',
       'CHATLUNA_BASE_URL=https://api.siliconflow.cn/v1',
       'UNMANAGED_FLAG=keep-me',
-      'QQ_VOICE_ENABLED=true',
+      'QQ_VOICE_INPUT_ENABLED=true',
       '',
     ].join('\n');
 
     const next = applyEnvPatchToContent(content, {
       CHATLUNA_BASE_URL: 'https://example.com/v1',
-      QQ_VOICE_ENABLED: 'false',
+      QQ_VOICE_INPUT_ENABLED: 'false',
     });
 
     expect(next).toContain('# comment');
     expect(next).toContain('UNMANAGED_FLAG=keep-me');
     expect(next).toContain('CHATLUNA_BASE_URL=https://example.com/v1');
-    expect(next).toContain('QQ_VOICE_ENABLED=false');
+    expect(next).toContain('QQ_VOICE_INPUT_ENABLED=false');
   });
 
   it('keeps the original file when atomic write fails', async () => {
