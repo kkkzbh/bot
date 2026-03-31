@@ -9,9 +9,17 @@ export const FIELD_LABELS: Record<string, string> = {
   QQBOT_REPLY_INTERRUPT_ENABLED: '回复期中断',
   CHATLUNA_COMMON_FS: '文件系统工具总开关',
   CHATLUNA_COMMON_FS_SCOPE_PATH: '文件系统作用域目录',
+  CHATLUNA_ACTIVE_TAB: '当前对话模型 Tab',
+  CHATLUNA_PLATFORM: '当前对话模型平台',
   CHATLUNA_BASE_URL: '对话模型接口地址',
   CHATLUNA_API_KEY: '对话模型接口密钥',
   CHATLUNA_DEFAULT_MODEL: '对话默认模型',
+  CHATLUNA_SILICONFLOW_BASE_URL: '硅基流动接口地址',
+  CHATLUNA_SILICONFLOW_API_KEY: '硅基流动接口密钥',
+  CHATLUNA_SILICONFLOW_DEFAULT_MODEL: '硅基流动默认模型',
+  CHATLUNA_OPENAI_BASE_URL: 'OpenAI 接口地址',
+  CHATLUNA_OPENAI_API_KEY: 'OpenAI 接口密钥',
+  CHATLUNA_OPENAI_DEFAULT_MODEL: 'OpenAI 默认模型',
   OPENAI_BASE_URL: '通用模型接口地址',
   OPENAI_API_KEY: '通用模型接口密钥',
   OPENAI_MODEL: '通用默认模型',
@@ -42,6 +50,8 @@ export const FIELD_HINTS: Record<string, string> = {
     '限制文件系统工具默认可访问的根目录。留空时会跟随 Koishi 启动目录，也就是当前 bot 的工作目录。',
   CHATLUNA_DEFAULT_MODEL:
     '普通聊天默认走这里配置的模型。建议填写完整规范名，例如 siliconflow/Pro/moonshotai/Kimi-K2.5。',
+  CHATLUNA_OPENAI_DEFAULT_MODEL:
+    'OpenAI Tab 当前按 OpenAI 兼容 provider 处理，默认推荐 openai/gpt-5.4-medium-thinking。',
 }
 
 export const ROLE_LABELS: Record<string, string> = {

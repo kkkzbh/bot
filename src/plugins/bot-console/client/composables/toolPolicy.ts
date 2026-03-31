@@ -46,32 +46,6 @@ export const TOOL_SCOPE_LABELS: Record<ToolPolicyScopeKind, string> = {
 
 export const TOOL_CATALOG: ToolCatalogEntry[] = [
   {
-    toolName: 'question',
-    title: '提问选择器',
-    category: 'builtin',
-    description: '在你已经想好方案时，让模型向用户抛出 2-4 个明确选项，收集用户选择。',
-    compatibility: 'incompatible',
-    compatibilityNote: '这是 agent 中间交互工具，不适合 agent，更适合 research/automation。',
-    hardDependencies: [],
-    relatedTools: ['user_confirm'],
-    riskLevel: 'high',
-    availableRoutes: ['agent', 'automation'],
-    defaultEnabledByRoute: { agent: true, automation: true },
-  },
-  {
-    toolName: 'user_confirm',
-    title: '开放式确认',
-    category: 'builtin',
-    description: '当需求不清楚、需要补充信息时，向用户发出开放式确认或追问。',
-    compatibility: 'incompatible',
-    compatibilityNote: '这是 agent 中间交互工具，不适合 agent。',
-    hardDependencies: [],
-    relatedTools: ['question'],
-    riskLevel: 'high',
-    availableRoutes: ['agent', 'automation'],
-    defaultEnabledByRoute: { agent: true, automation: true },
-  },
-  {
     toolName: 'file_read',
     title: '文件读取',
     category: 'file',

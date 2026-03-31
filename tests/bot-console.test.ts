@@ -76,7 +76,7 @@ describe('bot-console plugin', () => {
     apply(ctx as any);
 
     expect(addEntry).toHaveBeenCalledTimes(1);
-    expect(addListener).toHaveBeenCalledTimes(14);
+    expect(addListener).toHaveBeenCalledTimes(15);
     for (const call of addListener.mock.calls) {
       expect(call[2]).toEqual({ authority: 4 });
     }
@@ -104,6 +104,62 @@ describe('bot-console plugin', () => {
     const saveEnvListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/save-env')?.[1];
     expect(saveEnvListener).toBeTypeOf('function');
     await expect(saveEnvListener({ HACKED: '1' })).rejects.toThrow('不支持这个配置项');
+  });
+
+  it('routes built-in model tab saves to the bot console manager', async () => {
+    const dir = createTempDir();
+    mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(
+      join(dir, 'data/chathub/presets/sakiko.yml'),
+      'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
+      'utf8',
+    );
+
+    const addListener = vi.fn();
+    apply({
+      baseDir: dir,
+      console: {
+        addEntry: vi.fn(),
+        addListener,
+      },
+    } as any);
+
+    const saveModelTabsListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/save-model-tabs')?.[1];
+    expect(saveModelTabsListener).toBeTypeOf('function');
+
+    const result = await saveModelTabsListener({
+      activeTab: 'openai',
+      tabs: [
+        {
+          id: 'siliconflow',
+          title: '硅基流动',
+          provider: 'siliconflow',
+          baseUrl: 'https://api.siliconflow.cn/v1',
+          apiKey: 'sk-kimi',
+          defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+        },
+        {
+          id: 'openai',
+          title: 'OpenAI',
+          provider: 'openai',
+          baseUrl: 'https://shell.wyzai.top/v1',
+          apiKey: 'sk-openai',
+          defaultModel: 'openai/gpt-5.4-medium-thinking',
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      restartRequired: true,
+      modelTabs: expect.objectContaining({
+        activeTab: 'openai',
+      }),
+      env: expect.objectContaining({
+        CHATLUNA_PLATFORM: 'openai',
+        CHATLUNA_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+      }),
+    });
   });
 
   it('includes runtime memory status in get-state payload when the service is available', async () => {
@@ -357,7 +413,7 @@ describe('bot-console plugin', () => {
     const saveToolOverrides = vi.fn().mockResolvedValue([
       {
         id: 9,
-        toolName: 'user_confirm',
+        toolName: 'web_post',
         routeProfile: 'agent',
         scopeKind: 'group',
         scopeId: '1091330365',
@@ -418,13 +474,13 @@ describe('bot-console plugin', () => {
     expect(getToolPolicyState).toHaveBeenCalledTimes(1);
 
     const saveToolOverridesListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/save-tool-overrides')?.[1];
-    await expect(
+      await expect(
       saveToolOverridesListener({
-        overrides: [{ toolName: 'user_confirm', routeProfile: 'agent', scopeKind: 'group', scopeId: '1091330365', enabled: false }],
+        overrides: [{ toolName: 'web_post', routeProfile: 'agent', scopeKind: 'group', scopeId: '1091330365', enabled: false }],
       }),
     ).resolves.toEqual({
       overrides: [
-        expect.objectContaining({ toolName: 'user_confirm', routeProfile: 'agent', scopeKind: 'group', scopeId: '1091330365' }),
+        expect.objectContaining({ toolName: 'web_post', routeProfile: 'agent', scopeKind: 'group', scopeId: '1091330365' }),
       ],
     });
     expect(saveToolOverrides).toHaveBeenCalledTimes(1);

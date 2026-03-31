@@ -51,38 +51,12 @@ export const TOOL_DEFAULT_SCOPES: ToolScopeTarget[] = [
 ];
 
 export const LEGACY_TOOL_NAME_ALIASES: Record<string, string | null> = {
-  built_question: 'question',
-  built_user_confirm: 'user_confirm',
   built_user_toast: null,
   web_fetcher: 'web_fetch',
   web_poster: 'web_post',
 };
 
 export const TOOL_CATALOG: ToolCatalogEntry[] = [
-  buildCatalogEntry({
-    toolName: 'question',
-    title: '选项提问',
-    category: 'builtin',
-    description: '让模型向用户抛出 2-4 个明确选项，要求用户在选项之间做决定。',
-    compatibility: 'incompatible',
-    compatibilityNote: '会把直答链路拉进中间交互，更适合 research/automation，不适合 agent。',
-    hardDependencies: [],
-    relatedTools: ['user_confirm'],
-    riskLevel: 'high',
-    source: 'chatluna_runtime',
-  }),
-  buildCatalogEntry({
-    toolName: 'user_confirm',
-    title: '开放式确认',
-    category: 'builtin',
-    description: '让模型向用户追问、确认或索取开放式补充信息。',
-    compatibility: 'incompatible',
-    compatibilityNote: '会让模型转向中间交互，不适合 agent。',
-    hardDependencies: [],
-    relatedTools: ['question'],
-    riskLevel: 'high',
-    source: 'chatluna_runtime',
-  }),
   buildCatalogEntry({
     toolName: 'file_read',
     title: '读取文件',

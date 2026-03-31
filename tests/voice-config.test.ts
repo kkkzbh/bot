@@ -18,6 +18,7 @@ describe('qq voice config wiring', () => {
     expect(content).toContain("ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || 'http://127.0.0.1:5162' }}");
     expect(content).toContain('defaultModel: >-');
     expect(content).toContain("${{ env.CHATLUNA_DEFAULT_MODEL || 'siliconflow/Pro/moonshotai/Kimi-K2.5'");
+    expect(content).toContain("platform: ${{ env.CHATLUNA_PLATFORM || 'siliconflow' }}");
     expect(content).not.toContain('defaultModel: siliconflow/inclusionAI/Ring-flash-2.0');
   });
 
@@ -56,6 +57,10 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('QQ_VOICE_OUTPUT_MAX_WORDS=80');
     expect(content).toContain('QQ_VOICE_OUTPUT_MAX_SECONDS=45');
     expect(content).toContain('QQ_VOICE_SYNTH_TIMEOUT_MS=300000');
+    expect(content).toContain('CHATLUNA_ACTIVE_TAB=siliconflow');
+    expect(content).toContain('CHATLUNA_PLATFORM=siliconflow');
+    expect(content).toContain('CHATLUNA_OPENAI_BASE_URL=https://shell.wyzai.top/v1');
+    expect(content).toContain('CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking');
     expect(content).toContain('PMHQ_BIND_HOST=127.0.0.1');
     expect(content).not.toContain('VOICE_TTS_GPT_WEIGHTS=/data/voice/tts/models/sakiko_v2pp-e15.ckpt');
     expect(content).not.toContain('VOICE_TTS_REF_BLACK=/data/voice/tts/references/black_sakiko.wav');
@@ -69,6 +74,8 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('QQ_VOICE_OUTPUT_ENABLED=false');
     expect(content).toContain('QQ_VOICE_ASR_BASE_URL=');
     expect(content).toContain('QQ_VOICE_TTS_BASE_URL=');
+    expect(content).toContain('CHATLUNA_ACTIVE_TAB=siliconflow');
+    expect(content).toContain('CHATLUNA_OPENAI_BASE_URL=https://shell.wyzai.top/v1');
     expect(content).toContain('PMHQ_BIND_HOST=10.88.0.1');
     expect(content).toContain('# Server deploy does not run voice-asr.');
   });

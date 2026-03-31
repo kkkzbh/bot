@@ -24,6 +24,10 @@ const { botState, probePending } = bc
 
 const services  = computed(() => botState.value?.services ?? [])
 const env       = computed(() => botState.value?.env ?? {})
+const modelTabs = computed(() => botState.value?.modelTabs)
+const activeModelProfile = computed(() =>
+  modelTabs.value?.tabs?.find(tab => tab.id === modelTabs.value?.activeTab) ?? null,
+)
 const memory    = computed<MemoryV2StatusSnapshot | undefined>(
   () => botState.value?.runtimeStatus?.memoryV2,
 )
@@ -135,8 +139,16 @@ async function handleProbe() {
         <div class="bc-status-card-head">
           <strong>对话配置</strong>
           <span class="bc-status-badge is-muted">
-            {{ env['CHATLUNA_DEFAULT_PRESET'] || 'sakiko' }}
+            {{ activeModelProfile?.title || '未设置' }}
           </span>
+        </div>
+        <div class="bc-overview-kv">
+          <span>当前 Tab</span>
+          <strong>{{ activeModelProfile?.title || '未设置' }}</strong>
+        </div>
+        <div class="bc-overview-kv">
+          <span>provider / mode</span>
+          <strong>{{ activeModelProfile ? `${activeModelProfile.provider} / ${activeModelProfile.requestMode}` : '未设置' }}</strong>
         </div>
         <div class="bc-overview-kv">
           <span>默认模型</span>

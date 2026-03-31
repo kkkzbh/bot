@@ -98,7 +98,7 @@ const STRUCTURED_REPLY_MESSAGE_SCHEMA = z.discriminatedUnion('modality', [
 
 export const STRUCTURED_REPLY_V1_SCHEMA = z.object({
   decision: z.enum(['reply', 'no_reply']),
-  messages: z.array(STRUCTURED_REPLY_MESSAGE_SCHEMA).optional(),
+  messages: z.array(STRUCTURED_REPLY_MESSAGE_SCHEMA).nullable().optional(),
 }).strict();
 
 export const STRUCTURED_REPLY_V1_JSON_SCHEMA = {

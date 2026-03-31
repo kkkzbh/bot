@@ -4,10 +4,15 @@ import {
   resolveUserTurnIntentState,
 } from '../src/plugins/reply/prompt/time-context.js';
 import {
+  buildStructuredReplyRequestSpec,
+  buildStructuredReplyModelOverride,
   buildSiliconFlowKimiK25NonThinkingOverride,
   inferPlatformFromBaseUrl,
+  isSupportedMainChatModelForTab,
   normalizeRawModelName,
+  resolveMainChatRuntimeProfileFromEnv,
   resolvePlatform,
+  supportsStructuredReplyJsonSchema,
 } from '../src/plugins/shared/llm/index.js';
 import { resolveSessionDisplayName } from '../src/plugins/shared/session/index.js';
 
@@ -89,12 +94,101 @@ describe('buildSiliconFlowKimiK25NonThinkingOverride', () => {
   });
 });
 
+describe('buildStructuredReplyModelOverride', () => {
+  it('keeps the Kimi non-thinking override and switches OpenAI to responses mode', () => {
+    expect(buildStructuredReplyModelOverride('siliconflow/Pro/moonshotai/Kimi-K2.5')).toEqual({
+      thinking: {
+        type: 'disabled',
+      },
+    });
+    expect(buildStructuredReplyModelOverride('openai/gpt-5.4-medium-thinking')).toEqual({
+      qqbot_request_mode: 'responses',
+      reasoning: {
+        effort: 'medium',
+      },
+    });
+  });
+});
+
+describe('supportsStructuredReplyJsonSchema', () => {
+  it('supports both the Kimi and OpenAI gpt-5.4 main-chat families', () => {
+    expect(supportsStructuredReplyJsonSchema('siliconflow/Pro/moonshotai/Kimi-K2.5')).toBe(true);
+    expect(supportsStructuredReplyJsonSchema('openai/gpt-5.4')).toBe(true);
+    expect(supportsStructuredReplyJsonSchema('openai/gpt-5.4-medium-thinking')).toBe(true);
+    expect(supportsStructuredReplyJsonSchema('openai/gpt-5.3-codex')).toBe(false);
+  });
+});
+
+describe('buildStructuredReplyRequestSpec', () => {
+  it('uses chat completions json_schema for siliconflow and responses text.format for openai', () => {
+    expect(
+      buildStructuredReplyRequestSpec({
+        model: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+      }),
+    ).toMatchObject({
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'chat_completions_json_schema',
+      overrideRequestParams: {
+        thinking: {
+          type: 'disabled',
+        },
+      },
+    });
+
+    expect(
+      buildStructuredReplyRequestSpec({
+        model: 'openai/gpt-5.4-medium-thinking',
+      }),
+    ).toMatchObject({
+      requestMode: 'responses',
+      structuredOutputProtocol: 'responses_text_format',
+      overrideRequestParams: {
+        qqbot_request_mode: 'responses',
+        reasoning: {
+          effort: 'medium',
+        },
+      },
+    });
+  });
+});
+
+describe('isSupportedMainChatModelForTab', () => {
+  it('enforces the fixed model whitelist for built-in tabs', () => {
+    expect(isSupportedMainChatModelForTab('siliconflow', 'siliconflow/Pro/moonshotai/Kimi-K2.5')).toBe(true);
+    expect(isSupportedMainChatModelForTab('siliconflow', 'openai/gpt-5.4-medium-thinking')).toBe(false);
+    expect(isSupportedMainChatModelForTab('openai', 'openai/gpt-5.4-medium-thinking')).toBe(true);
+    expect(isSupportedMainChatModelForTab('openai', 'openai/gpt-5.2')).toBe(false);
+  });
+});
+
 describe('inferPlatformFromBaseUrl', () => {
   it('infers platform from base url', () => {
     expect(inferPlatformFromBaseUrl('https://api.siliconflow.cn/v1')).toBe('siliconflow');
     expect(inferPlatformFromBaseUrl('https://api.deepseek.com/v1')).toBe('deepseek');
     expect(inferPlatformFromBaseUrl('https://api.openai.com/v1')).toBe('openai');
     expect(inferPlatformFromBaseUrl('https://api.anthropic.com')).toBe('anthropic');
+    expect(inferPlatformFromBaseUrl('https://shell.wyzai.top/v1')).toBe('openai');
+  });
+});
+
+describe('resolveMainChatRuntimeProfileFromEnv', () => {
+  it('resolves active built-in tab into a runtime profile with strategy metadata', () => {
+    expect(
+      resolveMainChatRuntimeProfileFromEnv({
+        CHATLUNA_ACTIVE_TAB: 'openai',
+        CHATLUNA_OPENAI_BASE_URL: 'https://shell.wyzai.top/v1',
+        CHATLUNA_OPENAI_API_KEY: 'sk-openai',
+        CHATLUNA_OPENAI_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+      }),
+    ).toMatchObject({
+      tabId: 'openai',
+      provider: 'openai',
+      strategyId: 'openai-gpt54-main-chat',
+      requestMode: 'responses',
+      structuredOutputProtocol: 'responses_text_format',
+      baseUrl: 'https://shell.wyzai.top/v1',
+      defaultModel: 'openai/gpt-5.4-medium-thinking',
+    });
   });
 });
 

@@ -1,6 +1,9 @@
 import { ref, reactive, computed } from 'vue'
 import { send } from '@koishijs/client'
 import type {
+  BotConsoleBuiltinModelTab,
+  BotConsoleModelTabId,
+  BotConsoleModelTabsState,
   BotConsoleToolPolicyState,
   BotConsoleState,
   ClearConversationHistoryResponse,
@@ -13,6 +16,8 @@ import type {
   ReorderPresetsResponse,
   SaveEnvResponse,
   SaveFeatureOverridesResponse,
+  SaveModelTabsRequest,
+  SaveModelTabsResponse,
   SavePresetResponse,
   SaveToolOverridesResponse,
   ServiceActionResponse,
@@ -56,10 +61,7 @@ export const FILE_SYSTEM_CONTROL_KEYS = [
 export const PRIVATE_DEFAULT_SCOPE_ID = 'private-default'
 export const PRIVATE_UNSUPPORTED_FEATURE_KEYS = ['CHAT_NATURAL_TRIGGER_ENABLED'] as const
 
-export const MODEL_KEYS = [
-  'CHATLUNA_BASE_URL',
-  'CHATLUNA_API_KEY',
-  'CHATLUNA_DEFAULT_MODEL',
+export const MODEL_SHARED_KEYS = [
   'OPENAI_BASE_URL',
   'OPENAI_API_KEY',
   'OPENAI_MODEL',
@@ -69,6 +71,8 @@ export const MODEL_KEYS = [
   'CHATLUNA_DEFAULT_PRESET',
 ] as const
 
+export const MODEL_TAB_IDS = ['siliconflow', 'openai'] as const satisfies readonly BotConsoleModelTabId[]
+
 export const BASIC_KEYS = [
   'CHAT_ENABLED_GROUPS',
   'CHAT_NATURAL_TRIGGER_GROUPS',
@@ -76,7 +80,7 @@ export const BASIC_KEYS = [
   'CHATLUNA_COMMAND_AUTHORITY',
 ] as const
 
-export const ALL_ENV_KEYS = [...FEATURE_KEYS, ...FILE_SYSTEM_CONTROL_KEYS, ...MODEL_KEYS, ...BASIC_KEYS] as const
+export const ALL_ENV_KEYS = [...FEATURE_KEYS, ...FILE_SYSTEM_CONTROL_KEYS, ...MODEL_SHARED_KEYS, ...BASIC_KEYS] as const
 const BOT_RUNTIME_UNIT = 'qqbot-koishi.service'
 
 // ─── Exported helpers ─────────────────────────────────────────────────────────
@@ -109,6 +113,59 @@ function clonePreset(p: PresetDocument): PresetDocument {
     keywords: [...p.keywords],
     prompts: p.prompts.map(x => ({ role: x.role, content: x.content })),
   }
+}
+
+function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltinModelTab {
+  const isOpenAI = id === 'openai'
+  return {
+    id,
+    title: isOpenAI ? 'OpenAI' : '硅基流动',
+    provider: isOpenAI ? 'openai' : 'siliconflow',
+    strategyId: isOpenAI ? 'openai-gpt54-main-chat' : 'siliconflow-kimi-main-chat',
+    requestMode: isOpenAI ? 'responses' : 'chat_completions',
+    structuredOutputProtocol: isOpenAI ? 'responses_text_format' : 'chat_completions_json_schema',
+    description: isOpenAI
+      ? '当前按 OpenAI 兼容 provider 处理，默认预填 wyzai + gpt-5.4-medium-thinking。'
+      : '当前主聊天固定走硅基流动 provider，默认保持现有 Kimi 主链路。',
+    modelHint: isOpenAI
+      ? '推荐填写 openai/gpt-5.4-medium-thinking。当前 OpenAI Tab 默认接入 wyzai。'
+      : '当前仅支持 SiliconFlow Kimi-K2.5 主聊天模型族。',
+    baseUrl: '',
+    apiKey: '',
+    defaultModel: '',
+  }
+}
+
+function buildModelTabsState(state: BotConsoleState | null): BotConsoleModelTabsState {
+  const fallbackTabs = MODEL_TAB_IDS.map(id => createEmptyBuiltinModelTab(id))
+  const tabs = MODEL_TAB_IDS.map(id => {
+    const found = state?.modelTabs?.tabs?.find(tab => tab.id === id)
+    return found ? { ...found } : createEmptyBuiltinModelTab(id)
+  })
+  const activeTab = state?.modelTabs?.activeTab
+  return {
+    activeTab: activeTab === 'openai' ? 'openai' : 'siliconflow',
+    tabs: tabs.length > 0 ? tabs : fallbackTabs,
+  }
+}
+
+function serializeModelTabsState(state: BotConsoleModelTabsState): string {
+  return JSON.stringify({
+    activeTab: state.activeTab,
+    tabs: MODEL_TAB_IDS.map(id => {
+      const tab = state.tabs.find(item => item.id === id) ?? createEmptyBuiltinModelTab(id)
+      return {
+        id: tab.id,
+        provider: tab.provider,
+        strategyId: tab.strategyId,
+        requestMode: tab.requestMode,
+        structuredOutputProtocol: tab.structuredOutputProtocol,
+        baseUrl: tab.baseUrl,
+        apiKey: tab.apiKey,
+        defaultModel: tab.defaultModel,
+      }
+    }),
+  })
 }
 
 function buildFeatureOverrideKey(scopeKind: FeatureScopeKind, scopeId: string, featureKey: ScopedFeatureKey): string {
@@ -259,6 +316,18 @@ export function useBotConsole() {
   /** The preset currently open in the editor. */
   const currentPreset = ref<PresetDocument>(createEmptyPreset())
 
+  /** Fixed built-in model tabs for the main ChatLuna chain. */
+  const modelTabsDraft = reactive<Record<BotConsoleModelTabId, BotConsoleBuiltinModelTab>>({
+    siliconflow: createEmptyBuiltinModelTab('siliconflow'),
+    openai: createEmptyBuiltinModelTab('openai'),
+  })
+
+  /** Active built-in model tab currently being edited. */
+  const activeModelTab = ref<BotConsoleModelTabId>('siliconflow')
+
+  /** Last successfully loaded model tabs state. */
+  const originalModelTabs = ref<BotConsoleModelTabsState>(buildModelTabsState(null))
+
   /** True while an embedding probe request is in-flight. */
   const probePending = ref(false)
 
@@ -311,6 +380,16 @@ export function useBotConsole() {
   })
 
   const canSaveEnv = computed(() => changedKeys.value.size > 0)
+
+  const modelTabsChanged = computed<boolean>(() => {
+    const draftState: BotConsoleModelTabsState = {
+      activeTab: activeModelTab.value,
+      tabs: MODEL_TAB_IDS.map(id => ({ ...modelTabsDraft[id] })),
+    }
+    return serializeModelTabsState(draftState) !== serializeModelTabsState(originalModelTabs.value)
+  })
+
+  const canSaveModelSettings = computed(() => changedKeys.value.size > 0 || modelTabsChanged.value)
 
   const changedFeatureOverrideKeys = computed<Set<string>>(() => {
     const keys = new Set<string>()
@@ -372,6 +451,8 @@ export function useBotConsole() {
 
   const selectedToolRouteLabel = computed(() => getToolRouteLabel(toolRouteProfile.value))
 
+  const currentModelTabDraft = computed<BotConsoleBuiltinModelTab>(() => modelTabsDraft[activeModelTab.value])
+
   // ── Actions ───────────────────────────────────────────────────────────────────
 
   /**
@@ -397,6 +478,13 @@ export function useBotConsole() {
         delete envDraft[key]
       }
       Object.assign(envDraft, env)
+
+      const modelTabs = buildModelTabsState(mergedState)
+      originalModelTabs.value = modelTabs
+      activeModelTab.value = modelTabs.activeTab
+      for (const id of MODEL_TAB_IDS) {
+        modelTabsDraft[id] = { ...modelTabs.tabs.find(tab => tab.id === id) ?? createEmptyBuiltinModelTab(id) }
+      }
 
       const nextOverrides: Record<string, FeatureOverrideMode> = {}
       for (const item of mergedState?.featureOverrides ?? []) {
@@ -479,6 +567,13 @@ export function useBotConsole() {
     }
     Object.assign(envDraft, result?.env ?? {})
 
+    if (botState.value) {
+      botState.value = {
+        ...botState.value,
+        env: result?.env ?? botState.value.env,
+      }
+    }
+
     if (restartAfter) await restartBot()
 
     return result
@@ -486,6 +581,58 @@ export function useBotConsole() {
 
   async function saveEnv(restartAfter = false): Promise<SaveEnvResponse> {
     return saveEnvPatch(ALL_ENV_KEYS, restartAfter)
+  }
+
+  async function saveModelTabs(restartAfter = false): Promise<SaveModelTabsResponse> {
+    const payload: SaveModelTabsRequest = {
+      activeTab: activeModelTab.value,
+      tabs: MODEL_TAB_IDS.map(id => ({
+        ...modelTabsDraft[id],
+        id,
+        title: id === 'siliconflow' ? '硅基流动' : 'OpenAI',
+        provider: id === 'siliconflow' ? 'siliconflow' : 'openai',
+      })),
+    }
+
+    const result = await send<SaveModelTabsResponse>('bot-console/save-model-tabs', payload)
+
+    originalEnv.value = { ...(result?.env ?? {}) }
+    for (const key of Object.keys(envDraft)) {
+      delete envDraft[key]
+    }
+    Object.assign(envDraft, result?.env ?? {})
+
+    const nextTabs = result?.modelTabs ?? buildModelTabsState(botState.value)
+    originalModelTabs.value = nextTabs
+    activeModelTab.value = nextTabs.activeTab
+    for (const id of MODEL_TAB_IDS) {
+      modelTabsDraft[id] = { ...nextTabs.tabs.find(tab => tab.id === id) ?? createEmptyBuiltinModelTab(id) }
+    }
+
+    if (botState.value) {
+      botState.value = {
+        ...botState.value,
+        env: result?.env ?? botState.value.env,
+        modelTabs: nextTabs,
+      }
+    }
+
+    if (restartAfter) await restartBot()
+    return result
+  }
+
+  async function saveModelSettings(restartAfter = false): Promise<void> {
+    if (changedKeys.value.size > 0) {
+      await saveEnvPatch(MODEL_SHARED_KEYS, false)
+    }
+    if (modelTabsChanged.value) {
+      await saveModelTabs(false)
+    }
+    if (restartAfter) await restartBot()
+  }
+
+  function selectModelTab(id: BotConsoleModelTabId): void {
+    activeModelTab.value = id
   }
 
   async function saveFeatureOverrides(): Promise<SaveFeatureOverridesResponse> {
@@ -849,6 +996,9 @@ export function useBotConsole() {
     botState,
     envDraft,
     originalEnv,
+    modelTabsDraft,
+    activeModelTab,
+    originalModelTabs,
     featureOverrideDraft,
     originalFeatureOverrides,
     currentPreset,
@@ -864,6 +1014,8 @@ export function useBotConsole() {
     // Computed
     changedKeys,
     canSaveEnv,
+    modelTabsChanged,
+    canSaveModelSettings,
     changedFeatureOverrideKeys,
     canSaveFeatureOverrides,
     canSaveFeatureSettings,
@@ -878,11 +1030,15 @@ export function useBotConsole() {
     canSaveToolPolicySettings,
     canSavePreset,
     defaultPreset,
+    currentModelTabDraft,
 
     // Actions
     refresh,
     saveEnv,
     saveEnvPatch,
+    saveModelTabs,
+    saveModelSettings,
+    selectModelTab,
     saveFeatureOverrides,
     saveFeatureSettings,
     getToolOverrideMode,

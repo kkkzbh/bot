@@ -42,6 +42,27 @@ export interface PresetDocument {
   raw?: string;
 }
 
+export type BotConsoleModelTabId = "siliconflow" | "openai";
+
+export interface BotConsoleBuiltinModelTab {
+  id: BotConsoleModelTabId;
+  title: string;
+  provider: "siliconflow" | "openai";
+  strategyId: "siliconflow-kimi-main-chat" | "openai-gpt54-main-chat";
+  requestMode: "chat_completions" | "responses";
+  structuredOutputProtocol: "chat_completions_json_schema" | "responses_text_format";
+  description: string;
+  modelHint: string;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+}
+
+export interface BotConsoleModelTabsState {
+  activeTab: BotConsoleModelTabId;
+  tabs: BotConsoleBuiltinModelTab[];
+}
+
 export interface ReorderPresetsResponse {
   presets: PresetSummary[];
 }
@@ -248,6 +269,7 @@ export interface BotConsoleState {
   featureOverrides: FeatureScopeOverrideRecord[];
   conversationTargets: ConversationTarget[];
   toolPolicy?: BotConsoleToolPolicyState | null;
+  modelTabs: BotConsoleModelTabsState;
   runtimeStatus: {
     memoryV2: MemoryV2StatusSnapshot;
   };
@@ -260,6 +282,17 @@ export interface BotConsoleProbeResponse {
 
 export interface SaveEnvResponse {
   env: Record<string, string>;
+  restartRequired: boolean;
+}
+
+export interface SaveModelTabsRequest {
+  activeTab: BotConsoleModelTabId;
+  tabs: BotConsoleBuiltinModelTab[];
+}
+
+export interface SaveModelTabsResponse {
+  env: Record<string, string>;
+  modelTabs: BotConsoleModelTabsState;
   restartRequired: boolean;
 }
 

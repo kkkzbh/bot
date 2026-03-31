@@ -6,7 +6,12 @@ import {
   buildUserContextReference,
   resolveUserTurnIntentState,
 } from '../reply/index.js';
-import { inferPlatformFromBaseUrl, normalizeRawModelName, resolvePlatform } from '../shared/llm/index.js';
+import {
+  inferPlatformFromBaseUrl,
+  normalizeRawModelName,
+  resolveMainChatRuntimeProfileFromEnv,
+  resolvePlatform,
+} from '../shared/llm/index.js';
 import { beginPromptAssemblyTurn, registerPromptFragment } from '../shared/prompt-context/index.js';
 import { resolveSessionDisplayName } from '../shared/session/index.js';
 import { getNaturalTriggerState } from '../triggers/group-natural/index.js';
@@ -81,12 +86,17 @@ function listAllLlmModels(chatluna: ChatLunaLike): string[] {
 }
 
 function resolveDefaultModelForGuard(): string | null {
-  return process.env.CHATLUNA_DEFAULT_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || null;
+  const profile = resolveMainChatRuntimeProfileFromEnv(process.env);
+  return profile.defaultModel || process.env.OPENAI_MODEL?.trim() || null;
 }
 
 function resolvePreferredPlatformForGuard(defaultModel: string | null): string | null {
+  const profile = resolveMainChatRuntimeProfileFromEnv(process.env);
   return (
+    profile.provider ??
+    trimOptionalText(process.env.CHATLUNA_PLATFORM) ??
     resolvePlatform(defaultModel ?? undefined) ??
+    inferPlatformFromBaseUrl(profile.baseUrl) ??
     inferPlatformFromBaseUrl(process.env.CHATLUNA_BASE_URL) ??
     inferPlatformFromBaseUrl(process.env.OPENAI_BASE_URL) ??
     null

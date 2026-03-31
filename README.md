@@ -20,14 +20,37 @@ Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime.
 
 - `ONEBOT_SELF_ID`
 - `SQLITE_PATH`
+- `CHATLUNA_ACTIVE_TAB`
+- `CHATLUNA_PLATFORM`
 - `CHATLUNA_BASE_URL`
 - `CHATLUNA_API_KEY`
 - `CHATLUNA_DEFAULT_MODEL`
+- `CHATLUNA_SILICONFLOW_BASE_URL`
+- `CHATLUNA_SILICONFLOW_API_KEY`
+- `CHATLUNA_SILICONFLOW_DEFAULT_MODEL`
+- `CHATLUNA_OPENAI_BASE_URL`
+- `CHATLUNA_OPENAI_API_KEY`
+- `CHATLUNA_OPENAI_DEFAULT_MODEL`
 - `OPENAI_BASE_URL`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `MEMORY_EMBED_API_KEY`
 - `CHATLUNA_COMMAND_AUTHORITY`
+
+Main chat provider selection is fixed to two built-in tabs:
+
+- `siliconflow`: current Kimi main-chat chain
+- `openai`: OpenAI-compatible provider tab, defaulting to `wyzai` with `openai/gpt-5.4-medium-thinking`
+
+`CHATLUNA_ACTIVE_TAB` selects which built-in tab is mirrored into the runtime
+keys `CHATLUNA_PLATFORM` / `CHATLUNA_BASE_URL` / `CHATLUNA_API_KEY` /
+`CHATLUNA_DEFAULT_MODEL`.
+
+Each built-in tab now maps to a provider strategy bundle rather than only an
+endpoint preset:
+
+- `siliconflow` uses the existing `chat/completions` main-chat path and Kimi-specific non-thinking override
+- `openai` uses the OpenAI-compatible GPT-5.4 strategy, including `responses` mode and provider-specific structured-output wiring
 
 ## Developer docs (web)
 

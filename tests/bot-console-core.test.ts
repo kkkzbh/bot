@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyEnvPatchToContent,
+  buildModelTabsStateFromEnv,
   BotConsoleManager,
   parsePresetDocument,
   parseSystemdShowOutput,
@@ -91,6 +92,38 @@ describe('bot-console env helpers', () => {
     vi.stubEnv('QQBOT_ENV_FILE', '.env.server');
 
     expect(resolveBotEnvFilePath(dir)).toBe(join(dir, '.env.server'));
+  });
+
+  it('builds fixed built-in model tabs from active env state', () => {
+    const state = buildModelTabsStateFromEnv({
+      CHATLUNA_ACTIVE_TAB: 'openai',
+      CHATLUNA_BASE_URL: 'https://shell.wyzai.top/v1',
+      CHATLUNA_API_KEY: 'sk-active',
+      CHATLUNA_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+      CHATLUNA_OPENAI_BASE_URL: 'https://shell.wyzai.top/v1',
+      CHATLUNA_OPENAI_API_KEY: 'sk-openai',
+      CHATLUNA_OPENAI_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+      CHATLUNA_SILICONFLOW_BASE_URL: 'https://api.siliconflow.cn/v1',
+      CHATLUNA_SILICONFLOW_API_KEY: 'sk-kimi',
+      CHATLUNA_SILICONFLOW_DEFAULT_MODEL: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+    } as Record<string, string>);
+
+    expect(state.activeTab).toBe('openai');
+    expect(state.tabs).toEqual([
+      expect.objectContaining({
+        id: 'siliconflow',
+        strategyId: 'siliconflow-kimi-main-chat',
+        baseUrl: 'https://api.siliconflow.cn/v1',
+        defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+      }),
+      expect.objectContaining({
+        id: 'openai',
+        requestMode: 'responses',
+        structuredOutputProtocol: 'responses_text_format',
+        baseUrl: 'https://shell.wyzai.top/v1',
+        defaultModel: 'openai/gpt-5.4-medium-thinking',
+      }),
+    ]);
   });
 });
 
@@ -236,6 +269,106 @@ describe('bot-console manager', () => {
       }),
       defaultPreset: 'sakiko',
     });
+  });
+
+  it('mirrors the active built-in tab into runtime chatluna env keys', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(
+      envFilePath,
+      [
+        'CHATLUNA_BASE_URL=https://api.siliconflow.cn/v1',
+        'CHATLUNA_API_KEY=sk-old',
+        'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    const result = await manager.saveModelTabs({
+      activeTab: 'openai',
+      tabs: [
+        {
+          id: 'siliconflow',
+          title: '硅基流动',
+          provider: 'siliconflow',
+          strategyId: 'siliconflow-kimi-main-chat',
+          requestMode: 'chat_completions',
+          structuredOutputProtocol: 'chat_completions_json_schema',
+          description: 'siliconflow',
+          modelHint: 'kimi',
+          baseUrl: 'https://api.siliconflow.cn/v1',
+          apiKey: 'sk-kimi',
+          defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+        },
+        {
+          id: 'openai',
+          title: 'OpenAI',
+          provider: 'openai',
+          strategyId: 'openai-gpt54-main-chat',
+          requestMode: 'responses',
+          structuredOutputProtocol: 'responses_text_format',
+          description: 'openai',
+          modelHint: 'gpt-5.4',
+          baseUrl: 'https://shell.wyzai.top/v1',
+          apiKey: 'sk-openai',
+          defaultModel: 'openai/gpt-5.4-medium-thinking',
+        },
+      ],
+    });
+
+    expect(result.modelTabs.activeTab).toBe('openai');
+    expect(result.env).toMatchObject({
+      CHATLUNA_ACTIVE_TAB: 'openai',
+      CHATLUNA_PLATFORM: 'openai',
+      CHATLUNA_BASE_URL: 'https://shell.wyzai.top/v1',
+      CHATLUNA_API_KEY: 'sk-openai',
+      CHATLUNA_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+      CHATLUNA_SILICONFLOW_DEFAULT_MODEL: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+      CHATLUNA_OPENAI_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+    });
+  });
+
+  it('rejects unsupported OpenAI tab models', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    await expect(
+      manager.saveModelTabs({
+        activeTab: 'openai',
+        tabs: [
+          {
+            id: 'siliconflow',
+            title: '硅基流动',
+            provider: 'siliconflow',
+            strategyId: 'siliconflow-kimi-main-chat',
+            requestMode: 'chat_completions',
+            structuredOutputProtocol: 'chat_completions_json_schema',
+            description: 'siliconflow',
+            modelHint: 'kimi',
+            baseUrl: 'https://api.siliconflow.cn/v1',
+            apiKey: 'sk-kimi',
+            defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+          },
+          {
+            id: 'openai',
+            title: 'OpenAI',
+            provider: 'openai',
+            strategyId: 'openai-gpt54-main-chat',
+            requestMode: 'responses',
+            structuredOutputProtocol: 'responses_text_format',
+            description: 'openai',
+            modelHint: 'gpt-5.4',
+            baseUrl: 'https://shell.wyzai.top/v1',
+            apiKey: 'sk-openai',
+            defaultModel: 'openai/gpt-5.2',
+          },
+        ],
+      }),
+    ).rejects.toThrow('OpenAI Tab 只支持当前允许的模型族');
   });
 
   it('schedules qqbot.target restart through a transient user unit', async () => {

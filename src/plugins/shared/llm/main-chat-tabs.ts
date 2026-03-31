@@ -1,0 +1,471 @@
+export type MainChatBuiltinTabId = 'siliconflow' | 'openai';
+export type MainChatProvider = 'siliconflow' | 'openai';
+export type MainChatRequestMode = 'chat_completions' | 'responses';
+export type StructuredOutputProtocol = 'chat_completions_json_schema' | 'responses_text_format';
+
+export interface MainChatTabEnvKeys {
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+}
+
+export interface BuiltinTabDefinition {
+  id: MainChatBuiltinTabId;
+  title: string;
+  provider: MainChatProvider;
+  envKeys: MainChatTabEnvKeys;
+  defaultBaseUrl: string;
+  defaultModel: string;
+  strategyId: MainChatProviderStrategy['id'];
+}
+
+export interface MainChatStructuredOutputSpec {
+  requestMode: MainChatRequestMode;
+  structuredOutputProtocol: StructuredOutputProtocol;
+  finalResponseSchema: Record<string, unknown>;
+  overrideRequestParams: Record<string, unknown> | null;
+  finalResponseInstruction?: string;
+}
+
+export interface MainChatProviderStrategy {
+  id: 'siliconflow-kimi-main-chat' | 'openai-gpt54-main-chat';
+  platform: MainChatProvider;
+  requestMode: MainChatRequestMode;
+  structuredOutputProtocol: StructuredOutputProtocol;
+  supportsModel: (model?: string | null) => boolean;
+  buildRequestOverride: (model?: string | null) => Record<string, unknown> | null;
+  buildStructuredOutputSpec: (model?: string | null) => MainChatStructuredOutputSpec;
+  normalizeModel: (model?: string | null) => string | null;
+  describeForConsole: () => { description: string; modelHint: string };
+}
+
+export interface MainChatRuntimeProfile {
+  tabId: MainChatBuiltinTabId;
+  title: string;
+  provider: MainChatProvider;
+  strategyId: MainChatProviderStrategy['id'];
+  requestMode: MainChatRequestMode;
+  structuredOutputProtocol: StructuredOutputProtocol;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  description: string;
+  modelHint: string;
+}
+
+export interface MainChatBuiltinTabState extends MainChatRuntimeProfile {
+  id: MainChatBuiltinTabId;
+}
+
+export const WYZAI_DEFAULT_BASE_URL = 'https://shell.wyzai.top/v1';
+export const WYZAI_DEFAULT_API_KEY = 'sk-AU2PaFWvQImSIbTtXkx9t286QyCgUUh8Ith5R0mBa9yOsr43';
+export const OPENAI_DEFAULT_MODEL = 'openai/gpt-5.4-medium-thinking';
+export const SILICONFLOW_DEFAULT_BASE_URL = 'https://api.siliconflow.cn/v1';
+export const SILICONFLOW_DEFAULT_MODEL = 'siliconflow/Pro/moonshotai/Kimi-K2.5';
+export const MAIN_CHAT_BUILTIN_TAB_IDS = ['siliconflow', 'openai'] as const satisfies readonly MainChatBuiltinTabId[];
+
+const BASE_STRUCTURED_REPLY_MESSAGE_ITEMS = {
+  anyOf: [
+    {
+      type: 'object',
+      title: 'TextMessage',
+      description: 'A normal visible text reply sent to the user.',
+      additionalProperties: false,
+      required: ['modality', 'content'],
+      properties: {
+        modality: {
+          title: 'Modality',
+          type: 'string',
+          enum: ['text'],
+          description: 'Send the content as a normal text message.',
+        },
+        content: {
+          title: 'Content',
+          type: 'string',
+          description: 'The exact text content to send to the user.',
+        },
+      },
+    },
+    {
+      type: 'object',
+      title: 'VoiceMessage',
+      description: 'A voice reply where content is the final TTS text.',
+      additionalProperties: false,
+      required: ['modality', 'content'],
+      properties: {
+        modality: {
+          title: 'Modality',
+          type: 'string',
+          enum: ['voice'],
+          description: 'Send the content through TTS as a voice message.',
+        },
+        content: {
+          title: 'Content',
+          type: 'string',
+          description: 'The exact text that should be spoken by TTS.',
+        },
+      },
+    },
+    {
+      type: 'object',
+      title: 'MemeMessage',
+      description: 'A meme reply where content is the meme intent, not an asset id.',
+      additionalProperties: false,
+      required: ['modality', 'content'],
+      properties: {
+        modality: {
+          title: 'Modality',
+          type: 'string',
+          enum: ['meme'],
+          description: 'Send a meme that matches the described intent.',
+        },
+        content: {
+          title: 'Content',
+          type: 'string',
+          description: 'Natural-language meme intent text, not a sticker id or filename.',
+        },
+      },
+    },
+  ],
+} as const;
+
+const BASE_STRUCTURED_REPLY_V1_JSON_SCHEMA = {
+  type: 'object',
+  title: 'StructuredReplyV1',
+  description: 'Reply decision and outbound messages for one qqbot turn.',
+  additionalProperties: false,
+  required: ['decision'],
+  properties: {
+    decision: {
+      title: 'Decision',
+      type: 'string',
+      enum: ['reply', 'no_reply'],
+      description: 'Whether the assistant should reply to the user in this turn.',
+    },
+    messages: {
+      title: 'Messages',
+      type: 'array',
+      description: 'Outbound messages to send when decision is reply.',
+      items: BASE_STRUCTURED_REPLY_MESSAGE_ITEMS,
+    },
+  },
+} as const satisfies Record<string, unknown>;
+
+const OPENAI_STRUCTURED_REPLY_V1_JSON_SCHEMA = {
+  ...BASE_STRUCTURED_REPLY_V1_JSON_SCHEMA,
+  required: ['decision', 'messages'],
+  properties: {
+    ...BASE_STRUCTURED_REPLY_V1_JSON_SCHEMA.properties,
+    messages: {
+      title: 'Messages',
+      description: 'Outbound messages to send when decision is reply. Use null when there is no reply.',
+      anyOf: [
+        {
+          type: 'array',
+          items: BASE_STRUCTURED_REPLY_MESSAGE_ITEMS,
+        },
+        {
+          type: 'null',
+        },
+      ],
+    },
+  },
+} as const satisfies Record<string, unknown>;
+
+export const BUILTIN_MAIN_CHAT_TABS: readonly BuiltinTabDefinition[] = [
+  {
+    id: 'siliconflow',
+    title: '硅基流动',
+    provider: 'siliconflow',
+    envKeys: {
+      baseUrl: 'CHATLUNA_SILICONFLOW_BASE_URL',
+      apiKey: 'CHATLUNA_SILICONFLOW_API_KEY',
+      defaultModel: 'CHATLUNA_SILICONFLOW_DEFAULT_MODEL',
+    },
+    defaultBaseUrl: SILICONFLOW_DEFAULT_BASE_URL,
+    defaultModel: SILICONFLOW_DEFAULT_MODEL,
+    strategyId: 'siliconflow-kimi-main-chat',
+  },
+  {
+    id: 'openai',
+    title: 'OpenAI',
+    provider: 'openai',
+    envKeys: {
+      baseUrl: 'CHATLUNA_OPENAI_BASE_URL',
+      apiKey: 'CHATLUNA_OPENAI_API_KEY',
+      defaultModel: 'CHATLUNA_OPENAI_DEFAULT_MODEL',
+    },
+    defaultBaseUrl: WYZAI_DEFAULT_BASE_URL,
+    defaultModel: OPENAI_DEFAULT_MODEL,
+    strategyId: 'openai-gpt54-main-chat',
+  },
+] as const;
+
+export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] = [
+  {
+    id: 'siliconflow-kimi-main-chat',
+    platform: 'siliconflow',
+    requestMode: 'chat_completions',
+    structuredOutputProtocol: 'chat_completions_json_schema',
+    supportsModel: isSiliconFlowKimiK25Model,
+    buildRequestOverride(model) {
+      if (!isSiliconFlowKimiK25Model(model)) return null;
+      return {
+        thinking: {
+          type: 'disabled',
+        },
+      };
+    },
+    buildStructuredOutputSpec(model) {
+      return {
+        requestMode: 'chat_completions',
+        structuredOutputProtocol: 'chat_completions_json_schema',
+        finalResponseSchema: BASE_STRUCTURED_REPLY_V1_JSON_SCHEMA,
+        overrideRequestParams: this.buildRequestOverride(model),
+      };
+    },
+    normalizeModel(model) {
+      return model?.trim() || null;
+    },
+    describeForConsole() {
+      return {
+        description: '当前主聊天固定走硅基流动 provider，默认保持现有 Kimi 主链路。',
+        modelHint: '当前仅支持 SiliconFlow Kimi-K2.5 主聊天模型族。',
+      };
+    },
+  },
+  {
+    id: 'openai-gpt54-main-chat',
+    platform: 'openai',
+    requestMode: 'responses',
+    structuredOutputProtocol: 'responses_text_format',
+    supportsModel: isOpenAIGpt54ModelFamily,
+    buildRequestOverride(model) {
+      if (!isOpenAIGpt54ModelFamily(model)) return null;
+      return {
+        qqbot_request_mode: 'responses',
+        qqbot_tool_profile: 'qqbot_openai_main_chat',
+        reasoning: {
+          effort: resolveOpenAIGpt54ReasoningEffort(model),
+        },
+      };
+    },
+    buildStructuredOutputSpec(model) {
+      return {
+        requestMode: 'responses',
+        structuredOutputProtocol: 'responses_text_format',
+        finalResponseSchema: OPENAI_STRUCTURED_REPLY_V1_JSON_SCHEMA,
+        overrideRequestParams: this.buildRequestOverride(model),
+      };
+    },
+    normalizeModel(model) {
+      return model?.trim() || null;
+    },
+    describeForConsole() {
+      return {
+        description: '当前按 OpenAI 兼容 provider 处理，默认预填 wyzai + gpt-5.4-medium-thinking。',
+        modelHint: '推荐填写 openai/gpt-5.4-medium-thinking。当前 OpenAI Tab 默认接入 wyzai。',
+      };
+    },
+  },
+] as const;
+
+export function getBuiltinMainChatTabDefinition(id: MainChatBuiltinTabId): BuiltinTabDefinition {
+  const found = BUILTIN_MAIN_CHAT_TABS.find((item) => item.id === id);
+  if (!found) {
+    throw new Error(`Unknown main chat tab definition: ${id}`);
+  }
+  return found;
+}
+
+export function getMainChatProviderStrategy(id: MainChatProviderStrategy['id']): MainChatProviderStrategy {
+  const found = MAIN_CHAT_PROVIDER_STRATEGIES.find((item) => item.id === id);
+  if (!found) {
+    throw new Error(`Unknown main chat provider strategy: ${id}`);
+  }
+  return found;
+}
+
+export function getMainChatProviderStrategyForTab(id: MainChatBuiltinTabId): MainChatProviderStrategy {
+  return getMainChatProviderStrategy(getBuiltinMainChatTabDefinition(id).strategyId);
+}
+
+export function normalizeMainChatBuiltinTabId(value: unknown): MainChatBuiltinTabId {
+  const normalized = String(value ?? '').trim();
+  if (normalized === 'siliconflow' || normalized === 'openai') {
+    return normalized;
+  }
+  throw new Error(`不支持这个模型 Tab：${normalized || 'unknown'}`);
+}
+
+export function resolveMainChatRuntimeProfileFromEnv(env: Record<string, string> | NodeJS.ProcessEnv): MainChatRuntimeProfile {
+  const activeTab = resolveMainChatActiveTabFromEnv(env);
+  return resolveMainChatRuntimeProfileFromTabConfig(
+    activeTab,
+    MAIN_CHAT_BUILTIN_TAB_IDS.map((id) => resolveMainChatTabStateFromEnv(id, env)),
+  );
+}
+
+export function resolveMainChatActiveTabFromEnv(env: Record<string, string> | NodeJS.ProcessEnv): MainChatBuiltinTabId {
+  const raw = String(env.CHATLUNA_ACTIVE_TAB ?? '').trim();
+  return raw === 'openai' ? 'openai' : 'siliconflow';
+}
+
+export function resolveMainChatTabStateFromEnv(
+  id: MainChatBuiltinTabId,
+  env: Record<string, string> | NodeJS.ProcessEnv,
+): MainChatBuiltinTabState {
+  const definition = getBuiltinMainChatTabDefinition(id);
+  const strategy = getMainChatProviderStrategy(definition.strategyId);
+  const activeTab = resolveMainChatActiveTabFromEnv(env);
+  const baseUrl =
+    trimOptionalEnvValue(env[definition.envKeys.baseUrl]) ||
+    (activeTab === id ? trimOptionalEnvValue(env.CHATLUNA_BASE_URL) : null) ||
+    definition.defaultBaseUrl;
+  const apiKey =
+    trimOptionalEnvValue(env[definition.envKeys.apiKey]) ||
+    (activeTab === id ? trimOptionalEnvValue(env.CHATLUNA_API_KEY) : null) ||
+    (id === 'openai' ? WYZAI_DEFAULT_API_KEY : '');
+  const defaultModel =
+    trimOptionalEnvValue(env[definition.envKeys.defaultModel]) ||
+    (activeTab === id ? trimOptionalEnvValue(env.CHATLUNA_DEFAULT_MODEL) : null) ||
+    definition.defaultModel;
+  const { description, modelHint } = strategy.describeForConsole();
+
+  return {
+    id,
+    tabId: id,
+    title: definition.title,
+    provider: definition.provider,
+    strategyId: strategy.id,
+    requestMode: strategy.requestMode,
+    structuredOutputProtocol: strategy.structuredOutputProtocol,
+    baseUrl,
+    apiKey,
+    defaultModel,
+    description,
+    modelHint,
+  };
+}
+
+export function resolveMainChatRuntimeProfileFromTabConfig(
+  activeTab: MainChatBuiltinTabId,
+  tabs: readonly Pick<MainChatBuiltinTabState, 'id' | 'baseUrl' | 'apiKey' | 'defaultModel'>[],
+): MainChatRuntimeProfile {
+  const activeConfig = tabs.find((item) => item.id === activeTab);
+  if (!activeConfig) {
+    throw new Error(`缺少内置模型 Tab：${activeTab}`);
+  }
+
+  const definition = getBuiltinMainChatTabDefinition(activeTab);
+  const strategy = getMainChatProviderStrategy(definition.strategyId);
+  const { description, modelHint } = strategy.describeForConsole();
+
+  return {
+    tabId: activeTab,
+    title: definition.title,
+    provider: definition.provider,
+    strategyId: strategy.id,
+    requestMode: strategy.requestMode,
+    structuredOutputProtocol: strategy.structuredOutputProtocol,
+    baseUrl: activeConfig.baseUrl.trim(),
+    apiKey: activeConfig.apiKey.trim(),
+    defaultModel: activeConfig.defaultModel.trim(),
+    description,
+    modelHint,
+  };
+}
+
+export function buildMainChatRuntimeEnvPatch(
+  activeTab: MainChatBuiltinTabId,
+  tabs: readonly Pick<MainChatBuiltinTabState, 'id' | 'baseUrl' | 'apiKey' | 'defaultModel'>[],
+): Record<string, string> {
+  const runtimeProfile = resolveMainChatRuntimeProfileFromTabConfig(activeTab, tabs);
+  const siliconflowTab = requireMainChatTabConfig(tabs, 'siliconflow');
+  const openaiTab = requireMainChatTabConfig(tabs, 'openai');
+
+  return {
+    CHATLUNA_ACTIVE_TAB: activeTab,
+    CHATLUNA_PLATFORM: runtimeProfile.provider,
+    CHATLUNA_BASE_URL: runtimeProfile.baseUrl,
+    CHATLUNA_API_KEY: runtimeProfile.apiKey,
+    CHATLUNA_DEFAULT_MODEL: runtimeProfile.defaultModel,
+    CHATLUNA_SILICONFLOW_BASE_URL: siliconflowTab.baseUrl.trim(),
+    CHATLUNA_SILICONFLOW_API_KEY: siliconflowTab.apiKey.trim(),
+    CHATLUNA_SILICONFLOW_DEFAULT_MODEL: siliconflowTab.defaultModel.trim(),
+    CHATLUNA_OPENAI_BASE_URL: openaiTab.baseUrl.trim(),
+    CHATLUNA_OPENAI_API_KEY: openaiTab.apiKey.trim(),
+    CHATLUNA_OPENAI_DEFAULT_MODEL: openaiTab.defaultModel.trim(),
+  };
+}
+
+export function isSupportedMainChatModelForTab(tabId: MainChatBuiltinTabId, model?: string | null): boolean {
+  return getMainChatProviderStrategyForTab(tabId).supportsModel(model);
+}
+
+export function supportsStructuredReplyJsonSchema(model?: string | null): boolean {
+  return MAIN_CHAT_PROVIDER_STRATEGIES.some((strategy) => strategy.supportsModel(model));
+}
+
+export function buildStructuredReplyModelOverride(model?: string | null): Record<string, unknown> | null {
+  const strategy = resolveMainChatProviderStrategyForModel(model);
+  return strategy?.buildRequestOverride(model) ?? null;
+}
+
+export function buildSiliconFlowKimiK25NonThinkingOverride(model?: string | null): Record<string, unknown> | null {
+  if (!isSiliconFlowKimiK25Model(model)) return null;
+  return getMainChatProviderStrategy('siliconflow-kimi-main-chat').buildRequestOverride(model);
+}
+
+export function buildStructuredReplyRequestSpec(args: {
+  model?: string | null;
+  profile?: MainChatRuntimeProfile | null;
+}): MainChatStructuredOutputSpec {
+  const strategy = args.profile
+    ? getMainChatProviderStrategy(args.profile.strategyId)
+    : resolveMainChatProviderStrategyForModel(args.model) ?? getMainChatProviderStrategy('siliconflow-kimi-main-chat');
+  const model = args.model ?? args.profile?.defaultModel ?? null;
+  return strategy.buildStructuredOutputSpec(model);
+}
+
+function requireMainChatTabConfig<T extends Pick<MainChatBuiltinTabState, 'id'>>(tabs: readonly T[], id: MainChatBuiltinTabId): T {
+  const found = tabs.find((item) => item.id === id);
+  if (!found) {
+    throw new Error(`缺少内置模型 Tab：${id}`);
+  }
+  return found;
+}
+
+function resolveMainChatProviderStrategyForModel(model?: string | null): MainChatProviderStrategy | null {
+  const found = MAIN_CHAT_PROVIDER_STRATEGIES.find((strategy) => strategy.supportsModel(model));
+  return found ?? null;
+}
+
+function isSiliconFlowKimiK25Model(model?: string | null): boolean {
+  const value = model?.trim();
+  if (!value) return false;
+  return value.startsWith('siliconflow/') && /kimi-k2\.5/i.test(value);
+}
+
+function isOpenAIGpt54ModelFamily(model?: string | null): boolean {
+  const value = model?.trim();
+  if (!value || !value.startsWith('openai/')) return false;
+  const normalized = value.slice('openai/'.length);
+  return /^gpt-5\.4(?:-(?:non|minimal|low|medium|high|xhigh)-thinking|-thinking)?$/i.test(normalized);
+}
+
+function resolveOpenAIGpt54ReasoningEffort(model?: string | null): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' {
+  const value = model?.trim().toLowerCase() ?? '';
+  if (value.endsWith('-non-thinking')) return 'none';
+  if (value.endsWith('-minimal-thinking')) return 'minimal';
+  if (value.endsWith('-low-thinking')) return 'low';
+  if (value.endsWith('-high-thinking')) return 'high';
+  if (value.endsWith('-xhigh-thinking')) return 'xhigh';
+  return 'medium';
+}
+
+function trimOptionalEnvValue(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized || null;
+}

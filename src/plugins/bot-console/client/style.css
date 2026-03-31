@@ -206,6 +206,13 @@
     color: var(--bc-text-strong);
 }
 
+.bc-panel h3 {
+    margin: 0 0 0.25rem;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--bc-text-strong);
+}
+
 .bc-panel-head,
 .bc-panel-subhead,
 .bc-prompt-head,
@@ -216,6 +223,66 @@
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
+}
+
+.bc-model-tabs,
+.bc-model-shared {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.bc-model-tab-row {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 1rem;
+}
+
+.bc-model-tab {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.1rem;
+    padding: 0.45rem 0.95rem;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--k-color-primary) 12%, var(--k-card-border));
+    background: color-mix(in srgb, var(--k-card-bg) 92%, var(--k-page-bg));
+    color: var(--bc-text-secondary);
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.bc-model-tab:hover:not(.is-active) {
+    background: var(--k-hover-bg);
+}
+
+.bc-model-tab.is-active {
+    color: var(--k-color-primary);
+    border-color: color-mix(in srgb, var(--k-color-primary) 26%, transparent);
+    background: color-mix(in srgb, var(--k-color-primary) 12%, var(--k-card-bg));
+}
+
+.bc-model-tab-card {
+    padding: 1rem;
+    border: 1px solid color-mix(in srgb, var(--k-color-primary) 10%, var(--k-card-border));
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--k-page-bg) 28%, var(--k-card-bg));
+}
+
+.bc-model-tab-head {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+
+.bc-model-tab-head p {
+    margin: 0.3rem 0 0;
+    color: var(--bc-text-muted);
+    font-size: 0.875rem;
+    line-height: 1.5;
 }
 
 .bc-panel-head > div > p,

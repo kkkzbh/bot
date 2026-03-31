@@ -16,6 +16,8 @@ import type {
   ReorderPresetsResponse,
   SaveFeatureOverridesRequest,
   SaveFeatureOverridesResponse,
+  SaveModelTabsRequest,
+  SaveModelTabsResponse,
   SaveToolOverridesRequest,
   SaveToolOverridesResponse,
   ServiceAction,
@@ -149,6 +151,22 @@ export function apply(ctx: Context): void {
       }
       const env = await manager.saveEnv(patch);
       return { env, restartRequired: true };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/save-model-tabs',
+    async (payload: SaveModelTabsRequest): Promise<SaveModelTabsResponse> => {
+      const record = ensureRecord(payload);
+      const result = await manager.saveModelTabs({
+        activeTab: String(record.activeTab ?? '') as SaveModelTabsRequest['activeTab'],
+        tabs: Array.isArray(record.tabs) ? (record.tabs as SaveModelTabsRequest['tabs']) : [],
+      });
+      return {
+        ...result,
+        restartRequired: true,
+      };
     },
     { authority: LISTENER_AUTHORITY },
   );

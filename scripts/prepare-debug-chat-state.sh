@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DB_PATH="${QQBOT_KOISHI_DB_PATH:-$ROOT_DIR/data/koishi.db}"
+BOT_ENV_FILE="${QQBOT_ENV_FILE:-$ROOT_DIR/.env.local}"
 FAKE_USER_ID="${FAKE_USER_ID:-}"
 CHAT_MODE="${1:-${CHAT_MODE:-}}"
 ROOM_PREFIX="${ROOM_PREFIX:-codex-debug}"
@@ -18,6 +19,7 @@ Description:
 
 Environment:
   QQBOT_KOISHI_DB_PATH  Override sqlite db path (default: data/koishi.db)
+  QQBOT_ENV_FILE        Bot env file used to resolve the active built-in tab and runtime model
   FAKE_USER_ID          Required fake private-chat user id
   CHAT_MODE             Optional fallback for the positional chat mode
   ROOM_PREFIX           Debug room name prefix (default: codex-debug)
@@ -43,6 +45,15 @@ if [[ ! -f "$DB_PATH" ]]; then
   exit 1
 fi
 
+if [[ "$BOT_ENV_FILE" != /* ]]; then
+  BOT_ENV_FILE="$ROOT_DIR/$BOT_ENV_FILE"
+fi
+
+if [[ ! -f "$BOT_ENV_FILE" ]]; then
+  echo "[error] Missing bot env file: $BOT_ENV_FILE" >&2
+  exit 1
+fi
+
 if [[ -z "$FAKE_USER_ID" ]] || ! [[ "$FAKE_USER_ID" =~ ^[0-9]+$ ]]; then
   echo "[error] FAKE_USER_ID must be a numeric user id." >&2
   exit 2
@@ -53,18 +64,60 @@ if [[ -z "$CHAT_MODE" ]]; then
   exit 2
 fi
 
-export DB_PATH FAKE_USER_ID CHAT_MODE ROOM_PREFIX
+export DB_PATH BOT_ENV_FILE FAKE_USER_ID CHAT_MODE ROOM_PREFIX
 
 python3 <<'PY'
 import os
 import sqlite3
 import time
+from pathlib import Path
 
 db_path = os.environ['DB_PATH']
+bot_env_file = os.environ['BOT_ENV_FILE']
 fake_user_id = os.environ['FAKE_USER_ID']
 chat_mode = os.environ['CHAT_MODE'].strip()
 room_prefix = os.environ['ROOM_PREFIX']
 now = int(time.time() * 1000)
+
+def parse_env_file(path: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in Path(path).read_text(encoding='utf-8').splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and (
+            (value.startswith("'") and value.endswith("'")) or
+            (value.startswith('"') and value.endswith('"'))
+        ):
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+def resolve_runtime_room_config(env_values: dict[str, str]) -> tuple[str, str]:
+    active_tab = env_values.get('CHATLUNA_ACTIVE_TAB', '').strip()
+    if active_tab == 'openai':
+        model = (
+            env_values.get('CHATLUNA_OPENAI_DEFAULT_MODEL', '').strip() or
+            env_values.get('CHATLUNA_DEFAULT_MODEL', '').strip()
+        )
+    elif active_tab == 'siliconflow':
+        model = (
+            env_values.get('CHATLUNA_SILICONFLOW_DEFAULT_MODEL', '').strip() or
+            env_values.get('CHATLUNA_DEFAULT_MODEL', '').strip()
+        )
+    else:
+        model = env_values.get('CHATLUNA_DEFAULT_MODEL', '').strip()
+
+    preset = env_values.get('CHATLUNA_DEFAULT_PRESET', '').strip() or 'sakiko'
+    if not model:
+        raise RuntimeError(f'no runtime main-chat model found in env file: {bot_env_file}')
+    return preset, model
+
+env_values = parse_env_file(bot_env_file)
+preset_from_env, model_from_env = resolve_runtime_room_config(env_values)
 
 conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
@@ -93,12 +146,9 @@ try:
         """
     ).fetchone()
 
-    preset = str(template['preset']) if template and template['preset'] else 'chatgpt'
-    model = str(template['model']) if template and template['model'] else ''
+    preset = preset_from_env or (str(template['preset']) if template and template['preset'] else 'sakiko')
+    model = model_from_env
     password = str(template['password']) if template and template['password'] else ''
-
-    if not model:
-        raise RuntimeError('no reusable room model found; cannot prepare debug room')
 
     updated_room_ids = []
 
@@ -110,10 +160,10 @@ try:
                 conn.execute(
                     """
                     update chathub_room
-                    set conversationId = ?, chatMode = ?, autoUpdate = 0, updatedTime = ?
+                    set conversationId = ?, preset = ?, model = ?, chatMode = ?, autoUpdate = 0, updatedTime = ?
                     where roomId = ?
                     """,
-                    (conversation_id, chat_mode, now, room_id),
+                    (conversation_id, preset, model, chat_mode, now, room_id),
                 )
                 conn.execute(
                     """
@@ -183,7 +233,10 @@ try:
             (fake_user_id, default_room_id),
         )
 
-    print(f'rooms={len(updated_room_ids)} defaultRoomId={updated_room_ids[0]} chatMode={chat_mode}')
+    print(
+        f'rooms={len(updated_room_ids)} defaultRoomId={updated_room_ids[0]} '
+        f'chatMode={chat_mode} preset={preset} model={model}'
+    )
 finally:
     conn.close()
 PY

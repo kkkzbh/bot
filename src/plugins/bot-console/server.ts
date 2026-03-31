@@ -15,14 +15,26 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import YAML from 'yaml';
 import type {
-  BotConsoleState,
+  BotConsoleBuiltinModelTab,
+  BotConsoleModelTabId,
+  BotConsoleModelTabsState,
   BotServiceStatus,
   BotServiceUnit,
   EnvPatch,
   PresetDocument,
   PresetSummary,
+  SaveModelTabsRequest,
   ServiceAction,
 } from '../../types/bot-console.js';
+import {
+  buildMainChatRuntimeEnvPatch,
+  getBuiltinMainChatTabDefinition,
+  isSupportedMainChatModelForTab,
+  MAIN_CHAT_BUILTIN_TAB_IDS,
+  normalizeMainChatBuiltinTabId,
+  resolveMainChatActiveTabFromEnv,
+  resolveMainChatTabStateFromEnv,
+} from '../shared/llm/index.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -67,6 +79,7 @@ type BotConsoleStaticState = {
   services: BotServiceStatus[];
   presets: PresetSummary[];
   defaultPreset: string;
+  modelTabs: BotConsoleModelTabsState;
 };
 
 type PresetOrderDocument = {
@@ -89,9 +102,17 @@ export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
   { key: 'QQBOT_REPLY_INTERRUPT_ENABLED', label: '回复期中断', type: 'toggle', section: 'features' },
   { key: 'CHATLUNA_COMMON_FS', label: '文件系统工具总开关', type: 'toggle', section: 'features' },
   { key: 'CHATLUNA_COMMON_FS_SCOPE_PATH', label: '文件系统作用域目录', type: 'text', section: 'features' },
+  { key: 'CHATLUNA_ACTIVE_TAB', label: '当前对话模型 Tab', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_PLATFORM', label: '当前对话模型平台', type: 'text', section: 'model' },
   { key: 'CHATLUNA_BASE_URL', label: '对话模型接口地址', type: 'text', section: 'model' },
   { key: 'CHATLUNA_API_KEY', label: '对话模型接口密钥', type: 'secret', section: 'model' },
   { key: 'CHATLUNA_DEFAULT_MODEL', label: '对话默认模型', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_SILICONFLOW_BASE_URL', label: '硅基流动接口地址', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_SILICONFLOW_API_KEY', label: '硅基流动接口密钥', type: 'secret', section: 'model' },
+  { key: 'CHATLUNA_SILICONFLOW_DEFAULT_MODEL', label: '硅基流动默认模型', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_OPENAI_BASE_URL', label: 'OpenAI 接口地址', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_OPENAI_API_KEY', label: 'OpenAI 接口密钥', type: 'secret', section: 'model' },
+  { key: 'CHATLUNA_OPENAI_DEFAULT_MODEL', label: 'OpenAI 默认模型', type: 'text', section: 'model' },
   { key: 'OPENAI_BASE_URL', label: '通用模型接口地址', type: 'text', section: 'model' },
   { key: 'OPENAI_API_KEY', label: '通用模型接口密钥', type: 'secret', section: 'model' },
   { key: 'OPENAI_MODEL', label: '通用默认模型', type: 'text', section: 'model' },
@@ -141,6 +162,63 @@ function ensureManagedKey(key: string): void {
   if (!BOT_CONSOLE_ENV_KEYS.has(key)) {
     throw new Error(`不支持这个配置项：${key}`);
   }
+}
+
+export function buildModelTabsStateFromEnv(env: Record<string, string>): BotConsoleModelTabsState {
+  const activeTab = resolveMainChatActiveTabFromEnv(env) as BotConsoleModelTabId;
+  const tabs = MAIN_CHAT_BUILTIN_TAB_IDS.map((id) => resolveMainChatTabStateFromEnv(id, env) as BotConsoleBuiltinModelTab);
+
+  return {
+    activeTab,
+    tabs,
+  };
+}
+
+function findRequiredModelTab(
+  tabs: readonly BotConsoleBuiltinModelTab[],
+  id: BotConsoleModelTabId,
+): BotConsoleBuiltinModelTab {
+  const tab = tabs.find((item) => item.id === id);
+  if (!tab) {
+    throw new Error(`缺少内置模型 Tab：${id}`);
+  }
+  return tab;
+}
+
+function normalizeModelTabInput(
+  input: Partial<BotConsoleBuiltinModelTab> | null | undefined,
+): BotConsoleBuiltinModelTab {
+  const id = normalizeMainChatBuiltinTabId(input?.id) as BotConsoleModelTabId;
+  const defaultTab = resolveMainChatTabStateFromEnv(id, readManagedEnvFromContent('')) as BotConsoleBuiltinModelTab;
+  const definition = getBuiltinMainChatTabDefinition(id);
+  const normalized: BotConsoleBuiltinModelTab = {
+    id,
+    title: definition.title,
+    provider: definition.provider,
+    strategyId: defaultTab.strategyId,
+    requestMode: defaultTab.requestMode,
+    structuredOutputProtocol: defaultTab.structuredOutputProtocol,
+    description: defaultTab.description,
+    modelHint: defaultTab.modelHint,
+    baseUrl: String(input?.baseUrl ?? defaultTab.baseUrl ?? '').trim(),
+    apiKey: String(input?.apiKey ?? defaultTab.apiKey ?? '').trim(),
+    defaultModel: String(input?.defaultModel ?? defaultTab.defaultModel ?? '').trim(),
+  };
+
+  if (!isSupportedMainChatModelForTab(id, normalized.defaultModel)) {
+    throw new Error(`${normalized.title} Tab 只支持当前允许的模型族，收到：${normalized.defaultModel || '空值'}`);
+  }
+
+  return normalized;
+}
+
+function buildModelTabsPatch(input: SaveModelTabsRequest): EnvPatch {
+  const activeTab = normalizeMainChatBuiltinTabId(input?.activeTab) as BotConsoleModelTabId;
+  const providedTabs = Array.isArray(input?.tabs) ? input.tabs : [];
+  const tabs = providedTabs.map((item) => normalizeModelTabInput(item));
+  findRequiredModelTab(tabs, 'siliconflow');
+  findRequiredModelTab(tabs, 'openai');
+  return buildMainChatRuntimeEnvPatch(activeTab, tabs);
 }
 
 export function parseEnvLines(content: string): EnvLine[] {
@@ -398,6 +476,7 @@ export class BotConsoleManager {
       services,
       presets,
       defaultPreset: env.CHATLUNA_DEFAULT_PRESET || 'sakiko',
+      modelTabs: buildModelTabsStateFromEnv(env),
     };
   }
 
@@ -413,6 +492,14 @@ export class BotConsoleManager {
     const next = applyEnvPatchToContent(content, patch);
     await writeFileAtomicWithBackup(this.envFilePath, next, this.fs);
     return readManagedEnvFromContent(next);
+  }
+
+  async saveModelTabs(input: SaveModelTabsRequest): Promise<{ env: Record<string, string>; modelTabs: BotConsoleModelTabsState }> {
+    const env = await this.saveEnv(buildModelTabsPatch(input));
+    return {
+      env,
+      modelTabs: buildModelTabsStateFromEnv(env),
+    };
   }
 
   async savePreset(document: PresetDocument): Promise<PresetDocument> {

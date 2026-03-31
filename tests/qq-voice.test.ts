@@ -1519,7 +1519,7 @@ describe('qq voice plugin', () => {
       },
     };
 
-    await expect(prepare?.(session, context)).rejects.toThrow('requires SiliconFlow Kimi-K2.5');
+    await expect(prepare?.(session, context)).rejects.toThrow('requires a supported main chat model');
     expect(chatluna.createChatModel).not.toHaveBeenCalled();
   });
 

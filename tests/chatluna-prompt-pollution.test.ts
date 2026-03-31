@@ -140,12 +140,24 @@ describe('chatluna prompt pollution regression', () => {
     expect(executorSource).toContain('overrideRequestParams');
   });
 
-  it('forces SiliconFlow Kimi K2.5 structured reply requests into non-thinking mode', () => {
+  it('keeps provider-aware structured reply request overrides wired into the reply chain', () => {
     const generationSource = readFileSync(join(process.cwd(), 'src/plugins/reply/voice/generation.ts'), 'utf8');
 
-    expect(generationSource).toContain('buildSiliconFlowKimiK25NonThinkingOverride');
+    expect(generationSource).toContain('buildStructuredReplyRequestSpec');
     expect(generationSource).toContain('mergeReplyOverrideRequestParams');
     expect(generationSource).toContain('overrideRequestParams');
+  });
+
+  it('keeps the linked OpenAI-like adapter wired for responses mode when requested by qqbot', () => {
+    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
+    const packageRoot = dirname(packageJsonPath);
+    const sharedAdapterRequesterSource = readFileSync(join(packageRoot, '..', 'shared-adapter', 'src', 'requester.ts'), 'utf8');
+    const openAIRequesterSource = readFileSync(join(packageRoot, '..', 'adapter-openai-like', 'src', 'requester.ts'), 'utf8');
+
+    expect(sharedAdapterRequesterSource).toContain("override['qqbot_request_mode'] === 'responses'");
+    expect(sharedAdapterRequesterSource).toContain("completionUrl: string = 'responses'");
+    expect(openAIRequesterSource).toContain("params.overrideRequestParams['qqbot_request_mode'] === 'responses'");
+    expect(openAIRequesterSource).toContain("completionResponses(");
   });
 
   it('uses a chatluna context manager build that accepts plain prompt message objects', () => {

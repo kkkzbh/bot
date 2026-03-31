@@ -44,8 +44,9 @@ import { normalizeReplyChatMode } from '../compat.js';
 import { ReplyOrchestratorService } from '../pipeline/orchestrator.js';
 import { buildReplyTurnInput, normalizeReplyRouteHint } from '../pipeline/context-builder.js';
 import {
-  buildSiliconFlowKimiK25NonThinkingOverride,
-  supportsStructuredReplyJsonSchema,
+  buildStructuredReplyRequestSpec,
+  isSupportedMainChatModelForTab,
+  resolveMainChatRuntimeProfileFromEnv,
 } from '../../shared/llm/index.js';
 import {
   STRUCTURED_REPLY_V1_JSON_SCHEMA,
@@ -869,9 +870,11 @@ function ensureReplyPluginRoom(room: ReplyRuntimeRoomLike | undefined): void {
 
 function ensureStructuredReplyJsonSchemaModel(room: ReplyRuntimeRoomLike | undefined): void {
   const model = typeof room?.model === 'string' ? room.model.trim() : '';
-  if (supportsStructuredReplyJsonSchema(model)) return;
+  const profile = resolveMainChatRuntimeProfileFromEnv(process.env);
+  const strategyModel = model || profile.defaultModel;
+  if (isSupportedMainChatModelForTab(profile.tabId, strategyModel)) return;
 
-  throw new Error(`qqbot reply structured output requires SiliconFlow Kimi-K2.5, got ${model || 'unknown'}.`);
+  throw new Error(`qqbot reply structured output requires a supported main chat model, got ${model || 'unknown'}.`);
 }
 
 function applyReplyStructuredOutputRequest(
@@ -880,15 +883,20 @@ function applyReplyStructuredOutputRequest(
 ): void {
   if (!inputMessage) return;
 
-  const overrideRequestParams = mergeReplyOverrideRequestParams(
-    inputMessage.additional_kwargs,
-    buildSiliconFlowKimiK25NonThinkingOverride(room?.model),
-  );
+  const profile = resolveMainChatRuntimeProfileFromEnv(process.env);
+  const structuredOutputSpec = buildStructuredReplyRequestSpec({
+    profile,
+    model: typeof room?.model === 'string' ? room.model.trim() : profile.defaultModel,
+  });
+  const overrideRequestParams = mergeReplyOverrideRequestParams(inputMessage.additional_kwargs, structuredOutputSpec.overrideRequestParams);
 
   inputMessage.additional_kwargs = {
     ...(inputMessage.additional_kwargs ?? {}),
     qqbot_reply_mode: 'agent',
-    qqbot_final_response_schema: STRUCTURED_REPLY_V1_JSON_SCHEMA,
+    qqbot_final_response_schema: structuredOutputSpec.finalResponseSchema ?? STRUCTURED_REPLY_V1_JSON_SCHEMA,
+    ...(structuredOutputSpec.finalResponseInstruction
+      ? { qqbot_final_response_instruction: structuredOutputSpec.finalResponseInstruction }
+      : {}),
     ...(overrideRequestParams ? { overrideRequestParams } : {}),
   };
 }

@@ -24,6 +24,8 @@ else
 fi
 export OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.deepseek.com/v1}"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-sk-ci-smoke}"
+export CHATLUNA_ACTIVE_TAB="${CHATLUNA_ACTIVE_TAB:-siliconflow}"
+export CHATLUNA_PLATFORM="${CHATLUNA_PLATFORM:-siliconflow}"
 export CHATLUNA_BASE_URL="${CHATLUNA_BASE_URL:-https://api.siliconflow.cn/v1}"
 export CHATLUNA_API_KEY="${CHATLUNA_API_KEY:-sk-ci-smoke}"
 export CHATLUNA_DEFAULT_MODEL="${CHATLUNA_DEFAULT_MODEL:-siliconflow/Pro/moonshotai/Kimi-K2.5}"

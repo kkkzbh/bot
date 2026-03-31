@@ -78,14 +78,14 @@ function createHarness(
   });
   const chatluna = {
     registerToolMaskResolver,
-    platform: {
-      getToolRegistry: () => ({
-        question: { name: 'question' },
-        user_confirm: { name: 'user_confirm' },
-        web_search: { name: 'web_search' },
-        unknown_runtime_tool: { name: 'unknown_runtime_tool' },
-      }),
-    },
+      platform: {
+        getToolRegistry: () => ({
+          web_search: { name: 'web_search' },
+          web_fetch: { name: 'web_fetch' },
+          web_post: { name: 'web_post' },
+          unknown_runtime_tool: { name: 'unknown_runtime_tool' },
+        }),
+      },
   };
   let currentChatLuna: typeof chatluna | undefined = options.initialChatLunaAvailable === false ? undefined : chatluna;
 
@@ -163,7 +163,7 @@ describe('tool policy service', () => {
         enabled: true,
       },
       {
-        toolName: 'user_confirm',
+        toolName: 'web_fetch',
         routeProfile: 'agent',
         scopeKind: 'group',
         scopeId: '1091078473',
@@ -175,11 +175,11 @@ describe('tool policy service', () => {
       service.resolveAllowedTools({
         session: { isDirect: true, userId: 'u1', channelId: 'private-1' },
         routeProfile: 'agent',
-        toolNames: ['web_search', 'user_confirm'],
+        toolNames: ['web_search', 'web_fetch'],
         room: { roomId: 7, conversationId: 'conv-private' },
       }),
     ).resolves.toEqual({
-      allowed: ['web_search', 'user_confirm'],
+      allowed: ['web_search', 'web_fetch'],
       unknown: [],
     });
 
@@ -187,7 +187,7 @@ describe('tool policy service', () => {
       service.resolveAllowedTools({
         session: { isDirect: false, userId: 'u1', guildId: '1091078473', channelId: '1091078473' },
         routeProfile: 'agent',
-        toolNames: ['web_search', 'user_confirm'],
+        toolNames: ['web_search', 'web_fetch'],
         room: { roomId: 101, conversationId: 'conv-group' },
       }),
     ).resolves.toEqual({
@@ -240,7 +240,7 @@ describe('tool policy service', () => {
     const service = ctx.toolPolicy!;
     await service.saveToolOverrides([
       {
-        toolName: 'user_confirm',
+        toolName: 'web_post',
         routeProfile: 'agent',
         scopeKind: 'group',
         scopeId: '1091330365',
@@ -268,11 +268,11 @@ describe('tool policy service', () => {
       }),
     ).resolves.toEqual({
       mode: 'allow',
-      allow: ['question', 'web_search'],
+      allow: ['web_fetch', 'web_search'],
       deny: [],
       toolCallMask: {
         mode: 'allow',
-        allow: ['question', 'web_search'],
+        allow: ['web_fetch', 'web_search'],
         deny: [],
       },
     });
@@ -284,11 +284,11 @@ describe('tool policy service', () => {
       }),
     ).resolves.toEqual({
       mode: 'allow',
-      allow: ['question', 'web_search'],
+      allow: ['web_fetch', 'web_search'],
       deny: [],
       toolCallMask: {
         mode: 'allow',
-        allow: ['question', 'web_search'],
+        allow: ['web_fetch', 'web_search'],
         deny: [],
       },
     });
@@ -312,7 +312,7 @@ describe('tool policy service', () => {
       tool_scope_override: [
         {
           id: 1,
-          toolName: 'built_question',
+          toolName: 'web_fetch',
           routeProfile: 'agent',
           scopeKind: 'global_default',
           scopeId: GLOBAL_DEFAULT_SCOPE_ID,
@@ -321,7 +321,7 @@ describe('tool policy service', () => {
         },
         {
           id: 2,
-          toolName: 'question',
+          toolName: 'built_user_toast',
           routeProfile: 'agent',
           scopeKind: 'global_default',
           scopeId: GLOBAL_DEFAULT_SCOPE_ID,
@@ -330,7 +330,7 @@ describe('tool policy service', () => {
         },
         {
           id: 3,
-          toolName: 'built_user_toast',
+          toolName: 'ghost_tool',
           routeProfile: 'agent',
           scopeKind: 'group',
           scopeId: '1001',
@@ -352,22 +352,37 @@ describe('tool policy service', () => {
 
     await expect(service.getToolOverrides()).resolves.toEqual([
       expect.objectContaining({
-        id: 2,
-        toolName: 'question',
+        id: 1,
+        toolName: 'web_fetch',
         routeProfile: 'agent',
         scopeKind: 'global_default',
         scopeId: GLOBAL_DEFAULT_SCOPE_ID,
-        enabled: 0,
+        enabled: 1,
+      }),
+      expect.objectContaining({
+        id: 4,
+        toolName: 'web_post',
+        routeProfile: 'agent',
+        scopeKind: 'group',
+        scopeId: '1002',
+        enabled: 1,
       }),
     ]);
 
     await expect(database.get('tool_scope_override', {})).resolves.toEqual([
       expect.objectContaining({
-        id: 2,
-        toolName: 'question',
+        id: 1,
+        toolName: 'web_fetch',
         routeProfile: 'agent',
         scopeKind: 'global_default',
         scopeId: GLOBAL_DEFAULT_SCOPE_ID,
+      }),
+      expect.objectContaining({
+        id: 4,
+        toolName: 'web_post',
+        routeProfile: 'agent',
+        scopeKind: 'group',
+        scopeId: '1002',
       }),
     ]);
   });
