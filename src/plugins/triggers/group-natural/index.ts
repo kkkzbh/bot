@@ -19,7 +19,8 @@ import {
 import {
   buildGroupScopeKey,
   capturePassiveGroupRecentContext,
-  replaceRuntimeChatHistoryWithGroupRecentContext,
+  groupRecentContextCache,
+  mergeRuntimeChatHistoryWithGroupRecentContext,
 } from './recent-context.js';
 
 const logger = new Logger('group-natural-trigger');
@@ -334,7 +335,7 @@ export function apply(ctx: Context, config: Config): void {
     disposeRecentChatPipeline = contextManager.pipeline(
       'chat_history',
       async (runtime, next) => {
-        replaceRuntimeChatHistoryWithGroupRecentContext(runtime as Parameters<typeof replaceRuntimeChatHistoryWithGroupRecentContext>[0]);
+        mergeRuntimeChatHistoryWithGroupRecentContext(runtime as Parameters<typeof mergeRuntimeChatHistoryWithGroupRecentContext>[0]);
         await next();
       },
       -100,
@@ -343,7 +344,7 @@ export function apply(ctx: Context, config: Config): void {
   };
 
   ctx.middleware(async (session, next) => {
-    capturePassiveGroupRecentContext(session);
+    const capturedRecentContextEntry = capturePassiveGroupRecentContext(session);
 
     if (!runtime.enabled) return next();
     if (featurePolicy && !(await featurePolicy.resolveFeatureEnabled(session, 'CHAT_NATURAL_TRIGGER_ENABLED'))) {
@@ -420,6 +421,10 @@ export function apply(ctx: Context, config: Config): void {
       reason: triggerReason ?? 'direct',
       explicit: explicitTrigger,
     };
+
+    if (capturedRecentContextEntry) {
+      groupRecentContextCache.remove(groupScopeKey, capturedRecentContextEntry);
+    }
 
     const replyReadyAt = nextReplyAt.get(groupScopeKey) ?? 0;
     if (replyReadyAt > now) {

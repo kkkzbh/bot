@@ -2,13 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   capturePassiveGroupRecentContext,
   groupRecentContextCache,
-  replaceRuntimeChatHistoryWithGroupRecentContext,
+  mergeRuntimeChatHistoryWithGroupRecentContext,
 } from '../src/plugins/triggers/group-natural/recent-context.js';
 
 function createHumanMessage(content: string, id?: string) {
   return {
     content,
     ...(id ? { id } : {}),
+    additional_kwargs: {},
     getType: () => 'human',
   };
 }
@@ -48,8 +49,8 @@ afterEach(() => {
   groupRecentContextCache.clear();
 });
 
-describe('group recent context runtime replacement', () => {
-  it('replaces persisted chat history with same-group passive cache and skips the current trigger message', () => {
+describe('group recent context runtime merge', () => {
+  it('keeps original chat history and appends same-group passive cache tail without the current trigger message', () => {
     capturePassiveGroupRecentContext(
       createGroupSession({
         userId: 'u1',
@@ -60,10 +61,42 @@ describe('group recent context runtime replacement', () => {
     );
     capturePassiveGroupRecentContext(
       createGroupSession({
+        userId: 'u0',
+        messageId: 'msg-0',
+        username: '零',
+        content: '更早的一条普通消息',
+      }),
+    );
+    capturePassiveGroupRecentContext(
+      createGroupSession({
         userId: 'u2',
         messageId: 'msg-2',
         username: '乙',
         content: '先前普通消息二',
+      }),
+    );
+    capturePassiveGroupRecentContext(
+      createGroupSession({
+        userId: 'u4',
+        messageId: 'msg-4',
+        username: '丁',
+        content: '先前普通消息三',
+      }),
+    );
+    capturePassiveGroupRecentContext(
+      createGroupSession({
+        userId: 'u5',
+        messageId: 'msg-5',
+        username: '戊',
+        content: '先前普通消息四',
+      }),
+    );
+    capturePassiveGroupRecentContext(
+      createGroupSession({
+        userId: 'u6',
+        messageId: 'msg-6',
+        username: '己',
+        content: '先前普通消息五',
       }),
     );
 
@@ -78,18 +111,37 @@ describe('group recent context runtime replacement', () => {
     const runtime = {
       configurable: { session: triggerSession },
       input: createHumanMessage('[speaker_id=u3 speaker_name="丙"] 祥子 帮我看看', 'u3'),
-      chatHistory: [createHumanMessage('persisted chat history should be replaced')],
+      chatHistory: [
+        createHumanMessage('persisted human history should stay'),
+        {
+          content: 'persisted ai reply should stay',
+          additional_kwargs: {},
+          getType: () => 'ai',
+        },
+      ],
     };
 
-    replaceRuntimeChatHistoryWithGroupRecentContext(runtime);
+    mergeRuntimeChatHistoryWithGroupRecentContext(runtime);
 
     expect(runtime.chatHistory.map((message) => message.content)).toEqual([
-      '[speaker_id=u1 speaker_name="甲"] 先前普通消息一',
+      'persisted human history should stay',
+      'persisted ai reply should stay',
       '[speaker_id=u2 speaker_name="乙"] 先前普通消息二',
+      '[speaker_id=u4 speaker_name="丁"] 先前普通消息三',
+      '[speaker_id=u5 speaker_name="戊"] 先前普通消息四',
+      '[speaker_id=u6 speaker_name="己"] 先前普通消息五',
     ]);
+    expect(runtime.chatHistory.at(-4)?.content).toBe(
+      '[speaker_id=u2 speaker_name="乙"] 先前普通消息二',
+    );
+    expect(
+      runtime.chatHistory.every(
+        (message) => message.additional_kwargs && typeof message.additional_kwargs === 'object',
+      ),
+    ).toBe(true);
   });
 
-  it('keeps groups isolated when replacing runtime chat history', () => {
+  it('keeps groups isolated when merging runtime chat history', () => {
     capturePassiveGroupRecentContext(
       createGroupSession({
         guildId: '100',
@@ -123,17 +175,18 @@ describe('group recent context runtime replacement', () => {
         }),
       },
       input: createHumanMessage('[speaker_id=u3 speaker_name="丙"] B 群触发', 'u3'),
-      chatHistory: [createHumanMessage('persisted chat history should be replaced')],
+      chatHistory: [createHumanMessage('persisted chat history should stay')],
     };
 
-    replaceRuntimeChatHistoryWithGroupRecentContext(runtime);
+    mergeRuntimeChatHistoryWithGroupRecentContext(runtime);
 
     expect(runtime.chatHistory.map((message) => message.content)).toEqual([
+      'persisted chat history should stay',
       '[speaker_id=u2 speaker_name="乙"] B 群消息',
     ]);
   });
 
-  it('does not replace private chat history', () => {
+  it('does not merge into private chat history', () => {
     const runtime = {
       configurable: {
         session: {
@@ -148,9 +201,49 @@ describe('group recent context runtime replacement', () => {
       chatHistory: [createHumanMessage('persisted private history')],
     };
 
-    replaceRuntimeChatHistoryWithGroupRecentContext(runtime);
+    mergeRuntimeChatHistoryWithGroupRecentContext(runtime);
 
     expect(runtime.chatHistory.map((message) => message.content)).toEqual(['persisted private history']);
+  });
+
+  it('appends fewer than four cached messages when the passive cache is short', () => {
+    capturePassiveGroupRecentContext(
+      createGroupSession({
+        userId: 'u1',
+        messageId: 'msg-1',
+        username: '甲',
+        content: '只有一条',
+      }),
+    );
+    capturePassiveGroupRecentContext(
+      createGroupSession({
+        userId: 'u2',
+        messageId: 'msg-2',
+        username: '乙',
+        content: '只有两条',
+      }),
+    );
+
+    const runtime = {
+      configurable: {
+        session: createGroupSession({
+          userId: 'u3',
+          messageId: 'msg-3',
+          username: '丙',
+          content: '触发一下',
+        }),
+      },
+      input: createHumanMessage('[speaker_id=u3 speaker_name="丙"] 触发一下', 'u3'),
+      chatHistory: [createHumanMessage('persisted history')],
+    };
+
+    mergeRuntimeChatHistoryWithGroupRecentContext(runtime);
+
+    expect(runtime.chatHistory.map((message) => message.content)).toEqual([
+      'persisted history',
+      '[speaker_id=u1 speaker_name="甲"] 只有一条',
+      '[speaker_id=u2 speaker_name="乙"] 只有两条',
+    ]);
   });
 
   it('captures image-only passive messages as speaker-tagged placeholders', () => {

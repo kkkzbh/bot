@@ -2,6 +2,7 @@ import { resolveSessionDisplayName } from '../../shared/session/index.js';
 
 const DEFAULT_MAX_GROUPS = 128;
 const DEFAULT_MAX_MESSAGES_PER_GROUP = 24;
+const DEFAULT_RECENT_CONTEXT_TAIL_LIMIT = 4;
 
 type SessionLike = {
   platform?: string;
@@ -79,6 +80,28 @@ export class GroupRecentContextCache {
     this.buckets.delete(normalizedKey);
     this.buckets.set(normalizedKey, bucket);
     return [...bucket];
+  }
+
+  remove(groupScopeKey: string, entry: GroupRecentContextEntry): void {
+    const normalizedKey = groupScopeKey.trim();
+    if (!normalizedKey) return;
+
+    const bucket = this.buckets.get(normalizedKey);
+    if (!bucket?.length) return;
+
+    const nextBucket = bucket.filter(
+      (current) =>
+        !(
+          current.messageId === entry.messageId &&
+          current.userId === entry.userId &&
+          current.renderedText === entry.renderedText &&
+          current.capturedAt === entry.capturedAt
+        ),
+    );
+
+    this.buckets.delete(normalizedKey);
+    if (!nextBucket.length) return;
+    this.buckets.set(normalizedKey, nextBucket);
   }
 
   clear(): void {
@@ -231,7 +254,16 @@ export function capturePassiveGroupRecentContext(session: SessionLike): GroupRec
   return entry;
 }
 
-export function replaceRuntimeChatHistoryWithGroupRecentContext(
+function toRuntimeMessage(entry: GroupRecentContextEntry): PromptRuntimeMessageLike {
+  return {
+    content: entry.renderedText,
+    id: entry.userId,
+    additional_kwargs: {},
+    getType: () => 'human',
+  };
+}
+
+export function mergeRuntimeChatHistoryWithGroupRecentContext(
   runtime: PromptRuntimeLike,
 ): void {
   const session = runtime.configurable?.session as SessionLike | undefined;
@@ -242,11 +274,10 @@ export function replaceRuntimeChatHistoryWithGroupRecentContext(
 
   const cachedEntries = groupRecentContextCache
     .get(groupScopeKey)
-    .filter((entry) => !isCurrentTurnEntry(entry, session, runtime.input));
+    .filter((entry) => !isCurrentTurnEntry(entry, session, runtime.input))
+    .slice(-DEFAULT_RECENT_CONTEXT_TAIL_LIMIT);
 
-  runtime.chatHistory = cachedEntries.map((entry) => ({
-    content: entry.renderedText,
-    id: entry.userId,
-    getType: () => 'human',
-  }));
+  if (!cachedEntries.length) return;
+
+  runtime.chatHistory = [...(runtime.chatHistory ?? []), ...cachedEntries.map(toRuntimeMessage)];
 }

@@ -227,6 +227,23 @@ describe('group natural trigger middleware', () => {
     ]);
   });
 
+  it('removes the triggering message from passive cache once it enters the session chain', async () => {
+    const { middleware } = createHarness({ replyIntervalMs: 0 });
+
+    const session = createSession({
+      channelId: '100',
+      guildId: '100',
+      userId: 'u7',
+      messageId: 'msg-trigger-1',
+      content: '祥子 帮我看看',
+    });
+
+    const result = await runAndCapture(middleware, session);
+
+    expect(result.naturalTrigger).toEqual({ reason: 'alias', explicit: true });
+    expect(groupRecentContextCache.get(buildGroupScopeKey(session) ?? '')).toEqual([]);
+  });
+
   it('keeps reply interval isolated by group', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-09T12:00:00+08:00'));
