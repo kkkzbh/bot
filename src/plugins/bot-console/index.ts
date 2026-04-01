@@ -396,7 +396,13 @@ export function apply(ctx: Context): void {
       koaCtx.body = result.body;
     });
 
+    ctx.server.options('/api/internal/qq-voice/v1/send', async (koaCtx: any) => {
+      setQqVoiceBridgeCorsHeaders(koaCtx);
+      koaCtx.status = 204;
+    });
+
     ctx.server.post('/api/internal/qq-voice/v1/send', async (koaCtx: any) => {
+      setQqVoiceBridgeCorsHeaders(koaCtx);
       if (!validateVoiceBridgeAuthHeader(String(koaCtx.get('authorization') || ''))) {
         writeJsonError(koaCtx, 401, 'invalid_request_error', 'invalid qq voice bridge authorization');
         return;
@@ -441,4 +447,11 @@ function writeJsonError(koaCtx: any, status: number, type: string, message: stri
       type,
     },
   });
+}
+
+function setQqVoiceBridgeCorsHeaders(koaCtx: any): void {
+  koaCtx.set('access-control-allow-origin', '*');
+  koaCtx.set('access-control-allow-methods', 'POST, OPTIONS');
+  koaCtx.set('access-control-allow-headers', 'authorization, content-type');
+  koaCtx.set('access-control-max-age', '600');
 }
