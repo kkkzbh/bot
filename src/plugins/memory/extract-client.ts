@@ -1,3 +1,5 @@
+import type { MemoryProfileKind } from '../../types/memory-v2.js';
+
 export interface MemoryConversationTurn {
   id: string;
   role: 'human' | 'ai';
@@ -11,7 +13,9 @@ export interface MemoryExtractRuntime {
   timeoutMs: number;
 }
 
-export interface ExtractedMemoryFact {
+export interface ExtractedMemoryProfileItem {
+  subject: 'user';
+  kind: MemoryProfileKind;
   topicKey?: string;
   content: string;
   keywords?: string[];
@@ -20,6 +24,7 @@ export interface ExtractedMemoryFact {
 }
 
 export interface ExtractedMemoryEpisode {
+  subject: 'user';
   title: string;
   summary: string;
   keywords?: string[];
@@ -30,10 +35,15 @@ export interface ExtractedMemoryEpisode {
 }
 
 export interface MemoryExtractionResult {
-  facts: ExtractedMemoryFact[];
+  profileItems: ExtractedMemoryProfileItem[];
   episodes: ExtractedMemoryEpisode[];
   drop: string[];
 }
+
+const PROFILE_KINDS = new Set<MemoryProfileKind>(['identity', 'preference', 'trait', 'boundary', 'plan', 'relationship']);
+const BOT_ONLY_PREFIX = /^(助手|bot|AI|小祥|祥子|丰川祥子)[：:，,\s]?/i;
+const PROFILE_CONTENT_PREFIX = /^用户[：:，,\s]?/;
+const EPISODE_CONTENT_PREFIX = /^(用户|我)[：:，,\s]?/;
 
 const MEMORY_EXTRACTION_JSON_SCHEMA = {
   name: 'memory_extraction_v1',
@@ -42,22 +52,31 @@ const MEMORY_EXTRACTION_JSON_SCHEMA = {
     type: 'object',
     additionalProperties: false,
     properties: {
-      facts: {
+      profile_items: {
         type: 'array',
         description:
-          '只记录用户相关、未来仍值得保留的稳定事实、偏好、长期计划、持续关系、明确禁忌。不得记录助手 persona、角色设定、说话风格、台词、临时情绪、挑衅演绎、普通寒暄或一次性指令。',
+          '只记录用户画像：用户身份信息、稳定偏好、行为特点、边界禁忌、长期计划、持续关系信号。绝不记录只关于我的 persona、兴趣、设定、台词、情绪、口头禅或角色扮演内容。',
         maxItems: 6,
         items: {
           type: 'object',
           additionalProperties: false,
           properties: {
+            subject: {
+              type: 'string',
+              enum: ['user'],
+              description: '固定为 user。',
+            },
+            kind: {
+              type: 'string',
+              enum: ['identity', 'preference', 'trait', 'boundary', 'plan', 'relationship'],
+            },
             topicKey: {
               type: 'string',
-              description: '稳定英文或 kebab-case 主题键，例如 preference-music、plan-job-change。',
+              description: '稳定英文或 kebab-case 主题键，例如 preferred-name、boundary-name-test。',
             },
             content: {
               type: 'string',
-              description: '对用户长期记忆的简洁陈述。',
+              description: '自然、简洁、可复用的用户画像描述，必须以“用户”开头。',
             },
             keywords: {
               type: 'array',
@@ -75,25 +94,30 @@ const MEMORY_EXTRACTION_JSON_SCHEMA = {
               maximum: 1,
             },
           },
-          required: ['topicKey', 'content', 'keywords', 'importance', 'confidence'],
+          required: ['subject', 'kind', 'topicKey', 'content', 'keywords', 'importance', 'confidence'],
         },
       },
       episodes: {
         type: 'array',
         description:
-          '只记录可供以后回忆的阶段性事件。不要记录普通寒暄、无意义重复、纯角色扮演冲突，或仅反映助手 persona 的内容。',
+          '只记录与用户有关、以后值得回忆的互动事件。summary 可以用“我”来写用户如何对待我，但不能变成自我介绍、persona 摘抄或只关于我的记忆。',
         maxItems: 6,
         items: {
           type: 'object',
           additionalProperties: false,
           properties: {
+            subject: {
+              type: 'string',
+              enum: ['user'],
+              description: '固定为 user。',
+            },
             title: {
               type: 'string',
               description: '简短事件标题。',
             },
             summary: {
               type: 'string',
-              description: '可供以后回忆的事件摘要，不要复制原文。',
+              description: '自然描述用户相关事件；可以写“我被……”，但必须体现用户特点、偏好、边界或互动模式。',
             },
             keywords: {
               type: 'array',
@@ -119,7 +143,7 @@ const MEMORY_EXTRACTION_JSON_SCHEMA = {
               description: 'YYYY-MM-DD 或 null。',
             },
           },
-          required: ['title', 'summary', 'keywords', 'importance', 'confidence', 'periodStart', 'periodEnd'],
+          required: ['subject', 'title', 'summary', 'keywords', 'importance', 'confidence', 'periodStart', 'periodEnd'],
         },
       },
       drop: {
@@ -129,7 +153,7 @@ const MEMORY_EXTRACTION_JSON_SCHEMA = {
         maxItems: 12,
       },
     },
-    required: ['facts', 'episodes', 'drop'],
+    required: ['profile_items', 'episodes', 'drop'],
   },
 } as const;
 
@@ -174,33 +198,44 @@ function normalizeKeywords(raw: unknown): string[] {
   return [...new Set(raw.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean))].slice(0, 12);
 }
 
-function normalizeFact(raw: unknown): ExtractedMemoryFact | null {
+function normalizeProfileItem(raw: unknown): ExtractedMemoryProfileItem | null {
   if (!raw || typeof raw !== 'object') return null;
-  const fact = raw as Record<string, unknown>;
-  const content = typeof fact.content === 'string' ? fact.content.trim() : '';
-  if (!content) return null;
-  const topicKey = typeof fact.topicKey === 'string' ? fact.topicKey.trim() : '';
+  const item = raw as Record<string, unknown>;
+  const subject = item.subject === 'user' ? 'user' : null;
+  const kind = typeof item.kind === 'string' && PROFILE_KINDS.has(item.kind as MemoryProfileKind)
+    ? (item.kind as MemoryProfileKind)
+    : null;
+  const content = typeof item.content === 'string' ? item.content.trim() : '';
+  if (!subject || !kind || !content) return null;
+  if (!PROFILE_CONTENT_PREFIX.test(content) || BOT_ONLY_PREFIX.test(content)) return null;
+
+  const topicKey = typeof item.topicKey === 'string' ? item.topicKey.trim() : '';
   return {
+    subject,
+    kind,
     ...(topicKey ? { topicKey } : {}),
     content,
-    keywords: normalizeKeywords(fact.keywords),
-    importance: normalizeScore(fact.importance, 0.55),
-    confidence: normalizeScore(fact.confidence, 0.8),
+    keywords: normalizeKeywords(item.keywords),
+    importance: normalizeScore(item.importance, 0.6),
+    confidence: normalizeScore(item.confidence, 0.82),
   };
 }
 
 function normalizeEpisode(raw: unknown): ExtractedMemoryEpisode | null {
   if (!raw || typeof raw !== 'object') return null;
   const episode = raw as Record<string, unknown>;
+  const subject = episode.subject === 'user' ? 'user' : null;
   const title = typeof episode.title === 'string' ? episode.title.trim() : '';
   const summary = typeof episode.summary === 'string' ? episode.summary.trim() : '';
-  if (!title || !summary) return null;
+  if (!subject || !title || !summary) return null;
+  if (!EPISODE_CONTENT_PREFIX.test(summary) || BOT_ONLY_PREFIX.test(summary)) return null;
   return {
+    subject,
     title,
     summary,
     keywords: normalizeKeywords(episode.keywords),
-    importance: normalizeScore(episode.importance, 0.58),
-    confidence: normalizeScore(episode.confidence, 0.78),
+    importance: normalizeScore(episode.importance, 0.62),
+    confidence: normalizeScore(episode.confidence, 0.8),
     periodStart:
       typeof episode.periodStart === 'string' || typeof episode.periodStart === 'number' ? episode.periodStart : null,
     periodEnd: typeof episode.periodEnd === 'string' || typeof episode.periodEnd === 'number' ? episode.periodEnd : null,
@@ -213,12 +248,14 @@ export function parseExtractionResponse(text: string): MemoryExtractionResult | 
 
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    const facts = Array.isArray(parsed.facts) ? parsed.facts.map(normalizeFact).filter(Boolean) : [];
+    const profileItems = Array.isArray(parsed.profile_items)
+      ? parsed.profile_items.map(normalizeProfileItem).filter(Boolean)
+      : [];
     const episodes = Array.isArray(parsed.episodes) ? parsed.episodes.map(normalizeEpisode).filter(Boolean) : [];
     const drop = Array.isArray(parsed.drop)
       ? parsed.drop.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
       : [];
-    return { facts, episodes, drop } as MemoryExtractionResult;
+    return { profileItems, episodes, drop } as MemoryExtractionResult;
   } catch {
     return null;
   }
@@ -226,10 +263,24 @@ export function parseExtractionResponse(text: string): MemoryExtractionResult | 
 
 function buildExtractionPrompt(turns: MemoryConversationTurn[]): string {
   const transcript = turns
-    .map((turn) => `${turn.role === 'human' ? '用户' : '助手'}: ${turn.text}`)
+    .map((turn) => `${turn.role === 'human' ? '用户' : '我'}: ${turn.text}`)
     .join('\n');
 
-  return ['对话记录：', transcript].join('\n');
+  return [
+    '只提取“我对用户的长期记忆”，不要记录只关于我的信息。',
+    '允许的长期记忆只有两类：',
+    '1. 用户画像：稳定偏好、身份、行为特点、边界禁忌、长期计划、持续关系信号。',
+    '2. 用户相关事件：以后值得回忆的互动事件，必须体现用户特征或用户如何对待我。',
+    '坏例：',
+    '- 助手喜欢音乐。',
+    '- 助手对 Ave Mujica 感兴趣。',
+    '- 助手昵称是小祥。',
+    '好例：',
+    '- 用户🥚会反复用“读名字”验证我发音，属于试探边界/验证反应的行为模式。',
+    '- 我被用户反复要求念名字，以测试我的发音是否稳定。',
+    '对话记录：',
+    transcript,
+  ].join('\n');
 }
 
 export async function extractLongMemory(
@@ -237,7 +288,7 @@ export async function extractLongMemory(
   turns: MemoryConversationTurn[],
 ): Promise<MemoryExtractionResult> {
   if (!isExtractRuntimeConfigured(runtime)) {
-    return { facts: [], episodes: [], drop: [] };
+    return { profileItems: [], episodes: [], drop: [] };
   }
 
   const controller = new AbortController();
@@ -259,7 +310,7 @@ export async function extractLongMemory(
         messages: [
           {
             role: 'system',
-            content: '请根据提供的 schema 提取长期记忆。',
+            content: '请根据提供的 schema 提取我对用户的长期记忆。',
           },
           {
             role: 'user',

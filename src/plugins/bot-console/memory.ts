@@ -1,16 +1,11 @@
 import type {
   BotConsoleMemoryEpisodeItem,
-  BotConsoleMemoryFactItem,
+  BotConsoleMemoryProfileItem,
   BotConsoleMemoryJobItem,
   BotConsoleMemoryScopeSummary,
   BotConsoleMemoryState,
 } from '../../types/bot-console.js';
-import type {
-  MemoryEpisodeRecord,
-  MemoryFactRecord,
-  MemoryJobRecord,
-  MemoryScopeType,
-} from '../../types/memory-v2.js';
+import type { MemoryEpisodeRecord, MemoryFactRecord, MemoryJobRecord, MemoryScopeType } from '../../types/memory-v2.js';
 
 type MemoryDatabaseLike = {
   get(table: string, query: Record<string, unknown>): Promise<any[]>;
@@ -73,11 +68,12 @@ function buildScopeLabel(scopeType: MemoryScopeType, scopeKey: string): string {
   return scopeKey;
 }
 
-function toFactItem(row: MemoryFactRecord): BotConsoleMemoryFactItem {
+function toProfileItem(row: MemoryFactRecord): BotConsoleMemoryProfileItem {
   return {
     id: row.id,
     scopeType: row.scopeType,
     scopeKey: row.scopeKey,
+    kind: row.kind,
     topicKey: row.topicKey,
     content: row.content,
     keywords: parseStringArray(row.keywords),
@@ -146,7 +142,7 @@ function toJobItem(row: MemoryJobRecord): BotConsoleMemoryJobItem {
 }
 
 function buildScopeSummaries(
-  facts: BotConsoleMemoryFactItem[],
+  profileItems: BotConsoleMemoryProfileItem[],
   episodes: BotConsoleMemoryEpisodeItem[],
 ): BotConsoleMemoryScopeSummary[] {
   const scopeMap = new Map<string, BotConsoleMemoryScopeSummary>();
@@ -163,7 +159,7 @@ function buildScopeSummaries(
       userId: parsed.userId,
       groupId: parsed.groupId,
       label: buildScopeLabel(scopeType, scopeKey),
-      factCount: 0,
+      profileItemCount: 0,
       episodeCount: 0,
       latestSeenAt: null,
     };
@@ -171,10 +167,10 @@ function buildScopeSummaries(
     return created;
   };
 
-  for (const fact of facts) {
-    const scope = ensureScope(fact.scopeType, fact.scopeKey);
-    scope.factCount += 1;
-    scope.latestSeenAt = Math.max(scope.latestSeenAt ?? 0, fact.lastSeenAt || 0);
+  for (const item of profileItems) {
+    const scope = ensureScope(item.scopeType, item.scopeKey);
+    scope.profileItemCount += 1;
+    scope.latestSeenAt = Math.max(scope.latestSeenAt ?? 0, item.lastSeenAt || 0);
   }
 
   for (const episode of episodes) {
@@ -184,8 +180,8 @@ function buildScopeSummaries(
   }
 
   return [...scopeMap.values()].sort((left, right) => {
-    const leftTotal = left.factCount + left.episodeCount;
-    const rightTotal = right.factCount + right.episodeCount;
+    const leftTotal = left.profileItemCount + left.episodeCount;
+    const rightTotal = right.profileItemCount + right.episodeCount;
     if (rightTotal !== leftTotal) return rightTotal - leftTotal;
     return (right.latestSeenAt ?? 0) - (left.latestSeenAt ?? 0);
   });
@@ -198,13 +194,13 @@ export function createUnavailableMemoryState(): BotConsoleMemoryState {
       scopeCount: 0,
       userScopeCount: 0,
       userGroupScopeCount: 0,
-      factCount: 0,
+      profileItemCount: 0,
       episodeCount: 0,
       pendingJobs: 0,
       processingJobs: 0,
     },
     scopes: [],
-    facts: [],
+    profileItems: [],
     episodes: [],
     jobs: [],
   };
@@ -221,10 +217,10 @@ export async function buildMemoryState(database?: MemoryDatabaseLike | null): Pr
     database.get('memory_job', {} as Record<string, never>) as Promise<MemoryJobRecord[]>,
   ]);
 
-  const facts = factRows.map(toFactItem).sort((left, right) => right.lastSeenAt - left.lastSeenAt);
+  const profileItems = factRows.map(toProfileItem).sort((left, right) => right.lastSeenAt - left.lastSeenAt);
   const episodes = episodeRows.map(toEpisodeItem).sort((left, right) => right.lastSeenAt - left.lastSeenAt);
   const jobs = jobRows.map(toJobItem).sort((left, right) => right.updatedAt - left.updatedAt);
-  const scopes = buildScopeSummaries(facts, episodes);
+  const scopes = buildScopeSummaries(profileItems, episodes);
 
   return {
     available: true,
@@ -232,13 +228,13 @@ export async function buildMemoryState(database?: MemoryDatabaseLike | null): Pr
       scopeCount: scopes.length,
       userScopeCount: scopes.filter((item) => item.scopeType === 'user').length,
       userGroupScopeCount: scopes.filter((item) => item.scopeType === 'user_group').length,
-      factCount: facts.length,
+      profileItemCount: profileItems.length,
       episodeCount: episodes.length,
       pendingJobs: jobs.filter((item) => item.status === 'pending').length,
       processingJobs: jobs.filter((item) => item.status === 'processing').length,
     },
     scopes,
-    facts,
+    profileItems,
     episodes,
     jobs,
   };

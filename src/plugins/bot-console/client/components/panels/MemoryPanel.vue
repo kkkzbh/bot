@@ -5,7 +5,7 @@ import type { useBotConsole } from '../../composables/useBotConsole'
 import { formatDateTime } from '../../utils/format'
 import type {
   BotConsoleMemoryEpisodeItem,
-  BotConsoleMemoryFactItem,
+  BotConsoleMemoryProfileItem,
   BotConsoleMemoryJobItem,
   BotConsoleMemoryScopeSummary,
 } from '../../types'
@@ -37,9 +37,9 @@ const selectedScope = computed<BotConsoleMemoryScopeSummary | null>(() => {
   return all.find((scope) => scope.scopeKey === selectedScopeKey.value) ?? null
 })
 
-const scopeFacts = computed<BotConsoleMemoryFactItem[]>(() => {
+const scopeProfileItems = computed<BotConsoleMemoryProfileItem[]>(() => {
   if (!selectedScopeKey.value) return []
-  return (memoryState.value?.facts ?? []).filter((item) => item.scopeKey === selectedScopeKey.value)
+  return (memoryState.value?.profileItems ?? []).filter((item) => item.scopeKey === selectedScopeKey.value)
 })
 
 const scopeEpisodes = computed<BotConsoleMemoryEpisodeItem[]>(() => {
@@ -65,6 +65,25 @@ watch(
 
 function scopeTypeLabel(scopeType: 'user' | 'user_group'): string {
   return scopeType === 'user' ? '私聊画像' : '群内画像'
+}
+
+function profileKindLabel(kind: BotConsoleMemoryProfileItem['kind']): string {
+  switch (kind) {
+    case 'identity':
+      return '身份'
+    case 'preference':
+      return '偏好'
+    case 'trait':
+      return '特点'
+    case 'boundary':
+      return '边界'
+    case 'plan':
+      return '计划'
+    case 'relationship':
+      return '关系'
+    default:
+      return '画像'
+  }
 }
 
 function formatScore(value: number): string {
@@ -115,7 +134,7 @@ onMounted(() => {
         <p class="bc-eyebrow">长期记忆</p>
         <h2>记忆画像</h2>
         <p class="bc-muted">
-          查看各个用户 / 群内用户 scope 的 fact、episode 与当前队列状态。
+          查看各个用户 / 群内用户 scope 的用户画像、事件记忆与当前队列状态。
         </p>
       </div>
 
@@ -138,9 +157,9 @@ onMounted(() => {
         <small>私聊 {{ memoryState?.summary.userScopeCount ?? 0 }} / 群内 {{ memoryState?.summary.userGroupScopeCount ?? 0 }}</small>
       </article>
       <article class="bc-memory-summary-card">
-        <span>facts</span>
-        <strong>{{ memoryState?.summary.factCount ?? 0 }}</strong>
-        <small>稳定事实条目</small>
+        <span>profile</span>
+        <strong>{{ memoryState?.summary.profileItemCount ?? 0 }}</strong>
+        <small>用户画像条目</small>
       </article>
       <article class="bc-memory-summary-card">
         <span>episodes</span>
@@ -201,7 +220,7 @@ onMounted(() => {
               <span class="bc-status-badge is-muted">{{ scopeTypeLabel(scope.scopeType) }}</span>
             </div>
             <div class="bc-memory-meta">
-              <span>{{ scope.factCount }} facts</span>
+              <span>{{ scope.profileItemCount }} profile items</span>
               <span>{{ scope.episodeCount }} episodes</span>
             </div>
             <div class="bc-memory-scope-key">{{ scope.scopeKey }}</div>
@@ -224,15 +243,15 @@ onMounted(() => {
 
           <section class="bc-memory-record-section">
             <div class="bc-memory-section-head">
-              <h3>Stable Facts</h3>
-              <span class="bc-muted">{{ scopeFacts.length }} 条</span>
+              <h3>User Profile</h3>
+              <span class="bc-muted">{{ scopeProfileItems.length }} 条</span>
             </div>
 
             <div
-              v-if="scopeFacts.length === 0"
+              v-if="scopeProfileItems.length === 0"
               class="bc-memory-empty"
             >
-              该 scope 还没有 fact。
+              该 scope 还没有用户画像。
             </div>
 
             <div
@@ -240,29 +259,29 @@ onMounted(() => {
               class="bc-memory-record-list"
             >
               <article
-                v-for="fact in scopeFacts"
-                :key="`fact-${fact.id}`"
+                v-for="item in scopeProfileItems"
+                :key="`profile-${item.id}`"
                 class="bc-memory-record-card"
               >
                 <div class="bc-memory-record-head">
-                  <strong>{{ fact.topicKey || `fact-${fact.id}` }}</strong>
+                  <strong>{{ profileKindLabel(item.kind) }} · {{ item.topicKey || `profile-${item.id}` }}</strong>
                   <div class="bc-memory-pill-row">
-                    <span class="bc-memory-pill">{{ fact.hasEmbedding ? '已向量化' : '未向量化' }}</span>
+                    <span class="bc-memory-pill">{{ item.hasEmbedding ? '已向量化' : '不向量化' }}</span>
                     <span
-                      v-if="fact.archived"
+                      v-if="item.archived"
                       class="bc-memory-pill is-archived"
                     >
                       archived
                     </span>
                   </div>
                 </div>
-                <p>{{ fact.content }}</p>
+                <p>{{ item.content }}</p>
                 <div
-                  v-if="fact.keywords.length > 0"
+                  v-if="item.keywords.length > 0"
                   class="bc-memory-pill-row"
                 >
                   <span
-                    v-for="keyword in fact.keywords"
+                    v-for="keyword in item.keywords"
                     :key="keyword"
                     class="bc-memory-pill"
                   >
@@ -270,10 +289,10 @@ onMounted(() => {
                   </span>
                 </div>
                 <div class="bc-memory-meta">
-                  <span>importance {{ formatScore(fact.importance) }}</span>
-                  <span>confidence {{ formatScore(fact.confidence) }}</span>
-                  <span>首次 {{ formatDateTime(fact.firstSeenAt) }}</span>
-                  <span>最近 {{ formatDateTime(fact.lastSeenAt) }}</span>
+                  <span>importance {{ formatScore(item.importance) }}</span>
+                  <span>confidence {{ formatScore(item.confidence) }}</span>
+                  <span>首次 {{ formatDateTime(item.firstSeenAt) }}</span>
+                  <span>最近 {{ formatDateTime(item.lastSeenAt) }}</span>
                 </div>
               </article>
             </div>

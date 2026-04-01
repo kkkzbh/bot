@@ -5,11 +5,13 @@ export type MemoryJobType = 'extract' | 'embed';
 export type MemoryJobStatus = 'pending' | 'processing';
 export type MemoryStatusSource = 'runtime' | 'probe' | null;
 export type MemoryStatusState = 'never' | 'success' | 'failed';
+export type MemoryProfileKind = 'identity' | 'preference' | 'trait' | 'boundary' | 'plan' | 'relationship';
 
 export interface MemoryFactRecord {
   id: number;
   scopeType: MemoryScopeType;
   scopeKey: string;
+  kind: MemoryProfileKind;
   topicKey: string;
   content: string;
   keywords: string | null;

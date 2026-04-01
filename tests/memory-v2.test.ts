@@ -44,6 +44,7 @@ function createFact(partial: Partial<MemoryFactRecord>): MemoryFactRecord {
     id: 1,
     scopeType: 'user',
     scopeKey: 'onebot:bot:user:123',
+    kind: 'preference',
     topicKey: 'preference-music',
     content: '用户更喜欢听少女乐队题材的歌。',
     keywords: JSON.stringify(['少女乐队', '音乐']),
@@ -182,10 +183,9 @@ describe('memory-v2 core behavior', () => {
   });
 
   it('builds a stable context block grouped by facts and episodes', () => {
-    const docs = buildMemoryDocuments([createFact({})], [createEpisode({})]);
-    const prompt = buildMemoryContextBlock(docs, 1200);
+    const prompt = buildMemoryContextBlock([createFact({})], [createEpisode({})], 1200);
     expect(prompt).toContain('Relevant Long-Term Memory');
-    expect(prompt).toContain('Stable Facts:');
+    expect(prompt).toContain('User Profile:');
     expect(prompt).toContain('Relevant Past Episodes:');
   });
 
@@ -193,12 +193,15 @@ describe('memory-v2 core behavior', () => {
     const now = Date.now();
     const merged = mergeFactRecord(
       createFact({
+        kind: 'plan',
         topicKey: 'plan-travel',
         content: '用户计划五月去上海。',
         keywords: JSON.stringify(['旅行', '上海']),
         version: 2,
       }),
       {
+        subject: 'user',
+        kind: 'plan',
         topicKey: 'plan-travel',
         content: '用户计划五月去上海看演出。',
         keywords: ['旅行', '上海', '演出'],
@@ -219,12 +222,82 @@ describe('memory-v2 core behavior', () => {
     const parsed = parseExtractionResponse(
       [
         '```json',
-        '{"facts":[{"topicKey":"plan-travel","content":"用户准备五月去上海看演出","keywords":["上海","演出"],"importance":0.9,"confidence":0.8}],"episodes":[],"drop":[]}',
+        '{"profile_items":[{"subject":"user","kind":"plan","topicKey":"plan-travel","content":"用户准备五月去上海看演出","keywords":["上海","演出"],"importance":0.9,"confidence":0.8}],"episodes":[],"drop":[]}',
         '```',
       ].join('\n'),
     );
 
     expect(parsed).toBeNull();
+  });
+
+  it('drops assistant-only profile items and preserves user-facing profile items', () => {
+    const parsed = parseExtractionResponse(JSON.stringify({
+      profile_items: [
+        {
+          subject: 'user',
+          kind: 'trait',
+          topicKey: 'boundary-name-test',
+          content: '用户🥚会反复用“读名字”验证我发音，属于试探边界的行为模式。',
+          keywords: ['读名字', '试探'],
+          importance: 0.92,
+          confidence: 0.9,
+        },
+        {
+          subject: 'user',
+          kind: 'preference',
+          topicKey: 'assistant-music',
+          content: '助手对音乐及 Ave Mujica 演出感兴趣。',
+          keywords: ['音乐'],
+          importance: 0.8,
+          confidence: 0.8,
+        },
+      ],
+      episodes: [],
+      drop: [],
+    }));
+
+    expect(parsed?.profileItems).toEqual([
+      expect.objectContaining({
+        kind: 'trait',
+        content: '用户🥚会反复用“读名字”验证我发音，属于试探边界的行为模式。',
+      }),
+    ]);
+  });
+
+  it('keeps user-related episodes that use bot-first wording and drops assistant-only episodes', () => {
+    const parsed = parseExtractionResponse(JSON.stringify({
+      profile_items: [],
+      episodes: [
+        {
+          subject: 'user',
+          title: '名字发音测试',
+          summary: '我被用户反复要求读名字，以测试我的发音是否稳定。',
+          keywords: ['读名字', '发音'],
+          importance: 0.86,
+          confidence: 0.88,
+          periodStart: '2026-03-30',
+          periodEnd: '2026-03-30',
+        },
+        {
+          subject: 'user',
+          title: '助手兴趣',
+          summary: '助手最近更喜欢 Ave Mujica 的音乐。',
+          keywords: ['音乐'],
+          importance: 0.7,
+          confidence: 0.8,
+          periodStart: null,
+          periodEnd: null,
+        },
+      ],
+      drop: [],
+    }));
+
+    expect(parsed?.episodes).toEqual([
+      expect.objectContaining({
+        title: '名字发音测试',
+        summary: '我被用户反复要求读名字，以测试我的发音是否稳定。',
+      }),
+    ]);
   });
 
   it('calls memory extraction with json_schema structured output and minimal prompt injection', async () => {
@@ -234,7 +307,7 @@ describe('memory-v2 core behavior', () => {
           choices: [
             {
               message: {
-                content: '{"facts":[],"episodes":[],"drop":[]}',
+                content: '{"profile_items":[],"episodes":[],"drop":[]}',
               },
             },
           ],
@@ -256,7 +329,7 @@ describe('memory-v2 core behavior', () => {
           { id: 'm2', role: 'ai', text: '这样对身体不太好。' },
         ],
       ),
-    ).resolves.toEqual({ facts: [], episodes: [], drop: [] });
+    ).resolves.toEqual({ profileItems: [], episodes: [], drop: [] });
 
     const [, init] = fetchMock.mock.calls[0] ?? [];
     const body =
@@ -267,11 +340,11 @@ describe('memory-v2 core behavior', () => {
     expect(body?.response_format?.type).toBe('json_schema');
     expect(body?.response_format?.json_schema?.name).toBe('memory_extraction_v1');
     expect(body?.response_format?.json_schema?.strict).toBe(true);
-    expect(body?.response_format?.json_schema?.schema?.properties?.facts?.description).toContain('不得记录助手 persona');
-    expect(body?.messages?.[0]?.content).toBe('请根据提供的 schema 提取长期记忆。');
+    expect(body?.response_format?.json_schema?.schema?.properties?.profile_items?.description).toContain('绝不记录只关于我的');
+    expect(body?.messages?.[0]?.content).toBe('请根据提供的 schema 提取我对用户的长期记忆。');
     expect(body?.messages?.[1]?.content).toContain('对话记录：');
-    expect(body?.messages?.[1]?.content).not.toContain('严格只输出 JSON');
-    expect(body?.messages?.[1]?.content).not.toContain('JSON 结构如下');
+    expect(body?.messages?.[1]?.content).toContain('坏例：');
+    expect(body?.messages?.[1]?.content).toContain('好例：');
   });
 
   it('calls SiliconFlow embeddings with batched input', async () => {
@@ -405,6 +478,113 @@ describe('memory-v2 stored content extraction', () => {
         role: 'ai',
         text: '收到，我明天再提醒你。',
       },
+    ]);
+  });
+});
+
+describe('memory-v2 extraction persistence', () => {
+  it('stores profile items without creating embedding jobs and keeps episodes vectorized', async () => {
+    const store = new MemoryV2Store(new MemoryStoreDatabaseMock() as any);
+
+    await store.applyExtraction(
+      {
+        scopeType: 'user',
+        scopeKey: 'onebot:bot:user:123',
+      },
+      {
+        profileItems: [
+          {
+            subject: 'user',
+            kind: 'trait',
+            topicKey: 'boundary-name-test',
+            content: '用户会反复用“读名字”验证我发音，属于试探边界的行为模式。',
+            keywords: ['读名字', '试探'],
+            importance: 0.92,
+            confidence: 0.91,
+          },
+        ],
+        episodes: [
+          {
+            subject: 'user',
+            title: '名字发音测试',
+            summary: '我被用户反复要求读名字，以测试我的发音是否稳定。',
+            keywords: ['读名字', '发音'],
+            importance: 0.8,
+            confidence: 0.84,
+            periodStart: '2026-03-30',
+            periodEnd: '2026-03-30',
+          },
+        ],
+        drop: [],
+      },
+      ['m1', 'm2'],
+    );
+
+    const rows = await (store as any).database.get('memory_fact', {} as Record<string, never>);
+    const jobs = await (store as any).database.get('memory_job', {} as Record<string, never>);
+    expect(rows).toEqual([
+      expect.objectContaining({
+        kind: 'trait',
+        content: '用户会反复用“读名字”验证我发音，属于试探边界的行为模式。',
+        embedding: null,
+        embeddingModel: null,
+      }),
+    ]);
+    expect(jobs).toEqual([
+      expect.objectContaining({
+        jobType: 'embed',
+        payload: expect.stringContaining('"recordType":"episode"'),
+      }),
+    ]);
+  });
+
+  it('merges profile items by kind and topic key', async () => {
+    const store = new MemoryV2Store(
+      new MemoryStoreDatabaseMock({
+        memory_fact: [
+          createFact({
+            id: 7,
+            kind: 'preference',
+            topicKey: 'preferred-name',
+            content: '用户更喜欢被叫小嘉。',
+            version: 2,
+          }),
+        ],
+      }) as any,
+    );
+
+    await store.applyExtraction(
+      {
+        scopeType: 'user',
+        scopeKey: 'onebot:bot:user:123',
+      },
+      {
+        profileItems: [
+          {
+            subject: 'user',
+            kind: 'preference',
+            topicKey: 'preferred-name',
+            content: '用户更喜欢我叫她小嘉。',
+            keywords: ['昵称'],
+            importance: 0.88,
+            confidence: 0.93,
+          },
+        ],
+        episodes: [],
+        drop: [],
+      },
+      ['m3'],
+    );
+
+    const rows = await (store as any).database.get('memory_fact', {} as Record<string, never>);
+    expect(rows).toEqual([
+      expect.objectContaining({
+        id: 7,
+        kind: 'preference',
+        topicKey: 'preferred-name',
+        content: '用户更喜欢我叫她小嘉。',
+        version: 3,
+      }),
     ]);
   });
 });

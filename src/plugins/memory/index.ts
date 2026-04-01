@@ -16,6 +16,7 @@ import {
   buildMemoryContextBlock,
   buildMemoryScope,
   extractPlainText,
+  buildMemoryDocuments,
   planMemoryRecall,
   rankMemoryDocumentsByVector,
   type MemoryScope,
@@ -178,25 +179,31 @@ async function injectMemoryContext(
   query: string,
   conversationId: string,
 ): Promise<void> {
-  const documents = await store.listScopeDocuments(scope);
-  if (!documents.length) return;
+  const [profiles, episodes] = await Promise.all([
+    store.listScopeFacts(scope),
+    store.listScopeEpisodes(scope),
+  ]);
+  if (!profiles.length && !episodes.length) return;
 
-  const recallPlan = planMemoryRecall(query, documents, Date.now(), runtime.queryTopK);
+  const episodeDocs = buildMemoryDocuments([], episodes);
+  const recallPlan = planMemoryRecall(query, episodeDocs, Date.now(), runtime.queryTopK);
   let selected = recallPlan.candidates;
 
-  if (recallPlan.needsSemanticSearch && isEmbedRuntimeConfigured(runtime.embed)) {
+  if (episodeDocs.length && recallPlan.needsSemanticSearch && isEmbedRuntimeConfigured(runtime.embed)) {
     try {
       const [queryEmbedding] = await embedTexts(runtime.embed, [query]);
       if (queryEmbedding) {
-        selected = rankMemoryDocumentsByVector(documents, queryEmbedding, Date.now(), runtime.queryTopK);
+        selected = rankMemoryDocumentsByVector(episodeDocs, queryEmbedding, Date.now(), runtime.queryTopK);
       }
     } catch (error) {
       logger.warn('memory semantic recall failed: %s', (error as Error).message);
     }
   }
 
-  if (!selected.length) return;
-  const prompt = buildMemoryContextBlock(selected, runtime.promptBudgetTokens);
+  const selectedEpisodes = selected.length
+    ? episodes.filter((episode) => selected.some((item) => item.recordId === episode.id))
+    : [];
+  const prompt = buildMemoryContextBlock(profiles, selectedEpisodes, runtime.promptBudgetTokens);
   if (!prompt) return;
 
   registerPromptFragment(conversationId, {
@@ -211,7 +218,7 @@ async function injectMemoryContext(
     },
   });
 
-  const episodeIds = selected.filter((item) => item.kind === 'episode').map((item) => item.recordId);
+  const episodeIds = selected.map((item) => item.recordId);
   if (episodeIds.length) {
     await store.touchEpisodes(episodeIds);
   }
@@ -236,7 +243,7 @@ async function processExtractJob(store: MemoryV2Store, runtime: RuntimeConfig, j
   }
 
   const extraction = await extractLongMemory(runtime.extract, turns);
-  if (!extraction.facts.length && !extraction.episodes.length) {
+  if (!extraction.profileItems.length && !extraction.episodes.length) {
     await store.completeJob(job);
     return;
   }
@@ -261,7 +268,7 @@ async function processEmbedJobs(store: MemoryV2Store, runtime: RuntimeConfig, jo
     return;
   }
 
-  const resolved: Array<{ job: MemoryJobRecord; text: string; payload: { recordType: 'fact' | 'episode'; recordId: number } }> = [];
+  const resolved: Array<{ job: MemoryJobRecord; text: string; payload: { recordType: 'episode'; recordId: number } }> = [];
   for (const job of jobs) {
     const item = await store.resolveEmbedJob(job);
     if (!item || !item.text.trim()) {

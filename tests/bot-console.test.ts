@@ -362,6 +362,7 @@ describe('bot-console plugin', () => {
                 id: 1,
                 scopeType: 'user',
                 scopeKey: 'onebot:bot:user:10001',
+                kind: 'preference',
                 topicKey: 'nickname',
                 content: '用户更喜欢被叫小嘉。',
                 keywords: '["昵称"]',
@@ -370,8 +371,8 @@ describe('bot-console plugin', () => {
                 firstSeenAt: 1,
                 lastSeenAt: 10,
                 sourceMessageIds: '[]',
-                embeddingModel: 'Qwen/Qwen3-Embedding-8B',
-                embedding: '[1,2,3]',
+                embeddingModel: null,
+                embedding: null,
                 version: 1,
                 archived: 0,
               },
@@ -433,7 +434,7 @@ describe('bot-console plugin', () => {
     expect(result.summary).toEqual(
       expect.objectContaining({
         scopeCount: 1,
-        factCount: 1,
+        profileItemCount: 1,
         episodeCount: 1,
         processingJobs: 1,
       }),

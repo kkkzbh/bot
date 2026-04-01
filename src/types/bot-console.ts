@@ -119,15 +119,16 @@ export interface BotConsoleMemoryScopeSummary {
   userId: string | null;
   groupId: string | null;
   label: string;
-  factCount: number;
+  profileItemCount: number;
   episodeCount: number;
   latestSeenAt: number | null;
 }
 
-export interface BotConsoleMemoryFactItem {
+export interface BotConsoleMemoryProfileItem {
   id: number;
   scopeType: 'user' | 'user_group';
   scopeKey: string;
+  kind: import('./memory-v2.js').MemoryProfileKind;
   topicKey: string;
   content: string;
   keywords: string[];
@@ -175,7 +176,7 @@ export interface BotConsoleMemorySummary {
   scopeCount: number;
   userScopeCount: number;
   userGroupScopeCount: number;
-  factCount: number;
+  profileItemCount: number;
   episodeCount: number;
   pendingJobs: number;
   processingJobs: number;
@@ -185,7 +186,7 @@ export interface BotConsoleMemoryState {
   available: boolean;
   summary: BotConsoleMemorySummary;
   scopes: BotConsoleMemoryScopeSummary[];
-  facts: BotConsoleMemoryFactItem[];
+  profileItems: BotConsoleMemoryProfileItem[];
   episodes: BotConsoleMemoryEpisodeItem[];
   jobs: BotConsoleMemoryJobItem[];
 }

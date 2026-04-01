@@ -4,12 +4,13 @@ import type {
   MemoryEpisodeRecord,
   MemoryFactRecord,
   MemoryJobRecord,
+  MemoryProfileKind,
   MemoryV2QueueSummary,
   MemoryScopeType,
 } from '../../types/memory-v2.js';
 import type {
   ExtractedMemoryEpisode,
-  ExtractedMemoryFact,
+  ExtractedMemoryProfileItem,
   MemoryConversationTurn,
   MemoryExtractionResult,
 } from './llm.js';
@@ -34,7 +35,7 @@ export interface StoredMessageRecord {
 
 export interface MemorySearchDocument {
   key: string;
-  kind: 'fact' | 'episode';
+  kind: 'profile' | 'episode';
   recordId: number;
   title: string;
   text: string;
@@ -52,7 +53,7 @@ export interface RecallPlan {
 }
 
 interface EmbedJobPayload {
-  recordType: 'fact' | 'episode';
+  recordType: 'episode';
   recordId: number;
 }
 
@@ -178,7 +179,7 @@ function slugify(raw: string): string {
     .slice(0, 80);
 }
 
-export function deriveTopicKey(input: Pick<ExtractedMemoryFact, 'topicKey' | 'content' | 'keywords'>): string {
+export function deriveTopicKey(input: Pick<ExtractedMemoryProfileItem, 'topicKey' | 'content' | 'keywords'>): string {
   const topicKey = typeof input.topicKey === 'string' ? slugify(input.topicKey) : '';
   if (topicKey) return topicKey;
   const keyword = input.keywords?.find((item) => item.trim()) ?? '';
@@ -191,7 +192,7 @@ function uniqueKeywords(values: string[]): string[] {
 
 export function mergeFactRecord(
   existing: MemoryFactRecord | null,
-  incoming: ExtractedMemoryFact,
+  incoming: ExtractedMemoryProfileItem,
   now: number,
   sourceMessageIds: string[],
 ): Omit<MemoryFactRecord, 'id'> {
@@ -200,6 +201,7 @@ export function mergeFactRecord(
   return {
     scopeType: existing?.scopeType ?? 'user',
     scopeKey: existing?.scopeKey ?? '',
+    kind: existing?.kind ?? incoming.kind,
     topicKey: deriveTopicKey(incoming),
     content,
     keywords: keywords.length ? stringifyStringArray(keywords) : null,
@@ -208,8 +210,8 @@ export function mergeFactRecord(
     firstSeenAt: existing?.firstSeenAt ?? now,
     lastSeenAt: now,
     sourceMessageIds: stringifyStringArray([...(existing ? parseStringArray(existing.sourceMessageIds) : []), ...sourceMessageIds]),
-    embeddingModel: existing?.embeddingModel ?? null,
-    embedding: existing?.embedding ?? null,
+    embeddingModel: null,
+    embedding: null,
     version: (existing?.version ?? 0) + 1,
     archived: 0,
   };
@@ -287,23 +289,23 @@ export function cosineSimilarity(left: number[], right: number[]): number {
 }
 
 export function buildMemoryDocuments(
-  facts: MemoryFactRecord[],
+  profiles: MemoryFactRecord[],
   episodes: MemoryEpisodeRecord[],
 ): MemorySearchDocument[] {
-  const factDocs = facts
+  const profileDocs = profiles
     .filter((item) => item.archived !== 1)
     .map(
       (item): MemorySearchDocument => ({
         key: `fact:${item.id}`,
-        kind: 'fact',
+        kind: 'profile',
         recordId: item.id,
-        title: item.topicKey,
+        title: `${item.kind}:${item.topicKey}`,
         text: item.content,
         keywords: parseStringArray(item.keywords),
         importance: Number(item.importance ?? 0),
         updatedAt: Number(item.lastSeenAt ?? item.firstSeenAt ?? 0),
         accessedAt: Number(item.lastSeenAt ?? item.firstSeenAt ?? 0),
-        embedding: parseEmbedding(item.embedding),
+        embedding: null,
       }),
     );
 
@@ -324,7 +326,7 @@ export function buildMemoryDocuments(
       }),
     );
 
-  return [...factDocs, ...episodeDocs];
+  return [...profileDocs, ...episodeDocs];
 }
 
 export function planMemoryRecall(
@@ -349,6 +351,7 @@ export function planMemoryRecall(
         lexicalHit: keywordHits > 0 || directMention || timeMatch,
       };
     })
+    .filter(({ document }) => document.kind === 'episode')
     .filter(({ score, lexicalHit }) => (explicitRecallCue ? score >= 0.1 : lexicalHit && score >= 0.22))
     .sort((left, right) => right.score - left.score)
     .slice(0, Math.max(1, topK));
@@ -371,6 +374,7 @@ export function rankMemoryDocumentsByVector(
   topK: number,
 ): MemorySearchDocument[] {
   return documents
+    .filter((document) => document.kind === 'episode')
     .map((document) => {
       const similarity = document.embedding ? cosineSimilarity(queryEmbedding, document.embedding) : 0;
       const recency = 1 / (1 + Math.max(0, now - document.updatedAt) / (30 * DAY_MS));
@@ -384,10 +388,39 @@ export function rankMemoryDocumentsByVector(
     .map(({ document }) => document);
 }
 
-export function buildMemoryContextBlock(documents: MemorySearchDocument[], promptBudgetTokens: number): string | null {
-  if (!documents.length) return null;
-  const facts = documents.filter((item) => item.kind === 'fact');
-  const episodes = documents.filter((item) => item.kind === 'episode');
+function formatProfileKind(kind: MemoryProfileKind): string {
+  switch (kind) {
+    case 'identity':
+      return '身份';
+    case 'preference':
+      return '偏好';
+    case 'trait':
+      return '特点';
+    case 'boundary':
+      return '边界';
+    case 'plan':
+      return '计划';
+    case 'relationship':
+      return '关系';
+    default:
+      return '画像';
+  }
+}
+
+function sortProfiles(rows: MemoryFactRecord[]): MemoryFactRecord[] {
+  return [...rows].sort((left, right) => {
+    const importanceDelta = Number(right.importance ?? 0) - Number(left.importance ?? 0);
+    if (importanceDelta !== 0) return importanceDelta;
+    return Number(right.lastSeenAt ?? 0) - Number(left.lastSeenAt ?? 0);
+  });
+}
+
+export function buildMemoryContextBlock(
+  profiles: MemoryFactRecord[],
+  episodes: Array<Pick<MemoryEpisodeRecord, 'title' | 'summary'>>,
+  promptBudgetTokens: number,
+): string | null {
+  if (!profiles.length && !episodes.length) return null;
   const lines = ['Relevant Long-Term Memory'];
   const charBudget = Math.max(400, Math.floor(promptBudgetTokens * 2));
   let used = lines.join('\n').length;
@@ -404,12 +437,12 @@ export function buildMemoryContextBlock(documents: MemorySearchDocument[], promp
   };
 
   appendSection(
-    'Stable Facts',
-    facts.map((item) => `${item.title}: ${item.text}`),
+    'User Profile',
+    sortProfiles(profiles).map((item) => `${formatProfileKind(item.kind)}: ${item.content}`),
   );
   appendSection(
     'Relevant Past Episodes',
-    episodes.map((item) => `${item.title}: ${item.text}`),
+    episodes.map((item) => `${item.title}: ${item.summary}`),
   );
 
   return lines.length > 1 ? lines.join('\n') : null;
@@ -425,6 +458,7 @@ export class MemoryV2Store {
         id: 'unsigned',
         scopeType: 'string',
         scopeKey: 'string',
+        kind: 'string',
         topicKey: 'string',
         content: 'text',
         keywords: { type: 'text', nullable: true },
@@ -440,7 +474,7 @@ export class MemoryV2Store {
       },
       {
         autoInc: true,
-        indexes: [['scopeType', 'scopeKey', 'archived'], ['scopeKey', 'topicKey']],
+        indexes: [['scopeType', 'scopeKey', 'archived'], ['scopeKey', 'kind', 'topicKey']],
       },
     );
 
@@ -604,10 +638,10 @@ export class MemoryV2Store {
     try {
       const parsed = JSON.parse(job.payload) as Partial<EmbedJobPayload>;
       if (!parsed || typeof parsed !== 'object') return null;
-      if (!parsed.recordId || !parsed.recordType) return null;
+      if (!parsed.recordId || parsed.recordType !== 'episode') return null;
       return {
         recordId: Math.max(1, Math.floor(Number(parsed.recordId))),
-        recordType: parsed.recordType === 'episode' ? 'episode' : 'fact',
+        recordType: 'episode',
       };
     } catch {
       return null;
@@ -754,23 +788,22 @@ export class MemoryV2Store {
     const now = Date.now();
     const existingFacts = await this.listScopeFacts(scope);
     const existingEpisodes = await this.listScopeEpisodes(scope);
-    const factMap = new Map(existingFacts.map((item) => [item.topicKey, item]));
+    const factMap = new Map(existingFacts.map((item) => [`${item.kind}:${item.topicKey}`, item]));
 
-    for (const fact of extraction.facts) {
-      const topicKey = deriveTopicKey(fact);
-      const existing = factMap.get(topicKey) ?? null;
-      const record = mergeFactRecord(existing, fact, now, sourceMessageIds);
+    for (const profileItem of extraction.profileItems) {
+      const topicKey = deriveTopicKey(profileItem);
+      const existing = factMap.get(`${profileItem.kind}:${topicKey}`) ?? null;
+      const record = mergeFactRecord(existing, profileItem, now, sourceMessageIds);
       record.scopeType = scope.scopeType;
       record.scopeKey = scope.scopeKey;
+      record.kind = profileItem.kind;
       record.topicKey = topicKey;
       record.embedding = null;
       record.embeddingModel = null;
       if (existing?.id) {
         await this.database.set('memory_fact', { id: existing.id }, record);
-        await this.queueEmbedJob({ recordType: 'fact', recordId: existing.id });
       } else {
-        const created = (await this.database.create('memory_fact', record)) as unknown as MemoryFactRecord;
-        await this.queueEmbedJob({ recordType: 'fact', recordId: Number(created.id) });
+        await this.database.create('memory_fact', record);
       }
     }
 
@@ -783,38 +816,28 @@ export class MemoryV2Store {
       record.embeddingModel = null;
       if (existing?.id) {
         await this.database.set('memory_episode', { id: existing.id }, record);
-        await this.queueEmbedJob({ recordType: 'episode', recordId: existing.id });
       } else {
         const created = (await this.database.create('memory_episode', record)) as unknown as MemoryEpisodeRecord;
         await this.queueEmbedJob({ recordType: 'episode', recordId: Number(created.id) });
+        continue;
       }
+      await this.queueEmbedJob({ recordType: 'episode', recordId: existing.id });
     }
   }
 
   async resolveEmbedJob(job: MemoryJobRecord): Promise<{ payload: EmbedJobPayload; text: string } | null> {
     const payload = this.parseEmbedJob(job);
     if (!payload) return null;
-    if (payload.recordType === 'fact') {
-      const [row] = (await this.database.get('memory_fact', { id: payload.recordId })) as MemoryFactRecord[];
-      if (!row?.id || row.archived === 1) return null;
-      return { payload, text: row.content.trim() };
-    }
-
     const [row] = (await this.database.get('memory_episode', { id: payload.recordId })) as MemoryEpisodeRecord[];
     if (!row?.id || row.archived === 1) return null;
     return { payload, text: `${row.title.trim()}\n${row.summary.trim()}`.trim() };
   }
 
   async applyEmbedding(payload: EmbedJobPayload, model: string, embedding: number[]): Promise<void> {
-    const patch = {
+    await this.database.set('memory_episode', { id: payload.recordId }, {
       embeddingModel: model,
       embedding: stringifyEmbedding(embedding),
-    };
-    if (payload.recordType === 'fact') {
-      await this.database.set('memory_fact', { id: payload.recordId }, patch);
-      return;
-    }
-    await this.database.set('memory_episode', { id: payload.recordId }, patch);
+    });
   }
 
   async touchEpisodes(ids: number[]): Promise<void> {
