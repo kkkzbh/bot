@@ -517,7 +517,7 @@ describe('bot-console plugin', () => {
 
     const reorderPresetsSpy = vi
       .spyOn(BotConsoleManager.prototype, 'reorderPresets')
-      .mockResolvedValue([{ name: 'sakiko', path: join(dir, 'data/chathub/presets/sakiko.yml') }]);
+      .mockResolvedValue([{ name: 'sakiko', path: join(dir, 'data/chathub/presets/sakiko.yml'), source: 'runtime' }]);
 
     const addListener = vi.fn();
     apply({
@@ -530,7 +530,7 @@ describe('bot-console plugin', () => {
 
     const reorderListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/reorder-presets')?.[1];
     await expect(reorderListener({ names: ['sakiko'] })).resolves.toEqual({
-      presets: [{ name: 'sakiko', path: join(dir, 'data/chathub/presets/sakiko.yml') }],
+      presets: [{ name: 'sakiko', path: join(dir, 'data/chathub/presets/sakiko.yml'), source: 'runtime' }],
     });
     expect(reorderPresetsSpy).toHaveBeenCalledWith(['sakiko']);
     reorderPresetsSpy.mockRestore();

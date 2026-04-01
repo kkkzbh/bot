@@ -104,6 +104,7 @@ export function createEmptyPreset(): PresetDocument {
   return {
     name: '',
     originalName: '',
+    source: 'runtime',
     keywords: [],
     prompts: [{ role: 'system', content: '' }],
   }
@@ -117,6 +118,8 @@ function clonePreset(p: PresetDocument): PresetDocument {
   return {
     name: p.name,
     originalName: p.originalName ?? p.name,
+    path: p.path,
+    source: p.source ?? 'runtime',
     keywords: [...p.keywords],
     prompts: p.prompts.map(x => ({ role: x.role, content: x.content })),
   }

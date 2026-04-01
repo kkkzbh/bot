@@ -24,6 +24,7 @@ const { botState, probePending } = bc
 
 const services  = computed(() => botState.value?.services ?? [])
 const env       = computed(() => botState.value?.env ?? {})
+const envFiles  = computed(() => botState.value?.envFiles ?? null)
 const modelTabs = computed(() => botState.value?.modelTabs)
 const activeModelProfile = computed(() =>
   modelTabs.value?.tabs?.find(tab => tab.id === modelTabs.value?.activeTab) ?? null,
@@ -161,6 +162,16 @@ async function handleProbe() {
         <div class="bc-overview-kv">
           <span>模型接口</span>
           <strong>{{ env['CHATLUNA_BASE_URL'] || '未设置' }}</strong>
+        </div>
+        <div class="bc-overview-kv">
+          <span>配置写入层</span>
+          <strong>
+            {{ envFiles?.mode === 'layered' ? 'runtime override' : '单文件模式' }}
+          </strong>
+        </div>
+        <div class="bc-overview-kv bc-overview-kv-block">
+          <span>当前写入目标</span>
+          <strong>{{ envFiles?.editTarget || '未设置' }}</strong>
         </div>
       </article>
 

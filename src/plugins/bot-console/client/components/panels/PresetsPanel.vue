@@ -13,6 +13,8 @@ const { add: toastAdd } = useToast()
 // Destructure reactive refs for template auto-unwrapping
 const { currentPreset, botState, canSavePreset, defaultPreset } = bc
 const presetItems = computed(() => botState.value?.presets ?? [])
+const canDeleteCurrentPreset = computed(() => (currentPreset.value.source ?? 'runtime') === 'runtime' && Boolean(currentPreset.value.name))
+const currentPresetSourceLabel = computed(() => (currentPreset.value.source ?? 'runtime') === 'bundled' ? '仓库内置' : '运行时')
 const draggingPresetName = ref<string | null>(null)
 const dropTargetName = ref<string | null>(null)
 const dropPosition = ref<'before' | 'after' | null>(null)
@@ -76,6 +78,7 @@ function handleDuplicate() {
   currentPreset.value = {
     name: src.name ? `${src.name}-copy` : '',
     originalName: '',
+    source: 'runtime',
     keywords: [...src.keywords],
     prompts: src.prompts.map(p => ({ role: p.role, content: p.content })),
   }
@@ -216,7 +219,7 @@ function handlePresetDragEnd() {
         <InlineConfirm
           label="删除"
           confirm-label="确认删除"
-          :disabled="!currentPreset.name"
+          :disabled="!canDeleteCurrentPreset"
           @confirm="handleDelete"
         />
         <button
@@ -270,6 +273,7 @@ function handlePresetDragEnd() {
           @dragend="handlePresetDragEnd"
         >
           <span class="bc-preset-list-name">{{ item.name }}</span>
+          <span class="bc-badge bc-badge-muted bc-badge-sm">{{ item.source === 'bundled' ? '内置' : '运行时' }}</span>
           <span
             v-if="item.name === defaultPreset"
             class="bc-default-tag"
@@ -294,6 +298,7 @@ function handlePresetDragEnd() {
               placeholder="只允许字母、数字、点号、下划线、短横线"
               @input="(e) => { currentPreset.name = (e.target as HTMLInputElement).value }"
             >
+            <em class="bc-field-note">来源：{{ currentPresetSourceLabel }}。保存后都会写入运行时预设层。</em>
           </label>
 
           <!-- Keywords -->

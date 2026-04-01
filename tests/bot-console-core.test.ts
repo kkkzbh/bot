@@ -7,9 +7,13 @@ import {
   applyEnvPatchToContent,
   buildModelTabsStateFromEnv,
   BotConsoleManager,
+  mergeManagedEnvRecords,
   parsePresetDocument,
   parseSystemdShowOutput,
   resolveBotEnvFilePath,
+  resolveBotEnvFiles,
+  resolveBotPresetPaths,
+  readManagedEnvPatchFromContent,
   serializePresetDocument,
   writeFileAtomicWithBackup,
 } from '../src/plugins/bot-console/server.js';
@@ -92,6 +96,32 @@ describe('bot-console env helpers', () => {
     vi.stubEnv('QQBOT_ENV_FILE', '.env.server');
 
     expect(resolveBotEnvFilePath(dir)).toBe(join(dir, '.env.server'));
+  });
+
+  it('switches to layered env mode when runtime override files are configured', () => {
+    const dir = createTempDir();
+    vi.stubEnv('QQBOT_ENV_BASE_FILE', '/opt/qqbot/current/.env.server');
+    vi.stubEnv('QQBOT_ENV_OVERRIDE_FILE', '/opt/qqbot/shared/.env.runtime');
+
+    expect(resolveBotEnvFiles(dir)).toEqual({
+      mode: 'layered',
+      baseFilePath: '/opt/qqbot/current/.env.server',
+      overrideFilePath: '/opt/qqbot/shared/.env.runtime',
+      editTarget: '/opt/qqbot/shared/.env.runtime',
+    });
+  });
+
+  it('merges managed env values with runtime override precedence', () => {
+    const merged = mergeManagedEnvRecords(
+      readManagedEnvPatchFromContent('CHATLUNA_DEFAULT_MODEL=base-model\nCHATLUNA_DEFAULT_PRESET=sakiko\n'),
+      readManagedEnvPatchFromContent('CHATLUNA_DEFAULT_MODEL=runtime-model\nQQ_VOICE_OUTPUT_ENABLED=false\n'),
+    );
+
+    expect(merged).toMatchObject({
+      CHATLUNA_DEFAULT_MODEL: 'runtime-model',
+      CHATLUNA_DEFAULT_PRESET: 'sakiko',
+      QQ_VOICE_OUTPUT_ENABLED: 'false',
+    });
   });
 
   it('builds fixed built-in model tabs from active env state', () => {
@@ -192,6 +222,82 @@ describe('bot-console preset helpers', () => {
       expect.objectContaining({ name: 'sydney' }),
     ]);
   });
+
+  it('resolves layered preset directories from runtime env vars', () => {
+    const dir = createTempDir();
+    vi.stubEnv('CHATLUNA_RUNTIME_PRESET_DIR', '/opt/qqbot/shared/presets');
+    vi.stubEnv('CHATLUNA_PRESET_DIRS', '/opt/qqbot/shared/presets:/opt/qqbot/current/data/chathub/presets');
+
+    expect(resolveBotPresetPaths(dir)).toEqual({
+      mode: 'layered',
+      runtimeDirPath: '/opt/qqbot/shared/presets',
+      bundledDirPaths: ['/opt/qqbot/current/data/chathub/presets'],
+      allDirPaths: ['/opt/qqbot/shared/presets', '/opt/qqbot/current/data/chathub/presets'],
+    });
+  });
+
+  it('merges runtime presets ahead of bundled presets and tags their source', async () => {
+    const dir = createTempDir();
+    const runtimePresetDir = join(dir, 'runtime/presets');
+    const bundledPresetDir = join(dir, 'data/chathub/presets');
+    const envFilePath = join(dir, '.env.local');
+    mkdirSync(runtimePresetDir, { recursive: true });
+    mkdirSync(bundledPresetDir, { recursive: true });
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_PRESET=sakiko\n', 'utf8');
+    await Promise.all([
+      writeFile(join(runtimePresetDir, 'sakiko.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: runtime\n', 'utf8'),
+      writeFile(join(runtimePresetDir, 'runtime-only.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: runtime-only\n', 'utf8'),
+      writeFile(join(runtimePresetDir, '.bot-console-preset-order.json'), JSON.stringify({ names: ['sakiko', 'runtime-only'] }), 'utf8'),
+      writeFile(join(bundledPresetDir, 'sakiko.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: bundled\n', 'utf8'),
+      writeFile(join(bundledPresetDir, 'bundled-only.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: bundled-only\n', 'utf8'),
+    ]);
+
+    const manager = new BotConsoleManager({
+      rootDir: dir,
+      envFilePath,
+      runtimePresetDirPath: runtimePresetDir,
+      bundledPresetDirPaths: [bundledPresetDir],
+    });
+
+    await expect(manager.listPresetSummaries()).resolves.toEqual([
+      expect.objectContaining({ name: 'sakiko', source: 'runtime' }),
+      expect.objectContaining({ name: 'runtime-only', source: 'runtime' }),
+      expect.objectContaining({ name: 'bundled-only', source: 'bundled' }),
+    ]);
+    await expect(manager.getPreset('sakiko')).resolves.toMatchObject({
+      name: 'sakiko',
+      source: 'runtime',
+    });
+  });
+
+  it('rejects deleting a bundled-only preset and re-exposes bundled fallback after removing runtime shadow', async () => {
+    const dir = createTempDir();
+    const runtimePresetDir = join(dir, 'runtime/presets');
+    const bundledPresetDir = join(dir, 'data/chathub/presets');
+    const envFilePath = join(dir, '.env.local');
+    mkdirSync(runtimePresetDir, { recursive: true });
+    mkdirSync(bundledPresetDir, { recursive: true });
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_PRESET=sydney\n', 'utf8');
+    await Promise.all([
+      writeFile(join(runtimePresetDir, 'sakiko.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: runtime\n', 'utf8'),
+      writeFile(join(bundledPresetDir, 'sakiko.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: bundled\n', 'utf8'),
+      writeFile(join(bundledPresetDir, 'sydney.yml'), 'keywords: []\nprompts:\n  - role: system\n    content: bundled-only\n', 'utf8'),
+    ]);
+
+    const manager = new BotConsoleManager({
+      rootDir: dir,
+      envFilePath,
+      runtimePresetDirPath: runtimePresetDir,
+      bundledPresetDirPaths: [bundledPresetDir],
+    });
+
+    await expect(manager.deletePreset('sydney', 'sakiko')).rejects.toThrow('只能删除运行时预设');
+    await expect(manager.deletePreset('sakiko', 'sydney')).resolves.toBeUndefined();
+    await expect(manager.getPreset('sakiko')).resolves.toMatchObject({
+      name: 'sakiko',
+      source: 'bundled',
+    });
+  });
 });
 
 describe('bot-console systemd helpers', () => {
@@ -267,8 +373,32 @@ describe('bot-console manager', () => {
         CHATLUNA_DEFAULT_MODEL: 'server-model',
         CHATLUNA_DEFAULT_PRESET: 'sakiko',
       }),
+      envFiles: expect.objectContaining({
+        mode: 'single',
+        editTarget: join(dir, '.env.server'),
+      }),
       defaultPreset: 'sakiko',
     });
+  });
+
+  it('writes layered env updates into the runtime override file only', async () => {
+    const dir = createTempDir();
+    const baseEnvFilePath = join(dir, '.env.server');
+    const overrideEnvFilePath = join(dir, '.env.runtime');
+    writeFileSync(baseEnvFilePath, 'CHATLUNA_DEFAULT_MODEL=base-model\nCHATLUNA_DEFAULT_PRESET=sakiko\n', 'utf8');
+
+    const manager = new BotConsoleManager({
+      rootDir: dir,
+      envBaseFilePath: baseEnvFilePath,
+      envOverrideFilePath: overrideEnvFilePath,
+    });
+
+    await expect(manager.saveEnv({ CHATLUNA_DEFAULT_MODEL: 'runtime-model' })).resolves.toMatchObject({
+      CHATLUNA_DEFAULT_MODEL: 'runtime-model',
+      CHATLUNA_DEFAULT_PRESET: 'sakiko',
+    });
+    expect(readFileSync(baseEnvFilePath, 'utf8')).toContain('CHATLUNA_DEFAULT_MODEL=base-model');
+    expect(readFileSync(overrideEnvFilePath, 'utf8')).toContain('CHATLUNA_DEFAULT_MODEL=runtime-model');
   });
 
   it('mirrors the active built-in tab into runtime chatluna env keys', async () => {

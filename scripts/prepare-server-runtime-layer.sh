@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="${DEPLOY_APP_DIR:-$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+SHARED_DIR="${QQBOT_SHARED_DIR:-$(dirname "${APP_DIR}")/shared}"
+BASE_ENV_FILE="${APP_DIR}/.env.server"
+RUNTIME_ENV_FILE="${SHARED_DIR}/.env.runtime"
+RUNTIME_PRESET_DIR="${SHARED_DIR}/presets"
+BUNDLED_PRESET_DIR="${APP_DIR}/data/chathub/presets"
+SEED_MARKER_FILE="${SHARED_DIR}/.runtime-layer.seeded"
+
+mkdir -p "${SHARED_DIR}" "${RUNTIME_PRESET_DIR}"
+chmod 700 "${SHARED_DIR}" "${RUNTIME_PRESET_DIR}"
+
+if [[ ! -f "${RUNTIME_ENV_FILE}" ]]; then
+  if [[ -f "${BASE_ENV_FILE}" ]]; then
+    node - "${BASE_ENV_FILE}" "${RUNTIME_ENV_FILE}" "${APP_DIR}/src/plugins/bot-console/server.ts" <<'NODE'
+const fs = require('node:fs')
+
+const [, , sourceEnvPath, targetEnvPath, sourceFilePath] = process.argv
+const sourceText = fs.readFileSync(sourceFilePath, 'utf8')
+const envText = fs.readFileSync(sourceEnvPath, 'utf8')
+const keyMatches = [...sourceText.matchAll(/key:\s*'([^']+)'/g)]
+const managedKeys = new Set(keyMatches.map((match) => match[1]))
+
+if (managedKeys.size === 0) {
+  throw new Error(`failed to discover managed env keys from ${sourceFilePath}`)
+}
+
+const selected = new Map()
+for (const line of envText.split(/\r?\n/)) {
+  const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
+  if (!match) continue
+  const [, key] = match
+  if (!managedKeys.has(key)) continue
+  selected.set(key, line)
+}
+
+const output = [
+  '# Seeded from previous .env.server during first runtime-layer migration.',
+  ...selected.values(),
+  '',
+].join('\n')
+
+fs.writeFileSync(targetEnvPath, output, 'utf8')
+NODE
+  else
+    : > "${RUNTIME_ENV_FILE}"
+  fi
+  chmod 600 "${RUNTIME_ENV_FILE}"
+fi
+
+if [[ ! -e "${SEED_MARKER_FILE}" ]]; then
+  if [[ -d "${BUNDLED_PRESET_DIR}" ]]; then
+    while IFS= read -r -d '' file_path; do
+      cp -f "${file_path}" "${RUNTIME_PRESET_DIR}/$(basename "${file_path}")"
+    done < <(
+      find "${BUNDLED_PRESET_DIR}" -maxdepth 1 -type f \
+        \( -name '*.yml' -o -name '*.txt' -o -name '.bot-console-preset-order.json' \) \
+        -print0
+    )
+  fi
+
+  touch "${SEED_MARKER_FILE}"
+  chmod 600 "${SEED_MARKER_FILE}"
+fi
+
+find "${RUNTIME_PRESET_DIR}" -maxdepth 1 -type f -exec chmod 600 {} +

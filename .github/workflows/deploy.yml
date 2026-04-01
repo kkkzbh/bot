@@ -31,6 +31,7 @@ jobs:
       DEPLOY_USER: ${{ secrets.QQBOT_SERVER_USER }}
       DEPLOY_PORT: ${{ vars.QQBOT_SERVER_PORT || '22' }}
       DEPLOY_APP_DIR: ${{ vars.QQBOT_SERVER_APP_DIR || '/opt/qqbot/current' }}
+      DEPLOY_SHARED_DIR: ${{ vars.QQBOT_SERVER_SHARED_DIR || '/opt/qqbot/shared' }}
       DEPLOY_SYSTEMD_TARGET: ${{ vars.QQBOT_SYSTEMD_TARGET || 'qqbot.target' }}
       DEPLOY_CHATLUNA_REPO: kkkzbh/chatluna
       DEPLOY_CHATLUNA_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chatluna_ref || 'v1-dev' }}
@@ -189,6 +190,26 @@ jobs:
             -e "${RSYNC_RSH}" \
             ./chatluna-src/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_CHATLUNA_DIR}/"
 
+      - name: Prepare server runtime layer
+        run: |
+          set -euo pipefail
+          retry_cmd() {
+            local attempt=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -ge 6 ]; then
+                return 1
+              fi
+              sleep "$((attempt * 10))"
+              attempt="$((attempt + 1))"
+            done
+          }
+          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' QQBOT_SHARED_DIR='${DEPLOY_SHARED_DIR}' bash '${DEPLOY_APP_DIR}/scripts/prepare-server-runtime-layer.sh'"
+
       - name: Sync bundled preset files
         run: |
           set -euo pipefail
@@ -292,10 +313,11 @@ jobs:
           }
           SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
           retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' DEPLOY_SYSTEMD_TARGET='${DEPLOY_SYSTEMD_TARGET}' bash -s" <<'EOF'
+            "DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' DEPLOY_SHARED_DIR='${DEPLOY_SHARED_DIR}' DEPLOY_SYSTEMD_TARGET='${DEPLOY_SYSTEMD_TARGET}' bash -s" <<'EOF'
           set -euo pipefail
 
           APP_DIR="${DEPLOY_APP_DIR}"
+          SHARED_DIR="${DEPLOY_SHARED_DIR}"
           CHATLUNA_DIR="$(dirname "${APP_DIR}")/chatluna"
           SYSTEMD_TARGET="${DEPLOY_SYSTEMD_TARGET}"
           USER_SYSTEMD_DIR="${HOME}/.config/systemd/user"
@@ -347,6 +369,10 @@ jobs:
           fi
 
           chown -R "$(id -u):$(id -g)" "${APP_DIR}" >/dev/null 2>&1 || true
+          mkdir -p "${SHARED_DIR}/presets"
+          touch "${SHARED_DIR}/.env.runtime"
+          chmod 700 "${SHARED_DIR}" "${SHARED_DIR}/presets"
+          chmod 600 "${SHARED_DIR}/.env.runtime"
           if [ -d "${CHATLUNA_DIR}" ]; then
             chown -R "$(id -u):$(id -g)" "${CHATLUNA_DIR}" >/dev/null 2>&1 || true
             (
@@ -386,7 +412,12 @@ jobs:
           Type=oneshot
           WorkingDirectory=${APP_DIR}
           EnvironmentFile=${APP_DIR}/.env.server
+          EnvironmentFile=-${SHARED_DIR}/.env.runtime
           Environment=CONTAINERS_CONF=${APP_DIR}/config/podman/containers.conf
+          Environment=QQBOT_ENV_BASE_FILE=${APP_DIR}/.env.server
+          Environment=QQBOT_ENV_OVERRIDE_FILE=${SHARED_DIR}/.env.runtime
+          Environment=CHATLUNA_PRESET_DIRS=${SHARED_DIR}/presets:${APP_DIR}/data/chathub/presets
+          Environment=CHATLUNA_RUNTIME_PRESET_DIR=${SHARED_DIR}/presets
           ExecStartPre=/usr/bin/env bash -lc "podman network exists ${PODMAN_NETWORK_NAME} >/dev/null 2>&1 || podman network create ${PODMAN_NETWORK_NAME} >/dev/null; if [ -f '${PODMAN_CNI_CONFIG}' ]; then sed -i 's/\"cniVersion\": \"1.0.0\"/\"cniVersion\": \"0.4.0\"/' '${PODMAN_CNI_CONFIG}'; fi; podman rm -f qqbot-voice-asr >/dev/null 2>&1 || true"
           ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --force-recreate pmhq llbot
           ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop pmhq llbot
@@ -407,7 +438,12 @@ jobs:
           Type=simple
           WorkingDirectory=${APP_DIR}
           EnvironmentFile=${APP_DIR}/.env.server
-          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && export QQBOT_ENV_FILE=${APP_DIR}/.env.server; exec pnpm exec koishi start koishi.yml'
+          EnvironmentFile=-${SHARED_DIR}/.env.runtime
+          Environment=QQBOT_ENV_BASE_FILE=${APP_DIR}/.env.server
+          Environment=QQBOT_ENV_OVERRIDE_FILE=${SHARED_DIR}/.env.runtime
+          Environment=CHATLUNA_PRESET_DIRS=${SHARED_DIR}/presets:${APP_DIR}/data/chathub/presets
+          Environment=CHATLUNA_RUNTIME_PRESET_DIR=${SHARED_DIR}/presets
+          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && exec pnpm exec koishi start koishi.yml'
           Restart=always
           RestartSec=5
 

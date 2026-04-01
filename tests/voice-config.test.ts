@@ -141,15 +141,21 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('ConnectTimeout=30');
     expect(content).toContain('ConnectionAttempts=5');
     expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
+    expect(content).toContain('EnvironmentFile=-${SHARED_DIR}/.env.runtime');
+    expect(content).toContain('DEPLOY_SHARED_DIR');
+    expect(content).toContain("QQBOT_SHARED_DIR='${DEPLOY_SHARED_DIR}' bash '${DEPLOY_APP_DIR}/scripts/prepare-server-runtime-layer.sh'");
+    expect(content).toContain('Environment=QQBOT_ENV_BASE_FILE=${APP_DIR}/.env.server');
+    expect(content).toContain('Environment=QQBOT_ENV_OVERRIDE_FILE=${SHARED_DIR}/.env.runtime');
+    expect(content).toContain('Environment=CHATLUNA_PRESET_DIRS=${SHARED_DIR}/presets:${APP_DIR}/data/chathub/presets');
+    expect(content).toContain('Environment=CHATLUNA_RUNTIME_PRESET_DIR=${SHARED_DIR}/presets');
     expect(content).toContain('ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --force-recreate pmhq llbot');
     expect(content).toContain('ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop pmhq llbot');
     expect(content).toContain("--exclude='.env.local'");
     expect(content).toContain("--exclude='.env.server'");
     expect(content).toContain("cat > '${DEPLOY_APP_DIR}/.env.server'");
     expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
-    expect(content).toContain('QQBOT_ENV_FILE=${APP_DIR}/.env.server');
     expect(content).toContain('exec pnpm exec koishi start koishi.yml');
-    expect(content).not.toContain('QQBOT_ENV_FILE=${APP_DIR}/.env.server pnpm start');
+    expect(content).not.toContain('export QQBOT_ENV_FILE=${APP_DIR}/.env.server');
     expect(content).toContain('cd "${CHATLUNA_DIR}"');
     expect(content).toContain('mkdir -p "${CHATLUNA_DIR}/.yarn-cache"');
     expect(content).toContain('YARN_CACHE_FOLDER="${CHATLUNA_DIR}/.yarn-cache"');
@@ -163,6 +169,17 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('apt-get install -y chromium');
     expect(content).not.toContain('pnpm install --no-frozen-lockfile');
     expect(content).not.toContain('up -d --build --force-recreate');
+  });
+
+  it('ships a runtime layer migration script that seeds env and presets into the shared dir', () => {
+    const content = readFileSync(resolve(process.cwd(), 'scripts/prepare-server-runtime-layer.sh'), 'utf8');
+
+    expect(content).toContain('RUNTIME_ENV_FILE="${SHARED_DIR}/.env.runtime"');
+    expect(content).toContain('RUNTIME_PRESET_DIR="${SHARED_DIR}/presets"');
+    expect(content).toContain('SEED_MARKER_FILE="${SHARED_DIR}/.runtime-layer.seeded"');
+    expect(content).toContain("keyMatches = [...sourceText.matchAll(/key:\\s*'([^']+)'/g)]");
+    expect(content).toContain("find \"${BUNDLED_PRESET_DIR}\" -maxdepth 1 -type f");
+    expect(content).toContain("touch \"${SEED_MARKER_FILE}\"");
   });
 
   it('lets stickers sync resolve local env first and server env second', () => {

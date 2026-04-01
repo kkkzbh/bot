@@ -16,18 +16,52 @@ resolve_env_file() {
   printf '%s\n' "${ROOT_DIR}/.env.local"
 }
 
-ENV_FILE="$(resolve_env_file)"
+resolve_optional_env_file() {
+  local explicit="$1"
+  if [[ -z "$explicit" ]]; then
+    return 1
+  fi
+  if [[ "$explicit" != /* ]]; then
+    explicit="${ROOT_DIR}/${explicit}"
+  fi
+  printf '%s\n' "$explicit"
+}
 
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "[error] bot env file not found: $ENV_FILE" >&2
-  exit 2
+load_env_file() {
+  local env_file="$1"
+  if [[ ! -f "$env_file" ]]; then
+    echo "[error] bot env file not found: $env_file" >&2
+    exit 2
+  fi
+
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file"
+  set +a
+}
+
+BASE_ENV_FILE="$(resolve_optional_env_file "${QQBOT_ENV_BASE_FILE:-}" || true)"
+OVERRIDE_ENV_FILE="$(resolve_optional_env_file "${QQBOT_ENV_OVERRIDE_FILE:-}" || true)"
+
+if [[ -n "$BASE_ENV_FILE" || -n "$OVERRIDE_ENV_FILE" ]]; then
+  if [[ -z "$BASE_ENV_FILE" ]]; then
+    echo "[error] QQBOT_ENV_BASE_FILE is required when runtime env layering is enabled" >&2
+    exit 2
+  fi
+
+  load_env_file "$BASE_ENV_FILE"
+  if [[ -n "$OVERRIDE_ENV_FILE" && -f "$OVERRIDE_ENV_FILE" ]]; then
+    load_env_file "$OVERRIDE_ENV_FILE"
+  fi
+  echo "[info] Loaded bot env base: $BASE_ENV_FILE"
+  if [[ -n "$OVERRIDE_ENV_FILE" ]]; then
+    echo "[info] Loaded bot env override: $OVERRIDE_ENV_FILE"
+  fi
+else
+  ENV_FILE="$(resolve_env_file)"
+  load_env_file "$ENV_FILE"
+  echo "[info] Loaded bot env: $ENV_FILE"
 fi
-
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
-echo "[info] Loaded bot env: $ENV_FILE"
 
 cd "$ROOT_DIR"
 ./scripts/ensure-chatluna-build.sh
