@@ -2,6 +2,7 @@ import { ref, reactive, computed } from 'vue'
 import { send } from '@koishijs/client'
 import type {
   BotConsoleBuiltinModelTab,
+  BotConsoleMemoryState,
   BotConsoleModelTabId,
   BotConsoleModelTabsState,
   BotConsoleToolPolicyState,
@@ -11,6 +12,7 @@ import type {
   DeleteConversationRoomResponse,
   FeatureOverrideInput,
   FeatureScopeKind,
+  GetMemoryStateResponse,
   PresetDocument,
   PresetPrompt,
   ReorderPresetsResponse,
@@ -313,6 +315,8 @@ export function useBotConsole() {
   // ── Core state ──────────────────────────────────────────────────────────────
   const loading = ref(true)
   const botState = ref<BotConsoleState | null>(null)
+  const memoryState = ref<BotConsoleMemoryState | null>(null)
+  const memoryLoading = ref(false)
 
   /**
    * Live-editable env values. Keyed by env var name.
@@ -553,8 +557,23 @@ export function useBotConsole() {
       if (!currentPreset.value.name && mergedState?.presets?.length) {
         await openPreset(mergedState.presets[0].name)
       }
+
+      if (memoryState.value) {
+        await refreshMemoryState().catch(() => null)
+      }
     } finally {
       loading.value = false
+    }
+  }
+
+  async function refreshMemoryState(): Promise<GetMemoryStateResponse> {
+    memoryLoading.value = true
+    try {
+      const result = await send<GetMemoryStateResponse>('bot-console/get-memory-state')
+      memoryState.value = result
+      return result
+    } finally {
+      memoryLoading.value = false
     }
   }
 
@@ -1004,6 +1023,8 @@ export function useBotConsole() {
     // State
     loading,
     botState,
+    memoryState,
+    memoryLoading,
     envDraft,
     originalEnv,
     modelTabsDraft,
@@ -1044,6 +1065,7 @@ export function useBotConsole() {
 
     // Actions
     refresh,
+    refreshMemoryState,
     saveEnv,
     saveEnvPatch,
     saveModelTabs,

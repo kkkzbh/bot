@@ -431,7 +431,17 @@ export function apply(ctx: Context, config: Config = {}): void {
       .after('chatluna_time_context')
       .before('lifecycle-handle_command');
 
-    ctx.setInterval(() => void tick(), 10_000);
-    void tick();
+    void (async () => {
+      const recovered = await store.requeueProcessingJobs();
+      if (recovered > 0) {
+        logger.warn('memory recovered %d orphaned processing jobs after startup', recovered);
+      }
+      ctx.setInterval(() => void tick(), 10_000);
+      await tick();
+    })().catch((error) => {
+      logger.warn('memory startup recovery failed: %s', (error as Error).message);
+      ctx.setInterval(() => void tick(), 10_000);
+      void tick();
+    });
   });
 }

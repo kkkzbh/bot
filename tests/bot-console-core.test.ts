@@ -573,35 +573,6 @@ describe('bot-console manager', () => {
     expect(status.activeState).toBe('active');
   });
 
-  it('reads recent koishi logs from journalctl output', async () => {
-    const dir = createTempDir();
-    const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
-    const execFile = vi.fn().mockResolvedValue({
-      stdout: 'line one\nline two\n\n',
-      stderr: '',
-    });
-
-    const manager = new BotConsoleManager({ rootDir: dir, envFilePath, execFile });
-    const lines = await manager.getRecentLogs();
-
-    expect(execFile).toHaveBeenCalledWith(
-      'journalctl',
-      [
-        '--user',
-        '-u',
-        'qqbot-koishi.service',
-        '-n',
-        '200',
-        '--no-pager',
-        '--output',
-        'short-precise',
-      ],
-      expect.objectContaining({ cwd: dir, timeout: 15_000 }),
-    );
-    expect(lines).toEqual(['line one', 'line two']);
-  });
-
   it('persists custom preset order and removes deleted presets from it', async () => {
     const dir = createTempDir();
     const presetDir = join(dir, 'data/chathub/presets');

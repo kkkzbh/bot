@@ -4,6 +4,7 @@ import { Context, Logger } from 'koishi';
 import { BotConsoleManager } from './server.js';
 import type {
   BotConsoleProbeResult,
+  BotConsoleMemoryState,
   BotConsoleState,
   BotServiceUnit,
   ClearConversationHistoryRequest,
@@ -11,7 +12,6 @@ import type {
   DeleteConversationRoomRequest,
   DeleteConversationRoomResponse,
   EnvPatch,
-  GetRecentLogsResponse,
   PresetDocument,
   ReorderPresetsResponse,
   SaveFeatureOverridesRequest,
@@ -26,11 +26,12 @@ import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
 import type { MemoryV2StatusServiceLike } from '../../types/memory-v2.js';
 import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
 import { createUnavailableMemoryV2StatusSnapshot } from '../shared/memory-v2-status.js';
+import { buildMemoryState, createUnavailableMemoryState } from './memory.js';
 
 const logger = new Logger('bot-console');
 
 export const name = 'bot-console';
-export const inject = { required: ['console'], optional: ['memoryV2Status', 'featurePolicy', 'toolPolicy'] } as const;
+export const inject = { required: ['console'], optional: ['memoryV2Status', 'featurePolicy', 'toolPolicy', 'database'] } as const;
 
 const LISTENER_AUTHORITY = 4;
 
@@ -41,30 +42,44 @@ function ensureRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-type ContextWithRuntimeServices = Context & {
+type RuntimeServiceContext = {
   memoryV2Status?: MemoryV2StatusServiceLike;
   featurePolicy?: FeaturePolicyServiceLike;
   toolPolicy?: ToolPolicyServiceLike;
+  database?: {
+    get: (table: string, query: Record<string, unknown>) => Promise<any[]>;
+  };
 };
 
-async function buildState(ctx: ContextWithRuntimeServices, manager: BotConsoleManager): Promise<BotConsoleState> {
-  const [state, memoryV2, featureScopes, featureOverrides, conversationTargets, toolPolicy] = await Promise.all([
-    manager.getState(),
-    ctx.memoryV2Status
-      ? ctx.memoryV2Status.getSnapshot().catch(() => createUnavailableMemoryV2StatusSnapshot())
-      : Promise.resolve(createUnavailableMemoryV2StatusSnapshot()),
-    ctx.featurePolicy?.listConsoleFeatureScopes?.() ?? Promise.resolve([]),
-    ctx.featurePolicy?.getFeatureOverrides?.() ?? Promise.resolve([]),
-    ctx.featurePolicy?.listConversationTargets?.() ?? Promise.resolve([]),
-    ctx.toolPolicy?.getToolPolicyState?.() ?? Promise.resolve({
-      catalog: [],
-      routeProfiles: [],
-      routeProfileInfo: [],
-      defaultScopes: [],
-      scopes: [],
-      overrides: [],
-      conversationTargets: [],
-    }),
+async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager): Promise<BotConsoleState> {
+  const statePromise = manager.getState();
+  let memoryV2 = createUnavailableMemoryV2StatusSnapshot();
+  if (ctx.memoryV2Status) {
+    try {
+      memoryV2 = await ctx.memoryV2Status.getSnapshot();
+    } catch {
+      memoryV2 = createUnavailableMemoryV2StatusSnapshot();
+    }
+  }
+  const featureScopesPromise = ctx.featurePolicy?.listConsoleFeatureScopes?.() ?? Promise.resolve([]);
+  const featureOverridesPromise = ctx.featurePolicy?.getFeatureOverrides?.() ?? Promise.resolve([]);
+  const conversationTargetsPromise = ctx.featurePolicy?.listConversationTargets?.() ?? Promise.resolve([]);
+  const toolPolicyPromise = ctx.toolPolicy?.getToolPolicyState?.() ?? Promise.resolve({
+    catalog: [],
+    routeProfiles: [],
+    routeProfileInfo: [],
+    defaultScopes: [],
+    scopes: [],
+    overrides: [],
+    conversationTargets: [],
+  });
+
+  const [state, featureScopes, featureOverrides, conversationTargets, toolPolicy] = await Promise.all([
+    statePromise,
+    featureScopesPromise,
+    featureOverridesPromise,
+    conversationTargetsPromise,
+    toolPolicyPromise,
   ]);
 
   return {
@@ -85,7 +100,7 @@ async function buildState(ctx: ContextWithRuntimeServices, manager: BotConsoleMa
 export function apply(ctx: Context): void {
   const manager = new BotConsoleManager({ rootDir: ctx.baseDir });
   const consoleService = ctx.console as any;
-  const runtimeCtx = ctx as ContextWithRuntimeServices;
+  const runtimeCtx = ctx as unknown as RuntimeServiceContext;
   const entryDir = join(ctx.baseDir, 'node_modules/.cache/qqbot-bot-console');
 
   consoleService.addEntry(
@@ -129,6 +144,19 @@ export function apply(ctx: Context): void {
         target: 'embedding',
         memoryV2,
       };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/get-memory-state',
+    async (): Promise<BotConsoleMemoryState> => {
+      try {
+        return await buildMemoryState(runtimeCtx.database);
+      } catch (error) {
+        logger.warn('failed to build memory console state: %s', error instanceof Error ? error.message : String(error));
+        return createUnavailableMemoryState();
+      }
     },
     { authority: LISTENER_AUTHORITY },
   );
@@ -287,15 +315,6 @@ export function apply(ctx: Context): void {
     async (unit: BotServiceUnit, action: ServiceAction) => {
       const status = await manager.runServiceAction(unit, action);
       return { status };
-    },
-    { authority: LISTENER_AUTHORITY },
-  );
-
-  consoleService.addListener(
-    'bot-console/get-recent-logs',
-    async (): Promise<GetRecentLogsResponse> => {
-      const lines = await manager.getRecentLogs();
-      return { lines };
     },
     { authority: LISTENER_AUTHORITY },
   );

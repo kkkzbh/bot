@@ -792,29 +792,6 @@ export class BotConsoleManager {
     return this.getServiceStatus(unit);
   }
 
-  async getRecentLogs(limit = 200): Promise<string[]> {
-    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.trunc(limit))) : 200;
-    const { stdout } = await this.execFile(
-      'journalctl',
-      [
-        '--user',
-        '-u',
-        'qqbot-koishi.service',
-        '-n',
-        String(safeLimit),
-        '--no-pager',
-        '--output',
-        'short-precise',
-      ],
-      { cwd: this.rootDir, timeout: 15_000 },
-    );
-
-    return stdout
-      .split(/\r?\n/)
-      .map((line) => line.trimEnd())
-      .filter(Boolean);
-  }
-
   async getServiceStatuses(): Promise<BotServiceStatus[]> {
     return Promise.all(BOT_CONSOLE_SERVICE_UNITS.map((unit) => this.getServiceStatus(unit)));
   }

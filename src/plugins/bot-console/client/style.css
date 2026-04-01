@@ -1648,6 +1648,179 @@
     gap: 1rem;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   Memory panel
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.bc-memory-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+.bc-memory-summary-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 1rem 1.1rem;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.82);
+    border: 1px solid rgba(123, 104, 238, 0.12);
+    box-shadow: 0 14px 28px rgba(23, 29, 79, 0.08);
+}
+
+.bc-memory-summary-card span,
+.bc-memory-summary-card small {
+    color: var(--bc-text-soft);
+}
+
+.bc-memory-summary-card strong {
+    font-size: 1.7rem;
+    line-height: 1;
+}
+
+.bc-memory-toolbar {
+    margin-bottom: 1rem;
+}
+
+.bc-memory-search {
+    width: 100%;
+    min-height: 44px;
+    padding: 0.8rem 0.95rem;
+    border: 1px solid rgba(123, 104, 238, 0.16);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.88);
+    color: var(--bc-text-strong);
+    outline: none;
+}
+
+.bc-memory-search:focus {
+    border-color: rgba(123, 104, 238, 0.34);
+    box-shadow: 0 0 0 4px rgba(123, 104, 238, 0.08);
+}
+
+.bc-memory-main {
+    display: grid;
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+}
+
+.bc-memory-sidebar,
+.bc-memory-detail {
+    min-width: 0;
+}
+
+.bc-memory-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.bc-memory-section-head h3 {
+    margin: 0;
+}
+
+.bc-memory-scope-list,
+.bc-memory-record-list,
+.bc-memory-job-list {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.bc-memory-scope-item,
+.bc-memory-record-card,
+.bc-memory-job-card {
+    padding: 1rem;
+    border-radius: 18px;
+    border: 1px solid rgba(123, 104, 238, 0.12);
+    background: rgba(255, 255, 255, 0.82);
+    box-shadow: 0 14px 28px rgba(23, 29, 79, 0.08);
+}
+
+.bc-memory-scope-item {
+    text-align: left;
+    cursor: pointer;
+    transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.bc-memory-scope-item:hover {
+    transform: translateY(-1px);
+    border-color: rgba(123, 104, 238, 0.24);
+}
+
+.bc-memory-scope-item.is-active {
+    border-color: rgba(123, 104, 238, 0.4);
+    box-shadow: 0 18px 34px rgba(66, 52, 143, 0.14);
+}
+
+.bc-memory-scope-head,
+.bc-memory-record-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.8rem;
+    margin-bottom: 0.55rem;
+}
+
+.bc-memory-scope-key {
+    margin: 0.35rem 0 0.55rem;
+    color: var(--bc-text-soft);
+    font-size: 0.84rem;
+    word-break: break-all;
+}
+
+.bc-memory-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem 0.9rem;
+    color: var(--bc-text-soft);
+    font-size: 0.84rem;
+}
+
+.bc-memory-pill-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.bc-memory-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0.18rem 0.6rem;
+    border-radius: 999px;
+    background: rgba(123, 104, 238, 0.1);
+    color: var(--k-color-primary);
+    font-size: 0.8rem;
+}
+
+.bc-memory-pill.is-archived {
+    background: rgba(114, 122, 143, 0.14);
+    color: var(--bc-text-soft);
+}
+
+.bc-memory-record-card p,
+.bc-memory-job-card p {
+    margin: 0 0 0.75rem;
+    white-space: pre-wrap;
+}
+
+.bc-memory-record-section + .bc-memory-record-section {
+    margin-top: 1.25rem;
+}
+
+.bc-memory-empty {
+    padding: 1rem 1.1rem;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px dashed rgba(123, 104, 238, 0.18);
+    color: var(--bc-text-soft);
+}
+
 .bc-tool-global-settings,
 .bc-tool-scope-banner,
 .bc-tool-routebar {
@@ -2322,6 +2495,11 @@
     }
 
     .bc-tool-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .bc-memory-summary-grid,
+    .bc-memory-main {
         grid-template-columns: 1fr;
     }
 }

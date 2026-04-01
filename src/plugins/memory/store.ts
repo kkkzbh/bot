@@ -549,6 +549,23 @@ export class MemoryV2Store {
     );
   }
 
+  async requeueProcessingJobs(): Promise<number> {
+    const rows = (await this.database.get('memory_job', {} as Record<string, never>)) as MemoryJobRecord[];
+    const processing = rows.filter((row) => row.status === 'processing');
+    if (!processing.length) return 0;
+
+    const now = Date.now();
+    for (const row of processing) {
+      await this.database.set('memory_job', { id: row.id }, {
+        status: 'pending',
+        nextRunAt: Math.min(Number(row.nextRunAt ?? now) || now, now),
+        updatedAt: now,
+        lastError: null,
+      });
+    }
+    return processing.length;
+  }
+
   async markJobProcessing(job: MemoryJobRecord): Promise<void> {
     await this.database.set('memory_job', { id: job.id }, { status: 'processing', updatedAt: Date.now(), lastError: null });
   }

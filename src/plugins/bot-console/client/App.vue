@@ -9,10 +9,10 @@ import AnalyticsPanel from './components/panels/AnalyticsPanel.vue'
 import ServicesPanel from './components/panels/ServicesPanel.vue'
 import FeaturesPanel from './components/panels/FeaturesPanel.vue'
 import ToolPolicyPanel from './components/panels/ToolPolicyPanel.vue'
+import MemoryPanel from './components/panels/MemoryPanel.vue'
 import ModelsPanel from './components/panels/ModelsPanel.vue'
 import BasicPanel from './components/panels/BasicPanel.vue'
 import PresetsPanel from './components/panels/PresetsPanel.vue'
-import LogsPanel from './components/panels/LogsPanel.vue'
 
 const props = withDefaults(defineProps<{
   embedded?: boolean
@@ -38,10 +38,10 @@ const TABS = [
   { id: 'services', label: '运行控制' },
   { id: 'features', label: '功能开关' },
   { id: 'tools', label: '工具控制' },
+  { id: 'memory', label: '长期记忆' },
   { id: 'models',   label: '模型接口' },
   { id: 'basic',    label: '基础配置' },
   { id: 'presets',  label: '角色预设' },
-  { id: 'logs',     label: '运行日志' },
 ] as const
 
 const panelMap: Record<string, Component> = {
@@ -50,10 +50,10 @@ const panelMap: Record<string, Component> = {
   services: ServicesPanel,
   features: FeaturesPanel,
   tools: ToolPolicyPanel,
+  memory: MemoryPanel,
   models:   ModelsPanel,
   basic:    BasicPanel,
   presets:  PresetsPanel,
-  logs:     LogsPanel,
 }
 
 // ── Keyboard shortcuts (Ctrl+S to save) ───────────────────────────────────────

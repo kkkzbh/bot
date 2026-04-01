@@ -120,15 +120,28 @@ class MemoryStoreDatabaseMock {
       .map((row) => ({ ...row }));
   }
 
-  async set(): Promise<void> {}
+  async set(table: string, query: Record<string, unknown>, data: Record<string, unknown>): Promise<void> {
+    const rows = this.tables[table as MemoryTableName] ?? [];
+    for (const row of rows) {
+      if (Object.entries(query).every(([key, value]) => row[key] === value)) {
+        Object.assign(row, data);
+      }
+    }
+  }
 
   async upsert(): Promise<void> {}
 
-  async create(_table: string, row: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async create(table: string, row: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this.tables[table as MemoryTableName]?.push({ ...row });
     return row;
   }
 
-  async remove(): Promise<void> {}
+  async remove(table: string, query: Record<string, unknown>): Promise<void> {
+    const rows = this.tables[table as MemoryTableName] ?? [];
+    this.tables[table as MemoryTableName] = rows.filter(
+      (row) => !Object.entries(query).every(([key, value]) => row[key] === value),
+    );
+  }
 }
 
 describe('memory-v2 core behavior', () => {
@@ -505,5 +518,57 @@ describe('memory-v2 status service', () => {
     expect(snapshot.available).toBe(false);
     expect(snapshot.enabled).toBe(false);
     expect(snapshot.embedConfigured).toBe(false);
+  });
+});
+
+describe('memory-v2 job recovery', () => {
+  it('requeues orphaned processing jobs on startup recovery', async () => {
+    const store = new MemoryV2Store(
+      new MemoryStoreDatabaseMock({
+        memory_job: [
+          {
+            id: 1,
+            jobKey: 'extract:conv-1',
+            jobType: 'extract',
+            status: 'processing',
+            payload: '{"conversationId":"conv-1","scopeType":"user","scopeKey":"onebot:bot:user:1","maxMessages":12}',
+            retryCount: 0,
+            nextRunAt: 10,
+            lastError: null,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+          {
+            id: 2,
+            jobKey: 'embed:fact:1',
+            jobType: 'embed',
+            status: 'pending',
+            payload: '{"recordType":"fact","recordId":1}',
+            retryCount: 0,
+            nextRunAt: Date.now() + 30_000,
+            lastError: null,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        ],
+      }) as any,
+    );
+
+    await expect(store.requeueProcessingJobs()).resolves.toBe(1);
+
+    const rows = await (store as any).database.get('memory_job', {} as Record<string, never>);
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 1,
+          status: 'pending',
+          lastError: null,
+        }),
+        expect.objectContaining({
+          id: 2,
+          status: 'pending',
+        }),
+      ]),
+    );
   });
 });

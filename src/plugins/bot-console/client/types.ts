@@ -286,10 +286,91 @@ export interface BotConsoleState {
   };
 }
 
+export interface BotConsoleMemoryScopeSummary {
+  scopeType: "user" | "user_group";
+  scopeKey: string;
+  platform: string | null;
+  botSelfId: string | null;
+  userId: string | null;
+  groupId: string | null;
+  label: string;
+  factCount: number;
+  episodeCount: number;
+  latestSeenAt: number | null;
+}
+
+export interface BotConsoleMemoryFactItem {
+  id: number;
+  scopeType: "user" | "user_group";
+  scopeKey: string;
+  topicKey: string;
+  content: string;
+  keywords: string[];
+  importance: number;
+  confidence: number;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  hasEmbedding: boolean;
+  archived: boolean;
+}
+
+export interface BotConsoleMemoryEpisodeItem {
+  id: number;
+  scopeType: "user" | "user_group";
+  scopeKey: string;
+  title: string;
+  summary: string;
+  keywords: string[];
+  importance: number;
+  confidence: number;
+  periodStart: number | null;
+  periodEnd: number | null;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  lastAccessedAt: number | null;
+  hasEmbedding: boolean;
+  archived: boolean;
+}
+
+export interface BotConsoleMemoryJobItem {
+  id: number;
+  jobType: "extract" | "embed";
+  status: "pending" | "processing";
+  scopeType: "user" | "user_group" | null;
+  scopeKey: string | null;
+  conversationId: string | null;
+  retryCount: number;
+  nextRunAt: number;
+  createdAt: number;
+  updatedAt: number;
+  lastError: string | null;
+}
+
+export interface BotConsoleMemorySummary {
+  scopeCount: number;
+  userScopeCount: number;
+  userGroupScopeCount: number;
+  factCount: number;
+  episodeCount: number;
+  pendingJobs: number;
+  processingJobs: number;
+}
+
+export interface BotConsoleMemoryState {
+  available: boolean;
+  summary: BotConsoleMemorySummary;
+  scopes: BotConsoleMemoryScopeSummary[];
+  facts: BotConsoleMemoryFactItem[];
+  episodes: BotConsoleMemoryEpisodeItem[];
+  jobs: BotConsoleMemoryJobItem[];
+}
+
 export interface BotConsoleProbeResponse {
   target: "embedding";
   memoryV2: MemoryV2ProbeResult;
 }
+
+export interface GetMemoryStateResponse extends BotConsoleMemoryState {}
 
 export interface SaveEnvResponse {
   env: Record<string, string>;
@@ -322,10 +403,6 @@ export interface SaveToolOverridesResponse {
 
 export interface ServiceActionResponse {
   status: BotServiceStatus;
-}
-
-export interface GetRecentLogsResponse {
-  lines: string[];
 }
 
 export interface ClearConversationHistoryResponse {

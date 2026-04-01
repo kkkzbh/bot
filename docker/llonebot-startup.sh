@@ -35,34 +35,6 @@ ws.token = process.env.ONEBOT_TOKEN || ''
 config.ffmpeg = '/usr/bin/ffmpeg'
 
 writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`)
-
-const bundleFile = 'llbot.js'
-let bundle = readFileSync(bundleFile, 'utf8')
-const loginTimeoutPatches = [
-  {
-    from: 'return await invoke("nodeIKernelLoginService/getLoginList", []);',
-    to: 'return await invoke("nodeIKernelLoginService/getLoginList", [], { timeout: 6e4 });',
-  },
-  {
-    from: 'return await invoke("nodeIKernelLoginService/getQRCodePicture", [], { resultCmd: ReceiveCmdS.LOGIN_QR_CODE });',
-    to: 'return await invoke("nodeIKernelLoginService/getQRCodePicture", [], { resultCmd: ReceiveCmdS.LOGIN_QR_CODE, timeout: 6e4 });',
-  },
-]
-
-for (const patch of loginTimeoutPatches) {
-  if (bundle.includes(patch.to)) {
-    continue
-  }
-
-  if (!bundle.includes(patch.from)) {
-    console.warn(`[llonebot-startup] Skip login timeout patch; target not found: ${patch.from}`)
-    continue
-  }
-
-  bundle = bundle.replace(patch.from, patch.to)
-}
-
-writeFileSync(bundleFile, bundle)
 EOF_NODE
 
 mkdir -p /app/llbot/data

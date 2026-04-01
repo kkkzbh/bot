@@ -341,7 +341,7 @@ describe('bot-console plugin', () => {
     expect(result.memoryV2.snapshot.embed.lastSource).toBe('probe');
   });
 
-  it('returns recent koishi logs through the protected listener', async () => {
+  it('exposes memory explorer data through a protected listener', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
     writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
@@ -351,26 +351,105 @@ describe('bot-console plugin', () => {
       'utf8',
     );
 
-    const getRecentLogsSpy = vi
-      .spyOn(BotConsoleManager.prototype, 'getRecentLogs')
-      .mockResolvedValue(['2026-03-20 16:00:00 [I] bot-console test']);
-
     const addListener = vi.fn();
     apply({
       baseDir: dir,
+      database: {
+        get: vi.fn(async (table: string) => {
+          if (table === 'memory_fact') {
+            return [
+              {
+                id: 1,
+                scopeType: 'user',
+                scopeKey: 'onebot:bot:user:10001',
+                topicKey: 'nickname',
+                content: '用户更喜欢被叫小嘉。',
+                keywords: '["昵称"]',
+                importance: 0.8,
+                confidence: 0.9,
+                firstSeenAt: 1,
+                lastSeenAt: 10,
+                sourceMessageIds: '[]',
+                embeddingModel: 'Qwen/Qwen3-Embedding-8B',
+                embedding: '[1,2,3]',
+                version: 1,
+                archived: 0,
+              },
+            ];
+          }
+          if (table === 'memory_episode') {
+            return [
+              {
+                id: 2,
+                scopeType: 'user',
+                scopeKey: 'onebot:bot:user:10001',
+                title: '第一次晚安语音',
+                summary: '用户第一次主动索要晚安语音。',
+                keywords: '["晚安","语音"]',
+                importance: 0.9,
+                confidence: 0.95,
+                periodStart: 3,
+                periodEnd: 4,
+                firstSeenAt: 3,
+                lastSeenAt: 12,
+                lastAccessedAt: 15,
+                sourceMessageIds: '[]',
+                embeddingModel: 'Qwen/Qwen3-Embedding-8B',
+                embedding: '[1,2,3]',
+                archived: 0,
+              },
+            ];
+          }
+          if (table === 'memory_job') {
+            return [
+              {
+                id: 9,
+                jobKey: 'extract:conv-1',
+                jobType: 'extract',
+                status: 'processing',
+                payload: '{"conversationId":"conv-1","scopeType":"user","scopeKey":"onebot:bot:user:10001","maxMessages":12}',
+                retryCount: 0,
+                nextRunAt: 20,
+                lastError: null,
+                createdAt: 16,
+                updatedAt: 18,
+              },
+            ];
+          }
+          return [];
+        }),
+      },
       console: {
         addEntry: vi.fn(),
         addListener,
       },
     } as any);
 
-    const getRecentLogsListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/get-recent-logs')?.[1];
-    expect(getRecentLogsListener).toBeTypeOf('function');
-    await expect(getRecentLogsListener()).resolves.toEqual({
-      lines: ['2026-03-20 16:00:00 [I] bot-console test'],
-    });
-    expect(getRecentLogsSpy).toHaveBeenCalledTimes(1);
-    getRecentLogsSpy.mockRestore();
+    const memoryListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/get-memory-state')?.[1];
+    expect(memoryListener).toBeTypeOf('function');
+
+    const result = await memoryListener();
+    expect(result.available).toBe(true);
+    expect(result.summary).toEqual(
+      expect.objectContaining({
+        scopeCount: 1,
+        factCount: 1,
+        episodeCount: 1,
+        processingJobs: 1,
+      }),
+    );
+    expect(result.scopes).toEqual([
+      expect.objectContaining({
+        scopeKey: 'onebot:bot:user:10001',
+        label: '私聊用户 10001',
+      }),
+    ]);
+    expect(result.jobs).toEqual([
+      expect.objectContaining({
+        scopeKey: 'onebot:bot:user:10001',
+        conversationId: 'conv-1',
+      }),
+    ]);
   });
 
   it('routes scoped override and conversation clear listeners to feature policy service', async () => {
