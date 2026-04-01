@@ -33,6 +33,12 @@ import type { MemoryV2StatusServiceLike } from '../../types/memory-v2.js';
 import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
 import { createUnavailableMemoryV2StatusSnapshot } from '../shared/memory-v2-status.js';
 import { buildMemoryState, createUnavailableMemoryState } from './memory.js';
+import {
+  parseQqVoiceBridgeRequest,
+  QqVoiceBridgeHttpError,
+  sendVoiceByBridge,
+  validateVoiceBridgeAuthHeader,
+} from './voice-bridge.js';
 
 const logger = new Logger('bot-console');
 
@@ -389,6 +395,28 @@ export function apply(ctx: Context): void {
       }
       koaCtx.body = result.body;
     });
+
+    ctx.server.post('/api/internal/qq-voice/v1/send', async (koaCtx: any) => {
+      if (!validateVoiceBridgeAuthHeader(String(koaCtx.get('authorization') || ''))) {
+        writeJsonError(koaCtx, 401, 'invalid_request_error', 'invalid qq voice bridge authorization');
+        return;
+      }
+
+      try {
+        const request = parseQqVoiceBridgeRequest(koaCtx.request.body);
+        const response = await sendVoiceByBridge(ctx, request);
+        koaCtx.status = 200;
+        koaCtx.set('content-type', 'application/json; charset=utf-8');
+        koaCtx.body = JSON.stringify(response);
+      } catch (error) {
+        if (error instanceof QqVoiceBridgeHttpError) {
+          writeJsonError(koaCtx, error.status, error.code, error.message);
+          return;
+        }
+        logger.warn('qq voice bridge failed: %s', error instanceof Error ? error.message : String(error));
+        writeJsonError(koaCtx, 500, 'internal_error', 'qq voice bridge failed');
+      }
+    });
   }
 
   logger.info('bot console extension registered.');
@@ -400,13 +428,17 @@ async function validateCopilotBridgeAuth(koaCtx: any, bridge: CopilotOAuthBridge
   if (authHeader === `Bearer ${expected.apiKey}`) {
     return true;
   }
-  koaCtx.status = 401;
+  writeJsonError(koaCtx, 401, 'invalid_request_error', 'invalid copilot bridge authorization');
+  return false;
+}
+
+function writeJsonError(koaCtx: any, status: number, type: string, message: string): void {
+  koaCtx.status = status;
   koaCtx.set('content-type', 'application/json; charset=utf-8');
   koaCtx.body = JSON.stringify({
     error: {
-      message: 'invalid copilot bridge authorization',
-      type: 'invalid_request_error',
+      message,
+      type,
     },
   });
-  return false;
 }

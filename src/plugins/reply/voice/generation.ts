@@ -114,7 +114,7 @@ export const Config: Schema<Config> = Schema.object({
   replyInterruptMaxPendingInputs: Schema.natural().default(8).description('回复中断最多暂存的新消息条数。'),
 });
 
-interface RuntimeConfig {
+export interface RuntimeConfig {
   inputEnabled: boolean;
   outputEnabled: boolean;
   asrBaseUrl: string;
@@ -165,7 +165,7 @@ type SessionWithVoiceState = Session & {
   };
 };
 
-type OneBotInternalLike = {
+export type OneBotInternalLike = {
   _request?: (action: string, params?: Record<string, unknown>) => Promise<unknown>;
   canSendRecord?: () => Promise<boolean>;
   getRecord?: (file: string, format: 'wav', fullPath?: boolean) => Promise<{ file?: string }>;
@@ -173,7 +173,7 @@ type OneBotInternalLike = {
   sendGroupMsg?: (...args: unknown[]) => Promise<unknown>;
 };
 
-type OneBotBotLike = {
+export type OneBotBotLike = {
   selfId?: string;
   platform?: string;
   internal?: OneBotInternalLike;
@@ -372,6 +372,10 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
   };
 }
 
+export function createVoiceRuntimeConfig(config: Config = {}): RuntimeConfig {
+  return toRuntimeConfig(config);
+}
+
 function assertVoiceRuntimeConfig(runtime: RuntimeConfig): void {
   const runtimeRole = detectRuntimeRole();
 
@@ -552,7 +556,7 @@ async function transcribeAudio(runtime: RuntimeConfig, audio: DownloadedAudioPay
   }
 }
 
-async function synthesizeVoice(
+export async function synthesizeVoice(
   runtime: RuntimeConfig,
   text: string,
   style: 'white' | 'black',
@@ -594,7 +598,7 @@ async function synthesizeVoice(
   }
 }
 
-function createAudioDataUri(bytes: Uint8Array): string {
+export function createAudioDataUri(bytes: Uint8Array): string {
   return `data:audio/wav;base64,${Buffer.from(bytes).toString('base64')}`;
 }
 
@@ -805,7 +809,7 @@ async function normalizeResearchReplyHistory(
   await normalizeHistory(room!, messageText.trim());
 }
 
-async function ensureCanSendRecord(
+export async function ensureCanSendRecord(
   bot: OneBotBotLike,
   capabilityCache: Map<string, boolean>,
   force = false,
@@ -851,7 +855,7 @@ async function ensureCanSendRecord(
   return result;
 }
 
-function isVoiceOutputConfigured(runtime: RuntimeConfig): boolean {
+export function isVoiceOutputConfigured(runtime: RuntimeConfig): boolean {
   return Boolean(runtime.ttsBaseUrl);
 }
 
