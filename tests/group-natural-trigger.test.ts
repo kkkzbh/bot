@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apply, inject } from '../src/plugins/triggers/group-natural/index.js';
 import type { NaturalTriggerState } from '../src/plugins/triggers/group-natural/state.js';
+import { buildGroupScopeKey, groupRecentContextCache } from '../src/plugins/triggers/group-natural/recent-context.js';
 
 vi.mock('koishi', () => {
   type MockSchemaNode = {
@@ -140,6 +141,7 @@ describe('group natural trigger middleware', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    groupRecentContextCache.clear();
   });
 
   it('declares chatluna as a required injection', () => {
@@ -197,6 +199,32 @@ describe('group natural trigger middleware', () => {
     );
 
     expect(result.naturalTrigger).toBeNull();
+  });
+
+  it('captures passive group context even when natural trigger is disabled', async () => {
+    const { middleware } = createHarness({
+      enabled: false,
+      enabledGroups: '',
+      replyIntervalMs: 0,
+    });
+
+    const session = createSession({
+      channelId: '100',
+      guildId: '100',
+      userId: 'u9',
+      messageId: 'msg-passive-1',
+      content: '这条只是普通群消息',
+    });
+    const result = await runAndCapture(middleware, session);
+
+    expect(result.naturalTrigger).toBeNull();
+    expect(groupRecentContextCache.get(buildGroupScopeKey(session) ?? '')).toEqual([
+      expect.objectContaining({
+        messageId: 'msg-passive-1',
+        userId: 'u9',
+        renderedText: '[speaker_id=u9 speaker_name="u9"] 这条只是普通群消息',
+      }),
+    ]);
   });
 
   it('keeps reply interval isolated by group', async () => {

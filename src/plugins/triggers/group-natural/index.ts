@@ -16,6 +16,11 @@ import {
   type NaturalTriggerReason,
   type NaturalTriggerState,
 } from './state.js';
+import {
+  buildGroupScopeKey,
+  capturePassiveGroupRecentContext,
+  replaceRuntimeChatHistoryWithGroupRecentContext,
+} from './recent-context.js';
 
 const logger = new Logger('group-natural-trigger');
 const allowReplyResolverName = 'group-natural-trigger';
@@ -113,6 +118,9 @@ type ContextWithFeaturePolicy = Context & {
       name: string,
       resolver: (arg: { session: Session; context: unknown }) => boolean | void | Promise<boolean | void>,
     ) => () => void;
+    contextManager?: {
+      pipeline: (stage: string, middleware: (runtime: unknown, next: () => Promise<void>) => Promise<void>, priority?: number) => () => void;
+    };
   };
 };
 
@@ -279,15 +287,6 @@ function resolveGroupId(session: Session): string | null {
   return normalizeGroupId(session.guildId) ?? normalizeGroupId(session.channelId);
 }
 
-function buildGroupScopeKey(session: Session): string | null {
-  const groupId = resolveGroupId(session);
-  if (!groupId) return null;
-
-  const platform = session.platform?.trim() || 'default-platform';
-  const botSelfId = session.bot?.selfId?.trim() || 'default-bot';
-  return `${platform}:${botSelfId}:group:${groupId}`;
-}
-
 function shouldHandleGroup(session: Session, runtime: RuntimeConfig): boolean {
   if (session.isDirect) return false;
   const groupId = resolveGroupId(session);
@@ -304,6 +303,7 @@ export function apply(ctx: Context, config: Config): void {
   const spamStates = new Map<string, SpamState>();
   const nextReplyAt = new Map<string, number>();
   let disposeAllowReplyResolver: (() => void) | null = null;
+  let disposeRecentChatPipeline: (() => void) | null = null;
 
   const ensureAllowReplyResolverRegistered = (): void => {
     if (disposeAllowReplyResolver) return;
@@ -322,7 +322,29 @@ export function apply(ctx: Context, config: Config): void {
     logger.info('natural trigger allow resolver registered.');
   };
 
+  const ensureRecentChatPipelineRegistered = (): void => {
+    if (disposeRecentChatPipeline) return;
+
+    const contextManager = serviceCtx.chatluna.contextManager;
+    if (!contextManager) {
+      logger.warn('chatluna context manager is unavailable, skip recent group context pipeline registration.');
+      return;
+    }
+
+    disposeRecentChatPipeline = contextManager.pipeline(
+      'chat_history',
+      async (runtime, next) => {
+        replaceRuntimeChatHistoryWithGroupRecentContext(runtime as Parameters<typeof replaceRuntimeChatHistoryWithGroupRecentContext>[0]);
+        await next();
+      },
+      -100,
+    );
+    logger.info('recent group context chat_history pipeline registered.');
+  };
+
   ctx.middleware(async (session, next) => {
+    capturePassiveGroupRecentContext(session);
+
     if (!runtime.enabled) return next();
     if (featurePolicy && !(await featurePolicy.resolveFeatureEnabled(session, 'CHAT_NATURAL_TRIGGER_ENABLED'))) {
       return next();
@@ -425,6 +447,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.on('ready', () => {
     ensureAllowReplyResolverRegistered();
+    ensureRecentChatPipelineRegistered();
     logger.info(
       'group natural trigger loaded: groups=%d, aliases=%d, direct=%s, focusWindowMs=%d, replyIntervalMs=%d, spam=%d/%dms mute=%dms',
       runtime.enabledGroups.size,
@@ -442,6 +465,10 @@ export function apply(ctx: Context, config: Config): void {
     if (disposeAllowReplyResolver) {
       disposeAllowReplyResolver();
       disposeAllowReplyResolver = null;
+    }
+    if (disposeRecentChatPipeline) {
+      disposeRecentChatPipeline();
+      disposeRecentChatPipeline = null;
     }
   });
 }
