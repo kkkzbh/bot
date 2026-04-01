@@ -1,12 +1,18 @@
 import '@koishijs/plugin-console';
 import { join } from 'node:path';
 import { Context, Logger } from 'koishi';
-import { BotConsoleManager } from './server.js';
+import { BotConsoleManager, resolveBotEnvFiles } from './server.js';
+import { CopilotOAuthBridgeService } from '../copilot-oauth/service.js';
 import type {
   BotConsoleProbeResult,
   BotConsoleMemoryState,
   BotConsoleState,
   BotServiceUnit,
+  CopilotAuthCancelResponse,
+  CopilotAuthLogoutResponse,
+  CopilotAuthPollResponse,
+  CopilotAuthStartResponse,
+  CopilotAuthStatusResponse,
   ClearConversationHistoryRequest,
   ClearConversationHistoryResponse,
   DeleteConversationRoomRequest,
@@ -31,7 +37,7 @@ import { buildMemoryState, createUnavailableMemoryState } from './memory.js';
 const logger = new Logger('bot-console');
 
 export const name = 'bot-console';
-export const inject = { required: ['console'], optional: ['memoryV2Status', 'featurePolicy', 'toolPolicy', 'database'] } as const;
+export const inject = { required: ['console'], optional: ['server', 'memoryV2Status', 'featurePolicy', 'toolPolicy', 'database'] } as const;
 
 const LISTENER_AUTHORITY = 4;
 
@@ -98,7 +104,11 @@ async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager
 }
 
 export function apply(ctx: Context): void {
-  const manager = new BotConsoleManager({ rootDir: ctx.baseDir });
+  const copilotBridge = new CopilotOAuthBridgeService({
+    rootDir: ctx.baseDir,
+    envFiles: resolveBotEnvFiles(ctx.baseDir),
+  });
+  const manager = new BotConsoleManager({ rootDir: ctx.baseDir, copilotBridge });
   const consoleService = ctx.console as any;
   const runtimeCtx = ctx as unknown as RuntimeServiceContext;
   const entryDir = join(ctx.baseDir, 'node_modules/.cache/qqbot-bot-console');
@@ -195,6 +205,46 @@ export function apply(ctx: Context): void {
         ...result,
         restartRequired: true,
       };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/copilot-auth/start',
+    async (): Promise<CopilotAuthStartResponse> => {
+      return copilotBridge.startLogin();
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/copilot-auth/poll',
+    async (attemptId: string): Promise<CopilotAuthPollResponse> => {
+      return copilotBridge.pollLogin(String(attemptId ?? ''));
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/copilot-auth/cancel',
+    async (attemptId: string): Promise<CopilotAuthCancelResponse> => {
+      return copilotBridge.cancelLogin(String(attemptId ?? ''));
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/copilot-auth/logout',
+    async (): Promise<CopilotAuthLogoutResponse> => {
+      return copilotBridge.logout();
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/copilot-auth/status',
+    async (): Promise<CopilotAuthStatusResponse> => {
+      return copilotBridge.getConsoleStatus({ probe: true });
     },
     { authority: LISTENER_AUTHORITY },
   );
@@ -319,5 +369,44 @@ export function apply(ctx: Context): void {
     { authority: LISTENER_AUTHORITY },
   );
 
+  if (ctx.server) {
+    ctx.server.get('/api/internal/copilot/v1/models', async (koaCtx: any) => {
+      if (!(await validateCopilotBridgeAuth(koaCtx, copilotBridge))) return;
+      const result = await copilotBridge.proxyModels();
+      koaCtx.status = result.status;
+      for (const [key, value] of Object.entries(result.headers)) {
+        koaCtx.set(key, value);
+      }
+      koaCtx.body = result.body;
+    });
+
+    ctx.server.post('/api/internal/copilot/v1/responses', async (koaCtx: any) => {
+      if (!(await validateCopilotBridgeAuth(koaCtx, copilotBridge))) return;
+      const result = await copilotBridge.proxyResponses(koaCtx.request.body);
+      koaCtx.status = result.status;
+      for (const [key, value] of Object.entries(result.headers)) {
+        koaCtx.set(key, value);
+      }
+      koaCtx.body = result.body;
+    });
+  }
+
   logger.info('bot console extension registered.');
+}
+
+async function validateCopilotBridgeAuth(koaCtx: any, bridge: CopilotOAuthBridgeService): Promise<boolean> {
+  const expected = await bridge.getRuntimeConfig();
+  const authHeader = String(koaCtx.get('authorization') || '').trim();
+  if (authHeader === `Bearer ${expected.apiKey}`) {
+    return true;
+  }
+  koaCtx.status = 401;
+  koaCtx.set('content-type', 'application/json; charset=utf-8');
+  koaCtx.body = JSON.stringify({
+    error: {
+      message: 'invalid copilot bridge authorization',
+      type: 'invalid_request_error',
+    },
+  });
+  return false;
 }

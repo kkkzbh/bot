@@ -76,7 +76,7 @@ describe('bot-console plugin', () => {
     apply(ctx as any);
 
     expect(addEntry).toHaveBeenCalledTimes(1);
-    expect(addListener).toHaveBeenCalledTimes(15);
+    expect(addListener).toHaveBeenCalledTimes(20);
     for (const call of addListener.mock.calls) {
       expect(call[2]).toEqual({ authority: 4 });
     }
@@ -146,6 +146,14 @@ describe('bot-console plugin', () => {
           baseUrl: 'https://shell.wyzai.top/v1',
           apiKey: 'sk-openai',
           defaultModel: 'openai/gpt-5.4-medium-thinking',
+        },
+        {
+          id: 'copilot',
+          title: 'GitHub Copilot',
+          provider: 'openai',
+          baseUrl: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+          apiKey: 'github_pat_123',
+          defaultModel: 'gpt-5.4-mini',
         },
       ],
     });

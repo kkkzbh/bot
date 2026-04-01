@@ -160,4 +160,50 @@ CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
       ),
     ).toBe('sakiko|openai/gpt-5.4-medium-thinking|plugin|0');
   });
+
+  it('uses the copilot tab model when copilot is the active built-in tab', () => {
+    const dir = createTempDir();
+    const dbPath = join(dir, 'koishi.db');
+    const envPath = join(dir, '.env.local');
+    createBaseSchema(dbPath);
+
+    sqlite(
+      dbPath,
+      `
+insert into chathub_room (roomId, roomName, conversationId, roomMasterId, visibility, preset, model, chatMode, password, autoUpdate, updatedTime)
+values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'siliconflow/Pro/moonshotai/Kimi-K2.5', 'plugin', 'pw', 0, 1);
+insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
+values ('template-conv', null, null, 1);
+      `,
+    );
+
+    writeEnvFile(
+      envPath,
+      `
+CHATLUNA_ACTIVE_TAB=copilot
+CHATLUNA_DEFAULT_PRESET=sakiko
+CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5
+CHATLUNA_COPILOT_DEFAULT_MODEL=gpt-5.4-mini
+      `,
+    );
+
+    const output = execFileSync('bash', [resolve(process.cwd(), 'scripts/prepare-debug-chat-state.sh'), 'plugin'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        QQBOT_KOISHI_DB_PATH: dbPath,
+        QQBOT_ENV_FILE: envPath,
+        FAKE_USER_ID: '91000999',
+      },
+    });
+
+    expect(output).toContain('model=gpt-5.4-mini');
+    expect(
+      sqlite(
+        dbPath,
+        "select roomName || '|' || preset || '|' || model || '|' || chatMode from chathub_room where roomMasterId = '91000999';",
+      ),
+    ).toBe('codex-debug-91000999|sakiko|gpt-5.4-mini|plugin');
+  });
 });

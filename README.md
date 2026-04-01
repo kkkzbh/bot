@@ -31,16 +31,21 @@ Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime.
 - `CHATLUNA_OPENAI_BASE_URL`
 - `CHATLUNA_OPENAI_API_KEY`
 - `CHATLUNA_OPENAI_DEFAULT_MODEL`
+- `CHATLUNA_COPILOT_BASE_URL`
+- `CHATLUNA_COPILOT_API_KEY`
+- `CHATLUNA_COPILOT_DEFAULT_MODEL`
+- `CHATLUNA_COPILOT_OAUTH_CLIENT_ID`
 - `OPENAI_BASE_URL`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `MEMORY_EMBED_API_KEY`
 - `CHATLUNA_COMMAND_AUTHORITY`
 
-Main chat provider selection is fixed to two built-in tabs:
+Main chat provider selection is fixed to three built-in tabs:
 
 - `siliconflow`: current Kimi main-chat chain
 - `openai`: OpenAI-compatible provider tab, defaulting to `wyzai` with `openai/gpt-5.4-medium-thinking`
+- `copilot`: GitHub Copilot OAuth tab, defaulting to the local bridge `http://127.0.0.1:5140/api/internal/copilot/v1` with `gpt-5.4-mini`
 
 `CHATLUNA_ACTIVE_TAB` selects which built-in tab is mirrored into the runtime
 keys `CHATLUNA_PLATFORM` / `CHATLUNA_BASE_URL` / `CHATLUNA_API_KEY` /
@@ -51,6 +56,7 @@ endpoint preset:
 
 - `siliconflow` uses the existing `chat/completions` main-chat path and Kimi-specific non-thinking override
 - `openai` uses the OpenAI-compatible GPT-5.4 strategy, including `responses` mode and provider-specific structured-output wiring
+- `copilot` uses GitHub device-flow OAuth, exchanges GitHub token into a short-lived Copilot session token at runtime, and serves ChatLuna through a local Responses bridge
 
 ## Developer docs (web)
 

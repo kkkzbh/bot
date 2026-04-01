@@ -24,6 +24,12 @@ import type {
   SaveToolOverridesResponse,
   ServiceActionResponse,
   BotConsoleProbeResponse,
+  CopilotAuthAttempt,
+  CopilotAuthCancelResponse,
+  CopilotAuthLogoutResponse,
+  CopilotAuthPollResponse,
+  CopilotAuthStartResponse,
+  CopilotAuthStatusResponse,
   ScopedFeatureKey,
   ToolCatalogEntry,
   ToolPolicyOverrideInput,
@@ -76,7 +82,7 @@ export const MODEL_SHARED_KEYS = [
   'CHATLUNA_DEFAULT_PRESET',
 ] as const
 
-export const MODEL_TAB_IDS = ['siliconflow', 'openai'] as const satisfies readonly BotConsoleModelTabId[]
+export const MODEL_TAB_IDS = ['siliconflow', 'openai', 'copilot'] as const satisfies readonly BotConsoleModelTabId[]
 
 export const BASIC_KEYS = [
   'CHAT_NATURAL_TRIGGER_ALIASES',
@@ -128,20 +134,51 @@ function clonePreset(p: PresetDocument): PresetDocument {
 }
 
 function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltinModelTab {
-  const isOpenAI = id === 'openai'
+  const tabMeta: Record<BotConsoleModelTabId, Omit<BotConsoleBuiltinModelTab, 'id' | 'baseUrl' | 'apiKey' | 'defaultModel'>> = {
+    siliconflow: {
+      title: '硅基流动',
+      provider: 'siliconflow',
+      strategyId: 'siliconflow-kimi-main-chat',
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'chat_completions_json_schema',
+      description: '当前主聊天固定走硅基流动 provider，默认保持现有 Kimi 主链路。',
+      modelHint: '当前仅支持 SiliconFlow Kimi-K2.5 主聊天模型族。',
+      authKind: 'manual',
+      authStatus: 'ready',
+      accountLabel: null,
+      authError: null,
+    },
+    openai: {
+      title: 'OpenAI',
+      provider: 'openai',
+      strategyId: 'openai-gpt54-main-chat',
+      requestMode: 'responses',
+      structuredOutputProtocol: 'responses_text_format',
+      description: '当前按 OpenAI 兼容 provider 处理，默认预填 wyzai + gpt-5.4-medium-thinking。',
+      modelHint: '推荐填写 openai/gpt-5.4-medium-thinking。当前 OpenAI Tab 默认接入 wyzai。',
+      authKind: 'manual',
+      authStatus: 'ready',
+      accountLabel: null,
+      authError: null,
+    },
+    copilot: {
+      title: 'GitHub Copilot',
+      provider: 'openai',
+      strategyId: 'copilot-github-oauth-main-chat',
+      requestMode: 'responses',
+      structuredOutputProtocol: 'responses_text_format',
+      description: '当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 交换 session token。',
+      modelHint: '推荐填写 gpt-5.4-mini。该 Tab 使用 GitHub device-flow OAuth，不再手填 PAT。',
+      authKind: 'oauth_device',
+      authStatus: 'unauthenticated',
+      accountLabel: null,
+      authError: null,
+    },
+  }
+
   return {
     id,
-    title: isOpenAI ? 'OpenAI' : '硅基流动',
-    provider: isOpenAI ? 'openai' : 'siliconflow',
-    strategyId: isOpenAI ? 'openai-gpt54-main-chat' : 'siliconflow-kimi-main-chat',
-    requestMode: isOpenAI ? 'responses' : 'chat_completions',
-    structuredOutputProtocol: isOpenAI ? 'responses_text_format' : 'chat_completions_json_schema',
-    description: isOpenAI
-      ? '当前按 OpenAI 兼容 provider 处理，默认预填 wyzai + gpt-5.4-medium-thinking。'
-      : '当前主聊天固定走硅基流动 provider，默认保持现有 Kimi 主链路。',
-    modelHint: isOpenAI
-      ? '推荐填写 openai/gpt-5.4-medium-thinking。当前 OpenAI Tab 默认接入 wyzai。'
-      : '当前仅支持 SiliconFlow Kimi-K2.5 主聊天模型族。',
+    ...tabMeta[id],
     baseUrl: '',
     apiKey: '',
     defaultModel: '',
@@ -156,7 +193,7 @@ function buildModelTabsState(state: BotConsoleState | null): BotConsoleModelTabs
   })
   const activeTab = state?.modelTabs?.activeTab
   return {
-    activeTab: activeTab === 'openai' ? 'openai' : 'siliconflow',
+    activeTab: MODEL_TAB_IDS.includes(activeTab as BotConsoleModelTabId) ? activeTab as BotConsoleModelTabId : 'siliconflow',
     tabs: tabs.length > 0 ? tabs : fallbackTabs,
   }
 }
@@ -334,6 +371,7 @@ export function useBotConsole() {
   const modelTabsDraft = reactive<Record<BotConsoleModelTabId, BotConsoleBuiltinModelTab>>({
     siliconflow: createEmptyBuiltinModelTab('siliconflow'),
     openai: createEmptyBuiltinModelTab('openai'),
+    copilot: createEmptyBuiltinModelTab('copilot'),
   })
 
   /** Active built-in model tab currently being edited. */
@@ -341,6 +379,7 @@ export function useBotConsole() {
 
   /** Last successfully loaded model tabs state. */
   const originalModelTabs = ref<BotConsoleModelTabsState>(buildModelTabsState(null))
+  const copilotAuthAttempt = ref<CopilotAuthAttempt | null>(null)
 
   /** True while an embedding probe request is in-flight. */
   const probePending = ref(false)
@@ -467,6 +506,64 @@ export function useBotConsole() {
 
   const currentModelTabDraft = computed<BotConsoleBuiltinModelTab>(() => modelTabsDraft[activeModelTab.value])
 
+  function syncCopilotTabState(partial: Partial<BotConsoleBuiltinModelTab>): void {
+    modelTabsDraft.copilot = {
+      ...modelTabsDraft.copilot,
+      ...partial,
+      id: 'copilot',
+    }
+
+    originalModelTabs.value = {
+      activeTab: originalModelTabs.value.activeTab,
+      tabs: MODEL_TAB_IDS.map((id) => {
+        if (id !== 'copilot') {
+          return originalModelTabs.value.tabs.find(tab => tab.id === id) ?? createEmptyBuiltinModelTab(id)
+        }
+        return {
+          ...(originalModelTabs.value.tabs.find(tab => tab.id === 'copilot') ?? createEmptyBuiltinModelTab('copilot')),
+          ...partial,
+          id: 'copilot',
+        }
+      }),
+    }
+
+    if (botState.value) {
+      botState.value = {
+        ...botState.value,
+        modelTabs: {
+          activeTab: botState.value.modelTabs.activeTab,
+          tabs: MODEL_TAB_IDS.map((id) => {
+            if (id !== 'copilot') {
+              return botState.value?.modelTabs.tabs.find(tab => tab.id === id) ?? createEmptyBuiltinModelTab(id)
+            }
+            return {
+              ...(botState.value?.modelTabs.tabs.find(tab => tab.id === 'copilot') ?? createEmptyBuiltinModelTab('copilot')),
+              ...partial,
+              id: 'copilot',
+            }
+          }),
+        },
+      }
+    }
+  }
+
+  function applyCopilotAuthState(
+    state:
+      | CopilotAuthStartResponse
+      | CopilotAuthPollResponse
+      | CopilotAuthStatusResponse
+      | CopilotAuthCancelResponse
+      | CopilotAuthLogoutResponse,
+  ): void {
+    copilotAuthAttempt.value = state.attempt ?? null
+    syncCopilotTabState({
+      authKind: state.authKind,
+      authStatus: state.authStatus,
+      accountLabel: state.accountLabel,
+      authError: state.authError,
+    })
+  }
+
   // ── Actions ───────────────────────────────────────────────────────────────────
 
   /**
@@ -499,6 +596,7 @@ export function useBotConsole() {
       for (const id of MODEL_TAB_IDS) {
         modelTabsDraft[id] = { ...modelTabs.tabs.find(tab => tab.id === id) ?? createEmptyBuiltinModelTab(id) }
       }
+      copilotAuthAttempt.value = null
 
       const nextOverrides: Record<string, FeatureOverrideMode> = {}
       for (const item of mergedState?.featureOverrides ?? []) {
@@ -618,8 +716,8 @@ export function useBotConsole() {
       tabs: MODEL_TAB_IDS.map(id => ({
         ...modelTabsDraft[id],
         id,
-        title: id === 'siliconflow' ? '硅基流动' : 'OpenAI',
-        provider: id === 'siliconflow' ? 'siliconflow' : 'openai',
+        title: modelTabsDraft[id].title,
+        provider: modelTabsDraft[id].provider,
       })),
     }
 
@@ -662,6 +760,39 @@ export function useBotConsole() {
 
   function selectModelTab(id: BotConsoleModelTabId): void {
     activeModelTab.value = id
+  }
+
+  async function refreshCopilotAuthStatus(): Promise<CopilotAuthStatusResponse> {
+    const result = await send<CopilotAuthStatusResponse>('bot-console/copilot-auth/status')
+    applyCopilotAuthState(result)
+    return result
+  }
+
+  async function startCopilotAuth(): Promise<CopilotAuthStartResponse> {
+    const result = await send<CopilotAuthStartResponse>('bot-console/copilot-auth/start')
+    applyCopilotAuthState(result)
+    return result
+  }
+
+  async function pollCopilotAuth(attemptId: string): Promise<CopilotAuthPollResponse> {
+    const result = await send<CopilotAuthPollResponse>('bot-console/copilot-auth/poll', attemptId)
+    applyCopilotAuthState(result)
+    return result
+  }
+
+  async function cancelCopilotAuth(): Promise<CopilotAuthCancelResponse> {
+    const result = await send<CopilotAuthCancelResponse>(
+      'bot-console/copilot-auth/cancel',
+      copilotAuthAttempt.value?.attemptId ?? '',
+    )
+    applyCopilotAuthState(result)
+    return result
+  }
+
+  async function logoutCopilotAuth(): Promise<CopilotAuthLogoutResponse> {
+    const result = await send<CopilotAuthLogoutResponse>('bot-console/copilot-auth/logout')
+    applyCopilotAuthState(result)
+    return result
   }
 
   async function saveFeatureOverrides(): Promise<SaveFeatureOverridesResponse> {
@@ -1030,6 +1161,7 @@ export function useBotConsole() {
     modelTabsDraft,
     activeModelTab,
     originalModelTabs,
+    copilotAuthAttempt,
     featureOverrideDraft,
     originalFeatureOverrides,
     currentPreset,
@@ -1071,6 +1203,11 @@ export function useBotConsole() {
     saveModelTabs,
     saveModelSettings,
     selectModelTab,
+    refreshCopilotAuthStatus,
+    startCopilotAuth,
+    pollCopilotAuth,
+    cancelCopilotAuth,
+    logoutCopilotAuth,
     saveFeatureOverrides,
     saveFeatureSettings,
     getToolOverrideMode,

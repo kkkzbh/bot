@@ -1,7 +1,9 @@
-export type MainChatBuiltinTabId = 'siliconflow' | 'openai';
+export type MainChatBuiltinTabId = 'siliconflow' | 'openai' | 'copilot';
 export type MainChatProvider = 'siliconflow' | 'openai';
 export type MainChatRequestMode = 'chat_completions' | 'responses';
 export type StructuredOutputProtocol = 'chat_completions_json_schema' | 'responses_text_format';
+export type MainChatAuthKind = 'manual' | 'oauth_device';
+export type MainChatAuthStatus = 'unauthenticated' | 'pending' | 'ready' | 'expired' | 'error';
 
 export interface MainChatTabEnvKeys {
   baseUrl: string;
@@ -28,7 +30,7 @@ export interface MainChatStructuredOutputSpec {
 }
 
 export interface MainChatProviderStrategy {
-  id: 'siliconflow-kimi-main-chat' | 'openai-gpt54-main-chat';
+  id: 'siliconflow-kimi-main-chat' | 'openai-gpt54-main-chat' | 'copilot-github-oauth-main-chat';
   platform: MainChatProvider;
   requestMode: MainChatRequestMode;
   structuredOutputProtocol: StructuredOutputProtocol;
@@ -46,6 +48,10 @@ export interface MainChatRuntimeProfile {
   strategyId: MainChatProviderStrategy['id'];
   requestMode: MainChatRequestMode;
   structuredOutputProtocol: StructuredOutputProtocol;
+  authKind: MainChatAuthKind;
+  authStatus: MainChatAuthStatus;
+  accountLabel?: string | null;
+  authError?: string | null;
   baseUrl: string;
   apiKey: string;
   defaultModel: string;
@@ -62,7 +68,9 @@ export const WYZAI_DEFAULT_API_KEY = 'sk-AU2PaFWvQImSIbTtXkx9t286QyCgUUh8Ith5R0m
 export const OPENAI_DEFAULT_MODEL = 'openai/gpt-5.4-medium-thinking';
 export const SILICONFLOW_DEFAULT_BASE_URL = 'https://api.siliconflow.cn/v1';
 export const SILICONFLOW_DEFAULT_MODEL = 'siliconflow/Pro/moonshotai/Kimi-K2.5';
-export const MAIN_CHAT_BUILTIN_TAB_IDS = ['siliconflow', 'openai'] as const satisfies readonly MainChatBuiltinTabId[];
+export const COPILOT_BRIDGE_DEFAULT_BASE_URL = 'http://127.0.0.1:5140/api/internal/copilot/v1';
+export const COPILOT_DEFAULT_MODEL = 'gpt-5.4-mini';
+export const MAIN_CHAT_BUILTIN_TAB_IDS = ['siliconflow', 'openai', 'copilot'] as const satisfies readonly MainChatBuiltinTabId[];
 
 const BASE_STRUCTURED_REPLY_MESSAGE_ITEMS = {
   anyOf: [
@@ -199,6 +207,19 @@ export const BUILTIN_MAIN_CHAT_TABS: readonly BuiltinTabDefinition[] = [
     defaultModel: OPENAI_DEFAULT_MODEL,
     strategyId: 'openai-gpt54-main-chat',
   },
+  {
+    id: 'copilot',
+    title: 'GitHub Copilot',
+    provider: 'openai',
+    envKeys: {
+      baseUrl: 'CHATLUNA_COPILOT_BASE_URL',
+      apiKey: 'CHATLUNA_COPILOT_API_KEY',
+      defaultModel: 'CHATLUNA_COPILOT_DEFAULT_MODEL',
+    },
+    defaultBaseUrl: COPILOT_BRIDGE_DEFAULT_BASE_URL,
+    defaultModel: COPILOT_DEFAULT_MODEL,
+    strategyId: 'copilot-github-oauth-main-chat',
+  },
 ] as const;
 
 export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] = [
@@ -268,6 +289,37 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       };
     },
   },
+  {
+    id: 'copilot-github-oauth-main-chat',
+    platform: 'openai',
+    requestMode: 'responses',
+    structuredOutputProtocol: 'responses_text_format',
+    supportsModel: isCopilotModelId,
+    buildRequestOverride(model) {
+      if (!isCopilotModelId(model)) return null;
+      return {
+        qqbot_request_mode: 'responses',
+        qqbot_tool_profile: 'qqbot_openai_main_chat',
+      };
+    },
+    buildStructuredOutputSpec(model) {
+      return {
+        requestMode: 'responses',
+        structuredOutputProtocol: 'responses_text_format',
+        finalResponseSchema: OPENAI_STRUCTURED_REPLY_V1_JSON_SCHEMA,
+        overrideRequestParams: this.buildRequestOverride(model),
+      };
+    },
+    normalizeModel(model) {
+      return normalizeCopilotModelId(model);
+    },
+    describeForConsole() {
+      return {
+        description: '当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 交换 Copilot session token 并走 Responses API。',
+        modelHint: '推荐填写 gpt-5.4-mini。该 Tab 使用 GitHub device-flow OAuth，不再手填 PAT。',
+      };
+    },
+  },
 ] as const;
 
 export function getBuiltinMainChatTabDefinition(id: MainChatBuiltinTabId): BuiltinTabDefinition {
@@ -292,7 +344,7 @@ export function getMainChatProviderStrategyForTab(id: MainChatBuiltinTabId): Mai
 
 export function normalizeMainChatBuiltinTabId(value: unknown): MainChatBuiltinTabId {
   const normalized = String(value ?? '').trim();
-  if (normalized === 'siliconflow' || normalized === 'openai') {
+  if (normalized === 'siliconflow' || normalized === 'openai' || normalized === 'copilot') {
     return normalized;
   }
   throw new Error(`不支持这个模型 Tab：${normalized || 'unknown'}`);
@@ -308,7 +360,8 @@ export function resolveMainChatRuntimeProfileFromEnv(env: Record<string, string>
 
 export function resolveMainChatActiveTabFromEnv(env: Record<string, string> | NodeJS.ProcessEnv): MainChatBuiltinTabId {
   const raw = String(env.CHATLUNA_ACTIVE_TAB ?? '').trim();
-  return raw === 'openai' ? 'openai' : 'siliconflow';
+  if (raw === 'openai' || raw === 'copilot') return raw;
+  return 'siliconflow';
 }
 
 export function resolveMainChatTabStateFromEnv(
@@ -340,9 +393,13 @@ export function resolveMainChatTabStateFromEnv(
     strategyId: strategy.id,
     requestMode: strategy.requestMode,
     structuredOutputProtocol: strategy.structuredOutputProtocol,
+    authKind: id === 'copilot' ? 'oauth_device' : 'manual',
+    authStatus: apiKey ? 'ready' : id === 'copilot' ? 'unauthenticated' : 'ready',
+    accountLabel: null,
+    authError: null,
     baseUrl,
     apiKey,
-    defaultModel,
+    defaultModel: strategy.normalizeModel(defaultModel) ?? definition.defaultModel,
     description,
     modelHint,
   };
@@ -368,9 +425,13 @@ export function resolveMainChatRuntimeProfileFromTabConfig(
     strategyId: strategy.id,
     requestMode: strategy.requestMode,
     structuredOutputProtocol: strategy.structuredOutputProtocol,
+    authKind: activeTab === 'copilot' ? 'oauth_device' : 'manual',
+    authStatus: activeConfig.apiKey.trim() ? 'ready' : activeTab === 'copilot' ? 'unauthenticated' : 'ready',
+    accountLabel: null,
+    authError: null,
     baseUrl: activeConfig.baseUrl.trim(),
     apiKey: activeConfig.apiKey.trim(),
-    defaultModel: activeConfig.defaultModel.trim(),
+    defaultModel: strategy.normalizeModel(activeConfig.defaultModel) ?? definition.defaultModel,
     description,
     modelHint,
   };
@@ -383,6 +444,7 @@ export function buildMainChatRuntimeEnvPatch(
   const runtimeProfile = resolveMainChatRuntimeProfileFromTabConfig(activeTab, tabs);
   const siliconflowTab = requireMainChatTabConfig(tabs, 'siliconflow');
   const openaiTab = requireMainChatTabConfig(tabs, 'openai');
+  const copilotTab = requireMainChatTabConfig(tabs, 'copilot');
 
   return {
     CHATLUNA_ACTIVE_TAB: activeTab,
@@ -396,6 +458,9 @@ export function buildMainChatRuntimeEnvPatch(
     CHATLUNA_OPENAI_BASE_URL: openaiTab.baseUrl.trim(),
     CHATLUNA_OPENAI_API_KEY: openaiTab.apiKey.trim(),
     CHATLUNA_OPENAI_DEFAULT_MODEL: openaiTab.defaultModel.trim(),
+    CHATLUNA_COPILOT_BASE_URL: copilotTab.baseUrl.trim(),
+    CHATLUNA_COPILOT_API_KEY: copilotTab.apiKey.trim(),
+    CHATLUNA_COPILOT_DEFAULT_MODEL: copilotTab.defaultModel.trim(),
   };
 }
 
@@ -452,6 +517,26 @@ function isOpenAIGpt54ModelFamily(model?: string | null): boolean {
   if (!value || !value.startsWith('openai/')) return false;
   const normalized = value.slice('openai/'.length);
   return /^gpt-5\.4(?:-(?:non|minimal|low|medium|high|xhigh)-thinking|-thinking)?$/i.test(normalized);
+}
+
+function normalizeCopilotModelId(model?: string | null): string | null {
+  const value = model?.trim();
+  if (!value) return null;
+  if (value.startsWith('openai/')) {
+    return value.slice('openai/'.length).trim() || null;
+  }
+  if (value.startsWith('github-copilot/')) {
+    return value.slice('github-copilot/'.length).trim() || null;
+  }
+  return value;
+}
+
+function isCopilotModelId(model?: string | null): boolean {
+  const normalized = normalizeCopilotModelId(model);
+  if (!normalized) return false;
+  if (/\s/.test(normalized)) return false;
+  if (normalized.includes('://')) return false;
+  return true;
 }
 
 function resolveOpenAIGpt54ReasoningEffort(model?: string | null): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' {

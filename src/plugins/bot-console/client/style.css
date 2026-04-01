@@ -285,6 +285,38 @@
     line-height: 1.5;
 }
 
+.bc-model-auth-card {
+    padding: 1rem;
+    border: 1px solid var(--k-card-border);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--k-card-bg) 86%, var(--k-page-bg));
+}
+
+.bc-model-auth-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.bc-model-auth-head p {
+    margin: 0.35rem 0 0;
+}
+
+.bc-model-auth-body {
+    display: grid;
+    gap: 0.45rem;
+    margin: 0.85rem 0 1rem;
+}
+
+.bc-model-auth-body p {
+    margin: 0;
+    color: var(--bc-text-secondary);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
 .bc-panel-head > div > p,
 .bc-panel > p {
     margin: 0;

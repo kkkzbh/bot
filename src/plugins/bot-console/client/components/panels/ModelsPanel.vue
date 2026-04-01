@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useToast } from '../../composables/useToast'
 import { MODEL_SHARED_KEYS, MODEL_TAB_IDS } from '../../composables/useBotConsole'
 import { getFieldHint, getFieldLabel } from '../../utils/constants'
@@ -13,14 +13,24 @@ const {
   envDraft,
   changedKeys,
   activeModelTab,
+  copilotAuthAttempt,
   currentModelTabDraft,
   canSaveModelSettings,
   selectModelTab,
 } = bc
 
+const {
+  startCopilotAuth,
+  pollCopilotAuth,
+  cancelCopilotAuth,
+  logoutCopilotAuth,
+  refreshCopilotAuthStatus,
+} = bc
+
 const tabTitles: Record<BotConsoleModelTabId, string> = {
   siliconflow: '硅基流动',
   openai: 'OpenAI',
+  copilot: 'GitHub Copilot',
 }
 
 const currentTabModelHint = computed(() => currentModelTabDraft.value.modelHint)
@@ -33,6 +43,104 @@ function setTabField(key: 'baseUrl' | 'apiKey' | 'defaultModel', value: string) 
   currentModelTabDraft.value[key] = value
 }
 
+const isCopilotTab = computed(() => activeModelTab.value === 'copilot')
+const copilotStatusTone = computed(() => {
+  switch (currentModelTabDraft.value.authStatus) {
+    case 'ready':
+      return 'is-success'
+    case 'pending':
+      return 'is-warning'
+    case 'error':
+    case 'expired':
+      return 'is-danger'
+    default:
+      return 'is-muted'
+  }
+})
+const copilotStatusLabel = computed(() => {
+  switch (currentModelTabDraft.value.authStatus) {
+    case 'ready':
+      return '已登录'
+    case 'pending':
+      return '登录中'
+    case 'expired':
+      return '已过期'
+    case 'error':
+      return '错误'
+    default:
+      return '未登录'
+  }
+})
+
+let copilotPollTimer: number | null = null
+
+function stopCopilotPolling() {
+  if (copilotPollTimer != null) {
+    window.clearTimeout(copilotPollTimer)
+    copilotPollTimer = null
+  }
+}
+
+function scheduleCopilotPolling() {
+  stopCopilotPolling()
+  const attempt = copilotAuthAttempt.value
+  if (!attempt || attempt.state !== 'pending') return
+  const delay = Math.max(250, attempt.nextPollAt - Date.now())
+  copilotPollTimer = window.setTimeout(async () => {
+    try {
+      const result = await pollCopilotAuth(attempt.attemptId)
+      if (result.authStatus === 'ready') {
+        toastAdd('GitHub Copilot OAuth 登录成功', 'success')
+      } else if (result.authStatus === 'error' || result.authStatus === 'expired') {
+        toastAdd(result.authError || 'GitHub Copilot OAuth 登录失败', 'error')
+      }
+    } catch (err: unknown) {
+      toastAdd(err instanceof Error ? err.message : 'GitHub Copilot 状态轮询失败', 'error')
+    } finally {
+      scheduleCopilotPolling()
+    }
+  }, delay)
+}
+
+async function handleStartCopilotAuth() {
+  try {
+    const result = await startCopilotAuth()
+    scheduleCopilotPolling()
+    toastAdd(`请在浏览器中输入验证码 ${result.attempt?.userCode ?? ''}`, 'success')
+  } catch (err: unknown) {
+    toastAdd(err instanceof Error ? err.message : '发起 GitHub Copilot OAuth 失败', 'error')
+  }
+}
+
+async function handleCancelCopilotAuth() {
+  try {
+    await cancelCopilotAuth()
+    stopCopilotPolling()
+    toastAdd('已取消 GitHub Copilot OAuth 登录', 'success')
+  } catch (err: unknown) {
+    toastAdd(err instanceof Error ? err.message : '取消 GitHub Copilot OAuth 失败', 'error')
+  }
+}
+
+async function handleLogoutCopilotAuth() {
+  try {
+    await logoutCopilotAuth()
+    stopCopilotPolling()
+    toastAdd('GitHub Copilot 授权已清除', 'success')
+  } catch (err: unknown) {
+    toastAdd(err instanceof Error ? err.message : '退出 GitHub Copilot OAuth 失败', 'error')
+  }
+}
+
+async function handleRefreshCopilotAuth() {
+  try {
+    await refreshCopilotAuthStatus()
+    toastAdd('GitHub Copilot 状态已刷新', 'success')
+  } catch (err: unknown) {
+    toastAdd(err instanceof Error ? err.message : '刷新 GitHub Copilot 状态失败', 'error')
+  }
+}
+
 async function handleSave() {
   try {
     await bc.saveModelSettings(false)
@@ -41,6 +149,29 @@ async function handleSave() {
     toastAdd(err instanceof Error ? err.message : '保存失败', 'error')
   }
 }
+
+watch(copilotAuthAttempt, () => {
+  scheduleCopilotPolling()
+})
+
+watch(activeModelTab, (tabId) => {
+  if (tabId === 'copilot') {
+    void refreshCopilotAuthStatus().catch(() => null)
+  } else {
+    stopCopilotPolling()
+  }
+})
+
+onMounted(() => {
+  if (activeModelTab.value === 'copilot') {
+    void refreshCopilotAuthStatus().catch(() => null)
+  }
+  scheduleCopilotPolling()
+})
+
+onBeforeUnmount(() => {
+  stopCopilotPolling()
+})
 </script>
 
 <template>
@@ -48,7 +179,7 @@ async function handleSave() {
     <div class="bc-panel-head">
       <div>
         <h2>模型接口</h2>
-        <p>固定内置两个主聊天 provider Tab。保存后重启机器人生效。</p>
+        <p>固定内置三个主聊天 provider Tab。保存后重启机器人生效。</p>
       </div>
       <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
         <span
@@ -92,7 +223,11 @@ async function handleSave() {
           </div>
         </div>
 
-        <div class="bc-field-grid" style="margin-top: 1rem;">
+        <div
+          v-if="!isCopilotTab"
+          class="bc-field-grid"
+          style="margin-top: 1rem;"
+        >
           <label class="bc-field">
             <span class="bc-field-label">
               <span>对话模型接口地址</span>
@@ -139,6 +274,94 @@ async function handleSave() {
               @input="(e) => setTabField('defaultModel', (e.target as HTMLInputElement).value)"
             >
           </label>
+        </div>
+
+        <div
+          v-else
+          style="margin-top: 1rem; display: grid; gap: 1rem;"
+        >
+          <section class="bc-model-auth-card">
+            <div class="bc-model-auth-head">
+              <div>
+                <strong>GitHub OAuth 状态</strong>
+                <p class="bc-muted">本地与服务器登录状态独立保存。完成授权后，主聊天会通过本地 Copilot bridge 走 Responses API。</p>
+              </div>
+              <span :class="['bc-status-badge', copilotStatusTone]">{{ copilotStatusLabel }}</span>
+            </div>
+
+            <div class="bc-model-auth-body">
+              <p><strong>账号：</strong>{{ currentModelTabDraft.accountLabel || '未登录' }}</p>
+              <p><strong>Bridge：</strong>{{ currentModelTabDraft.baseUrl }}</p>
+              <p v-if="currentModelTabDraft.authError"><strong>错误：</strong>{{ currentModelTabDraft.authError }}</p>
+              <p v-if="copilotAuthAttempt">
+                <strong>验证码：</strong>
+                <code>{{ copilotAuthAttempt.userCode }}</code>
+                <a
+                  :href="copilotAuthAttempt.verificationUri"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style="margin-left: 0.5rem;"
+                >打开 GitHub 授权页</a>
+              </p>
+            </div>
+
+            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+              <button
+                class="bc-btn bc-btn-primary"
+                type="button"
+                :disabled="currentModelTabDraft.authStatus === 'pending'"
+                @click="handleStartCopilotAuth"
+              >
+                开始 OAuth 登录
+              </button>
+              <button
+                class="bc-btn"
+                type="button"
+                :disabled="!copilotAuthAttempt || currentModelTabDraft.authStatus !== 'pending'"
+                @click="handleCancelCopilotAuth"
+              >
+                取消登录
+              </button>
+              <button
+                class="bc-btn"
+                type="button"
+                :disabled="currentModelTabDraft.authStatus === 'unauthenticated'"
+                @click="handleLogoutCopilotAuth"
+              >
+                退出登录
+              </button>
+              <button
+                class="bc-btn"
+                type="button"
+                @click="handleRefreshCopilotAuth"
+              >
+                刷新状态
+              </button>
+            </div>
+          </section>
+
+          <div class="bc-field-grid">
+            <label class="bc-field">
+              <span class="bc-field-label">
+                <span>对话默认模型</span>
+                <span
+                  class="bc-field-help"
+                  tabindex="0"
+                  :aria-label="currentTabModelHint"
+                >
+                  <span aria-hidden="true">!</span>
+                  <span class="bc-field-tooltip" role="tooltip">{{ currentTabModelHint }}</span>
+                </span>
+              </span>
+              <input
+                type="text"
+                :value="currentModelTabDraft.defaultModel"
+                spellcheck="false"
+                autocomplete="off"
+                @input="(e) => setTabField('defaultModel', (e.target as HTMLInputElement).value)"
+              >
+            </label>
+          </div>
         </div>
       </div>
     </section>

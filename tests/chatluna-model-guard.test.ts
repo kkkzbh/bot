@@ -108,6 +108,10 @@ describe('buildStructuredReplyModelOverride', () => {
         effort: 'medium',
       },
     });
+    expect(buildStructuredReplyModelOverride('openai/gpt-4o')).toEqual({
+      qqbot_request_mode: 'responses',
+      qqbot_tool_profile: 'qqbot_openai_main_chat',
+    });
   });
 });
 
@@ -116,7 +120,8 @@ describe('supportsStructuredReplyJsonSchema', () => {
     expect(supportsStructuredReplyJsonSchema('siliconflow/Pro/moonshotai/Kimi-K2.5')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-5.4')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-5.4-medium-thinking')).toBe(true);
-    expect(supportsStructuredReplyJsonSchema('openai/gpt-5.3-codex')).toBe(false);
+    expect(supportsStructuredReplyJsonSchema('openai/gpt-4o')).toBe(true);
+    expect(supportsStructuredReplyJsonSchema('openai/gpt-5.3-codex')).toBe(true);
   });
 });
 
@@ -150,6 +155,18 @@ describe('buildStructuredReplyRequestSpec', () => {
         },
       },
     });
+
+    expect(
+      buildStructuredReplyRequestSpec({
+        model: 'gpt-4o',
+      }),
+    ).toMatchObject({
+      requestMode: 'responses',
+      structuredOutputProtocol: 'responses_text_format',
+      overrideRequestParams: {
+        qqbot_request_mode: 'responses',
+      },
+    });
   });
 });
 
@@ -159,6 +176,10 @@ describe('isSupportedMainChatModelForTab', () => {
     expect(isSupportedMainChatModelForTab('siliconflow', 'openai/gpt-5.4-medium-thinking')).toBe(false);
     expect(isSupportedMainChatModelForTab('openai', 'openai/gpt-5.4-medium-thinking')).toBe(true);
     expect(isSupportedMainChatModelForTab('openai', 'openai/gpt-5.2')).toBe(false);
+    expect(isSupportedMainChatModelForTab('copilot', 'gpt-4o')).toBe(true);
+    expect(isSupportedMainChatModelForTab('copilot', 'openai/gpt-4o')).toBe(true);
+    expect(isSupportedMainChatModelForTab('copilot', 'github-copilot/claude-haiku-4.5')).toBe(true);
+    expect(isSupportedMainChatModelForTab('copilot', 'bad model')).toBe(false);
   });
 });
 
@@ -189,6 +210,25 @@ describe('resolveMainChatRuntimeProfileFromEnv', () => {
       structuredOutputProtocol: 'responses_text_format',
       baseUrl: 'https://shell.wyzai.top/v1',
       defaultModel: 'openai/gpt-5.4-medium-thinking',
+    });
+  });
+
+  it('resolves the copilot tab into a Copilot OAuth runtime profile', () => {
+    expect(
+      resolveMainChatRuntimeProfileFromEnv({
+        CHATLUNA_ACTIVE_TAB: 'copilot',
+        CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+        CHATLUNA_COPILOT_API_KEY: 'bridge-secret',
+        CHATLUNA_COPILOT_DEFAULT_MODEL: 'gpt-5.4-mini',
+      }),
+    ).toMatchObject({
+      tabId: 'copilot',
+      provider: 'openai',
+      strategyId: 'copilot-github-oauth-main-chat',
+      requestMode: 'responses',
+      structuredOutputProtocol: 'responses_text_format',
+      baseUrl: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+      defaultModel: 'gpt-5.4-mini',
     });
   });
 });

@@ -17,6 +17,7 @@ import YAML from 'yaml';
 import type {
   BotConsoleEnvFilesState,
   BotConsoleBuiltinModelTab,
+  BotConsoleAuthStatus,
   BotConsoleModelTabId,
   BotConsoleModelTabsState,
   BotServiceStatus,
@@ -31,6 +32,7 @@ import type {
 import {
   buildMainChatRuntimeEnvPatch,
   getBuiltinMainChatTabDefinition,
+  getMainChatProviderStrategy,
   isSupportedMainChatModelForTab,
   MAIN_CHAT_BUILTIN_TAB_IDS,
   normalizeMainChatBuiltinTabId,
@@ -74,6 +76,7 @@ type BotConsoleManagerOptions = {
   bundledPresetDirPaths?: string[];
   fs?: FsLike;
   execFile?: (file: string, args: string[], options?: { cwd?: string; timeout?: number }) => Promise<ExecResult>;
+  copilotBridge?: CopilotBridgeStateProvider;
 };
 
 type EnvLine =
@@ -87,6 +90,23 @@ type BotConsoleStaticState = {
   presets: PresetSummary[];
   defaultPreset: string;
   modelTabs: BotConsoleModelTabsState;
+};
+
+type CopilotBridgeRuntimeConfig = {
+  baseUrl: string;
+  apiKey: string;
+};
+
+type CopilotBridgeConsoleState = {
+  authKind: 'oauth_device';
+  authStatus: BotConsoleAuthStatus;
+  accountLabel: string | null;
+  authError: string | null;
+};
+
+type CopilotBridgeStateProvider = {
+  getRuntimeConfig: () => Promise<CopilotBridgeRuntimeConfig>;
+  getConsoleStatus: (options?: { probe?: boolean }) => Promise<CopilotBridgeConsoleState>;
 };
 
 type ResolvedEnvFiles = {
@@ -135,6 +155,9 @@ export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
   { key: 'CHATLUNA_OPENAI_BASE_URL', label: 'OpenAI 接口地址', type: 'text', section: 'model' },
   { key: 'CHATLUNA_OPENAI_API_KEY', label: 'OpenAI 接口密钥', type: 'secret', section: 'model' },
   { key: 'CHATLUNA_OPENAI_DEFAULT_MODEL', label: 'OpenAI 默认模型', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_COPILOT_BASE_URL', label: 'GitHub Copilot 接口地址', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_COPILOT_API_KEY', label: 'GitHub Copilot Bridge 密钥', type: 'secret', section: 'model' },
+  { key: 'CHATLUNA_COPILOT_DEFAULT_MODEL', label: 'GitHub Copilot 默认模型', type: 'text', section: 'model' },
   { key: 'OPENAI_BASE_URL', label: '通用模型接口地址', type: 'text', section: 'model' },
   { key: 'OPENAI_API_KEY', label: '通用模型接口密钥', type: 'secret', section: 'model' },
   { key: 'OPENAI_MODEL', label: '通用默认模型', type: 'text', section: 'model' },
@@ -212,6 +235,8 @@ function normalizeModelTabInput(
   const id = normalizeMainChatBuiltinTabId(input?.id) as BotConsoleModelTabId;
   const defaultTab = resolveMainChatTabStateFromEnv(id, readManagedEnvFromContent('')) as BotConsoleBuiltinModelTab;
   const definition = getBuiltinMainChatTabDefinition(id);
+  const strategy = getMainChatProviderStrategy(definition.strategyId);
+  const normalizedModel = strategy.normalizeModel(String(input?.defaultModel ?? defaultTab.defaultModel ?? '').trim()) ?? '';
   const normalized: BotConsoleBuiltinModelTab = {
     id,
     title: definition.title,
@@ -221,9 +246,13 @@ function normalizeModelTabInput(
     structuredOutputProtocol: defaultTab.structuredOutputProtocol,
     description: defaultTab.description,
     modelHint: defaultTab.modelHint,
+    authKind: defaultTab.authKind,
+    authStatus: defaultTab.authStatus,
+    accountLabel: defaultTab.accountLabel,
+    authError: defaultTab.authError,
     baseUrl: String(input?.baseUrl ?? defaultTab.baseUrl ?? '').trim(),
     apiKey: String(input?.apiKey ?? defaultTab.apiKey ?? '').trim(),
-    defaultModel: String(input?.defaultModel ?? defaultTab.defaultModel ?? '').trim(),
+    defaultModel: normalizedModel,
   };
 
   if (!isSupportedMainChatModelForTab(id, normalized.defaultModel)) {
@@ -231,15 +260,6 @@ function normalizeModelTabInput(
   }
 
   return normalized;
-}
-
-function buildModelTabsPatch(input: SaveModelTabsRequest): EnvPatch {
-  const activeTab = normalizeMainChatBuiltinTabId(input?.activeTab) as BotConsoleModelTabId;
-  const providedTabs = Array.isArray(input?.tabs) ? input.tabs : [];
-  const tabs = providedTabs.map((item) => normalizeModelTabInput(item));
-  findRequiredModelTab(tabs, 'siliconflow');
-  findRequiredModelTab(tabs, 'openai');
-  return buildMainChatRuntimeEnvPatch(activeTab, tabs);
 }
 
 export function parseEnvLines(content: string): EnvLine[] {
@@ -570,6 +590,7 @@ export class BotConsoleManager {
   readonly allPresetDirPaths: string[];
   readonly fs: FsLike;
   readonly execFile: (file: string, args: string[], options?: { cwd?: string; timeout?: number }) => Promise<ExecResult>;
+  readonly copilotBridge?: CopilotBridgeStateProvider;
 
   constructor(options: BotConsoleManagerOptions = {}) {
     this.rootDir = options.rootDir ? resolve(options.rootDir) : DEFAULT_ROOT_DIR;
@@ -613,6 +634,7 @@ export class BotConsoleManager {
     }
     this.fs = options.fs ?? defaultFs();
     this.execFile = options.execFile ?? defaultExec;
+    this.copilotBridge = options.copilotBridge;
   }
 
   async getState(): Promise<BotConsoleStaticState> {
@@ -627,6 +649,7 @@ export class BotConsoleManager {
       readManagedEnvPatchFromContent(baseEnvContent),
       readManagedEnvPatchFromContent(overrideEnvContent),
     );
+    const modelTabs = await this.decorateModelTabsState(buildModelTabsStateFromEnv(env));
     return {
       env,
       envFiles: {
@@ -638,7 +661,7 @@ export class BotConsoleManager {
       services,
       presets,
       defaultPreset: env.CHATLUNA_DEFAULT_PRESET || 'sakiko',
-      modelTabs: buildModelTabsStateFromEnv(env),
+      modelTabs,
     };
   }
 
@@ -666,10 +689,10 @@ export class BotConsoleManager {
   }
 
   async saveModelTabs(input: SaveModelTabsRequest): Promise<{ env: Record<string, string>; modelTabs: BotConsoleModelTabsState }> {
-    const env = await this.saveEnv(buildModelTabsPatch(input));
+    const env = await this.saveEnv(await this.buildModelTabsPatch(input));
     return {
       env,
-      modelTabs: buildModelTabsStateFromEnv(env),
+      modelTabs: await this.decorateModelTabsState(buildModelTabsStateFromEnv(env)),
     };
   }
 
@@ -925,5 +948,47 @@ export class BotConsoleManager {
       }
     }
     return null;
+  }
+
+  private async buildModelTabsPatch(input: SaveModelTabsRequest): Promise<EnvPatch> {
+    const activeTab = normalizeMainChatBuiltinTabId(input?.activeTab) as BotConsoleModelTabId;
+    const providedTabs = Array.isArray(input?.tabs) ? input.tabs : [];
+    const tabs = providedTabs.map((item) => normalizeModelTabInput(item));
+
+    if (this.copilotBridge) {
+      const runtime = await this.copilotBridge.getRuntimeConfig();
+      const copilotTab = findRequiredModelTab(tabs, 'copilot');
+      copilotTab.baseUrl = runtime.baseUrl;
+      copilotTab.apiKey = runtime.apiKey;
+    }
+
+    findRequiredModelTab(tabs, 'siliconflow');
+    findRequiredModelTab(tabs, 'openai');
+    findRequiredModelTab(tabs, 'copilot');
+    return buildMainChatRuntimeEnvPatch(activeTab, tabs);
+  }
+
+  private async decorateModelTabsState(state: BotConsoleModelTabsState): Promise<BotConsoleModelTabsState> {
+    if (!this.copilotBridge) {
+      return state;
+    }
+
+    const runtime = await this.copilotBridge.getRuntimeConfig();
+    const consoleState = await this.copilotBridge.getConsoleStatus({ probe: false });
+    return {
+      activeTab: state.activeTab,
+      tabs: state.tabs.map((tab) => {
+        if (tab.id !== 'copilot') return tab;
+        return {
+          ...tab,
+          authKind: consoleState.authKind,
+          authStatus: consoleState.authStatus,
+          accountLabel: consoleState.accountLabel,
+          authError: consoleState.authError,
+          baseUrl: runtime.baseUrl,
+          apiKey: runtime.apiKey,
+        };
+      }),
+    };
   }
 }

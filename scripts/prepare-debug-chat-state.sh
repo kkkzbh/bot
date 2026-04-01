@@ -98,14 +98,14 @@ def parse_env_file(path: str) -> dict[str, str]:
 
 def resolve_runtime_room_config(env_values: dict[str, str]) -> tuple[str, str]:
     active_tab = env_values.get('CHATLUNA_ACTIVE_TAB', '').strip()
-    if active_tab == 'openai':
+    tab_model_key = {
+        'openai': 'CHATLUNA_OPENAI_DEFAULT_MODEL',
+        'siliconflow': 'CHATLUNA_SILICONFLOW_DEFAULT_MODEL',
+        'copilot': 'CHATLUNA_COPILOT_DEFAULT_MODEL',
+    }.get(active_tab)
+    if tab_model_key is not None:
         model = (
-            env_values.get('CHATLUNA_OPENAI_DEFAULT_MODEL', '').strip() or
-            env_values.get('CHATLUNA_DEFAULT_MODEL', '').strip()
-        )
-    elif active_tab == 'siliconflow':
-        model = (
-            env_values.get('CHATLUNA_SILICONFLOW_DEFAULT_MODEL', '').strip() or
+            env_values.get(tab_model_key, '').strip() or
             env_values.get('CHATLUNA_DEFAULT_MODEL', '').strip()
         )
     else:

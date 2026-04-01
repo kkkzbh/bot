@@ -70,17 +70,34 @@ export interface PresetDocument {
   raw?: string;
 }
 
-export type BotConsoleModelTabId = 'siliconflow' | 'openai';
+export type BotConsoleModelTabId = 'siliconflow' | 'openai' | 'copilot';
+export type BotConsoleAuthKind = 'manual' | 'oauth_device';
+export type BotConsoleAuthStatus = 'unauthenticated' | 'pending' | 'ready' | 'expired' | 'error';
+
+export interface CopilotAuthAttempt {
+  attemptId: string;
+  userCode: string;
+  verificationUri: string;
+  expiresAt: number;
+  intervalSec: number;
+  nextPollAt: number;
+  state: 'pending' | 'authorized' | 'expired' | 'failed' | 'cancelled';
+  error: string | null;
+}
 
 export interface BotConsoleBuiltinModelTab {
   id: BotConsoleModelTabId;
   title: string;
   provider: 'siliconflow' | 'openai';
-  strategyId: 'siliconflow-kimi-main-chat' | 'openai-gpt54-main-chat';
+  strategyId: 'siliconflow-kimi-main-chat' | 'openai-gpt54-main-chat' | 'copilot-github-oauth-main-chat';
   requestMode: 'chat_completions' | 'responses';
   structuredOutputProtocol: 'chat_completions_json_schema' | 'responses_text_format';
   description: string;
   modelHint: string;
+  authKind: BotConsoleAuthKind;
+  authStatus: BotConsoleAuthStatus;
+  accountLabel?: string | null;
+  authError?: string | null;
   baseUrl: string;
   apiKey: string;
   defaultModel: string;
@@ -216,6 +233,20 @@ export interface SaveModelTabsResponse {
   modelTabs: BotConsoleModelTabsState;
   restartRequired: boolean;
 }
+
+export interface CopilotAuthState {
+  authKind: 'oauth_device';
+  authStatus: BotConsoleAuthStatus;
+  accountLabel: string | null;
+  authError: string | null;
+  attempt: CopilotAuthAttempt | null;
+}
+
+export interface CopilotAuthStartResponse extends CopilotAuthState {}
+export interface CopilotAuthPollResponse extends CopilotAuthState {}
+export interface CopilotAuthStatusResponse extends CopilotAuthState {}
+export interface CopilotAuthCancelResponse extends CopilotAuthState {}
+export interface CopilotAuthLogoutResponse extends CopilotAuthState {}
 
 export interface SaveFeatureOverridesRequest {
   overrides: FeatureOverrideInput[];

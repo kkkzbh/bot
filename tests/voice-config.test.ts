@@ -59,6 +59,9 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('CHATLUNA_PLATFORM=siliconflow');
     expect(content).toContain('CHATLUNA_OPENAI_BASE_URL=https://shell.wyzai.top/v1');
     expect(content).toContain('CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking');
+    expect(content).toContain('CHATLUNA_COPILOT_BASE_URL=http://127.0.0.1:5140/api/internal/copilot/v1');
+    expect(content).toContain('CHATLUNA_COPILOT_DEFAULT_MODEL=gpt-5.4-mini');
+    expect(content).toContain('CHATLUNA_COPILOT_OAUTH_CLIENT_ID=Iv1.b507a08c87ecfe98');
     expect(content).toContain('PMHQ_BIND_HOST=127.0.0.1');
     expect(content).not.toContain('VOICE_TTS_GPT_WEIGHTS=/data/voice/tts/models/sakiko_v2pp-e15.ckpt');
     expect(content).not.toContain('VOICE_TTS_REF_BLACK=/data/voice/tts/references/black_sakiko.wav');
@@ -73,6 +76,7 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('QQ_VOICE_TTS_BASE_URL=');
     expect(content).toContain('CHATLUNA_ACTIVE_TAB=siliconflow');
     expect(content).toContain('CHATLUNA_OPENAI_BASE_URL=https://shell.wyzai.top/v1');
+    expect(content).toContain('CHATLUNA_COPILOT_BASE_URL=http://127.0.0.1:5140/api/internal/copilot/v1');
     expect(content).toContain('PMHQ_BIND_HOST=10.88.0.1');
     expect(content).toContain('# Server deploy does not run voice-asr.');
   });

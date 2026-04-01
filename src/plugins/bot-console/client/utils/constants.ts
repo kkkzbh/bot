@@ -19,6 +19,9 @@ export const FIELD_LABELS: Record<string, string> = {
   CHATLUNA_OPENAI_BASE_URL: 'OpenAI 接口地址',
   CHATLUNA_OPENAI_API_KEY: 'OpenAI 接口密钥',
   CHATLUNA_OPENAI_DEFAULT_MODEL: 'OpenAI 默认模型',
+  CHATLUNA_COPILOT_BASE_URL: 'GitHub Copilot Bridge 地址',
+  CHATLUNA_COPILOT_API_KEY: 'GitHub Copilot Bridge 密钥',
+  CHATLUNA_COPILOT_DEFAULT_MODEL: 'GitHub Copilot 默认模型',
   OPENAI_BASE_URL: '通用模型接口地址',
   OPENAI_API_KEY: '通用模型接口密钥',
   OPENAI_MODEL: '通用默认模型',
@@ -51,6 +54,8 @@ export const FIELD_HINTS: Record<string, string> = {
     '普通聊天默认走这里配置的模型。建议填写完整规范名，例如 siliconflow/Pro/moonshotai/Kimi-K2.5。',
   CHATLUNA_OPENAI_DEFAULT_MODEL:
     'OpenAI Tab 当前按 OpenAI 兼容 provider 处理，默认推荐 openai/gpt-5.4-medium-thinking。',
+  CHATLUNA_COPILOT_DEFAULT_MODEL:
+    'GitHub Copilot Tab 当前按 OAuth + 本地 bridge 处理，默认推荐 gpt-5.4-mini。',
   CHAT_NATURAL_TRIGGER_GROUPS:
     '只有填在这里的群号才会命中群聊自然触发。多个群号用英文逗号分隔；留空时不会在任何群自动触发。',
 }
