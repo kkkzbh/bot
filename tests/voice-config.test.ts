@@ -13,8 +13,8 @@ describe('qq voice config wiring', () => {
     expect(triggerIndex).toBeGreaterThan(voiceIndex);
     expect(chatlunaIndex).toBeGreaterThan(triggerIndex);
 
-    expect(content).toContain("asrBaseUrl: ${{ env.QQ_VOICE_ASR_BASE_URL || 'http://127.0.0.1:5161' }}");
-    expect(content).toContain("ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || 'http://127.0.0.1:5162' }}");
+    expect(content).toContain("asrBaseUrl: ${{ env.QQ_VOICE_ASR_BASE_URL || '' }}");
+    expect(content).toContain("ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || '' }}");
     expect(content).toContain('defaultModel: >-');
     expect(content).toContain("${{ env.CHATLUNA_DEFAULT_MODEL || 'siliconflow/Pro/moonshotai/Kimi-K2.5'");
     expect(content).toContain("platform: ${{ env.CHATLUNA_PLATFORM || 'siliconflow' }}");
@@ -153,6 +153,7 @@ describe('qq voice config wiring', () => {
     expect(content).toContain("--exclude='.env.local'");
     expect(content).toContain("--exclude='.env.server'");
     expect(content).toContain("cat > '${DEPLOY_APP_DIR}/.env.server'");
+    expect(content).toContain('node ./scripts/validate-server-voice-env.mjs "${VALIDATE_ENV_FILE}"');
     expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
     expect(content).toContain('exec pnpm exec koishi start koishi.yml');
     expect(content).not.toContain('export QQBOT_ENV_FILE=${APP_DIR}/.env.server');
@@ -180,6 +181,15 @@ describe('qq voice config wiring', () => {
     expect(content).toContain("keyMatches = [...sourceText.matchAll(/key:\\s*'([^']+)'/g)]");
     expect(content).toContain("find \"${BUNDLED_PRESET_DIR}\" -maxdepth 1 -type f");
     expect(content).toContain("touch \"${SEED_MARKER_FILE}\"");
+  });
+
+  it('ships a server voice env validator that rejects empty or loopback TTS settings', () => {
+    const content = readFileSync(resolve(process.cwd(), 'scripts/validate-server-voice-env.mjs'), 'utf8');
+
+    expect(content).toContain("QQ_VOICE_OUTPUT_ENABLED=true but QQ_VOICE_TTS_BASE_URL is empty.");
+    expect(content).toContain("QQ_VOICE_OUTPUT_ENABLED=true but QQ_VOICE_TTS_API_KEY is empty.");
+    expect(content).toContain('server QQ_VOICE_TTS_BASE_URL must point to laptop Tailnet TTS, not 127.0.0.1/localhost.');
+    expect(content).toContain('server deploy does not support QQ_VOICE_INPUT_ENABLED=true.');
   });
 
   it('lets stickers sync resolve local env first and server env second', () => {

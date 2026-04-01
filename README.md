@@ -140,9 +140,11 @@ session key quotas on the host.
 - Optional voice replies use different bot envs by runtime role:
   - local bot: set `QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162` in `.env.local`
   - server bot: set `QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162` in `.env.server`
+  - if the server cannot resolve MagicDNS reliably, use the laptop Tailscale IP instead, for example `http://100.x.y.z:5162`
   - keep `QQ_VOICE_TTS_API_KEY` identical between the bot env file in use and `config/voice-tts.local.env`
 - Server deploy no longer force-disables voice output in systemd.
   - if `QQ_VOICE_OUTPUT_ENABLED=true` on the server, it is expected to call your laptop-local TTS over Tailnet
+  - deploy now rejects `QQ_VOICE_OUTPUT_ENABLED=true` when `QQ_VOICE_TTS_BASE_URL` / `QQ_VOICE_TTS_API_KEY` are empty or point at loopback
   - if the laptop-local TTS gateway or its Tailnet publish layer is unavailable, server voice reply should be treated as unavailable rather than silently downgraded to a fake enabled state
 - The local TTS gateway itself should only listen on loopback:
   - set `VOICE_TTS_HOST=127.0.0.1` in `config/voice-tts.local.env`

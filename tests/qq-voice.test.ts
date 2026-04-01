@@ -338,6 +338,7 @@ function createHarness(overrides: {
     outputEnabled: true,
     asrBaseUrl: 'http://127.0.0.1:8081',
     ttsBaseUrl: 'http://127.0.0.1:8082',
+    ttsApiKey: 'qqbot-voice-tts-token',
     inputMaxSeconds: 60,
     outputMaxWords: 80,
     outputMaxSeconds: 45,
@@ -461,6 +462,7 @@ describe('qq voice plugin', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it('declares required services so reply plan middleware can register on the live chat chain', () => {
@@ -474,6 +476,45 @@ describe('qq voice plugin', () => {
         required: expect.arrayContaining(['chatluna', 'database']),
       }),
     );
+  });
+
+  it('fails fast when server voice output points at loopback', () => {
+    vi.stubEnv('QQBOT_ENV_BASE_FILE', '/opt/qqbot/current/.env.server');
+
+    expect(() =>
+      createHarness({
+        pluginConfig: {
+          inputEnabled: false,
+        },
+      }),
+    ).toThrow(
+      'server QQ voice output must point to a laptop Tailnet TTS endpoint, not a loopback address.',
+    );
+  });
+
+  it('fails fast when voice output is enabled without a TTS endpoint', () => {
+    expect(() =>
+      createHarness({
+        pluginConfig: {
+          ttsBaseUrl: '',
+          ttsApiKey: 'qqbot-voice-tts-token',
+        },
+      }),
+    ).toThrow('QQ voice output is enabled but QQ_VOICE_TTS_BASE_URL is empty.');
+  });
+
+  it('allows server voice output when it uses a non-loopback tailnet endpoint', () => {
+    vi.stubEnv('QQBOT_ENV_BASE_FILE', '/opt/qqbot/current/.env.server');
+
+    expect(() =>
+      createHarness({
+        pluginConfig: {
+          inputEnabled: false,
+          ttsBaseUrl: 'http://100.119.134.69:5162',
+          ttsApiKey: 'qqbot-voice-tts-token',
+        },
+      }),
+    ).not.toThrow();
   });
 
   it('serializes turns instead of interrupting when reply interrupt is disabled', async () => {

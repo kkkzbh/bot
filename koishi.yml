@@ -60,9 +60,9 @@ plugins:
     ./dist/plugins/reply:voice:
       inputEnabled: ${{ env.QQ_VOICE_INPUT_ENABLED !== 'false' }}
       outputEnabled: ${{ env.QQ_VOICE_OUTPUT_ENABLED !== 'false' }}
-      asrBaseUrl: ${{ env.QQ_VOICE_ASR_BASE_URL || 'http://127.0.0.1:5161' }}
+      asrBaseUrl: ${{ env.QQ_VOICE_ASR_BASE_URL || '' }}
       asrApiKey: ${{ env.QQ_VOICE_ASR_API_KEY || '' }}
-      ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || 'http://127.0.0.1:5162' }}
+      ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || '' }}
       ttsApiKey: ${{ env.QQ_VOICE_TTS_API_KEY || '' }}
       inputMaxSeconds: ${{ +env.QQ_VOICE_INPUT_MAX_SECONDS || 60 }}
       outputMaxWords: ${{ +env.QQ_VOICE_OUTPUT_MAX_WORDS || 80 }}

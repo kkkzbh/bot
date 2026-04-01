@@ -148,6 +148,7 @@ interface ReplyCapabilitySnapshot {
 interface ReplyTransportState {
   capabilitySnapshot?: ReplyCapabilitySnapshot;
   runId?: string;
+  suppressErrorNotice?: boolean;
 }
 
 interface ReplyV2State {
@@ -303,9 +304,10 @@ type ChatLunaChainLike = NonNullable<ChatLunaLike['chatChain']>;
 type ChatLunaChainBuilderLike = ReturnType<ChatLunaChainLike['middleware']>;
 
 type ContextWithChatLuna = Context & { chatluna?: ChatLunaLike; featurePolicy?: FeaturePolicyServiceLike };
+type RuntimeRole = 'local' | 'server' | 'unknown';
 
-function normalizeBaseUrl(input: string): string {
-  return input.trim().replace(/\/+$/, '');
+function normalizeBaseUrl(input?: string | null): string {
+  return String(input ?? '').trim().replace(/\/+$/, '');
 }
 
 function clampNatural(input: unknown, fallback: number): number {
@@ -313,14 +315,43 @@ function clampNatural(input: unknown, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
+function detectRuntimeRole(): RuntimeRole {
+  const candidates = [
+    process.env.QQBOT_ENV_BASE_FILE,
+    process.env.QQBOT_ENV_FILE,
+  ]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+
+  if (candidates.some((value) => value.endsWith('.env.server'))) {
+    return 'server';
+  }
+
+  if (candidates.some((value) => value.endsWith('.env.local'))) {
+    return 'local';
+  }
+
+  return 'unknown';
+}
+
+function isLoopbackUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.trim().toLowerCase();
+    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+  } catch {
+    return /:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::|\/|$)/i.test(url);
+  }
+}
+
 function toRuntimeConfig(config: Config): RuntimeConfig {
   return {
     inputEnabled: config.inputEnabled ?? String(process.env.QQ_VOICE_INPUT_ENABLED ?? 'true').toLowerCase() !== 'false',
     outputEnabled:
       config.outputEnabled ?? String(process.env.QQ_VOICE_OUTPUT_ENABLED ?? 'true').toLowerCase() !== 'false',
-    asrBaseUrl: normalizeBaseUrl(config.asrBaseUrl ?? process.env.QQ_VOICE_ASR_BASE_URL ?? 'http://127.0.0.1:8081'),
+    asrBaseUrl: normalizeBaseUrl(config.asrBaseUrl ?? process.env.QQ_VOICE_ASR_BASE_URL),
     asrApiKey: config.asrApiKey ?? process.env.QQ_VOICE_ASR_API_KEY ?? '',
-    ttsBaseUrl: normalizeBaseUrl(config.ttsBaseUrl ?? process.env.QQ_VOICE_TTS_BASE_URL ?? 'http://127.0.0.1:8082'),
+    ttsBaseUrl: normalizeBaseUrl(config.ttsBaseUrl ?? process.env.QQ_VOICE_TTS_BASE_URL),
     ttsApiKey: config.ttsApiKey ?? process.env.QQ_VOICE_TTS_API_KEY ?? '',
     inputMaxSeconds: clampNatural(config.inputMaxSeconds ?? process.env.QQ_VOICE_INPUT_MAX_SECONDS, 60),
     outputMaxWords: clampNatural(config.outputMaxWords ?? process.env.QQ_VOICE_OUTPUT_MAX_WORDS, 80),
@@ -339,6 +370,34 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
       8,
     ),
   };
+}
+
+function assertVoiceRuntimeConfig(runtime: RuntimeConfig): void {
+  const runtimeRole = detectRuntimeRole();
+
+  if (runtimeRole === 'server' && runtime.inputEnabled) {
+    throw new Error('server runtime does not support QQ voice input; keep QQ_VOICE_INPUT_ENABLED=false.');
+  }
+
+  if (runtime.inputEnabled && !runtime.asrBaseUrl) {
+    throw new Error('QQ voice input is enabled but QQ_VOICE_ASR_BASE_URL is empty.');
+  }
+
+  if (!runtime.outputEnabled) {
+    return;
+  }
+
+  if (!runtime.ttsBaseUrl) {
+    throw new Error('QQ voice output is enabled but QQ_VOICE_TTS_BASE_URL is empty.');
+  }
+
+  if (!runtime.ttsApiKey.trim()) {
+    throw new Error('QQ voice output is enabled but QQ_VOICE_TTS_API_KEY is empty.');
+  }
+
+  if (runtimeRole === 'server' && isLoopbackUrl(runtime.ttsBaseUrl)) {
+    throw new Error('server QQ voice output must point to a laptop Tailnet TTS endpoint, not a loopback address.');
+  }
 }
 
 function createAuthHeaders(apiKey: string): Record<string, string> {
@@ -1460,6 +1519,7 @@ function isReplyPlanSessionAvailable(session: Session): boolean {
 
 export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
+  assertVoiceRuntimeConfig(runtime);
   const featurePolicy = (ctx as ContextWithChatLuna).featurePolicy;
   const sendStrand = createKeyedStrandRunner();
   const replyOrchestrator = new ReplyOrchestratorService();
@@ -1686,6 +1746,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (getReplyRouteState(session) !== 'agent') {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
+        getReplyTransportState(session).suppressErrorNotice = true;
         const voiceFeatureState = await resolveVoiceFeatureState(session);
 
         const snapshot =

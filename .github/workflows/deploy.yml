@@ -265,6 +265,10 @@ jobs:
       - name: Sync runtime .env.server
         run: |
           set -euo pipefail
+          VALIDATE_ENV_FILE="$(mktemp)"
+          trap 'rm -f "${VALIDATE_ENV_FILE}"' EXIT
+          printf "%s" "${DEPLOY_DOTENV}" > "${VALIDATE_ENV_FILE}"
+          node ./scripts/validate-server-voice-env.mjs "${VALIDATE_ENV_FILE}"
           retry_ssh_pipe() {
             local attempt=1
             while true; do
