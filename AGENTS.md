@@ -24,10 +24,16 @@
 - 服务器部署代码来源固定为 GitHub Actions checkout + 同步，不再从当前工作区直接 `rsync` 到线上。
 - 线上应用目录固定为 `/opt/qqbot/current`，联动的本地 fork `chatluna` 目录为 `/opt/qqbot/chatluna`。
 - `chatluna` 固定使用你的 fork：`https://github.com/kkkzbh/chatluna.git`，不要切回上游仓库假设。
+- `chatluna` 分支约定固定为两条线：本地开发使用 `codex/*` 分支，服务器发布使用 fork 上的 `v1-dev`；不要额外引入第三套长期分支，也不要切回上游仓库分支。
+- 当 `qqbot` 变更依赖 `chatluna` 新能力时，先把对应 `codex/*` 改动整理进 fork 的 `v1-dev`，再触发服务器 deploy；不要假设服务器会直接读取本地 `codex/*` 工作分支。
 - `qqbot` 当前直接 link 到 `chatluna` 的 4 个包：`core`、`adapter-openai-like`、`extension-tools`、`service-search`；本地与服务器启动前都要确保这些 linked package 的 `lib/` 已构建。
 - 服务器运行态使用 `root` 的 user-level systemd：unit 位于 `/root/.config/systemd/user`，目标仍是 `qqbot.target`。
 - 不要重建旧的 `/etc/systemd/system/qqbot*.service` 或 `/etc/systemd/system/qqbot.target`；线上只认 root user-level unit。
 - 线上环境变量文件为 `/opt/qqbot/current/.env.server`，来源是 GitHub secret `QQBOT_DOTENV`。
+- 服务器运行时可变配置固定落在 `/opt/qqbot/shared`：
+  - `/opt/qqbot/shared/.env.runtime`：服务器控制台写入的运行时 env override，deploy 不覆盖
+  - `/opt/qqbot/shared/presets`：服务器控制台写入的运行时预设，优先级高于仓库内置预设
+- 服务器 systemd 启动按两层 env 加载：基础层 `/opt/qqbot/current/.env.server` + 运行时覆盖层 `/opt/qqbot/shared/.env.runtime`；排查配置生效问题时先同时检查这两层。
 - 服务器部署不支持 `voice-asr`，不要在服务器上构建或启动它。
 - 服务器若开启 `QQ_VOICE_OUTPUT_ENABLED=true`，语义上必须通过笔记本本地 TTS 的 Tailnet 地址提供语音回复；若笔记本本地 TTS 或 Tailnet 发布未就绪，则该能力应视为不可用。
 - 服务器容器栈只拉起 `pmhq + llonebot`；voice 仅保留本地环境。
