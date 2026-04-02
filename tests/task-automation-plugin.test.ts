@@ -50,6 +50,11 @@ vi.mock('koishi', () => {
     Session: class {},
     h: {
       at: (id: string) => `@${id}`,
+      text: (content: string) => ({
+        type: 'text',
+        attrs: { content },
+        children: [],
+      }),
     },
   };
 });
@@ -165,7 +170,11 @@ describe('task automation middleware', () => {
       }),
     );
     expect(session.send).toHaveBeenCalledWith(
-      '记住了，08:00提醒你关门',
+      {
+        type: 'text',
+        attrs: { content: '记住了，08:00提醒你关门' },
+        children: [],
+      },
       expect.any(Object),
     );
   });
