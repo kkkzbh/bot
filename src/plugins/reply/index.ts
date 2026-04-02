@@ -1,4 +1,12 @@
 export { Config, apply, inject, name, type Config as ReplyConfig } from './voice/generation.js';
+export {
+  createAudioDataUri,
+  createVoiceRuntimeConfig,
+  ensureCanSendRecord,
+  isVoiceOutputConfigured,
+  synthesizeVoice,
+  type OneBotBotLike,
+} from './voice/generation.js';
 export { formatStructuredLogBlock } from './pipeline/debug.js';
 export {
   buildNaturalTriggerReference,
@@ -11,3 +19,8 @@ export {
   type UserTurnIntentMode,
   type UserTurnIntentState,
 } from './prompt/time-context.js';
+export {
+  normalizeVoiceSynthesisText,
+  pickVoiceStyle,
+  type VoiceStyle,
+} from './voice/tts.js';

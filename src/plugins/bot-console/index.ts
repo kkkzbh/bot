@@ -2,7 +2,7 @@ import '@koishijs/plugin-console';
 import { join } from 'node:path';
 import { Context, Logger } from 'koishi';
 import { BotConsoleManager, resolveBotEnvFiles } from './server.js';
-import { CopilotOAuthBridgeService } from '../copilot-oauth/service.js';
+import { CopilotOAuthBridgeService } from '../copilot-oauth/index.js';
 import type {
   BotConsoleProbeResult,
   BotConsoleMemoryState,

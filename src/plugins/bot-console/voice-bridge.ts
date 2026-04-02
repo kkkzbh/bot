@@ -6,9 +6,11 @@ import {
   isVoiceOutputConfigured,
   synthesizeVoice,
   type OneBotBotLike,
-} from '../reply/voice/generation.js';
+  normalizeVoiceSynthesisText,
+  pickVoiceStyle,
+  type VoiceStyle,
+} from '../reply/index.js';
 import { createBotMessageDispatchers } from '../shared/outbound/index.js';
-import { normalizeVoiceSynthesisText, pickVoiceStyle, type VoiceStyle } from '../reply/voice/tts.js';
 
 export interface QqVoiceBridgeRequest {
   chatType: 'private' | 'group';
