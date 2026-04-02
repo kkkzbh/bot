@@ -93,7 +93,7 @@ export type BotMessageContent = string | ReturnType<typeof h> | Array<ReturnType
 export type BotMessageSender = {
   sendMessage: (
     channelId: string,
-    content: string,
+    content: BotMessageContent,
     guildId?: string,
     options?: Universal.SendOptions,
   ) => Promise<unknown>;
@@ -245,10 +245,26 @@ export function createBotMessageDispatchers(
 } {
   return {
     sendWhole: async (content: BotMessageContent) =>
-      bot.sendMessage(channelId, content as never, undefined, createBypassLineSplitOptions(session)),
+      bot.sendMessage(channelId, toExplicitMessageContent(content), undefined, createBypassLineSplitOptions(session)),
     sendLine: async (line: BotMessageContent) =>
-      bot.sendMessage(channelId, line as never, undefined, createBypassLineSplitOptions(session)),
+      bot.sendMessage(channelId, toExplicitMessageContent(line), undefined, createBypassLineSplitOptions(session)),
   };
+}
+
+export function createSessionMessageDispatchers(session: Session): {
+  sendWhole: (content: BotMessageContent) => Promise<unknown>;
+  sendLine: (line: BotMessageContent) => Promise<unknown>;
+} {
+  return {
+    sendWhole: async (content: BotMessageContent) =>
+      session.send(toExplicitMessageContent(content) as never, createBypassLineSplitOptions(session)),
+    sendLine: async (line: BotMessageContent) =>
+      session.send(toExplicitMessageContent(line) as never, createBypassLineSplitOptions(session)),
+  };
+}
+
+function toExplicitMessageContent(content: BotMessageContent): Exclude<BotMessageContent, string> {
+  return typeof content === 'string' ? h.text(content) : content;
 }
 
 function toMessageElements(content: BotMessageContent): Array<ReturnType<typeof h>> {
@@ -566,8 +582,8 @@ export async function sendByLinesWithSmartInterval(
 
 export async function dispatchNormalizedOutboundMessage(
   message: NormalizedOutboundMessage,
-  sendWhole: (content: string) => Promise<unknown>,
-  sendLine: (line: string) => Promise<unknown>,
+  sendWhole: (content: BotMessageContent) => Promise<unknown>,
+  sendLine: (line: BotMessageContent) => Promise<unknown>,
 ): Promise<void> {
   if (message.mode === 'preserve') {
     if (!message.content.trim()) return;

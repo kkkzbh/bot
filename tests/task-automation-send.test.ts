@@ -37,12 +37,14 @@ vi.mock('koishi', () => {
       const: vi.fn(() => ({})),
     },
     Session: class {},
-    h: { at: vi.fn((id: string) => `@${id}`) },
+    h: {
+      at: vi.fn((id: string) => ({ type: 'at', attrs: { id }, children: [] })),
+      text: vi.fn((content: string) => ({ type: 'text', attrs: { content }, children: [] })),
+    },
   };
 });
 
-import { normalizeOutboundMessage } from '../src/plugins/shared/outbound/index.js';
-import { prependGroupMention, sendBotMessageByLines } from '../src/plugins/automation/index.js';
+import { sendBotMessageByLines } from '../src/plugins/automation/index.js';
 
 describe('task automation outbound send', () => {
   afterEach(() => {
@@ -50,9 +52,9 @@ describe('task automation outbound send', () => {
   });
 
   it('sends qqbot multiline payload as one bot message', async () => {
-    const calls: Array<[string, string, string | undefined, unknown]> = [];
+    const calls: Array<[string, unknown, string | undefined, unknown]> = [];
     const bot = {
-      sendMessage: vi.fn(async (channelId: string, content: string, guildId?: string, options?: unknown) => {
+      sendMessage: vi.fn(async (channelId: string, content: unknown, guildId?: string, options?: unknown) => {
         calls.push([channelId, content, guildId, options]);
         return ['msg-id'];
       }),
@@ -65,21 +67,79 @@ describe('task automation outbound send', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[0]).toBe('group-100');
-    expect(calls[0]?.[1]).toBe('第一行\n第二行');
+    expect(calls[0]?.[1]).toEqual({
+      type: 'text',
+      attrs: { content: '第一行\n第二行' },
+      children: [],
+    });
     expect(calls[0]?.[3]).toBeTruthy();
   });
 
-  it('puts group mention on its own first line for preserve mode', () => {
-    expect(prependGroupMention({ mode: 'preserve', content: '第一行\n第二行' }, '@123456')).toEqual({
-      mode: 'preserve',
-      content: '@123456\n第一行\n第二行',
-    });
+  it('sends preserve-mode group mention as an explicit mention plus text block', async () => {
+    const calls: Array<[string, unknown, string | undefined, unknown]> = [];
+    const bot = {
+      sendMessage: vi.fn(async (channelId: string, content: unknown, guildId?: string, options?: unknown) => {
+        calls.push([channelId, content, guildId, options]);
+        return ['msg-id'];
+      }),
+    };
+
+    await sendBotMessageByLines(
+      bot,
+      'group-100',
+      {
+        mode: 'preserve',
+        content: '第一行\n第二行',
+      },
+      { mentionUserId: '123456' },
+    );
+
+    expect(calls).toEqual([
+      [
+        'group-100',
+        [
+          { type: 'at', attrs: { id: '123456' }, children: [] },
+          { type: 'text', attrs: { content: '\n第一行\n第二行' }, children: [] },
+        ],
+        undefined,
+        expect.anything(),
+      ],
+    ]);
   });
 
-  it('keeps split-mode group mention on the first line with a space', () => {
-    expect(prependGroupMention(normalizeOutboundMessage('第一行\n第二行'), '@123456')).toEqual({
-      mode: 'split',
-      content: '@123456 第一行\n第二行',
+  it('sends split-mode group mention only on the first line', async () => {
+    vi.useFakeTimers();
+    const calls: Array<[string, unknown, string | undefined, unknown]> = [];
+    const bot = {
+      sendMessage: vi.fn(async (channelId: string, content: unknown, guildId?: string, options?: unknown) => {
+        calls.push([channelId, content, guildId, options]);
+        return ['msg-id'];
+      }),
+    };
+
+    const pending = sendBotMessageByLines(bot, 'group-100', '第一行\n第二行', {
+      mentionUserId: '123456',
     });
+
+    await vi.runAllTimersAsync();
+    await pending;
+
+    expect(calls).toEqual([
+      [
+        'group-100',
+        [
+          { type: 'at', attrs: { id: '123456' }, children: [] },
+          { type: 'text', attrs: { content: ' 第一行' }, children: [] },
+        ],
+        undefined,
+        expect.anything(),
+      ],
+      [
+        'group-100',
+        { type: 'text', attrs: { content: '第二行' }, children: [] },
+        undefined,
+        expect.anything(),
+      ],
+    ]);
   });
 });

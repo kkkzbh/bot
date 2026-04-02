@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildOutboundMessagePlanFromReplyPlan,
   calculateSmartSendDelayMs,
+  createBotMessageDispatchers,
   createQuotedMessageContent,
   createTextOnlyOutboundMessagePlan,
   createKeyedStrandRunner,
@@ -36,6 +37,7 @@ import {
   resolveReplyQueueKey,
   resolveSessionStrandKey,
   sanitizeLeakedReasoningMessage,
+  sendBotMessageByNormalizedContent,
   sendByLinesWithSmartInterval,
   splitMessageByLines,
 } from '../src/plugins/shared/outbound/index.js';
@@ -211,6 +213,46 @@ describe('message send utils', () => {
     ]);
   });
 
+  it('sends plain bot text as explicit text elements instead of raw strings', async () => {
+    const calls: Array<{ channelId: string; content: unknown; options: unknown }> = [];
+    const bot = {
+      sendMessage: vi.fn(async (channelId: string, content: unknown, _guildId?: string, options?: unknown) => {
+        calls.push({ channelId, content, options });
+        return ['msg-id'];
+      }),
+    };
+
+    await sendBotMessageByNormalizedContent(bot, 'group-100', {
+      mode: 'preserve',
+      content: '#include <bits/stdc++.h>\nusing namespace std;',
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      channelId: 'group-100',
+      content: {
+        type: 'text',
+        attrs: {
+          content: '#include <bits/stdc++.h>\nusing namespace std;',
+        },
+      },
+    });
+    expect(typeof calls[0]?.content).not.toBe('string');
+    expect(calls[0]?.options).toBeTruthy();
+  });
+
+  it('keeps non-text elements intact when dispatchers send them', async () => {
+    const audio = { type: 'audio', attrs: { src: 'data:audio/wav;base64,abc' }, children: [] };
+    const bot = {
+      sendMessage: vi.fn(async () => ['msg-id']),
+    };
+
+    const { sendWhole } = createBotMessageDispatchers(bot, 'group-100');
+    await sendWhole(audio as never);
+
+    expect(bot.sendMessage).toHaveBeenCalledWith('group-100', audio, undefined, expect.anything());
+  });
+
   it('prepends quote to non-text element content without stringifying it', () => {
     const image = { type: 'img', attrs: { src: 'asset://image-1' }, children: [] };
     expect(createQuotedMessageContent(image as never, 'msg-2')).toEqual([
@@ -265,8 +307,8 @@ describe('message send utils', () => {
   });
 
   it('dispatches preserve mode as a single multiline message', async () => {
-    const sentWhole: string[] = [];
-    const sentLine: string[] = [];
+    const sentWhole: unknown[] = [];
+    const sentLine: unknown[] = [];
     await dispatchNormalizedOutboundMessage(
       {
         mode: 'preserve',

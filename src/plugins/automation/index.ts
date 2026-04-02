@@ -1,5 +1,5 @@
 import 'koishi-plugin-cron';
-import { Context, h, Logger, Schema, Session, type Universal } from 'koishi';
+import { Context, h, Logger, Schema, Session } from 'koishi';
 import { parseExpression } from 'cron-parser';
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
 import type { AutomationTask, TaskScope } from '../../types/task-automation.js';
@@ -23,8 +23,13 @@ import {
   type AutomationLlmRuntime,
 } from './llm.js';
 import {
-  createBypassLineSplitOptions,
+  calculateSmartSendDelayMs,
+  createBotMessageDispatchers,
+  createSessionMessageDispatchers,
   dispatchNormalizedOutboundMessage,
+  splitMessageByLines,
+  type BotMessageContent,
+  type BotMessageSender,
   type NormalizedOutboundMessage,
   normalizeOutboundMessage,
   sendBotMessageByNormalizedContent,
@@ -493,45 +498,96 @@ function resolveTaskBot(ctx: Context, task: AutomationTask) {
 
 async function sendSessionMessageByLines(session: Session, message: string): Promise<void> {
   const normalized = normalizeOutboundMessage(message);
+  const { sendWhole, sendLine } = createSessionMessageDispatchers(session);
   await dispatchNormalizedOutboundMessage(
     normalized,
-    async (content) => session.send(content, createBypassLineSplitOptions(session)),
-    async (line) => session.send(line),
+    sendWhole,
+    sendLine,
   );
 }
 
 async function sendSessionMessageOnce(session: Session, message: string): Promise<void> {
   const content = message.trim();
   if (!content) return;
-  await session.send(content, createBypassLineSplitOptions(session));
+  const { sendWhole } = createSessionMessageDispatchers(session);
+  await sendWhole(content);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createMentionedTextContent(userId: string, content: string, mode: 'preserve' | 'split'): BotMessageContent {
+  const normalizedUserId = userId.trim();
+  if (!normalizedUserId) {
+    return content;
+  }
+
+  const normalizedContent = content.trim();
+  if (!normalizedContent) {
+    return h.at(normalizedUserId);
+  }
+
+  return [h.at(normalizedUserId), h.text(mode === 'preserve' ? `\n${normalizedContent}` : ` ${normalizedContent}`)];
+}
+
+async function dispatchNormalizedMessageWithMention(
+  message: NormalizedOutboundMessage,
+  mentionUserId: string,
+  sendWhole: (content: BotMessageContent) => Promise<unknown>,
+  sendLine: (line: BotMessageContent) => Promise<unknown>,
+): Promise<void> {
+  const normalizedUserId = mentionUserId.trim();
+  if (!normalizedUserId) {
+    await dispatchNormalizedOutboundMessage(message, sendWhole, sendLine);
+    return;
+  }
+
+  if (message.mode === 'preserve') {
+    const content = message.content.trim();
+    if (!content) {
+      await sendWhole(h.at(normalizedUserId));
+      return;
+    }
+
+    await sendWhole(createMentionedTextContent(normalizedUserId, content, 'preserve'));
+    return;
+  }
+
+  const content = message.content.trim();
+  if (!content) {
+    await sendWhole(h.at(normalizedUserId));
+    return;
+  }
+
+  const lines = splitMessageByLines(content);
+  if (!lines.length) {
+    await sendWhole(h.at(normalizedUserId));
+    return;
+  }
+
+  await sendWhole(createMentionedTextContent(normalizedUserId, lines[0], 'split'));
+
+  for (let index = 1; index < lines.length; index += 1) {
+    await sleep(calculateSmartSendDelayMs(lines[index - 1]!));
+    await sendLine(lines[index]!);
+  }
 }
 
 export async function sendBotMessageByLines(
-  bot: {
-    sendMessage: (
-      channelId: string,
-      content: string,
-      guildId?: string,
-      options?: Universal.SendOptions,
-    ) => Promise<unknown>;
-  },
+  bot: BotMessageSender,
   channelId: string,
   message: string | NormalizedOutboundMessage,
+  options: { mentionUserId?: string } = {},
 ): Promise<void> {
-  await sendBotMessageByNormalizedContent(bot, channelId, message);
-}
-
-export function prependGroupMention(message: NormalizedOutboundMessage, mention: string): NormalizedOutboundMessage {
-  const prefix = mention.trim();
-  if (!prefix) return message;
-  if (!message.content.trim()) {
-    return { ...message, content: prefix };
+  const normalized = typeof message === 'string' ? normalizeOutboundMessage(message) : message;
+  if (!options.mentionUserId?.trim()) {
+    await sendBotMessageByNormalizedContent(bot, channelId, normalized);
+    return;
   }
 
-  return {
-    ...message,
-    content: message.mode === 'preserve' ? `${prefix}\n${message.content}` : `${prefix} ${message.content}`,
-  };
+  const { sendWhole, sendLine } = createBotMessageDispatchers(bot, channelId);
+  await dispatchNormalizedMessageWithMention(normalized, options.mentionUserId, sendWhole, sendLine);
 }
 
 async function sendTaskMessage(ctx: Context, task: AutomationTask, runtime: RuntimeConfig): Promise<boolean> {
@@ -543,10 +599,10 @@ async function sendTaskMessage(ctx: Context, task: AutomationTask, runtime: Runt
 
   const finalMessage = task.kind === 'once' ? task.message : await buildDeliveryMessage(task, runtime);
 
-  const normalized = normalizeOutboundMessage(finalMessage);
-  const content = task.scope === 'group' ? prependGroupMention(normalized, String(h.at(task.creatorId))) : normalized;
   try {
-    await sendBotMessageByLines(bot, task.channelId, content);
+    await sendBotMessageByLines(bot, task.channelId, finalMessage, {
+      mentionUserId: task.scope === 'group' ? task.creatorId : undefined,
+    });
     return true;
   } catch (error) {
     logger.warn('task #%d delivery failed: %s', task.id, (error as Error).message);

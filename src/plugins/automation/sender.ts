@@ -1,1 +1,1 @@
-export { prependGroupMention, sendBotMessageByLines } from './index.js';
+export { sendBotMessageByLines } from './index.js';

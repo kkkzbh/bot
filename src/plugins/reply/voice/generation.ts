@@ -18,8 +18,8 @@ import {
 } from './tts.js';
 import {
   buildOutboundMessagePlanFromReplyPlan,
-  createBypassLineSplitOptions,
   createBotMessageDispatchers,
+  createSessionMessageDispatchers,
   createQuotedMessageContent,
   createKeyedStrandRunner,
   dispatchOutboundMessagePlan,
@@ -27,6 +27,7 @@ import {
   resolveReplyQueueKey,
   sanitizeStructuredReplySegmentContent,
   sendBotMessageByNormalizedContent,
+  type BotMessageContent,
   type OutboundMessagePlan,
   type OutboundMessageSegment,
   type ReplyTransportPlan,
@@ -179,7 +180,7 @@ export type OneBotBotLike = {
   internal?: OneBotInternalLike;
   sendMessage: (
     channelId: string,
-    content: string,
+    content: BotMessageContent,
     guildId?: string,
     options?: Universal.SendOptions,
   ) => Promise<unknown>;
@@ -657,7 +658,8 @@ function updateVoiceState(session: SessionWithVoiceState, state: QqVoiceState): 
 
 async function sendFailureReply(session: SessionWithVoiceState, message: string): Promise<void> {
   if (!session.channelId) {
-    await session.send(message);
+    const { sendWhole } = createSessionMessageDispatchers(session);
+    await sendWhole(message);
     return;
   }
 

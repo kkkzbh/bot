@@ -155,6 +155,33 @@ type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) =
 type EventHandler = (...args: any[]) => Promise<unknown> | unknown;
 type ChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;
 
+function extractVisibleMessageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map((part) => extractVisibleMessageText(part)).join('');
+  if (!content || typeof content !== 'object') return String(content ?? '');
+
+  const node = content as {
+    type?: string;
+    attrs?: { content?: unknown };
+    children?: unknown[];
+    toString?: () => string;
+  };
+
+  if (typeof node.attrs?.content === 'string') {
+    return node.attrs.content;
+  }
+
+  if (Array.isArray(node.children) && node.children.length > 0) {
+    return node.children.map((child) => extractVisibleMessageText(child)).join('');
+  }
+
+  return typeof node.toString === 'function' ? node.toString() : '';
+}
+
+function extractSentMessagePayloads(bot: { sendMessage: { mock: { calls: any[][] } } }): string[] {
+  return bot.sendMessage.mock.calls.map((call: any[]) => extractVisibleMessageText(call[1]));
+}
+
 function createChainBuilder(store: Map<string, ChainMiddleware>) {
   return {
     middleware: (name: string, middleware: ChainMiddleware) => {
@@ -556,7 +583,7 @@ describe('qq voice plugin', () => {
 
     await prepareSecondPromise;
     expect(secondPrepared).toBe(true);
-    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['第一条回复']);
+    expect(extractSentMessagePayloads(bot)).toEqual(['第一条回复']);
   });
 
   it('requeues self-interruptions to the group tail while keeping one shared group queue', async () => {
@@ -1066,7 +1093,7 @@ describe('qq voice plugin', () => {
 
     const result = await executor?.(session, context);
     expect(typeof result).toBe('number');
-    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['今晚先这样吧']);
+    expect(extractSentMessagePayloads(bot)).toEqual(['今晚先这样吧']);
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-text' }),
@@ -1146,7 +1173,7 @@ describe('qq voice plugin', () => {
         expect.objectContaining({ type: 'quote', attrs: expect.objectContaining({ id: 'msg-b' }) }),
         expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: '第一句' }) }),
       ]);
-      expect(calls[1]?.[1]).toBe('第二句');
+      expect(extractVisibleMessageText(calls[1]?.[1])).toBe('第二句');
     } finally {
       quoteSpy.mockRestore();
     }
@@ -1267,7 +1294,7 @@ describe('qq voice plugin', () => {
       expect(calls).toHaveLength(2);
       expect(Array.isArray(calls[0]?.[1])).toBe(false);
       expect(String(calls[0]?.[1] ?? '')).toContain('audio');
-      expect(calls[1]?.[1]).toBe('第二句');
+      expect(extractVisibleMessageText(calls[1]?.[1])).toBe('第二句');
     } finally {
       quoteSpy.mockRestore();
     }
@@ -1350,7 +1377,7 @@ describe('qq voice plugin', () => {
     expect(typeof result).toBe('number');
     expect(bot.sendMessage).toHaveBeenCalledTimes(2);
     const stickerCalls = bot.sendMessage.mock.calls as any[][];
-    expect(stickerCalls[0]?.[1]).toBe('……随你');
+    expect(extractVisibleMessageText(stickerCalls[0]?.[1])).toBe('……随你');
     expect(String(stickerCalls[1]?.[1] ?? '')).toContain('<img src="data:image/png;base64,');
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
@@ -1481,7 +1508,7 @@ describe('qq voice plugin', () => {
 
     const result = await executor?.(session, context);
     expect(typeof result).toBe('number');
-    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['echo hi', 'pwd']);
+    expect(extractSentMessagePayloads(bot)).toEqual(['echo hi', 'pwd']);
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-1' }),
@@ -1527,7 +1554,7 @@ describe('qq voice plugin', () => {
 
     const result = await executor?.(session, context);
     expect(typeof result).toBe('number');
-    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual([
+    expect(extractSentMessagePayloads(bot)).toEqual([
       '先看这个清单。',
       '- 牛奶\n- 面包',
       '照着买。',
@@ -1574,7 +1601,7 @@ describe('qq voice plugin', () => {
 
     const result = await executor?.(session, context);
     expect(typeof result).toBe('number');
-    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual(['收到']);
+    expect(extractSentMessagePayloads(bot)).toEqual(['收到']);
     expect(context.options.responseMessage).toBeNull();
     expect(
       loggerMocks.warn.mock.calls.some(
