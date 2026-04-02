@@ -690,6 +690,13 @@ function buildReplyTransportPlanFromResolvedActions(actions: ResolvedAction[]): 
     if (action.kind === 'no_reply') {
       continue;
     }
+    if (action.kind === 'multiline') {
+      segments.push({
+        kind: 'multiline' as const,
+        content: action.content,
+      });
+      continue;
+    }
     if (action.kind === 'voice') {
       segments.push({
         kind: 'voice' as const,

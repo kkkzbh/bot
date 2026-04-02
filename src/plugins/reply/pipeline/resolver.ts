@@ -14,6 +14,7 @@ export class ActionResolverService {
 
     const resolved: ResolvedAction[] = [];
     const capabilitySnapshot = turnContext.capabilitySnapshot;
+    const canMultiline = capabilitySnapshot?.canMultiline === true;
     const canVoice = capabilitySnapshot?.canVoice === true;
     const canSticker = capabilitySnapshot?.canSticker === true && (capabilitySnapshot?.stickerAvailableCount ?? 0) > 0;
 
@@ -36,6 +37,18 @@ export class ActionResolverService {
           throw new Error('structured reply requested meme output but sticker capability is unavailable.');
         }
         resolved.push({ kind: 'sticker', intent: content });
+        continue;
+      }
+
+      if (message.modality === 'multiline') {
+        if (!canMultiline) {
+          throw new Error('structured reply requested multiline output but multiline capability is unavailable.');
+        }
+        resolved.push({
+          kind: 'multiline',
+          semantic: message.semantic,
+          content,
+        });
         continue;
       }
 

@@ -150,6 +150,40 @@ describe('reply pipeline v3', () => {
     ]);
   });
 
+  it('resolves multiline actions when the capability is available', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+    const ready = await orchestrator.handle(createTurnInput('列个清单'), {} as never, {
+      routeHint: 'agent',
+      capabilitySnapshot: {
+        canMultiline: true,
+        canVoice: false,
+        canSticker: false,
+        stickerAvailableCount: 0,
+        source: 'test',
+      },
+      responseMessage: createStructuredResponse({
+        decision: 'reply',
+        messages: [
+          { modality: 'multiline', semantic: 'unordered_list', content: '- 牛奶\n- 面包' },
+        ],
+      }),
+    });
+
+    expect(ready.status).toBe('ready');
+    if (ready.status !== 'ready') {
+      throw new Error('expected ready');
+    }
+    expect(ready.reply).toEqual({
+      decision: 'reply',
+      messages: [
+        { modality: 'multiline', semantic: 'unordered_list', content: '- 牛奶\n- 面包' },
+      ],
+    });
+    expect(ready.actions).toEqual([
+      { kind: 'multiline', semantic: 'unordered_list', content: '- 牛奶\n- 面包' },
+    ]);
+  });
+
   it('rejects decision=reply when messages are missing', async () => {
     const orchestrator = new ReplyOrchestratorService();
 
@@ -250,5 +284,54 @@ describe('reply pipeline v3', () => {
         }),
       }),
     ).rejects.toThrow('voice output but voice capability is unavailable');
+  });
+
+  it('rejects multiline messages without semantic', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+
+    await expect(
+      orchestrator.handle(createTurnInput('列个清单'), {} as never, {
+        routeHint: 'agent',
+        responseMessage: createStructuredResponse({
+          decision: 'reply',
+          messages: [{ modality: 'multiline', content: '- 一\n- 二' }],
+        }),
+      }),
+    ).rejects.toThrow('messages.0.semantic Required');
+  });
+
+  it('rejects multiline messages with unknown semantic', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+
+    await expect(
+      orchestrator.handle(createTurnInput('列个清单'), {} as never, {
+        routeHint: 'agent',
+        responseMessage: createStructuredResponse({
+          decision: 'reply',
+          messages: [{ modality: 'multiline', semantic: 'table_block', content: 'a | b' }],
+        }),
+      }),
+    ).rejects.toThrow('messages.0.semantic');
+  });
+
+  it('rejects unavailable multiline outputs instead of downgrading them', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+
+    await expect(
+      orchestrator.handle(createTurnInput('列个清单'), {} as never, {
+        routeHint: 'agent',
+        capabilitySnapshot: {
+          canMultiline: false,
+          canVoice: false,
+          canSticker: false,
+          stickerAvailableCount: 0,
+          source: 'test',
+        },
+        responseMessage: createStructuredResponse({
+          decision: 'reply',
+          messages: [{ modality: 'multiline', semantic: 'ordered_list', content: '1. 一\n2. 二' }],
+        }),
+      }),
+    ).rejects.toThrow('multiline output but multiline capability is unavailable');
   });
 });

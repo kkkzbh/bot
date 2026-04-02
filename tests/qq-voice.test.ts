@@ -1489,6 +1489,56 @@ describe('qq voice plugin', () => {
     );
   });
 
+  it('keeps structured multiline replies atomic while preserving surrounding text order', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '先说一句再给清单',
+      strippedContent: '先说一句再给清单',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-structured-multiline'),
+        responseMessage: createReplyV2Response({
+          decision: 'reply',
+          messages: [
+            { modality: 'text', content: '先看这个清单。' },
+            { modality: 'multiline', semantic: 'unordered_list', content: '- 牛奶\n- 面包' },
+            { modality: 'text', content: '照着买。' },
+          ],
+        }),
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage.mock.calls.map((call: any[]) => call[1])).toEqual([
+      '先看这个清单。',
+      '- 牛奶\n- 面包',
+      '照着买。',
+    ]);
+    expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-structured-multiline' }),
+      '先看这个清单。\n- 牛奶\n- 面包\n照着买。',
+    );
+  });
+
   it('logs history normalization failures after send instead of surfacing a second user-visible error', async () => {
     const { ready, getExecutor, bot } = createHarness({
       normalizeResearchReplyHistoryImpl: async () => {

@@ -48,10 +48,34 @@ export interface TurnContext {
   continuationContext: TurnContinuationContext | null;
 }
 
-export type StructuredReplyMessage = {
-  modality: 'text' | 'voice' | 'meme';
-  content: string;
-};
+export const STRUCTURED_REPLY_MULTILINE_SEMANTICS = [
+  'plain_block',
+  'unordered_list',
+  'ordered_list',
+  'code_block',
+  'quote_block',
+] as const;
+
+export type StructuredReplyMultilineSemantic = (typeof STRUCTURED_REPLY_MULTILINE_SEMANTICS)[number];
+
+export type StructuredReplyMessage =
+  | {
+      modality: 'text';
+      content: string;
+    }
+  | {
+      modality: 'voice';
+      content: string;
+    }
+  | {
+      modality: 'meme';
+      content: string;
+    }
+  | {
+      modality: 'multiline';
+      semantic: StructuredReplyMultilineSemantic;
+      content: string;
+    };
 
 export interface StructuredReplyV1 {
   decision: 'reply' | 'no_reply';
@@ -61,6 +85,11 @@ export interface StructuredReplyV1 {
 export type ResolvedAction =
   | {
       kind: 'text';
+      content: string;
+    }
+  | {
+      kind: 'multiline';
+      semantic: StructuredReplyMultilineSemantic;
       content: string;
     }
   | {
@@ -90,10 +119,17 @@ const STRUCTURED_REPLY_MEME_MESSAGE_SCHEMA = z.object({
   content: z.string(),
 });
 
+const STRUCTURED_REPLY_MULTILINE_MESSAGE_SCHEMA = z.object({
+  modality: z.literal('multiline'),
+  semantic: z.enum(STRUCTURED_REPLY_MULTILINE_SEMANTICS),
+  content: z.string(),
+});
+
 const STRUCTURED_REPLY_MESSAGE_SCHEMA = z.discriminatedUnion('modality', [
   STRUCTURED_REPLY_TEXT_MESSAGE_SCHEMA,
   STRUCTURED_REPLY_VOICE_MESSAGE_SCHEMA,
   STRUCTURED_REPLY_MEME_MESSAGE_SCHEMA,
+  STRUCTURED_REPLY_MULTILINE_MESSAGE_SCHEMA,
 ]);
 
 export const STRUCTURED_REPLY_V1_SCHEMA = z.object({
@@ -180,6 +216,32 @@ export const STRUCTURED_REPLY_V1_JSON_SCHEMA = {
               },
             },
           },
+          {
+            type: 'object',
+            title: 'MultilineMessage',
+            description: 'A multi-line block that must be sent atomically as one message.',
+            additionalProperties: false,
+            required: ['modality', 'semantic', 'content'],
+            properties: {
+              modality: {
+                title: 'Modality',
+                type: 'string',
+                enum: ['multiline'],
+                description: 'Send the content as one atomic multi-line block.',
+              },
+              semantic: {
+                title: 'Semantic',
+                type: 'string',
+                enum: [...STRUCTURED_REPLY_MULTILINE_SEMANTICS],
+                description: 'High-level block semantic for the multiline content.',
+              },
+              content: {
+                title: 'Content',
+                type: 'string',
+                description: 'The exact multi-line content to send as one atomic block.',
+              },
+            },
+          },
         ],
       },
     },
@@ -198,10 +260,18 @@ export function normalizeStructuredReplyV1(raw: unknown): StructuredReplyV1 | nu
 
   return {
     decision: 'reply',
-    messages: parsed.data.messages?.map((message) => ({
-      modality: message.modality,
-      content: sanitizeStructuredReplySegmentContent(message.content),
-    })),
+    messages: parsed.data.messages?.map((message) =>
+      message.modality === 'multiline'
+        ? {
+            modality: message.modality,
+            semantic: message.semantic,
+            content: sanitizeStructuredReplySegmentContent(message.content),
+          }
+        : {
+            modality: message.modality,
+            content: sanitizeStructuredReplySegmentContent(message.content),
+          },
+    ),
   };
 }
 

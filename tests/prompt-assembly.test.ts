@@ -157,6 +157,8 @@ describe('prompt assembly', () => {
     expect(compiledContent).not.toContain('最终输出遵循结构化响应');
     expect(compiledContent).toContain('voice.content');
     expect(compiledContent).toContain('meme.content');
+    expect(compiledContent).toContain('multiline.content');
+    expect(compiledContent).toContain('multiline.semantic');
     expect(compiledContent).toContain('speaker_id=<id>');
     expect(compiledContent).not.toContain('"displayName": "小祥"');
     expect(compiledContent).not.toContain('"userId": "u1"');

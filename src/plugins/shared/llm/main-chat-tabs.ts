@@ -71,6 +71,13 @@ export const SILICONFLOW_DEFAULT_MODEL = 'siliconflow/Pro/moonshotai/Kimi-K2.5';
 export const COPILOT_BRIDGE_DEFAULT_BASE_URL = 'http://127.0.0.1:5140/api/internal/copilot/v1';
 export const COPILOT_DEFAULT_MODEL = 'gpt-5.4-mini';
 export const MAIN_CHAT_BUILTIN_TAB_IDS = ['siliconflow', 'openai', 'copilot'] as const satisfies readonly MainChatBuiltinTabId[];
+const STRUCTURED_REPLY_MULTILINE_SEMANTICS = [
+  'plain_block',
+  'unordered_list',
+  'ordered_list',
+  'code_block',
+  'quote_block',
+] as const;
 
 const BASE_STRUCTURED_REPLY_MESSAGE_ITEMS = {
   anyOf: [
@@ -131,6 +138,32 @@ const BASE_STRUCTURED_REPLY_MESSAGE_ITEMS = {
           title: 'Content',
           type: 'string',
           description: 'Natural-language meme intent text, not a sticker id or filename.',
+        },
+      },
+    },
+    {
+      type: 'object',
+      title: 'MultilineMessage',
+      description: 'A multi-line block that must be sent atomically as one message.',
+      additionalProperties: false,
+      required: ['modality', 'semantic', 'content'],
+      properties: {
+        modality: {
+          title: 'Modality',
+          type: 'string',
+          enum: ['multiline'],
+          description: 'Send the content as one atomic multi-line block.',
+        },
+        semantic: {
+          title: 'Semantic',
+          type: 'string',
+          enum: [...STRUCTURED_REPLY_MULTILINE_SEMANTICS],
+          description: 'High-level block semantic for the multiline content.',
+        },
+        content: {
+          title: 'Content',
+          type: 'string',
+          description: 'The exact multi-line content to send as one atomic block.',
         },
       },
     },
