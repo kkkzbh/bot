@@ -22,10 +22,12 @@ import {
   createSessionMessageDispatchers,
   createQuotedMessageContent,
   createKeyedStrandRunner,
-  dispatchOutboundMessagePlan,
-  resolveReplyActorKey,
-  resolveReplyQueueKey,
-  sanitizeStructuredReplySegmentContent,
+    dispatchOutboundMessagePlan,
+    renderRichTextSegmentsMessageContent,
+    renderRichTextSegmentsVisibleText,
+    resolveReplyActorKey,
+    resolveReplyQueueKey,
+    sanitizeStructuredReplySegmentContent,
   sendBotMessageByNormalizedContent,
   type BotMessageContent,
   type OutboundMessagePlan,
@@ -706,6 +708,13 @@ function buildReplyTransportPlanFromResolvedActions(actions: ResolvedAction[]): 
       });
       continue;
     }
+    if (action.kind === 'rich_text') {
+      segments.push({
+        kind: 'rich_text' as const,
+        segments: action.segments,
+      });
+      continue;
+    }
     if (action.kind === 'sticker') {
       segments.push({
         kind: 'sticker' as const,
@@ -726,6 +735,9 @@ function renderReplyPlanSegmentTextForFallback(segment: ReplyTransportPlan['segm
   if (segment.kind === 'sticker') return '';
   if (segment.kind === 'image') {
     return sanitizeStructuredReplySegmentContent(segment.alt ?? '');
+  }
+  if (segment.kind === 'rich_text') {
+    return renderRichTextSegmentsVisibleText(segment.segments);
   }
   return sanitizeStructuredReplySegmentContent(segment.content);
 }
@@ -761,6 +773,10 @@ function renderDeliveredReplyPlanHistoryText(
         return `（发送语音：${sanitizeStructuredReplySegmentContent(segment.content)}）`;
       }
 
+      if (segment.kind === 'rich_text') {
+        return renderRichTextSegmentsVisibleText(segment.segments);
+      }
+
       if (segment.kind !== 'sticker') {
         return sanitizeStructuredReplySegmentContent(segment.content);
       }
@@ -783,6 +799,9 @@ function buildPlannedUnitHistoryLines(args: {
   return outboundPlan.segments.map((segment) => {
     if (segment.kind === 'text-line' || segment.kind === 'multiline-block') {
       return segment.content;
+    }
+    if (segment.kind === 'rich-text-block') {
+      return renderRichTextSegmentsVisibleText(segment.segments);
     }
     if (segment.kind === 'image-block') {
       return segment.alt ? `（发送图片：${segment.alt}）` : '（发送图片）';
@@ -1465,6 +1484,13 @@ async function deliverReplyPlan(args: {
       if (segment.kind === 'text-line') {
         beganSending = true;
         await sendLine(createQuotedMessageContent(segment.content, quoteTargetMessageId));
+        replyRuntime.recordCommittedUnit(runId, historyLine);
+        return;
+      }
+
+      if (segment.kind === 'rich-text-block') {
+        beganSending = true;
+        await sendWhole(createQuotedMessageContent(renderRichTextSegmentsMessageContent(segment.segments), quoteTargetMessageId));
         replyRuntime.recordCommittedUnit(runId, historyLine);
         return;
       }

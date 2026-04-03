@@ -8,6 +8,7 @@ export const GLOBAL_DEFAULT_SCOPE_ID = 'global-default';
 export const PRIVATE_DEFAULT_SCOPE_ID = 'private-default';
 
 const ALL_ROUTES = ['agent', 'automation'] as const;
+const AGENT_ONLY_ROUTES = ['agent'] as const;
 
 function buildCatalogEntry(entry: Omit<ToolCatalogEntry, 'availableRoutes' | 'defaultEnabledByRoute'>): ToolCatalogEntry {
   return {
@@ -20,6 +21,19 @@ function buildCatalogEntry(entry: Omit<ToolCatalogEntry, 'availableRoutes' | 'de
   };
 }
 
+function buildAgentOnlyCatalogEntry(
+  entry: Omit<ToolCatalogEntry, 'availableRoutes' | 'defaultEnabledByRoute'>,
+): ToolCatalogEntry {
+  return {
+    ...entry,
+    availableRoutes: [...AGENT_ONLY_ROUTES],
+    defaultEnabledByRoute: {
+      agent: true,
+      automation: false,
+    },
+  };
+}
+
 export const TOOL_ROUTE_PROFILES: ToolRouteProfileInfo[] = [
   {
     id: 'agent',
@@ -27,11 +41,11 @@ export const TOOL_ROUTE_PROFILES: ToolRouteProfileInfo[] = [
     description: 'qqbot reply 唯一的工具型回复链路。模型可先走原生 tool loop，最后一跳返回 StructuredReplyV1。',
     note: '仅允许 plugin 房间进入。',
   },
-    {
+  {
     id: 'automation',
     title: '自动化',
-    description: '任务自动化等非 reply 直答链路的工具配置。',
-    note: '当前自动化链路通常不会携带这些工具，但策略会保留并可见。',
+    description: '自动化任务到点后启动独立 Agent run，并按这套路由决定可调用工具。',
+    note: '创建任务工具只在 agent 路由暴露；自动化 run 使用本路由解析实际工具开关。',
   },
 ];
 
@@ -57,6 +71,78 @@ export const LEGACY_TOOL_NAME_ALIASES: Record<string, string | null> = {
 };
 
 export const TOOL_CATALOG: ToolCatalogEntry[] = [
+  buildAgentOnlyCatalogEntry({
+    toolName: 'automation_create',
+    title: '创建自动化任务',
+    category: 'builtin',
+    description: '在当前房间按自然语言时间创建一次性或周期性自动化任务。',
+    compatibility: 'compatible',
+    compatibilityNote: '只应暴露给标准 Agent 回复链路，不应在自动化执行链里再次开放。',
+    hardDependencies: [],
+    relatedTools: ['automation_list', 'automation_update', 'automation_pause', 'automation_resume', 'automation_delete'],
+    riskLevel: 'medium',
+    source: 'project',
+  }),
+  buildAgentOnlyCatalogEntry({
+    toolName: 'automation_list',
+    title: '查看自动化任务',
+    category: 'builtin',
+    description: '查看当前房间内由当前用户创建的自动化任务。',
+    compatibility: 'compatible',
+    compatibilityNote: '只应暴露给标准 Agent 回复链路，不应在自动化执行链里再次开放。',
+    hardDependencies: [],
+    relatedTools: ['automation_create', 'automation_update', 'automation_pause', 'automation_resume', 'automation_delete'],
+    riskLevel: 'low',
+    source: 'project',
+  }),
+  buildAgentOnlyCatalogEntry({
+    toolName: 'automation_update',
+    title: '修改自动化任务',
+    category: 'builtin',
+    description: '按自然语言时间修改当前房间内自动化任务的时间、目标或提醒方式。',
+    compatibility: 'compatible',
+    compatibilityNote: '只应暴露给标准 Agent 回复链路，不应在自动化执行链里再次开放。',
+    hardDependencies: [],
+    relatedTools: ['automation_list', 'automation_create', 'automation_pause', 'automation_resume', 'automation_delete'],
+    riskLevel: 'low',
+    source: 'project',
+  }),
+  buildAgentOnlyCatalogEntry({
+    toolName: 'automation_pause',
+    title: '暂停自动化任务',
+    category: 'builtin',
+    description: '暂停当前房间内的自动化任务。',
+    compatibility: 'compatible',
+    compatibilityNote: '只应暴露给标准 Agent 回复链路，不应在自动化执行链里再次开放。',
+    hardDependencies: [],
+    relatedTools: ['automation_list', 'automation_update', 'automation_resume', 'automation_delete'],
+    riskLevel: 'low',
+    source: 'project',
+  }),
+  buildAgentOnlyCatalogEntry({
+    toolName: 'automation_resume',
+    title: '恢复自动化任务',
+    category: 'builtin',
+    description: '恢复当前房间内已暂停的自动化任务。',
+    compatibility: 'compatible',
+    compatibilityNote: '只应暴露给标准 Agent 回复链路，不应在自动化执行链里再次开放。',
+    hardDependencies: [],
+    relatedTools: ['automation_list', 'automation_update', 'automation_pause', 'automation_delete'],
+    riskLevel: 'low',
+    source: 'project',
+  }),
+  buildAgentOnlyCatalogEntry({
+    toolName: 'automation_delete',
+    title: '删除自动化任务',
+    category: 'builtin',
+    description: '删除当前房间内的自动化任务。',
+    compatibility: 'compatible',
+    compatibilityNote: '只应暴露给标准 Agent 回复链路，不应在自动化执行链里再次开放。',
+    hardDependencies: [],
+    relatedTools: ['automation_list', 'automation_update', 'automation_pause', 'automation_resume'],
+    riskLevel: 'low',
+    source: 'project',
+  }),
   buildCatalogEntry({
     toolName: 'file_read',
     title: '读取文件',

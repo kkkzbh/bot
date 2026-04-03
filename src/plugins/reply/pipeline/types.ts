@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { sanitizeStructuredReplySegmentContent } from '../../shared/outbound/index.js';
+import {
+  normalizeRichTextSegments,
+  sanitizeStructuredReplySegmentContent,
+  type ReplyRichTextSegment,
+} from '../../shared/outbound/index.js';
 import type { PromptFragment } from '../../shared/prompt-context/types.js';
 
 export const REPLY_ROUTES = [
@@ -64,6 +68,10 @@ export type StructuredReplyMessage =
       content: string;
     }
   | {
+      modality: 'rich_text';
+      segments: ReplyRichTextSegment[];
+    }
+  | {
       modality: 'voice';
       content: string;
     }
@@ -86,6 +94,10 @@ export type ResolvedAction =
   | {
       kind: 'text';
       content: string;
+    }
+  | {
+      kind: 'rich_text';
+      segments: ReplyRichTextSegment[];
     }
   | {
       kind: 'multiline';
@@ -114,6 +126,22 @@ const STRUCTURED_REPLY_VOICE_MESSAGE_SCHEMA = z.object({
   content: z.string(),
 });
 
+const STRUCTURED_REPLY_RICH_TEXT_SEGMENT_SCHEMA = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('text'),
+    text: z.string(),
+  }),
+  z.object({
+    kind: z.literal('mention'),
+    userId: z.string().regex(/^\s*\d+\s*$/),
+  }),
+]);
+
+const STRUCTURED_REPLY_RICH_TEXT_MESSAGE_SCHEMA = z.object({
+  modality: z.literal('rich_text'),
+  segments: z.array(STRUCTURED_REPLY_RICH_TEXT_SEGMENT_SCHEMA),
+});
+
 const STRUCTURED_REPLY_MEME_MESSAGE_SCHEMA = z.object({
   modality: z.literal('meme'),
   content: z.string(),
@@ -127,6 +155,7 @@ const STRUCTURED_REPLY_MULTILINE_MESSAGE_SCHEMA = z.object({
 
 const STRUCTURED_REPLY_MESSAGE_SCHEMA = z.discriminatedUnion('modality', [
   STRUCTURED_REPLY_TEXT_MESSAGE_SCHEMA,
+  STRUCTURED_REPLY_RICH_TEXT_MESSAGE_SCHEMA,
   STRUCTURED_REPLY_VOICE_MESSAGE_SCHEMA,
   STRUCTURED_REPLY_MEME_MESSAGE_SCHEMA,
   STRUCTURED_REPLY_MULTILINE_MESSAGE_SCHEMA,
@@ -193,6 +222,63 @@ export const STRUCTURED_REPLY_V1_JSON_SCHEMA = {
                 title: 'Content',
                 type: 'string',
                 description: 'The exact text that should be spoken by TTS.',
+              },
+            },
+          },
+          {
+            type: 'object',
+            title: 'RichTextMessage',
+            description: 'A mixed inline message composed of text and real @mentions.',
+            additionalProperties: false,
+            required: ['modality', 'segments'],
+            properties: {
+              modality: {
+                title: 'Modality',
+                type: 'string',
+                enum: ['rich_text'],
+                description: 'Send one rich-text message with inline text and real @mentions.',
+              },
+              segments: {
+                title: 'Segments',
+                type: 'array',
+                description: 'Ordered inline segments for one message.',
+                items: {
+                  anyOf: [
+                    {
+                      type: 'object',
+                      title: 'TextSegment',
+                      additionalProperties: false,
+                      required: ['kind', 'text'],
+                      properties: {
+                        kind: {
+                          type: 'string',
+                          enum: ['text'],
+                        },
+                        text: {
+                          type: 'string',
+                          description: 'Visible text content. Do not output transport tags such as <at .../>.',
+                        },
+                      },
+                    },
+                    {
+                      type: 'object',
+                      title: 'MentionSegment',
+                      additionalProperties: false,
+                      required: ['kind', 'userId'],
+                      properties: {
+                        kind: {
+                          type: 'string',
+                          enum: ['mention'],
+                        },
+                        userId: {
+                          type: 'string',
+                          description: 'Literal QQ user id to mention. Digits only.',
+                          pattern: '^\\s*\\d+\\s*$',
+                        },
+                      },
+                    },
+                  ],
+                },
               },
             },
           },
@@ -267,10 +353,27 @@ export function normalizeStructuredReplyV1(raw: unknown): StructuredReplyV1 | nu
             semantic: message.semantic,
             content: sanitizeStructuredReplySegmentContent(message.content),
           }
-        : {
-            modality: message.modality,
-            content: sanitizeStructuredReplySegmentContent(message.content),
-          },
+        : message.modality === 'rich_text'
+          ? {
+              modality: message.modality,
+              segments: normalizeRichTextSegments(
+                message.segments.map((segment) =>
+                  segment.kind === 'mention'
+                    ? {
+                        kind: segment.kind,
+                        userId: segment.userId.trim(),
+                      }
+                    : {
+                        kind: segment.kind,
+                        text: segment.text,
+                      },
+                ),
+              ),
+            }
+          : {
+              modality: message.modality,
+              content: sanitizeStructuredReplySegmentContent(message.content),
+            },
     ),
   };
 }

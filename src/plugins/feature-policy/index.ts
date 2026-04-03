@@ -22,7 +22,6 @@ export const SCOPED_FEATURE_KEYS = [
   'QQ_VOICE_INPUT_ENABLED',
   'QQ_VOICE_OUTPUT_ENABLED',
   'CHAT_NATURAL_TRIGGER_ENABLED',
-  'TASK_AUTOMATION_INTENT_ENABLED',
   'QQBOT_REPLY_INTERRUPT_ENABLED',
 ] as const satisfies readonly ScopedFeatureKey[];
 
@@ -191,8 +190,6 @@ function defaultFeatureEnabled(featureKey: ScopedFeatureKey): boolean {
       return normalizeBoolean(process.env.QQ_VOICE_OUTPUT_ENABLED, true);
     case 'CHAT_NATURAL_TRIGGER_ENABLED':
       return normalizeBoolean(process.env.CHAT_NATURAL_TRIGGER_ENABLED, true);
-    case 'TASK_AUTOMATION_INTENT_ENABLED':
-      return normalizeBoolean(process.env.TASK_AUTOMATION_INTENT_ENABLED, true);
     default:
       return true;
   }

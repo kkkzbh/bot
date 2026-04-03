@@ -1,4 +1,0 @@
-interface:
-  display_name: "QQBot 本地验证"
-  short_description: "只做本地回归、bot 真实验收与浏览器验收，不负责 Git 提交"
-  default_prompt: "使用 $qqbot-local-verify 对 qqbot 改动执行最小相关本地回归、bot 真实回复验收或浏览器验收，输出命令、证据和结论，不要执行 Git 提交。"

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROBE_SCRIPT="$ROOT_DIR/.codex/skills/qqbot-local-verify/scripts/probe-local-bot.sh"
+PROBE_SCRIPT="$ROOT_DIR/scripts/probe-local-bot.sh"
 CLEANUP_SCRIPT="$ROOT_DIR/scripts/cleanup-debug-chat-state.sh"
 PROBE_JSON_FILE=""
 

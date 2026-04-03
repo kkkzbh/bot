@@ -98,6 +98,27 @@ describe('reply pipeline v3', () => {
     });
   });
 
+  it('normalizes incoming mention tags into readable text on the text route', () => {
+    const turnInput = buildReplyTurnInput(
+      {
+        content: '<at id="3889019833" name="揽探长"/>弟弟回来的时候已经死了吗？',
+        stripped: { content: '' },
+        userId: 'u1',
+        isDirect: true,
+      } as never,
+      { conversationId: 'conv-1' },
+      {
+        content: '<at id="3889019833" name="揽探长"/>弟弟回来的时候已经死了吗？',
+      },
+    );
+
+    expect(turnInput).toMatchObject({
+      text: '@揽探长 弟弟回来的时候已经死了吗？',
+      hasImageInput: false,
+      imageCount: 0,
+    });
+  });
+
   it('returns await_model before the structured reply is available', async () => {
     const orchestrator = new ReplyOrchestratorService();
     const result = await orchestrator.handle(createTurnInput('查一下液态玻璃'), {} as never, {
@@ -147,6 +168,61 @@ describe('reply pipeline v3', () => {
     expect(ready.actions).toEqual([
       { kind: 'voice', content: '收到。' },
       { kind: 'sticker', intent: '无语地看对方一眼' },
+    ]);
+  });
+
+  it('resolves rich_text actions with inline mention segments', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+    const ready = await orchestrator.handle(createTurnInput('提醒一下对方'), {} as never, {
+      routeHint: 'agent',
+      capabilitySnapshot: {
+        canMultiline: true,
+        canVoice: false,
+        canSticker: false,
+        stickerAvailableCount: 0,
+        source: 'test',
+      },
+      responseMessage: createStructuredResponse({
+        decision: 'reply',
+        messages: [
+          {
+            modality: 'rich_text',
+            segments: [
+              { kind: 'text', text: '先问下 ' },
+              { kind: 'mention', userId: '123456' },
+              { kind: 'text', text: ' 这件事。' },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(ready.status).toBe('ready');
+    if (ready.status !== 'ready') {
+      throw new Error('expected ready');
+    }
+    expect(ready.reply).toEqual({
+      decision: 'reply',
+      messages: [
+        {
+          modality: 'rich_text',
+          segments: [
+            { kind: 'text', text: '先问下 ' },
+            { kind: 'mention', userId: '123456' },
+            { kind: 'text', text: ' 这件事。' },
+          ],
+        },
+      ],
+    });
+    expect(ready.actions).toEqual([
+      {
+        kind: 'rich_text',
+        segments: [
+          { kind: 'text', text: '先问下 ' },
+          { kind: 'mention', userId: '123456' },
+          { kind: 'text', text: ' 这件事。' },
+        ],
+      },
     ]);
   });
 
@@ -333,5 +409,27 @@ describe('reply pipeline v3', () => {
         }),
       }),
     ).rejects.toThrow('multiline output but multiline capability is unavailable');
+  });
+
+  it('rejects rich_text mention segments with non-numeric user ids', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+
+    await expect(
+      orchestrator.handle(createTurnInput('提醒一下对方'), {} as never, {
+        routeHint: 'agent',
+        responseMessage: createStructuredResponse({
+          decision: 'reply',
+          messages: [
+            {
+              modality: 'rich_text',
+              segments: [
+                { kind: 'text', text: '先问下 ' },
+                { kind: 'mention', userId: 'u1' },
+              ],
+            },
+          ],
+        }),
+      }),
+    ).rejects.toThrow('messages.0.segments.1.userId');
   });
 });

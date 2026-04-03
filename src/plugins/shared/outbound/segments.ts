@@ -39,6 +39,16 @@ export interface NormalizedOutboundMessage {
   content: string;
 }
 
+export type ReplyRichTextSegment =
+  | {
+      kind: 'text';
+      text: string;
+    }
+  | {
+      kind: 'mention';
+      userId: string;
+    };
+
 export type OutboundMessageSegment =
   | {
       kind: 'text-line';
@@ -65,18 +75,27 @@ export type OutboundMessageSegment =
       assetRef: string;
       alt?: string;
       raw: string;
+    }
+  | {
+      kind: 'rich-text-block';
+      segments: ReplyRichTextSegment[];
+      raw: string;
     };
 
 export interface OutboundMessagePlan {
   segments: OutboundMessageSegment[];
 }
 
-export type ReplyTransportSegmentKind = 'text' | 'multiline' | 'voice' | 'sticker' | 'image';
+export type ReplyTransportSegmentKind = 'text' | 'multiline' | 'voice' | 'sticker' | 'image' | 'rich_text';
 
 export type ReplyTransportSegment =
   | {
       kind: 'text' | 'multiline' | 'voice' | 'sticker';
       content: string;
+    }
+  | {
+      kind: 'rich_text';
+      segments: ReplyRichTextSegment[];
     }
   | {
       kind: 'image';
@@ -277,6 +296,38 @@ function toMessageElements(content: BotMessageContent): Array<ReturnType<typeof 
   return [content];
 }
 
+function sanitizeRichTextTextSegment(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
+}
+
+function renderMentionVisibleText(userId: string): string {
+  return `@${userId}`;
+}
+
+export function normalizeRichTextSegments(segments: ReplyRichTextSegment[]): ReplyRichTextSegment[] {
+  return segments.flatMap<ReplyRichTextSegment>((segment) => {
+    if (segment.kind === 'text') {
+      const text = sanitizeRichTextTextSegment(segment.text);
+      return text ? [{ kind: 'text' as const, text }] : [];
+    }
+
+    const userId = segment.userId.trim();
+    return userId ? [{ kind: 'mention' as const, userId }] : [];
+  });
+}
+
+export function renderRichTextSegmentsVisibleText(segments: ReplyRichTextSegment[]): string {
+  return normalizeRichTextSegments(segments)
+    .map((segment) => (segment.kind === 'mention' ? renderMentionVisibleText(segment.userId) : segment.text))
+    .join('');
+}
+
+export function renderRichTextSegmentsMessageContent(segments: ReplyRichTextSegment[]): BotMessageContent {
+  return normalizeRichTextSegments(segments).map((segment) =>
+    segment.kind === 'mention' ? h.at(segment.userId) : h.text(segment.text),
+  );
+}
+
 export function createQuotedMessageContent(content: BotMessageContent, targetMessageId?: string | null): BotMessageContent {
   const normalizedTarget = typeof targetMessageId === 'string' ? targetMessageId.trim() : '';
   if (!normalizedTarget) return content;
@@ -396,6 +447,17 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
     `reply-plan:${kind}:${index}:${value}`;
 
   for (const [index, segment] of plan.segments.entries()) {
+    if (segment.kind === 'rich_text') {
+      const normalizedSegments = normalizeRichTextSegments(segment.segments);
+      if (!normalizedSegments.length) continue;
+      segments.push({
+        kind: 'rich-text-block',
+        segments: normalizedSegments,
+        raw: createStructuredRaw(segment.kind, index, renderRichTextSegmentsVisibleText(normalizedSegments)),
+      });
+      continue;
+    }
+
     if (segment.kind === 'text') {
       segments.push(...createTextOutboundSegments(segment.content));
       continue;
@@ -458,6 +520,10 @@ export function renderOutboundMessageSegmentsHistoryText(segments: OutboundMessa
 
       if (segment.kind === 'image-block') {
         return segment.alt ? `（发送图片：${segment.alt}）` : '（发送图片）';
+      }
+
+      if (segment.kind === 'rich-text-block') {
+        return renderRichTextSegmentsVisibleText(segment.segments);
       }
 
       return segment.content;

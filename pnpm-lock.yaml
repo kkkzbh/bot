@@ -47,6 +47,9 @@ importers:
       '@koishijs/plugin-status':
         specifier: ^7.4.10
         version: 7.4.10(@koishijs/plugin-console@5.30.11(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))
+      '@langchain/core':
+        specifier: ^0.3.80
+        version: 0.3.80(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
       cron-parser:
         specifier: ^4.9.0
         version: 4.9.0

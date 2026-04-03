@@ -1,6 +1,7 @@
 import type { Session } from 'koishi';
 import type { PromptFragment } from '../../shared/prompt-context/types.js';
 import { resolveSessionDisplayName } from '../../shared/session/index.js';
+import { normalizeMentionLikeText } from '../../shared/mention-text.js';
 import type { ReplyRuntimeRoomLike } from '../runtime/index.js';
 import { classifyReplyRoute, type ReplyRoute, type TurnContext, type TurnInput } from './types.js';
 
@@ -19,8 +20,13 @@ type ContentPart = {
 
 function sanitizeInputText(text: string): string {
   return text
+    .replace(/\[CQ:reply,[^\]]+\]/gi, ' ')
     .replace(/<img\b[^>]*>/gi, ' ')
     .replace(/\[CQ:image,[^\]]+\]/gi, ' ')
+}
+
+function normalizeInputText(text: string): string {
+  return sanitizeInputText(normalizeMentionLikeText(text))
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/[ \t]{2,}/g, ' ')
@@ -45,7 +51,7 @@ export function normalizeReplyRouteHint(chatMode: unknown): ReplyRoute | null {
 
 function collectInputContentInfo(content: unknown): { text: string; imageCount: number } {
   if (typeof content === 'string') {
-    return { text: sanitizeInputText(content), imageCount: 0 };
+    return { text: normalizeInputText(content), imageCount: 0 };
   }
 
   if (!Array.isArray(content)) {
@@ -66,7 +72,7 @@ function collectInputContentInfo(content: unknown): { text: string; imageCount: 
     }
   }
 
-  return { text: sanitizeInputText(text), imageCount };
+  return { text: normalizeInputText(text), imageCount };
 }
 
 export function buildReplyTurnInput(
@@ -76,7 +82,7 @@ export function buildReplyTurnInput(
 ): TurnInput {
   const stripped = typeof session.stripped?.content === 'string' ? session.stripped.content : '';
   const { text: inputMessageText, imageCount } = collectInputContentInfo(inputMessage?.content);
-  const rawText = inputMessageText.trim() || stripped.trim() || String(session.content ?? '').trim();
+  const rawText = inputMessageText.trim() || normalizeInputText(stripped) || normalizeInputText(String(session.content ?? ''));
   return {
     text: rawText,
     hasImageInput: imageCount > 0,

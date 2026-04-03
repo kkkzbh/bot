@@ -263,7 +263,7 @@ bash ./scripts/cleanup-debug-chat-state.sh
 
 ## 5. Trigger contract
 
-- Runtime trigger path = `task-automation` (优先) + `group-natural-trigger` 判定 + ChatLuna allow-reply resolver 接线 + ChatLuna native。
+- Runtime trigger path = `group-natural-trigger` 判定 + ChatLuna allow-reply resolver 接线 + ChatLuna native。
 - `reply runtime` 统一接管生成期与发送期中断：
   - 同一会话的新消息会中断旧 run，并以最新消息重新生成。
   - 已经发出的内容不会撤回；未发送的剩余 segment 会被丢弃，并重写历史尾部。
@@ -277,28 +277,26 @@ bash ./scripts/cleanup-debug-chat-state.sh
   - `group-natural-trigger` 负责产出自然触发判定，并通过 ChatLuna service 注册的 allow-reply resolver 把结果接入放行链。
 - 昵称触发保留，默认别名包含：
   - `祥子`、`祥`、`丰川`、`丰川祥子`、`saki`、`saki酱`、`sakiko`。
-- 新增自动化任务插件：
-  - 自动化意图可在白名单群和私聊中通过自然语言触发，不要求必须 `@`。
-  - 自动化命中时优先执行任务逻辑；未命中则继续走原对话流程。
-  - 群任务触发时在原群 `@创建者`，私聊任务触发时私聊发送。
-  - 白名单群来源：`CHAT_ENABLED_GROUPS`。
+- 自动化任务不再拦截普通消息：
+  - 创建入口为 Agent 显式调用 `automation_*` 工具。
+  - 到点后会启动一次独立 Agent run，而不是复用当前聊天历史。
+  - 自动化 run 最终仍向原群/私聊发送文本结果；群任务默认 `@创建者`。
+  - 到点执行时会跟随当前房间的 preset / model / tool-policy，而不是使用创建时快照。
 
 ## 6. Command authority
 
 - `chatluna.*` command family is overridden by `@koishijs/plugin-commands`.
 - Default required authority is `>= 3` (configurable by `CHATLUNA_COMMAND_AUTHORITY`).
 - Passive conversation triggers still work for normal group members (subject to ChatLuna room/trigger settings).
-- 任务命令（`task.*`）默认按 `TASK_AUTOMATION_PERMISSION=all` 允许群成员使用。
-- 可切换 `TASK_AUTOMATION_PERMISSION=authority3` 仅允许高权限用户使用。
 
-## 7. Task automation commands
+## 7. Task automation tools
 
-- `task.list` 查看当前会话任务。
-- `task.add.once <time> -- <message>` 创建一次性任务（例如 `task.add.once 明天8点 -- 交周报`）。
-- `task.add.cron <cron> -- <message>` 创建周期任务（例如 `task.add.cron 0 9 * * 1 -- 周会提醒`）。
-- `task.pause <id>` 暂停任务。
-- `task.resume <id>` 恢复任务。
-- `task.del <id>` 删除任务。
+- `automation_create`：在当前 plugin 房间按自然语言 `scheduleText` 创建自动化任务，时间解析由代码负责。
+- `automation_list`：查看当前房间内由当前用户创建的自动化任务。
+- `automation_update`：按自然语言 `scheduleText` 修改现有自动化任务，避免模型自己重写 ISO / cron。
+- `automation_pause`：暂停自动化任务。
+- `automation_resume`：恢复已暂停的自动化任务。
+- `automation_delete`：删除自动化任务。
 
 ## 8. SQLite persistence
 
@@ -306,7 +304,7 @@ bash ./scripts/cleanup-debug-chat-state.sh
 - Default DB path: `./data/koishi.db` (override with `SQLITE_PATH`).
 - No extra DB container is required.
 - ChatLuna rooms and context can persist across Koishi restarts.
-- 自动化任务也持久化到同一 SQLite 数据库。
+- 自动化任务也持久化到同一 SQLite 数据库，核心表为 `automation_job` 和 `automation_job_run`。
 
 ## 9. Legacy removal status
 
@@ -318,7 +316,8 @@ bash ./scripts/cleanup-debug-chat-state.sh
 - Current conversation chain:
   - `chatluna` + `chatluna-openai-like-adapter` + `chatluna-model-guard` + `database-sqlite` + `commands`
 - Task automation extension chain:
-  - `cron` + `task-automation` (independent of ChatLuna trigger path)
+  - `cron` + `task-automation`
+  - 调度器只负责扫描到点任务、启动独立 Agent run、记录执行结果、回投 QQ 消息。
 
 ## 10. Group natural trigger environment variables
 
@@ -339,24 +338,9 @@ bash ./scripts/cleanup-debug-chat-state.sh
 
 ## 11. Task automation environment variables
 
-- `TASK_AUTOMATION_LISTEN_PRIVATE`：是否允许私聊自动化意图（默认 `true`）。
-- `TASK_AUTOMATION_PERMISSION`：`all` 或 `authority3`（默认 `all`）。
-- `TASK_AUTOMATION_INTENT_ENABLED`：是否开启自然语言意图识别（默认 `true`）。
-- `TASK_AUTOMATION_INTENT_MIN_CONFIDENCE`：模型兜底最小置信度（默认 `0.78`）。
-- `TASK_AUTOMATION_INTENT_BASE_URL` / `TASK_AUTOMATION_INTENT_API_KEY` / `TASK_AUTOMATION_INTENT_MODEL`：
-  - 未设置时复用 `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL`。
-- `TASK_AUTOMATION_INTENT_TIMEOUT_MS`：意图模型超时（默认 `12000`）。
 - `TASK_AUTOMATION_POLL_MS`：一次性任务轮询间隔（默认 `30000`）。
 - `TASK_AUTOMATION_MAX_TASKS_PER_USER`：单用户任务上限（默认 `20`）。
-- `TASK_AUTOMATION_DELIVERY_BASE_URL` / `TASK_AUTOMATION_DELIVERY_API_KEY` / `TASK_AUTOMATION_DELIVERY_MODEL`：
-  - 到点发送内容生成模型配置；默认复用 `OPENAI_BASE_URL` / `OPENAI_API_KEY`，模型默认 `deepseek-reasoner`。
-- `TASK_AUTOMATION_DELIVERY_TIMEOUT_MS`：到点发送内容生成超时（默认 `18000`）。
-- `TASK_AUTOMATION_DELIVERY_MAX_TOKENS`：到点发送内容 `max_tokens`（默认 `10000`）。
-- `TASK_AUTOMATION_DELIVERY_SYSTEM_PROMPT`：到点发送内容专用 system prompt（可选覆盖默认值）。
-- `TASK_AUTOMATION_CHAT_REPLY_MODEL`：自然语言创建任务时的回复模型（默认 `deepseek-reasoner`）。
-- `TASK_AUTOMATION_CHAT_REPLY_TIMEOUT_MS`：创建任务自然回复超时（默认 `12000`）。
-- `TASK_AUTOMATION_CHAT_REPLY_MAX_TOKENS`：创建任务自然回复 `max_tokens`（默认 `10000`）。
-- `TASK_AUTOMATION_CHAT_REPLY_SYSTEM_PROMPT`：创建任务自然回复专用 system prompt（可选覆盖默认值）。
+- 自动化任务创建与执行都改为 ChatLuna 工具链驱动，不再提供单独的意图模型、到点发送模型或创建回复模型配置。
 
 ### QQ voice environment variables
 
@@ -390,9 +374,8 @@ pnpm build
 
 - This project is built for Podman (not Docker Desktop).
 - `compose.yaml` uses `:Z` on bind mount for SELinux Enforcing.
-- Container should call host via `host.containers.internal`, not `127.0.0.1`.
-- If `llonebot` reaches `pmhq` through `host.containers.internal`, bind `PMHQ_BIND_HOST`
-  to the Podman bridge gateway (server currently uses `10.88.0.1`) instead of pure loopback.
+- `llonebot` should call `pmhq` through the compose service name `pmhq`, not `127.0.0.1`.
+- `PMHQ_BIND_HOST` only controls how `pmhq` is exposed to the host; it does not need to be reused as the in-network target for `llonebot`.
 
 ## 14. Troubleshooting
 
@@ -401,8 +384,8 @@ pnpm build
   - Confirm trigger pattern matches ChatLuna native rules (`@`/昵称/私聊).
 - 自动化未触发：
   - 确认 `./dist/plugins/automation` 与 `cron` 已在 `koishi.yml` 启用。
-  - 确认当前群在 `CHAT_ENABLED_GROUPS` 白名单。
-  - 确认意图模型配置可用（或已复用 `OPENAI_*`）。
+  - 确认当前会话对应房间 `chatMode=plugin`，且 Agent 侧允许调用 `automation_*` 工具。
+  - 确认控制台 `automation` route 下的工具策略允许到点 run 使用所需工具。
 - OneBot WS cannot connect:
   - Confirm Koishi process is running.
   - Confirm LLBot `WebSocket正向` is enabled at `3001`.
@@ -416,7 +399,6 @@ pnpm build
   - Check network/proxy for model endpoint.
 - Command denied:
   - `chatluna.*`：确认账号 authority >= `CHATLUNA_COMMAND_AUTHORITY`。
-  - `task.*`：若 `TASK_AUTOMATION_PERMISSION=authority3`，确认账号 authority >= 3。
 - QQ 语音不可用：
   - 服务器部署默认禁用语音；不要在服务器上排查 `voice-asr`，它不应该存在。
   - 确认笔记本 `qqbot-voice-tts.service` 已启动：`systemctl --user status qqbot-voice-tts.service`

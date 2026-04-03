@@ -1,4 +1,4 @@
-import { sanitizeStructuredReplySegmentContent } from '../../shared/outbound/index.js';
+import { normalizeRichTextSegments, sanitizeStructuredReplySegmentContent } from '../../shared/outbound/index.js';
 import type { ResolvedAction, StructuredReplyV1, TurnContext } from './types.js';
 
 export class ActionResolverService {
@@ -19,6 +19,15 @@ export class ActionResolverService {
     const canSticker = capabilitySnapshot?.canSticker === true && (capabilitySnapshot?.stickerAvailableCount ?? 0) > 0;
 
     for (const message of messages) {
+      if (message.modality === 'rich_text') {
+        const segments = normalizeRichTextSegments(message.segments);
+        if (!segments.length) {
+          continue;
+        }
+        resolved.push({ kind: 'rich_text', segments });
+        continue;
+      }
+
       const content = sanitizeStructuredReplySegmentContent(message.content);
       if (!content) {
         continue;

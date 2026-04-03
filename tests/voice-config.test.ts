@@ -15,9 +15,11 @@ describe('qq voice config wiring', () => {
 
     expect(content).toContain("asrBaseUrl: ${{ env.QQ_VOICE_ASR_BASE_URL || '' }}");
     expect(content).toContain("ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || '' }}");
-    expect(content).toContain('defaultModel: >-');
-    expect(content).toContain("${{ env.CHATLUNA_DEFAULT_MODEL || 'siliconflow/Pro/moonshotai/Kimi-K2.5'");
+    expect(content).toContain("maxJobsPerUser: ${{ +env.TASK_AUTOMATION_MAX_TASKS_PER_USER || 20 }}");
+    expect(content).not.toContain('maxTasksPerUser:');
+    expect(content).toContain("defaultModel: ${{ env.CHATLUNA_DEFAULT_MODEL || '' }}");
     expect(content).toContain("platform: ${{ env.CHATLUNA_PLATFORM || 'siliconflow' }}");
+    expect(content).not.toContain('defaultModel: openai/gemini-3.1-pro-preview');
     expect(content).not.toContain('defaultModel: siliconflow/inclusionAI/Ring-flash-2.0');
   });
 
@@ -25,7 +27,7 @@ describe('qq voice config wiring', () => {
     const content = readFileSync(resolve(process.cwd(), 'compose.yaml'), 'utf8');
 
     expect(content).toContain('"${PMHQ_BIND_HOST:-127.0.0.1}:${PMHQ_PORT:-13000}:13000"');
-    expect(content).toContain('pmhq_host: ${PMHQ_HOST:-host.containers.internal}');
+    expect(content).toContain('pmhq_host: ${PMHQ_HOST:-pmhq}');
     expect(content).toContain('pmhq_port: ${PMHQ_PORT:-13000}');
     expect(content).toContain('LLONEBOT_WS_PORT: ${LLONEBOT_WS_PORT:-3001}');
     expect(content).toContain('ONEBOT_TOKEN: ${ONEBOT_TOKEN:-}');
@@ -41,7 +43,7 @@ describe('qq voice config wiring', () => {
   it('starts llonebot with explicit PMHQ host and port CLI args', () => {
     const content = readFileSync(resolve(process.cwd(), 'docker/llonebot-startup.sh'), 'utf8');
 
-    expect(content).toContain('PMHQ_HOST="${pmhq_host:-${PMHQ_HOST:-host.containers.internal}}"');
+    expect(content).toContain('PMHQ_HOST="${pmhq_host:-${PMHQ_HOST:-pmhq}}"');
     expect(content).toContain('PMHQ_PORT="${pmhq_port:-${PMHQ_PORT:-13000}}"');
     expect(content).toContain('"--pmhq-host=${PMHQ_HOST}"');
     expect(content).toContain('"--pmhq-port=${PMHQ_PORT}"');
@@ -62,6 +64,12 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('CHATLUNA_COPILOT_BASE_URL=http://127.0.0.1:5140/api/internal/copilot/v1');
     expect(content).toContain('CHATLUNA_COPILOT_DEFAULT_MODEL=gpt-5.4-mini');
     expect(content).toContain('CHATLUNA_COPILOT_OAUTH_CLIENT_ID=Iv1.b507a08c87ecfe98');
+    expect(content).toContain('TASK_AUTOMATION_POLL_MS=30000');
+    expect(content).toContain('TASK_AUTOMATION_MAX_TASKS_PER_USER=20');
+    expect(content).not.toContain('CHAT_ENABLED_GROUPS=');
+    expect(content).not.toContain('TASK_AUTOMATION_INTENT_ENABLED=');
+    expect(content).not.toContain('TASK_AUTOMATION_DELIVERY_MODEL=');
+    expect(content).not.toContain('TASK_AUTOMATION_CHAT_REPLY_MODEL=');
     expect(content).toContain('PMHQ_BIND_HOST=127.0.0.1');
     expect(content).not.toContain('VOICE_TTS_GPT_WEIGHTS=/data/voice/tts/models/sakiko_v2pp-e15.ckpt');
     expect(content).not.toContain('VOICE_TTS_REF_BLACK=/data/voice/tts/references/black_sakiko.wav');
@@ -77,6 +85,12 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('CHATLUNA_ACTIVE_TAB=siliconflow');
     expect(content).toContain('CHATLUNA_OPENAI_BASE_URL=https://shell.wyzai.top/v1');
     expect(content).toContain('CHATLUNA_COPILOT_BASE_URL=http://127.0.0.1:5140/api/internal/copilot/v1');
+    expect(content).toContain('TASK_AUTOMATION_POLL_MS=30000');
+    expect(content).toContain('TASK_AUTOMATION_MAX_TASKS_PER_USER=20');
+    expect(content).not.toContain('CHAT_ENABLED_GROUPS=');
+    expect(content).not.toContain('TASK_AUTOMATION_INTENT_ENABLED=');
+    expect(content).not.toContain('TASK_AUTOMATION_DELIVERY_MODEL=');
+    expect(content).not.toContain('TASK_AUTOMATION_CHAT_REPLY_MODEL=');
     expect(content).toContain('PMHQ_BIND_HOST=10.88.0.1');
     expect(content).toContain('# Server deploy does not run voice-asr.');
   });

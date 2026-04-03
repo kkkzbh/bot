@@ -319,7 +319,7 @@ async function handleBatchDelete(targets: ConversationTarget[]) {
           type="text"
           :value="envDraft[key] ?? ''"
           spellcheck="false"
-          placeholder="群号之间用英文逗号分隔，如 123456,789012"
+          placeholder="自然触发白名单群，群号之间用英文逗号分隔，如 123456,789012"
           @input="(event) => { envDraft[key] = (event.target as HTMLInputElement).value }"
         />
 

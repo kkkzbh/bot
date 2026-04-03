@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('koishi-plugin-cron', () => ({}));
-
 vi.mock('cron-parser', () => ({
   parseExpression: vi.fn(() => ({
     next: () => ({
       getTime: () => Date.now() + 60_000,
     }),
   })),
+}));
+
+vi.mock('koishi-plugin-chatluna/utils/string', () => ({
+  getMessageContent: (content: unknown) => (typeof content === 'string' ? content : ''),
 }));
 
 vi.mock('koishi', () => {
@@ -46,10 +48,11 @@ vi.mock('koishi', () => {
       array: () => createSchemaNode(),
       union: () => createSchemaNode(),
       const: () => createSchemaNode(),
+      enum: () => createSchemaNode(),
     },
     Session: class {},
     h: {
-      at: (id: string) => `@${id}`,
+      at: (id: string) => ({ type: 'at', attrs: { id }, children: [] }),
       text: (content: string) => ({
         type: 'text',
         attrs: { content },
@@ -60,73 +63,208 @@ vi.mock('koishi', () => {
 });
 
 import { apply } from '../src/plugins/automation/index.js';
+import { TOOL_CATALOG } from '../src/plugins/tool-policy/catalog.js';
 
-type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
+type ListenerMap = Record<string, Array<() => Promise<void> | void>>;
+type ToolRegistry = Record<string, any>;
 
-function createHarness() {
-  const middlewares: Middleware[] = [];
-  const tasks: Record<string, any>[] = [];
+function createDatabase(seed: Record<string, Record<string, any>[]> = {}) {
+  const tables = new Map<string, Record<string, any>[]>(Object.entries(seed).map(([key, value]) => [key, [...value]]));
+  const autoIds = new Map<string, number>();
 
-  const database = {
-    get: vi.fn(async (table: string, query: Record<string, any>) => {
-      if (table !== 'automation_task') return [];
-
-      return tasks.filter((task) =>
-        Object.entries(query).every(([key, value]) => {
-          if (value && typeof value === 'object' && !Array.isArray(value)) {
-            return true;
-          }
-          return task[key] === value;
-        }),
-      );
-    }),
-    create: vi.fn(async (_table: string, record: Record<string, any>) => {
-      const created = {
-        id: tasks.length + 1,
-        ...record,
-      };
-      tasks.push(created);
-      return created;
-    }),
-    set: vi.fn(async () => undefined),
+  const getRows = (table: string) => tables.get(table) ?? [];
+  const setRows = (table: string, rows: Record<string, any>[]) => {
+    tables.set(table, rows);
   };
 
-  const ctx = {
-    bots: [],
-    database,
-    model: {
-      extend: vi.fn(),
-    },
-    middleware: vi.fn((handler: Middleware) => {
-      middlewares.push(handler);
-    }),
-    command: vi.fn(() => ({
-      action: vi.fn(() => undefined),
-    })),
-    on: vi.fn(() => undefined),
-  };
-
-  apply(ctx as never, {
-    enabledGroups: '829573670',
-    listenPrivate: true,
-    permissionMode: 'all',
-    intentEnabled: true,
-    deliveryBaseUrl: '',
-    deliveryApiKey: '',
-    deliveryModel: 'deepseek-reasoner',
-  });
+  const matches = (row: Record<string, any>, query: Record<string, any>) =>
+    Object.entries(query).every(([key, value]) => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        if ('$lte' in value) return Number(row[key]) <= Number((value as any).$lte);
+        if ('$in' in value) return Array.isArray((value as any).$in) && (value as any).$in.includes(row[key]);
+        return true;
+      }
+      return row[key] === value;
+    });
 
   return {
-    middleware: middlewares[0],
-    database,
-    tasks,
+    tables,
+    get: vi.fn(async (table: string, query: Record<string, any>) => getRows(table).filter((row) => matches(row, query))),
+    create: vi.fn(async (table: string, row: Record<string, any>) => {
+      const nextId = (autoIds.get(table) ?? 0) + 1;
+      autoIds.set(table, nextId);
+      const created = row.id == null ? { id: nextId, ...row } : { ...row };
+      setRows(table, [...getRows(table), created]);
+      return created;
+    }),
+    set: vi.fn(async (table: string, query: Record<string, any>, patch: Record<string, any>) => {
+      setRows(
+        table,
+        getRows(table).map((row) => (matches(row, query) ? { ...row, ...patch } : row)),
+      );
+    }),
+    remove: vi.fn(async (table: string, query: Record<string, any>) => {
+      setRows(
+        table,
+        getRows(table).filter((row) => !matches(row, query)),
+      );
+    }),
+    upsert: vi.fn(async (table: string, rows: Record<string, any>[]) => {
+      const current = [...getRows(table)];
+      for (const row of rows) {
+        const keys = Object.keys(row).filter((key) => ['id', 'roomId', 'userId', 'groupId', 'defaultRoomId'].includes(key));
+        const index = current.findIndex((candidate) =>
+          keys.length > 0 && keys.every((key) => candidate[key] === row[key]),
+        );
+        if (index >= 0) current[index] = { ...current[index], ...row };
+        else current.push({ ...row });
+      }
+      setRows(table, current);
+    }),
   };
 }
 
-describe('task automation middleware', () => {
+function createHarness(seed: Record<string, Record<string, any>[]> = {}) {
+  const listeners: ListenerMap = {};
+  const tools: ToolRegistry = {};
+  const database = createDatabase(seed);
+  const bot = {
+    selfId: 'bot-1',
+    platform: 'onebot',
+    sendMessage: vi.fn(async () => ['msg-id']),
+    session(event: Record<string, any> = {}) {
+      return {
+        event,
+        platform: 'onebot',
+        userId: event.user?.id ?? event.userId ?? 'u1',
+        channelId: event.channel?.id ?? event.channelId ?? 'group:100',
+        guildId: event.guild?.id ?? event.guildId ?? '100',
+        isDirect: false,
+        bot: bot,
+      };
+    },
+  };
+
+  const ctx = {
+    bots: [bot],
+    database,
+    model: { extend: vi.fn() },
+    middleware: vi.fn(),
+    command: vi.fn(),
+    chatluna: {
+      platform: {
+        registerTool: vi.fn((name: string, tool: any) => {
+          tools[name] = tool;
+          return () => {
+            delete tools[name];
+          };
+        }),
+      },
+      chat: vi.fn(async (_session: any, _room: any, _message: any, _events: any, _stream: boolean, _vars: any, _post: any, _req: string, _toolMask: any) => ({
+        content: '自动化执行结果',
+        additional_kwargs: {},
+      })),
+    },
+    toolPolicy: {
+      resolveToolMask: vi.fn(async () => ({
+        mode: 'allow',
+        allow: ['web_search'],
+        deny: [],
+        toolCallMask: { mode: 'allow', allow: ['web_search'], deny: [] },
+      })),
+    },
+    on: vi.fn((event: string, listener: () => Promise<void> | void) => {
+      (listeners[event] ||= []).push(listener);
+    }),
+  };
+
+  apply(ctx as never, {
+    pollIntervalMs: 1000,
+    maxJobsPerUser: 20,
+  });
+
+  return {
+    ctx,
+    bot,
+    database,
+    tools,
+    async runReady() {
+      for (const listener of listeners.ready ?? []) {
+        await listener();
+      }
+    },
+  };
+}
+
+async function callTool(toolEntry: any, input: Record<string, any>, config: Record<string, any>) {
+  const tool = toolEntry.createTool({ embeddings: {} });
+  return (tool as any)._call(input, null, config);
+}
+
+function createRoom(overrides: Record<string, any> = {}) {
+  return {
+    roomId: 7,
+    roomName: '当前房间',
+    roomMasterId: 'u1',
+    conversationId: 'conv-1',
+    preset: 'sakiko',
+    model: 'openai/gpt-5.4-medium-thinking',
+    chatMode: 'plugin',
+    visibility: 'template_clone',
+    updatedTime: new Date(),
+    ...overrides,
+  };
+}
+
+function createToolConfig(overrides: Record<string, any> = {}) {
+  const session = {
+    userId: 'u1',
+    platform: 'onebot',
+    guildId: '100',
+    channelId: 'group:100',
+    isDirect: false,
+    bot: { selfId: 'bot-1' },
+    event: { userId: 'u1', guildId: '100', channelId: 'group:100' },
+    ...overrides,
+  };
+
+  return {
+    configurable: {
+      session,
+      conversationId: 'conv-1',
+    },
+  };
+}
+
+function createJob(overrides: Record<string, any> = {}) {
+  return {
+    id: 1,
+    creatorId: 'u1',
+    scope: 'group',
+    channelId: 'group:100',
+    guildId: '100',
+    platform: 'onebot',
+    botSelfId: 'bot-1',
+    sourceRoomId: 7,
+    sourceConversationId: 'conv-1',
+    kind: 'once',
+    runAt: Date.now() + 3600_000,
+    cronExpr: null,
+    goal: '默认任务',
+    timezone: 'Asia/Shanghai',
+    mentionCreator: 1,
+    event: { userId: 'u1', guildId: '100', channelId: 'group:100' },
+    status: 'active',
+    createdAt: Date.now() - 2000,
+    updatedAt: Date.now() - 2000,
+    ...overrides,
+  };
+}
+
+describe('task automation tools and execution', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-03-01T08:00:00+08:00'));
+    vi.setSystemTime(new Date('2026-04-03T10:00:00+08:00'));
   });
 
   afterEach(() => {
@@ -134,48 +272,586 @@ describe('task automation middleware', () => {
     vi.restoreAllMocks();
   });
 
-  it('intercepts stripped mention reminder text, creates a task, and does not fall through to chat', async () => {
-    const { middleware, database, tasks } = createHarness();
-    const next = vi.fn(async () => 'next');
-    const session = {
-      userId: 'u1',
-      platform: 'onebot',
-      guildId: '829573670',
-      channelId: 'group:829573670',
-      isDirect: false,
-      content: '<at id="bot-1" name="小祥"/> 10s后提醒我关门',
-      stripped: {
-        content: '10s后提醒我关门',
-      },
-      bot: {
-        selfId: 'bot-1',
-      },
-      send: vi.fn(async () => ['msg-id']),
-    };
+  it('creates a once automation job from same-day natural schedule text', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间' })],
+    });
+    await harness.runReady();
 
-    const result = await middleware(session, next);
+    const result = await callTool(
+      harness.tools.automation_create,
+      {
+        scheduleText: '今天23:45',
+        goal: '到点后搜索今天的天气并简短回复',
+      },
+      createToolConfig(),
+    );
 
-    expect(result).toBeUndefined();
-    expect(next).not.toHaveBeenCalled();
-    expect(database.create).toHaveBeenCalledTimes(1);
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]).toEqual(
+    expect(result).toContain('23:45');
+    expect(result).toContain('2026-04-03 23:45, Asia/Shanghai');
+    expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
       expect.objectContaining({
+        id: 1,
+        sourceRoomId: 7,
+        goal: '到点后搜索今天的天气并简短回复',
         kind: 'once',
-        scope: 'group',
-        channelId: 'group:829573670',
-        guildId: '829573670',
-        message: '关门',
+        runAt: Date.parse('2026-04-03T23:45:00+08:00'),
         status: 'active',
       }),
-    );
-    expect(session.send).toHaveBeenCalledWith(
+    ]);
+  });
+
+  it('creates a once automation job from relative-day natural schedule text', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间' })],
+    });
+    await harness.runReady();
+
+    const result = await callTool(
+      harness.tools.automation_create,
       {
-        type: 'text',
-        attrs: { content: '记住了，08:00提醒你关门' },
-        children: [],
+        scheduleText: '明天早上8点',
+        goal: '提醒我打扫卫生',
       },
-      expect.any(Object),
+      createToolConfig(),
+    );
+
+    expect(result).toContain('明天08:00');
+    expect(result).toContain('2026-04-04 08:00, Asia/Shanghai');
+    expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
+      expect.objectContaining({
+        kind: 'once',
+        runAt: Date.parse('2026-04-04T08:00:00+08:00'),
+        goal: '提醒我打扫卫生',
+      }),
+    ]);
+  });
+
+  it('creates a once automation job from relative-offset natural schedule text', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间' })],
+    });
+    await harness.runReady();
+
+    const result = await callTool(
+      harness.tools.automation_create,
+      {
+        scheduleText: '半小时后',
+        goal: '提醒我站起来活动',
+      },
+      createToolConfig(),
+    );
+
+    expect(result).toContain('10:30');
+    expect(result).toContain('2026-04-03 10:30, Asia/Shanghai');
+    expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
+      expect.objectContaining({
+        kind: 'once',
+        runAt: Date.parse('2026-04-03T10:30:00+08:00'),
+        goal: '提醒我站起来活动',
+      }),
+    ]);
+  });
+
+  it('creates a cron automation job via natural schedule text in the current private plugin room', async () => {
+    const harness = createHarness({
+      chathub_room: [
+        createRoom({
+          roomId: 8,
+          roomName: '当前私聊房间',
+          roomMasterId: 'u1',
+          conversationId: 'conv-private-1',
+          visibility: 'private',
+        }),
+      ],
+    });
+    await harness.runReady();
+
+    const result = await callTool(
+      harness.tools.automation_create,
+      {
+        scheduleText: '每周一早上9点',
+        goal: '每周一早上总结本周安排',
+      },
+      {
+        configurable: {
+          session: createToolConfig({
+            guildId: '',
+            channelId: 'private:u1',
+            isDirect: true,
+            event: { userId: 'u1', channelId: 'private:u1' },
+          }).configurable.session,
+          conversationId: 'conv-private-1',
+        },
+      },
+    );
+
+    expect(result).toContain('每周一早上9点（cron: 0 9 * * 1, Asia/Shanghai）');
+    expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
+      expect.objectContaining({
+        id: 1,
+        scope: 'private',
+        channelId: 'private:u1',
+        sourceRoomId: 8,
+        kind: 'cron',
+        cronExpr: '0 9 * * 1',
+        mentionCreator: 0,
+        status: 'active',
+      }),
+    ]);
+  });
+
+  it('executes due once jobs via independent agent run and sends group mention result', async () => {
+    const automationMask = {
+      mode: 'allow',
+      allow: ['web_search'],
+      deny: [],
+      toolCallMask: { mode: 'allow', allow: ['web_search'], deny: [] },
+    };
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间' })],
+      automation_job: [
+        {
+          id: 1,
+          creatorId: 'u1',
+          scope: 'group',
+          channelId: 'group:100',
+          guildId: '100',
+          platform: 'onebot',
+          botSelfId: 'bot-1',
+          sourceRoomId: 7,
+          sourceConversationId: 'conv-1',
+          kind: 'once',
+          runAt: Date.now() - 1,
+          cronExpr: null,
+          goal: '总结今天的天气',
+          timezone: 'Asia/Shanghai',
+          mentionCreator: 1,
+          event: { userId: 'u1', guildId: '100', channelId: 'group:100' },
+          status: 'active',
+          createdAt: Date.now() - 2000,
+          updatedAt: Date.now() - 2000,
+        },
+      ],
+    });
+    harness.ctx.toolPolicy.resolveToolMask.mockResolvedValue(automationMask);
+    await harness.runReady();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(harness.ctx.chatluna.chat).toHaveBeenCalledTimes(1);
+    expect(harness.ctx.toolPolicy.resolveToolMask).toHaveBeenCalledWith(
+      expect.anything(),
+      'automation',
+      expect.objectContaining({ roomId: 7, conversationId: 'conv-1' }),
+    );
+    expect(harness.ctx.chatluna.chat.mock.calls[0]?.[8]).toEqual(automationMask);
+    expect(harness.bot.sendMessage).toHaveBeenCalled();
+    expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
+      expect.objectContaining({ status: 'done' }),
+    ]);
+    expect(await harness.database.get('automation_job_run', { jobId: 1 })).toEqual([
+      expect.objectContaining({
+        status: 'succeeded',
+        outputText: '自动化执行结果',
+      }),
+    ]);
+  });
+
+  it('executes due once jobs in private chat without mention wrapper', async () => {
+    const harness = createHarness({
+      chathub_room: [
+        createRoom({
+          roomId: 8,
+          roomName: '当前私聊房间',
+          roomMasterId: 'u1',
+          conversationId: 'conv-private-1',
+          visibility: 'private',
+        }),
+      ],
+      automation_job: [
+        {
+          id: 1,
+          creatorId: 'u1',
+          scope: 'private',
+          channelId: 'private:u1',
+          guildId: '',
+          platform: 'onebot',
+          botSelfId: 'bot-1',
+          sourceRoomId: 8,
+          sourceConversationId: 'conv-private-1',
+          kind: 'once',
+          runAt: Date.now() - 1,
+          cronExpr: null,
+          goal: '私聊执行一次',
+          timezone: 'Asia/Shanghai',
+          mentionCreator: 0,
+          event: { userId: 'u1', channelId: 'private:u1' },
+          status: 'active',
+          createdAt: Date.now() - 2000,
+          updatedAt: Date.now() - 2000,
+        },
+      ],
+    });
+    await harness.runReady();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(harness.bot.sendMessage).toHaveBeenCalledTimes(1);
+    const firstSendCall = harness.bot.sendMessage.mock.calls[0] as unknown[] | undefined;
+    expect(firstSendCall).toBeDefined();
+    expect(firstSendCall?.at(0)).toBe('private:u1');
+    expect(firstSendCall?.at(1)).toEqual(
+      expect.objectContaining({
+        attrs: expect.objectContaining({ content: '自动化执行结果' }),
+      }),
+    );
+    expect(await harness.database.get('automation_job_run', { jobId: 1 })).toEqual([
+      expect.objectContaining({
+        status: 'succeeded',
+        outputText: '自动化执行结果',
+      }),
+    ]);
+  });
+
+  it('follows the latest source room model at execution time', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间' })],
+      automation_job: [
+        {
+          id: 1,
+          creatorId: 'u1',
+          scope: 'group',
+          channelId: 'group:100',
+          guildId: '100',
+          platform: 'onebot',
+          botSelfId: 'bot-1',
+          sourceRoomId: 7,
+          sourceConversationId: 'conv-1',
+          kind: 'once',
+          runAt: Date.now() - 1,
+          cronExpr: null,
+          goal: '执行时跟随最新房间配置',
+          timezone: 'Asia/Shanghai',
+          mentionCreator: 1,
+          event: { userId: 'u1', guildId: '100', channelId: 'group:100' },
+          status: 'active',
+          createdAt: Date.now() - 2000,
+          updatedAt: Date.now() - 2000,
+        },
+      ],
+    });
+    await harness.runReady();
+
+    await harness.database.set('chathub_room', { roomId: 7 }, { model: 'openai/gpt-5.4', preset: 'new-preset' });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const [, tempRoom] = harness.ctx.chatluna.chat.mock.calls[0]!;
+    expect(tempRoom).toEqual(
+      expect.objectContaining({
+        model: 'openai/gpt-5.4',
+        preset: 'new-preset',
+      }),
+    );
+  });
+
+  it('manages scoped jobs via list pause resume and delete tools', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间' })],
+      automation_job: [
+        createJob({ id: 1, goal: '一次性任务' }),
+        createJob({ id: 2, kind: 'cron', runAt: null, cronExpr: '0 9 * * 1', goal: '周期任务' }),
+        createJob({ id: 3, creatorId: 'u2', goal: '别人的任务', runAt: Date.now() + 7200_000 }),
+      ],
+    });
+    await harness.runReady();
+
+    const config = createToolConfig();
+    const listBefore = await callTool(harness.tools.automation_list, {}, config);
+    expect(listBefore).toContain('#1 [active]');
+    expect(listBefore).toContain('#2 [active]');
+    expect(listBefore).not.toContain('#3');
+
+    await expect(callTool(harness.tools.automation_pause, { taskId: 2 }, config)).resolves.toContain('已暂停自动化任务 #2');
+    expect(await harness.database.get('automation_job', { id: 2 })).toEqual([
+      expect.objectContaining({ status: 'paused' }),
+    ]);
+
+    await expect(callTool(harness.tools.automation_resume, { taskId: 2 }, config)).resolves.toContain('已恢复自动化任务 #2');
+    expect(await harness.database.get('automation_job', { id: 2 })).toEqual([
+      expect.objectContaining({ status: 'active' }),
+    ]);
+
+    await expect(callTool(harness.tools.automation_delete, { taskId: 1 }, config)).resolves.toContain('已删除自动化任务 #1');
+    expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
+      expect.objectContaining({ status: 'deleted' }),
+    ]);
+
+    const listAfter = await callTool(harness.tools.automation_list, {}, config);
+    expect(listAfter).not.toContain('#1');
+    expect(listAfter).toContain('#2 [active]');
+  });
+
+  it('updates a once job from natural schedule text and goal in place', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom()],
+      automation_job: [
+        createJob({
+          id: 1,
+          kind: 'once',
+          runAt: Date.parse('2026-04-03T11:00:00+08:00'),
+          goal: '旧目标',
+        }),
+      ],
+    });
+    await harness.runReady();
+
+    const result = await callTool(
+      harness.tools.automation_update,
+      {
+        taskId: 1,
+        scheduleText: '明天8点',
+        goal: '新目标',
+      },
+      createToolConfig(),
+    );
+
+    expect(result).toContain('明天08:00');
+    expect(result).toContain('2026-04-04 08:00, Asia/Shanghai');
+    expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
+      expect.objectContaining({
+        id: 1,
+        runAt: Date.parse('2026-04-04T08:00:00+08:00'),
+        goal: '新目标',
+        status: 'active',
+      }),
+    ]);
+  });
+
+  it('updates mentionCreator for group jobs and keeps private jobs unmentioned', async () => {
+    const harness = createHarness({
+      chathub_room: [
+        createRoom(),
+        createRoom({
+          roomId: 8,
+          roomName: '当前私聊房间',
+          roomMasterId: 'u1',
+          conversationId: 'conv-private-1',
+          visibility: 'private',
+        }),
+      ],
+      automation_job: [
+        createJob({ id: 1, mentionCreator: 1 }),
+        createJob({
+          id: 2,
+          scope: 'private',
+          channelId: 'private:u1',
+          guildId: '',
+          sourceRoomId: 8,
+          sourceConversationId: 'conv-private-1',
+          mentionCreator: 0,
+        }),
+      ],
+    });
+    await harness.runReady();
+
+    await expect(
+      callTool(harness.tools.automation_update, { taskId: 1, mentionCreator: false }, createToolConfig()),
+    ).resolves.toContain('已更新自动化任务 #1');
+    await expect(
+      callTool(
+        harness.tools.automation_update,
+        { taskId: 2, mentionCreator: true },
+        {
+          configurable: {
+            session: createToolConfig({
+              guildId: '',
+              channelId: 'private:u1',
+              isDirect: true,
+              event: { userId: 'u1', channelId: 'private:u1' },
+            }).configurable.session,
+            conversationId: 'conv-private-1',
+          },
+        },
+      ),
+    ).resolves.toContain('已更新自动化任务 #2');
+
+    expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
+      expect.objectContaining({ mentionCreator: 0 }),
+    ]);
+    expect(await harness.database.get('automation_job', { id: 2 })).toEqual([
+      expect.objectContaining({ mentionCreator: 0 }),
+    ]);
+  });
+
+  it('updates an active cron job and re-registers the new in-memory schedule payload', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom()],
+      automation_job: [
+        createJob({
+          id: 1,
+          kind: 'cron',
+          runAt: null,
+          cronExpr: '0 9 * * 1',
+          goal: '旧周期目标',
+        }),
+      ],
+    });
+    await harness.runReady();
+
+    await expect(
+      callTool(
+        harness.tools.automation_update,
+        { taskId: 1, scheduleText: '每周二晚上7点', goal: '新周期目标' },
+        createToolConfig(),
+      ),
+    ).resolves.toContain('每周二晚上7点（cron: 0 19 * * 2, Asia/Shanghai）');
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(harness.ctx.chatluna.chat).toHaveBeenCalledTimes(1);
+    expect(harness.ctx.chatluna.chat.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        content: expect.stringContaining('任务目标：新周期目标'),
+      }),
+    );
+    expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
+      expect.objectContaining({
+        cronExpr: '0 19 * * 2',
+        goal: '新周期目标',
+        status: 'active',
+      }),
+    ]);
+  });
+
+  it('updates a paused cron job without resuming it', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom()],
+      automation_job: [
+        createJob({
+          id: 1,
+          kind: 'cron',
+          runAt: null,
+          cronExpr: '0 9 * * 1',
+          goal: '旧周期目标',
+          status: 'paused',
+        }),
+      ],
+    });
+    await harness.runReady();
+
+    await expect(
+      callTool(
+        harness.tools.automation_update,
+        { taskId: 1, scheduleText: '每周二晚上7点', goal: '暂停中的新目标' },
+        createToolConfig(),
+      ),
+    ).resolves.toContain('每周二晚上7点（cron: 0 19 * * 2, Asia/Shanghai）');
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(harness.ctx.chatluna.chat).not.toHaveBeenCalled();
+    expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
+      expect.objectContaining({
+        cronExpr: '0 19 * * 2',
+        goal: '暂停中的新目标',
+        status: 'paused',
+      }),
+    ]);
+  });
+
+  it('rejects invalid update shapes and immutable job states', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom()],
+      automation_job: [
+        createJob({ id: 1, kind: 'once' }),
+        createJob({ id: 2, kind: 'cron', runAt: null, cronExpr: '0 9 * * 1' }),
+        createJob({ id: 3, status: 'done' }),
+        createJob({ id: 4, status: 'deleted' }),
+      ],
+    });
+    await harness.runReady();
+
+    await expect(callTool(harness.tools.automation_update, { taskId: 1 }, createToolConfig())).rejects.toThrow(
+      '更新失败：至少提供一个可更新字段。',
+    );
+    await expect(
+      callTool(harness.tools.automation_update, { taskId: 1, scheduleText: '每周一早上9点' }, createToolConfig()),
+    ).rejects.toThrow('更新失败：一次性任务 #1 不能改成周期任务。');
+    await expect(
+      callTool(harness.tools.automation_update, { taskId: 2, scheduleText: '明天8点' }, createToolConfig()),
+    ).rejects.toThrow('更新失败：周期任务 #2 不能改成一次性任务。');
+    await expect(
+      callTool(harness.tools.automation_update, { taskId: 1, scheduleText: '有空的时候' }, createToolConfig()),
+    ).rejects.toThrow('无法解析时间表达：有空的时候。');
+    await expect(
+      callTool(harness.tools.automation_update, { taskId: 3, goal: '改一下' }, createToolConfig()),
+    ).rejects.toThrow('自动化任务 #3 已完成，不能更新。');
+    await expect(
+      callTool(harness.tools.automation_update, { taskId: 4, goal: '改一下' }, createToolConfig()),
+    ).rejects.toThrow('自动化任务 #4 已删除，不能更新。');
+  });
+
+  it('records a failed run when the source room no longer exists', async () => {
+    const harness = createHarness({
+      automation_job: [
+        {
+          id: 1,
+          creatorId: 'u1',
+          scope: 'group',
+          channelId: 'group:100',
+          guildId: '100',
+          platform: 'onebot',
+          botSelfId: 'bot-1',
+          sourceRoomId: 999,
+          sourceConversationId: 'conv-missing',
+          kind: 'once',
+          runAt: Date.now() - 1,
+          cronExpr: null,
+          goal: '执行会失败',
+          timezone: 'Asia/Shanghai',
+          mentionCreator: 1,
+          event: { userId: 'u1', guildId: '100', channelId: 'group:100' },
+          status: 'active',
+          createdAt: Date.now() - 2000,
+          updatedAt: Date.now() - 2000,
+        },
+      ],
+    });
+    await harness.runReady();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(harness.ctx.chatluna.chat).not.toHaveBeenCalled();
+    expect(await harness.database.get('automation_job_run', { jobId: 1 })).toEqual([
+      expect.objectContaining({
+        status: 'failed',
+        error: expect.stringContaining('source room #999 no longer exists'),
+      }),
+    ]);
+  });
+
+  it('does not register legacy task commands or automation middleware interception', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间' })],
+    });
+    await harness.runReady();
+
+    expect(harness.ctx.command).not.toHaveBeenCalled();
+    expect(harness.ctx.middleware).not.toHaveBeenCalled();
+  });
+
+  it('exposes automation_update only on the agent tool route', () => {
+    const entry = TOOL_CATALOG.find((item) => item.toolName === 'automation_update');
+    expect(entry).toEqual(
+      expect.objectContaining({
+        toolName: 'automation_update',
+        availableRoutes: ['agent'],
+        defaultEnabledByRoute: {
+          agent: true,
+          automation: false,
+        },
+      }),
     );
   });
 });

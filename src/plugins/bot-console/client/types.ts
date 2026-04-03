@@ -146,7 +146,6 @@ export type ScopedFeatureKey =
   | "QQ_VOICE_INPUT_ENABLED"
   | "QQ_VOICE_OUTPUT_ENABLED"
   | "CHAT_NATURAL_TRIGGER_ENABLED"
-  | "TASK_AUTOMATION_INTENT_ENABLED"
   | "QQBOT_REPLY_INTERRUPT_ENABLED";
 
 export type FeatureScopeKind = "private_default" | "group";

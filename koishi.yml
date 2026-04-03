@@ -30,33 +30,8 @@ plugins:
     ./dist/plugins/bot-console:bot-console: {}
     cron:task: {}
     ./dist/plugins/automation:automation:
-      enabledGroups: ${{ env.CHAT_ENABLED_GROUPS || '' }}
-      listenPrivate: ${{ env.TASK_AUTOMATION_LISTEN_PRIVATE !== 'false' }}
-      permissionMode: ${{ env.TASK_AUTOMATION_PERMISSION || 'all' }}
-      intentEnabled: ${{ env.TASK_AUTOMATION_INTENT_ENABLED !== 'false' }}
-      intentMinConfidence: ${{ +env.TASK_AUTOMATION_INTENT_MIN_CONFIDENCE || 0.78 }}
-      intentBaseUrl: >-
-        ${{ env.TASK_AUTOMATION_INTENT_BASE_URL || env.OPENAI_BASE_URL ||
-        'https://api.deepseek.com/v1' }}
-      intentApiKey: ${{ env.TASK_AUTOMATION_INTENT_API_KEY || env.OPENAI_API_KEY || '' }}
-      intentModel: ${{ env.TASK_AUTOMATION_INTENT_MODEL || env.OPENAI_MODEL || '' }}
-      intentTimeoutMs: ${{ +env.TASK_AUTOMATION_INTENT_TIMEOUT_MS || 12000 }}
       pollIntervalMs: ${{ +env.TASK_AUTOMATION_POLL_MS || 30000 }}
-      maxTasksPerUser: ${{ +env.TASK_AUTOMATION_MAX_TASKS_PER_USER || 20 }}
-      deliveryBaseUrl: >-
-        ${{ env.TASK_AUTOMATION_DELIVERY_BASE_URL || env.OPENAI_BASE_URL ||
-        'https://api.deepseek.com/v1' }}
-      deliveryApiKey: ${{ env.TASK_AUTOMATION_DELIVERY_API_KEY || env.OPENAI_API_KEY || '' }}
-      deliveryModel: ${{ env.TASK_AUTOMATION_DELIVERY_MODEL || 'deepseek-reasoner' }}
-      deliveryTimeoutMs: ${{ +env.TASK_AUTOMATION_DELIVERY_TIMEOUT_MS || 18000 }}
-      deliveryMaxTokens: ${{ +env.TASK_AUTOMATION_DELIVERY_MAX_TOKENS || 10000 }}
-      deliverySystemPrompt: ${{ env.TASK_AUTOMATION_DELIVERY_SYSTEM_PROMPT || '' }}
-      chatReplyModel: >-
-        ${{ env.TASK_AUTOMATION_CHAT_REPLY_MODEL ||
-        env.TASK_AUTOMATION_DELIVERY_MODEL || 'deepseek-reasoner' }}
-      chatReplyTimeoutMs: ${{ +env.TASK_AUTOMATION_CHAT_REPLY_TIMEOUT_MS || 12000 }}
-      chatReplyMaxTokens: ${{ +env.TASK_AUTOMATION_CHAT_REPLY_MAX_TOKENS || 10000 }}
-      chatReplySystemPrompt: ${{ env.TASK_AUTOMATION_CHAT_REPLY_SYSTEM_PROMPT || '' }}
+      maxJobsPerUser: ${{ +env.TASK_AUTOMATION_MAX_TASKS_PER_USER || 20 }}
     ./dist/plugins/reply:voice:
       inputEnabled: ${{ env.QQ_VOICE_INPUT_ENABLED !== 'false' }}
       outputEnabled: ${{ env.QQ_VOICE_OUTPUT_ENABLED !== 'false' }}
@@ -101,9 +76,7 @@ plugins:
         - 小祥
       isNickNameWithContent: true
       sendThinkingMessage: false
-      defaultModel: >-
-        ${{ env.CHATLUNA_DEFAULT_MODEL || 'siliconflow/Pro/moonshotai/Kimi-K2.5'
-        }}
+      defaultModel: ${{ env.CHATLUNA_DEFAULT_MODEL || '' }}
       defaultPreset: sakiko
       isLog: true
     chatluna-openai-like-adapter:0o3zho:

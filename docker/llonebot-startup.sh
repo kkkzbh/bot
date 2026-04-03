@@ -6,7 +6,7 @@ cd /app/llbot
 FILE="default_config.json"
 WEBUI_PORT="${WEBUI_PORT:-3080}"
 LLONEBOT_WS_PORT="${LLONEBOT_WS_PORT:-3001}"
-PMHQ_HOST="${pmhq_host:-${PMHQ_HOST:-host.containers.internal}}"
+PMHQ_HOST="${pmhq_host:-${PMHQ_HOST:-pmhq}}"
 PMHQ_PORT="${pmhq_port:-${PMHQ_PORT:-13000}}"
 
 node <<'EOF_NODE'

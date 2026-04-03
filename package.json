@@ -26,6 +26,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@langchain/core": "^0.3.80",
     "@koishijs/plugin-analytics": "^2.0.6",
     "@koishijs/plugin-commands": "^3.5.5",
     "@koishijs/plugin-config": "^2.8.6",

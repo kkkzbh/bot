@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('koishi-plugin-cron', () => ({}));
 
+vi.mock('koishi-plugin-chatluna/utils/string', () => ({
+  getMessageContent: (content: unknown) => (typeof content === 'string' ? content : ''),
+}));
+
 vi.mock('koishi', () => {
   class MockLogger {
     info(): void {}
@@ -60,11 +64,12 @@ describe('task automation outbound send', () => {
       }),
     };
 
-    await sendBotMessageByLines(bot, 'group-100', {
+    const receipts = await sendBotMessageByLines(bot, 'group-100', {
       mode: 'preserve',
       content: '第一行\n第二行',
     });
 
+    expect(receipts).toEqual(['msg-id']);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[0]).toBe('group-100');
     expect(calls[0]?.[1]).toEqual({
@@ -84,7 +89,7 @@ describe('task automation outbound send', () => {
       }),
     };
 
-    await sendBotMessageByLines(
+    const receipts = await sendBotMessageByLines(
       bot,
       'group-100',
       {
@@ -94,6 +99,7 @@ describe('task automation outbound send', () => {
       { mentionUserId: '123456' },
     );
 
+    expect(receipts).toEqual(['msg-id']);
     expect(calls).toEqual([
       [
         'group-100',
@@ -122,8 +128,9 @@ describe('task automation outbound send', () => {
     });
 
     await vi.runAllTimersAsync();
-    await pending;
+    const receipts = await pending;
 
+    expect(receipts).toEqual(['msg-id', 'msg-id']);
     expect(calls).toEqual([
       [
         'group-100',

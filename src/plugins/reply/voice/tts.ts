@@ -1,4 +1,5 @@
 import { h } from 'koishi';
+import { formatMentionText } from '../../shared/mention-text.js';
 
 const NEGATIVE_STYLE_KEYWORDS = [
   '与你无关',
@@ -74,13 +75,11 @@ export function extractTextContentWithoutVoice(content: string): string {
     }
 
     if (element.type === 'at') {
-      const name = typeof element.attrs?.name === 'string' ? element.attrs.name.trim() : '';
-      const id = typeof element.attrs?.id === 'string' ? element.attrs.id.trim() : '';
-      if (name) {
-        parts.push(`@${name}`);
-      } else if (id) {
-        parts.push(`@${id}`);
-      }
+      const mention = formatMentionText({
+        name: typeof element.attrs?.name === 'string' ? element.attrs.name : undefined,
+        id: typeof element.attrs?.id === 'string' ? element.attrs.id : undefined,
+      });
+      if (mention) parts.push(mention);
     }
   }
 

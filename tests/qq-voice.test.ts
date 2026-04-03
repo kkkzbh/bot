@@ -88,6 +88,7 @@ vi.mock('koishi', () => {
     (type: string, attrs?: Record<string, unknown>, children?: unknown[]): Record<string, unknown>;
     parse: typeof parse;
     text: (content: string) => Record<string, unknown>;
+    at: (id: string) => Record<string, unknown>;
     audio: (src: string) => Record<string, unknown>;
     image: (source: string | Buffer, mime?: string) => Record<string, unknown>;
   };
@@ -117,6 +118,12 @@ vi.mock('koishi', () => {
       typeof source === 'string'
         ? `<img src="${source}" />`
         : `<img src="data:${mime};base64,${source.toString('base64')}" />`,
+  });
+  hFactory.at = (id: string) => ({
+    type: 'at',
+    attrs: { id },
+    children: [],
+    toString: () => `@${id}`,
   });
 
   return {
@@ -169,6 +176,10 @@ function extractVisibleMessageText(content: unknown): string {
 
   if (typeof node.attrs?.content === 'string') {
     return node.attrs.content;
+  }
+
+  if (node.type === 'at' && typeof (node as { attrs?: { id?: unknown } }).attrs?.id === 'string') {
+    return `@${(node as { attrs?: { id?: string } }).attrs?.id}`;
   }
 
   if (Array.isArray(node.children) && node.children.length > 0) {
@@ -1101,6 +1112,63 @@ describe('qq voice plugin', () => {
     );
   });
 
+  it('executes a rich_text structured reply through the executor as inline mention elements', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '普通聊聊',
+      strippedContent: '普通聊聊',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-rich-text'),
+        responseMessage: createReplyV2Response({
+          decision: 'reply',
+          messages: [
+            {
+              modality: 'rich_text',
+              segments: [
+                { kind: 'text', text: '先问下 ' },
+                { kind: 'mention', userId: '123456' },
+                { kind: 'text', text: ' 这件事。' },
+              ],
+            },
+          ],
+        }),
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+    const calls = bot.sendMessage.mock.calls as any[][];
+    expect(calls[0]?.[1]).toEqual([
+      expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: '先问下 ' }) }),
+      expect.objectContaining({ type: 'at', attrs: expect.objectContaining({ id: '123456' }) }),
+      expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: ' 这件事。' }) }),
+    ]);
+    expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-rich-text' }),
+      '先问下 @123456 这件事。',
+    );
+  });
+
   it('treats empty text structured replies as no_reply and dispatches nothing', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
@@ -1174,6 +1242,57 @@ describe('qq voice plugin', () => {
         expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: '第一句' }) }),
       ]);
       expect(extractVisibleMessageText(calls[1]?.[1])).toBe('第二句');
+    } finally {
+      quoteSpy.mockRestore();
+    }
+  });
+
+  it('quotes a rich_text reply as one inline message when the runtime exposes a first-reply quote target', async () => {
+    const { ready, getExecutor, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const quoteSpy = vi.spyOn(ReplyRuntime.prototype, 'consumeFirstReplyQuote').mockReturnValueOnce('msg-b');
+
+    try {
+      const session = createSession(bot, {
+        userId: 'u2',
+        content: 'B1',
+        strippedContent: 'B1',
+        messageId: 'msg-b',
+      });
+      const context = {
+        options: {
+          room: createPluginRoom('conv-quote-rich-text'),
+          responseMessage: createReplyV2Response({
+            decision: 'reply',
+            messages: [
+              {
+                modality: 'rich_text',
+                segments: [
+                  { kind: 'text', text: '先问下 ' },
+                  { kind: 'mention', userId: '123456' },
+                  { kind: 'text', text: ' 这件事。' },
+                ],
+              },
+            ],
+          }),
+        },
+      };
+
+      await executor?.(session, context);
+
+      const calls = bot.sendMessage.mock.calls as any[][];
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[1]).toEqual([
+        expect.objectContaining({ type: 'quote', attrs: expect.objectContaining({ id: 'msg-b' }) }),
+        expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: '先问下 ' }) }),
+        expect.objectContaining({ type: 'at', attrs: expect.objectContaining({ id: '123456' }) }),
+        expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: ' 这件事。' }) }),
+      ]);
     } finally {
       quoteSpy.mockRestore();
     }

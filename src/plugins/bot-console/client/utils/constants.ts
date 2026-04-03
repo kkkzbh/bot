@@ -4,7 +4,6 @@ export const FIELD_LABELS: Record<string, string> = {
   QQ_VOICE_INPUT_ENABLED: '语音转文字',
   QQ_VOICE_OUTPUT_ENABLED: '语音回复',
   CHAT_NATURAL_TRIGGER_ENABLED: '群聊自然触发',
-  TASK_AUTOMATION_INTENT_ENABLED: '任务意图识别',
   QQBOT_REPLY_INTERRUPT_ENABLED: '回复期中断',
   CHATLUNA_COMMON_FS: '文件系统工具总开关',
   CHATLUNA_COMMON_FS_SCOPE_PATH: '文件系统作用域目录',
@@ -25,11 +24,7 @@ export const FIELD_LABELS: Record<string, string> = {
   OPENAI_BASE_URL: '通用模型接口地址',
   OPENAI_API_KEY: '通用模型接口密钥',
   OPENAI_MODEL: '通用默认模型',
-  TASK_AUTOMATION_INTENT_MODEL: '任务意图模型',
-  TASK_AUTOMATION_DELIVERY_MODEL: '任务投递模型',
-  TASK_AUTOMATION_CHAT_REPLY_MODEL: '任务回复模型',
   CHATLUNA_DEFAULT_PRESET: '默认预设',
-  CHAT_ENABLED_GROUPS: '自动化启用群',
   CHAT_NATURAL_TRIGGER_GROUPS: '自然触发白名单群',
   CHAT_NATURAL_TRIGGER_ALIASES: '触发别名',
   CHATLUNA_COMMAND_AUTHORITY: '命令权限等级',
@@ -40,12 +35,6 @@ export const FIELD_HINTS: Record<string, string> = {
     '普通聊天默认走这里配置的接口地址。它只影响 ChatLuna 主聊天链路，不会覆盖任务自动化、自然触发判定和记忆抽取。',
   CHATLUNA_API_KEY:
     '普通聊天默认走这里配置的接口密钥。主聊天切换供应商时，优先改这里，不要直接改 OPENAI_*。',
-  TASK_AUTOMATION_INTENT_MODEL:
-    '用于识别一段消息是不是任务需求，以及应该进入哪条任务自动化链路。更适合选择理解能力强、分类稳定的模型。',
-  TASK_AUTOMATION_DELIVERY_MODEL:
-    '用于把已识别的任务整理成可执行指令并投递给后续流程。更适合选择结构化输出稳定、遵循要求准确的模型。',
-  TASK_AUTOMATION_CHAT_REPLY_MODEL:
-    '用于任务流程里的对话回复，例如确认、追问和结果回执。它会直接影响用户看到的任务类回复内容。',
   CHATLUNA_COMMON_FS:
     '控制是否向 ChatLuna 注入整组 file_* 文件系统能力。关闭后，下方文件系统工具即使策略设为启用，也不会真正提供给模型。',
   CHATLUNA_COMMON_FS_SCOPE_PATH:
@@ -140,7 +129,6 @@ export const OVERVIEW_FEATURE_ITEMS: [string, string][] = [
   ['QQ_VOICE_INPUT_ENABLED', '语音转文字'],
   ['QQ_VOICE_OUTPUT_ENABLED', '语音回复'],
   ['CHAT_NATURAL_TRIGGER_ENABLED', '自然触发'],
-  ['TASK_AUTOMATION_INTENT_ENABLED', '任务意图'],
   ['QQBOT_REPLY_INTERRUPT_ENABLED', '回复期中断'],
 ]
 

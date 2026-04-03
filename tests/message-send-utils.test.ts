@@ -8,10 +8,16 @@ vi.mock('koishi', () => {
   })) as unknown as {
     (type: string, attrs?: Record<string, unknown>, children?: unknown[]): Record<string, unknown>;
     text: (content: string) => Record<string, unknown>;
+    at: (id: string) => Record<string, unknown>;
   };
   hFactory.text = (content: string) => ({
     type: 'text',
     attrs: { content },
+    children: [],
+  });
+  hFactory.at = (id: string) => ({
+    type: 'at',
+    attrs: { id },
     children: [],
   });
 
@@ -338,7 +344,13 @@ describe('message send utils', () => {
         ],
       }),
       async (segment) => {
-        sent.push(`${segment.kind}:${'content' in segment ? segment.content : segment.assetRef}`);
+        sent.push(
+          segment.kind === 'image-block'
+            ? `${segment.kind}:${segment.assetRef}`
+            : segment.kind === 'rich-text-block'
+              ? `${segment.kind}:${segment.segments.map((part) => (part.kind === 'mention' ? `@${part.userId}` : part.text)).join('')}`
+              : `${segment.kind}:${segment.content}`,
+        );
       },
     );
 
@@ -387,6 +399,35 @@ describe('message send utils', () => {
           assetRef: 'asset://image-1',
           alt: '夜空照片',
           raw: 'reply-plan:image:4:asset://image-1',
+        },
+      ],
+    });
+  });
+
+  it('keeps rich_text reply segments atomic and preserves inline mention order', () => {
+    expect(
+      buildOutboundMessagePlanFromReplyPlan({
+        segments: [
+          {
+            kind: 'rich_text',
+            segments: [
+              { kind: 'text', text: '先问下 ' },
+              { kind: 'mention', userId: '123456' },
+              { kind: 'text', text: ' 这件事。' },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      segments: [
+        {
+          kind: 'rich-text-block',
+          segments: [
+            { kind: 'text', text: '先问下 ' },
+            { kind: 'mention', userId: '123456' },
+            { kind: 'text', text: ' 这件事。' },
+          ],
+          raw: 'reply-plan:rich_text:0:先问下 @123456 这件事。',
         },
       ],
     });

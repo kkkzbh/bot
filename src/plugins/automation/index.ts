@@ -1,470 +1,177 @@
-import 'koishi-plugin-cron';
-import { Context, h, Logger, Schema, Session } from 'koishi';
+import { randomUUID } from 'node:crypto';
 import { parseExpression } from 'cron-parser';
-import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
-import type { AutomationTask, TaskScope } from '../../types/task-automation.js';
+import { StructuredTool } from '@langchain/core/tools';
+import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
+import type { ChatLunaTool, ChatLunaToolRunnable } from 'koishi-plugin-chatluna/llm-core/platform/types';
+import { getMessageContent } from 'koishi-plugin-chatluna/utils/string';
+import { z } from 'zod';
+import type { AutomationJob, AutomationJobRun, TaskKind, TaskScope } from '../../types/task-automation.js';
+import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
 import {
-  AutomationIntent,
-  formatNaturalRunAtText,
-  isValidCronExpr,
-  normalizeGroupId,
-  parseAutomationIntentByRule,
-  parseCronExpr,
-  parseGroupSet,
-  parseOnceRunAt,
-  selectDeliveryModelForTaskMessage,
-  shouldTryAutomationIntent,
-} from './scheduler.js';
-import {
-  DEFAULT_CHAT_REPLY_SYSTEM_PROMPT,
-  DEFAULT_DELIVERY_SYSTEM_PROMPT,
-  buildDeliveryMessageByModel,
-  extractMessageText,
-  type AutomationLlmRuntime,
-} from './llm.js';
-import {
-  calculateSmartSendDelayMs,
-  createBotMessageDispatchers,
-  createSessionMessageDispatchers,
+  createBypassLineSplitOptions,
   dispatchNormalizedOutboundMessage,
+  normalizeOutboundMessage,
   splitMessageByLines,
   type BotMessageContent,
   type BotMessageSender,
   type NormalizedOutboundMessage,
-  normalizeOutboundMessage,
-  sendBotMessageByNormalizedContent,
 } from '../shared/outbound/index.js';
+import {
+  formatNaturalRunAtText,
+  formatAutomationTimestamp,
+  isValidCronExpr,
+  normalizeGroupId,
+  parseCronExpr,
+  parseGroupSet,
+  parseOnceRunAt,
+} from './scheduler.js';
 
 const logger = new Logger('task-automation');
-const SHORT_ONCE_TASK_WINDOW_MS = 60_000;
-const SHORT_ONCE_DELIVERY_TIMEOUT_MS = 2500;
-const ONCE_PRELOAD_WINDOW_MS = 5 * 60_000;
+const FIXED_TIMEZONE = 'Asia/Shanghai';
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
+const DEFAULT_MAX_JOBS_PER_USER = 20;
+const RECURRING_SCHEDULE_HINT = /每(?:天|日|周|星期|月|隔)/;
+const EXECUTION_FINAL_RESPONSE_INSTRUCTION =
+  '你正在执行一个到点触发的自动化任务。你可以调用工具完成任务。' +
+  '最终只输出一条适合直接发送到 QQ 的纯文本结果，不要输出 Markdown、标题、代码围栏、解释过程、系统设定或调度器说明。';
 
 export const name = 'task-automation';
-export const inject = { required: ['database'], optional: ['featurePolicy'] } as const;
+export const inject = { required: ['database', 'chatluna'], optional: ['toolPolicy'] } as const;
 export { normalizeGroupId, parseGroupSet } from './scheduler.js';
 
 export interface Config {
-  enabledGroups?: string[] | string;
-  listenPrivate?: boolean;
-  permissionMode?: 'all' | 'authority3';
-  intentEnabled?: boolean;
-  intentMinConfidence?: number;
-  intentBaseUrl?: string;
-  intentApiKey?: string;
-  intentModel?: string;
-  intentTimeoutMs?: number;
   pollIntervalMs?: number;
-  maxTasksPerUser?: number;
-  deliveryBaseUrl?: string;
-  deliveryApiKey?: string;
-  deliveryModel?: string;
-  deliveryFastModel?: string;
-  deliveryTimeoutMs?: number;
-  deliveryMaxTokens?: number;
-  deliverySystemPrompt?: string;
-  chatReplyModel?: string;
-  chatReplyTimeoutMs?: number;
-  chatReplyMaxTokens?: number;
-  chatReplySystemPrompt?: string;
+  maxJobsPerUser?: number;
 }
 
 export const Config: Schema<Config> = Schema.object({
-  enabledGroups: Schema.union([
-    Schema.array(Schema.string()).role('table').description('允许自动化生效的群号列表。'),
-    Schema.string().description('允许自动化生效的群号（逗号分隔）。'),
-  ]).description('自动化白名单群。'),
-  listenPrivate: Schema.boolean().default(true).description('是否允许私聊智能创建/管理任务。'),
-  permissionMode: Schema.union([Schema.const('all'), Schema.const('authority3')])
-    .default('all')
-    .description('任务权限模式。all=所有成员，authority3=仅 authority>=3。'),
-  intentEnabled: Schema.boolean().default(true).description('是否启用自然语言意图判定。'),
-  intentMinConfidence: Schema.number().min(0).max(1).default(0.78).description('模型意图最小置信度。'),
-  intentBaseUrl: Schema.string()
-    .role('link')
-    .description('意图判定模型 API Base URL（默认复用 OPENAI_BASE_URL）。'),
-  intentApiKey: Schema.string().role('secret').description('意图判定模型 API Key（默认复用 OPENAI_API_KEY）。'),
-  intentModel: Schema.string().description('意图判定模型名（默认复用 OPENAI_MODEL）。'),
-  intentTimeoutMs: Schema.natural().role('time').default(12000).description('意图模型超时（毫秒）。'),
-  pollIntervalMs: Schema.natural().role('time').default(30000).description('一次性任务轮询周期（毫秒）。'),
-  maxTasksPerUser: Schema.natural().default(20).description('每个用户允许的任务上限（active+paused）。'),
-  deliveryBaseUrl: Schema.string()
-    .role('link')
-    .description('到点文案生成模型 API Base URL（默认复用 OPENAI_BASE_URL）。'),
-  deliveryApiKey: Schema.string().role('secret').description('到点文案生成模型 API Key（默认复用 OPENAI_API_KEY）。'),
-  deliveryModel: Schema.string().default('deepseek-reasoner').description('到点文案生成模型（默认 deepseek-reasoner）。'),
-  deliveryFastModel: Schema.string().default('deepseek-chat').description('到点文案快速模型（默认 deepseek-chat）。'),
-  deliveryTimeoutMs: Schema.natural().role('time').default(18000).description('到点文案生成模型超时（毫秒）。'),
-  deliveryMaxTokens: Schema.natural().default(10000).description('到点文案生成模型 max_tokens（默认 10000）。'),
-  deliverySystemPrompt: Schema.string().description('到点文案生成 system prompt（可选覆盖默认值）。'),
-  chatReplyModel: Schema.string().default('deepseek-reasoner').description('自动化创建回复模型（默认 deepseek-reasoner）。'),
-  chatReplyTimeoutMs: Schema.natural().role('time').default(12000).description('自动化创建回复模型超时（毫秒）。'),
-  chatReplyMaxTokens: Schema.natural().default(10000).description('自动化创建回复模型 max_tokens（默认 10000）。'),
-  chatReplySystemPrompt: Schema.string().description('自动化创建回复 system prompt（可选覆盖默认值）。'),
+  pollIntervalMs: Schema.natural().role('time').default(DEFAULT_POLL_INTERVAL_MS).description('一次性任务轮询周期（毫秒）。'),
+  maxJobsPerUser: Schema.natural().default(DEFAULT_MAX_JOBS_PER_USER).description('每个用户允许创建的自动化任务上限。'),
 });
 
 interface RuntimeConfig {
-  enabledGroups: Set<string>;
-  listenPrivate: boolean;
-  permissionMode: 'all' | 'authority3';
-  intentEnabled: boolean;
-  intentMinConfidence: number;
-  intentBaseUrl: string;
-  intentApiKey: string;
-  intentModel: string;
-  intentTimeoutMs: number;
   pollIntervalMs: number;
-  maxTasksPerUser: number;
-  deliveryBaseUrl: string;
-  deliveryApiKey: string;
-  deliveryModel: string;
-  deliveryFastModel: string;
-  deliveryTimeoutMs: number;
-  deliveryMaxTokens: number;
-  deliverySystemPrompt: string;
-  chatReplyModel: string;
-  chatReplyTimeoutMs: number;
-  chatReplyMaxTokens: number;
-  chatReplySystemPrompt: string;
+  maxJobsPerUser: number;
 }
 
-interface ScopeContext {
-  scope: TaskScope;
-  channelId: string;
-  guildId: string;
-}
-
-type ContextWithFeaturePolicy = Context & {
-  featurePolicy?: FeaturePolicyServiceLike;
+type DatabaseLike = {
+  get(table: string, query: Record<string, unknown>): Promise<any[]>;
+  set(table: string, query: Record<string, unknown>, data: Record<string, unknown>): Promise<unknown>;
+  create(table: string, row: Record<string, unknown>): Promise<Record<string, unknown>>;
+  remove(table: string, query: Record<string, unknown>): Promise<unknown>;
+  upsert?(table: string, rows: Record<string, unknown>[], keys?: string[]): Promise<unknown>;
 };
 
-interface ModelIntentResponse {
-  action?: string;
-  confidence?: number;
-  runAt?: string | number;
-  cronExpr?: string;
-  message?: string;
-  taskId?: number | string;
-  timeText?: string;
-}
+type ToolMask = {
+  mode: 'all' | 'allow' | 'deny';
+  allow: string[];
+  deny: string[];
+  toolCallMask?: ToolMask;
+};
 
-const FIXED_TIMEZONE = 'Asia/Shanghai';
+type AutomationRoomRow = {
+  visibility: 'public' | 'private' | 'template_clone';
+  roomMasterId: string;
+  roomName: string;
+  roomId: number;
+  preset: string;
+  model: string;
+  chatMode: string;
+  password?: string | null;
+  conversationId?: string | null;
+  autoUpdate?: boolean;
+  updatedTime: Date;
+};
+
+type ChatLunaMessage = {
+  content: unknown;
+  additional_kwargs?: Record<string, unknown>;
+};
+
+type ChatLunaBot = BotMessageSender & {
+  selfId?: string;
+  platform?: string;
+  session?: (event?: Record<string, unknown>) => Session;
+};
+
+type ChatLunaServiceLike = {
+  chat: (
+    session: any,
+    room: AutomationRoomRow,
+    message: ChatLunaMessage,
+    event: Record<string, ((...args: any[]) => Promise<void>) | undefined>,
+    stream?: boolean,
+    variables?: Record<string, unknown>,
+    postHandler?: unknown,
+    requestId?: string,
+    toolMask?: ToolMask,
+  ) => Promise<ChatLunaMessage>;
+  platform: {
+    registerTool: (name: string, tool: ChatLunaTool) => () => void;
+  };
+};
+
+type ContextWithAutomation = Context & {
+  database: any;
+  chatluna: ChatLunaServiceLike;
+  toolPolicy?: ToolPolicyServiceLike;
+  bots: ChatLunaBot[];
+};
+
+type SourceRoomContext = {
+  room: AutomationRoomRow;
+  session: Session;
+};
+
+type AutomationToolDeps = {
+  ctx: ContextWithAutomation;
+  runtime: RuntimeConfig;
+  lifecycle: {
+    registerCronJob: (job: AutomationJob) => void;
+    disposeCronJob: (jobId: number) => void;
+  };
+};
+
+type ToolCurrentRoom = {
+  room: AutomationRoomRow;
+  session: Session;
+  conversationId: string;
+};
+
+type ResolvedOnceSchedule = {
+  kind: 'once';
+  runAt: number;
+  scheduleText: string;
+};
+
+type ResolvedCronSchedule = {
+  kind: 'cron';
+  cronExpr: string;
+  scheduleText: string;
+};
+
+type ResolvedSchedule = ResolvedOnceSchedule | ResolvedCronSchedule;
+
+const AUTOMATION_TOOL_NAMES = {
+  create: 'automation_create',
+  list: 'automation_list',
+  update: 'automation_update',
+  pause: 'automation_pause',
+  resume: 'automation_resume',
+  delete: 'automation_delete',
+} as const;
 
 function toRuntimeConfig(config: Config): RuntimeConfig {
-  const configuredIntentModel = config.intentModel?.trim();
-  const envIntentModel = process.env.TASK_AUTOMATION_INTENT_MODEL?.trim() || process.env.OPENAI_MODEL?.trim();
-  const baseUrl = (config.intentBaseUrl ?? process.env.TASK_AUTOMATION_INTENT_BASE_URL ?? process.env.OPENAI_BASE_URL ?? '')
-    .replace(/\/+$/, '');
-  const apiKey = config.intentApiKey ?? process.env.TASK_AUTOMATION_INTENT_API_KEY ?? process.env.OPENAI_API_KEY ?? '';
-  const model = configuredIntentModel || envIntentModel || '';
-  const configuredDeliveryModel = config.deliveryModel?.trim();
-  const envDeliveryModel = process.env.TASK_AUTOMATION_DELIVERY_MODEL?.trim();
-  const configuredDeliveryFastModel = config.deliveryFastModel?.trim();
-  const envDeliveryFastModel = process.env.TASK_AUTOMATION_DELIVERY_FAST_MODEL?.trim();
-  const configuredChatReplyModel = config.chatReplyModel?.trim();
-  const envChatReplyModel = process.env.TASK_AUTOMATION_CHAT_REPLY_MODEL?.trim();
-  const deliveryBaseUrl = (
-    config.deliveryBaseUrl ??
-    process.env.TASK_AUTOMATION_DELIVERY_BASE_URL ??
-    process.env.OPENAI_BASE_URL ??
-    baseUrl
-  ).replace(/\/+$/, '');
-  const deliveryApiKey =
-    config.deliveryApiKey ??
-    process.env.TASK_AUTOMATION_DELIVERY_API_KEY ??
-    process.env.OPENAI_API_KEY ??
-    apiKey;
-  const deliveryModel = configuredDeliveryModel || envDeliveryModel || 'deepseek-reasoner';
-  const deliveryFastModel = configuredDeliveryFastModel || envDeliveryFastModel || 'deepseek-chat';
-  const chatReplyModel = configuredChatReplyModel || envChatReplyModel || deliveryModel;
-  const envDeliveryPrompt = process.env.TASK_AUTOMATION_DELIVERY_SYSTEM_PROMPT?.trim();
-  const envChatReplyPrompt = process.env.TASK_AUTOMATION_CHAT_REPLY_SYSTEM_PROMPT?.trim();
-  const deliverySystemPrompt = config.deliverySystemPrompt?.trim() || envDeliveryPrompt || DEFAULT_DELIVERY_SYSTEM_PROMPT;
-  const chatReplySystemPrompt = config.chatReplySystemPrompt?.trim() || envChatReplyPrompt || DEFAULT_CHAT_REPLY_SYSTEM_PROMPT;
-
   return {
-    enabledGroups: parseGroupSet(config.enabledGroups ?? process.env.CHAT_ENABLED_GROUPS),
-    listenPrivate:
-      config.listenPrivate ?? String(process.env.TASK_AUTOMATION_LISTEN_PRIVATE ?? 'true').toLowerCase() !== 'false',
-    permissionMode:
-      (config.permissionMode ?? (process.env.TASK_AUTOMATION_PERMISSION === 'authority3' ? 'authority3' : 'all')) ===
-      'authority3'
-        ? 'authority3'
-        : 'all',
-    intentEnabled:
-      config.intentEnabled ?? String(process.env.TASK_AUTOMATION_INTENT_ENABLED ?? 'true').toLowerCase() !== 'false',
-    intentMinConfidence: config.intentMinConfidence ?? Number(process.env.TASK_AUTOMATION_INTENT_MIN_CONFIDENCE || 0.78),
-    intentBaseUrl: baseUrl,
-    intentApiKey: apiKey,
-    intentModel: model,
-    intentTimeoutMs: config.intentTimeoutMs ?? Number(process.env.TASK_AUTOMATION_INTENT_TIMEOUT_MS || 12000),
-    pollIntervalMs: config.pollIntervalMs ?? Number(process.env.TASK_AUTOMATION_POLL_MS || 30000),
-    maxTasksPerUser: config.maxTasksPerUser ?? Number(process.env.TASK_AUTOMATION_MAX_TASKS_PER_USER || 20),
-    deliveryBaseUrl,
-    deliveryApiKey,
-    deliveryModel,
-    deliveryFastModel,
-    deliveryTimeoutMs: config.deliveryTimeoutMs ?? Number(process.env.TASK_AUTOMATION_DELIVERY_TIMEOUT_MS || 18000),
-    deliveryMaxTokens: config.deliveryMaxTokens ?? Number(process.env.TASK_AUTOMATION_DELIVERY_MAX_TOKENS || 10000),
-    deliverySystemPrompt,
-    chatReplyModel,
-    chatReplyTimeoutMs:
-      config.chatReplyTimeoutMs ?? Number(process.env.TASK_AUTOMATION_CHAT_REPLY_TIMEOUT_MS || 12000),
-    chatReplyMaxTokens:
-      config.chatReplyMaxTokens ?? Number(process.env.TASK_AUTOMATION_CHAT_REPLY_MAX_TOKENS || 10000),
-    chatReplySystemPrompt,
+    pollIntervalMs: config.pollIntervalMs ?? Number(process.env.TASK_AUTOMATION_POLL_MS || DEFAULT_POLL_INTERVAL_MS),
+    maxJobsPerUser:
+      config.maxJobsPerUser ?? Number(process.env.TASK_AUTOMATION_MAX_TASKS_PER_USER || DEFAULT_MAX_JOBS_PER_USER),
   };
 }
 
-function formatTimestamp(ts: number): string {
-  const parts = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: FIXED_TIMEZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(new Date(ts));
-
-  const lookup = new Map(parts.map((part) => [part.type, part.value]));
-  return `${lookup.get('year')}-${lookup.get('month')}-${lookup.get('day')} ${lookup.get('hour')}:${lookup.get('minute')}`;
-}
-
-function extractJsonObject(raw: string): string | null {
-  const fenced = raw.match(/```json\s*([\s\S]*?)```/i) ?? raw.match(/```\s*([\s\S]*?)```/);
-  if (fenced?.[1]) return fenced[1].trim();
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start >= 0 && end > start) return raw.slice(start, end + 1);
-  return null;
-}
-
-function normalizeMessageContent(session: Session): string {
-  const plain = session.stripped?.content?.trim();
-  if (plain) return plain;
-  return session.content?.trim() ?? '';
-}
-
-function toAutomationLlmRuntime(runtime: RuntimeConfig): AutomationLlmRuntime {
-  return {
-    baseUrl: runtime.deliveryBaseUrl,
-    apiKey: runtime.deliveryApiKey,
-    deliveryModel: runtime.deliveryModel,
-    deliveryTimeoutMs: runtime.deliveryTimeoutMs,
-    deliveryMaxTokens: runtime.deliveryMaxTokens,
-    deliverySystemPrompt: runtime.deliverySystemPrompt,
-    chatReplyModel: runtime.chatReplyModel,
-    chatReplyTimeoutMs: runtime.chatReplyTimeoutMs,
-    chatReplyMaxTokens: runtime.chatReplyMaxTokens,
-    chatReplySystemPrompt: runtime.chatReplySystemPrompt,
-  };
-}
-
-function resolveScopeContext(session: Session, runtime: RuntimeConfig): ScopeContext | null {
-  if (!session.channelId) return null;
-  if (session.isDirect) {
-    if (!runtime.listenPrivate) return null;
-    return { scope: 'private', channelId: session.channelId, guildId: '' };
-  }
-
-  const groupId = normalizeGroupId(session.guildId) ?? normalizeGroupId(session.channelId);
-  if (!groupId || !runtime.enabledGroups.has(groupId)) return null;
-  return { scope: 'group', channelId: session.channelId, guildId: session.guildId ?? '' };
-}
-
-async function checkPermission(session: Session, runtime: RuntimeConfig): Promise<boolean> {
-  if (runtime.permissionMode === 'all') return true;
-  try {
-    const user = await session.observeUser(['authority']);
-    return (user.authority ?? 0) >= 3;
-  } catch {
-    return false;
-  }
-}
-
-function isCommandLike(content: string): boolean {
-  return /^[./][\w-]+/.test(content);
-}
-
-function taskText(task: AutomationTask): string {
-  if (task.kind === 'cron') {
-    return `#${task.id} [${task.status}] cron(${task.cronExpr}) ${task.message}`;
-  }
-  return `#${task.id} [${task.status}] ${formatTimestamp(task.runAt ?? Date.now())} ${task.message}`;
-}
-
-function isVisibleInTaskList(task: AutomationTask): boolean {
-  return task.status === 'active' || task.status === 'paused';
-}
-
-async function buildDeliveryMessage(task: AutomationTask, runtime: RuntimeConfig): Promise<string> {
-  const llmRuntime = toAutomationLlmRuntime(runtime);
-  llmRuntime.deliveryModel = selectDeliveryModelForTaskMessage(
-    task.message,
-    runtime.deliveryModel,
-    runtime.deliveryFastModel,
-  );
-  return buildDeliveryMessageByModel(
-    llmRuntime,
-    {
-      kind: task.kind,
-      scope: task.scope,
-      runAt: task.runAt ?? null,
-      cronExpr: task.cronExpr ?? null,
-      message: task.message,
-    },
-    formatTimestamp,
-  );
-}
-
-async function buildOnceTaskMessage(
-  runtime: RuntimeConfig,
-  scope: ScopeContext,
-  runAt: number,
-  rawMessage: string,
-): Promise<string> {
-  const now = Date.now();
-  const remainingMs = runAt - now;
-  const llmRuntime = toAutomationLlmRuntime(runtime);
-  llmRuntime.deliveryModel = selectDeliveryModelForTaskMessage(rawMessage, runtime.deliveryModel, runtime.deliveryFastModel);
-  if (remainingMs > 0 && remainingMs <= SHORT_ONCE_TASK_WINDOW_MS) {
-    llmRuntime.deliveryModel = runtime.deliveryFastModel;
-    llmRuntime.deliveryTimeoutMs = Math.min(llmRuntime.deliveryTimeoutMs, SHORT_ONCE_DELIVERY_TIMEOUT_MS);
-  }
-  return buildDeliveryMessageByModel(
-    llmRuntime,
-    {
-      kind: 'once',
-      scope: scope.scope,
-      runAt,
-      cronExpr: null,
-      message: rawMessage,
-    },
-    formatTimestamp,
-    now,
-  );
-}
-
-function buildDeterministicCreateReply(payload: {
-  kind: 'once' | 'cron';
-  runAt?: number | null;
-  message: string;
-}): string {
-  if (payload.kind === 'once') {
-    return `记住了，${formatNaturalRunAtText(payload.runAt ?? Date.now(), Date.now())}提醒你${payload.message}`;
-  }
-
-  return `记住了，这件事我会按时提醒你：${payload.message}`;
-}
-
-async function parseIntentByModel(
-  content: string,
-  runtime: RuntimeConfig,
-): Promise<AutomationIntent | null> {
-  if (!runtime.intentEnabled || !runtime.intentBaseUrl || !runtime.intentApiKey || !runtime.intentModel) {
-    return null;
-  }
-
-  const now = new Date();
-  const systemPrompt =
-    '你是任务意图解析器。请仅输出 JSON：' +
-    '{"action":"none|create_once|create_cron|list|delete|pause|resume","confidence":0~1,' +
-    '"runAt":"ISO8601或null","timeText":"自然语言时间或null","cronExpr":"cron或null","message":"提醒内容或null","taskId":数字或null}。';
-  const requestPayload = {
-    model: runtime.intentModel,
-    max_tokens: 220,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      {
-        role: 'user',
-        content: `当前时间: ${now.toISOString()}\n文本: ${content}`,
-      },
-    ],
-  };
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), runtime.intentTimeoutMs);
-  try {
-    const response = await fetch(`${runtime.intentBaseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${runtime.intentApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestPayload),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-    const payload = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
-    };
-
-    const contentText = extractMessageText(payload.choices?.[0]?.message?.content);
-
-    const jsonText = extractJsonObject(contentText);
-    if (!jsonText) return null;
-    const parsed = JSON.parse(jsonText) as ModelIntentResponse;
-    const confidence = Number(parsed.confidence ?? 0);
-    if (!Number.isFinite(confidence) || confidence < runtime.intentMinConfidence) return null;
-
-    const action = parsed.action?.toLowerCase();
-    if (action === 'list') return { action: 'list', confidence };
-    if (action === 'delete') {
-      const id = Number(parsed.taskId);
-      return Number.isFinite(id) && id > 0 ? { action: 'delete', taskId: id, confidence } : null;
-    }
-    if (action === 'pause') {
-      const id = Number(parsed.taskId);
-      return Number.isFinite(id) && id > 0 ? { action: 'pause', taskId: id, confidence } : null;
-    }
-    if (action === 'resume') {
-      const id = Number(parsed.taskId);
-      return Number.isFinite(id) && id > 0 ? { action: 'resume', taskId: id, confidence } : null;
-    }
-    if (action === 'create_cron') {
-      const cronExpr = (parsed.cronExpr ?? '').trim();
-      if (!cronExpr || !isValidCronExpr(cronExpr)) return null;
-      return {
-        action: 'create-cron',
-        cronExpr,
-        message: (parsed.message ?? '定时提醒').trim() || '定时提醒',
-        confidence,
-      };
-    }
-    if (action === 'create_once') {
-      let runAt: number | null = null;
-      if (typeof parsed.runAt === 'string') {
-        const value = Date.parse(parsed.runAt);
-        if (Number.isFinite(value)) runAt = value;
-      } else if (typeof parsed.runAt === 'number' && Number.isFinite(parsed.runAt)) {
-        runAt = parsed.runAt;
-      }
-      if (!runAt && typeof parsed.timeText === 'string') {
-        runAt = parseOnceRunAt(parsed.timeText);
-      }
-      if (!runAt) return null;
-      return {
-        action: 'create-once',
-        runAt,
-        message: (parsed.message ?? '定时提醒').trim() || '定时提醒',
-        confidence,
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function ensureTaskTable(ctx: Context): void {
+function ensureTaskTables(ctx: Context): void {
   ctx.model.extend(
-    'automation_task',
+    'automation_job',
     {
       id: 'unsigned',
       creatorId: 'string',
@@ -473,60 +180,521 @@ function ensureTaskTable(ctx: Context): void {
       guildId: 'string',
       platform: 'string',
       botSelfId: 'string',
+      sourceRoomId: 'unsigned',
+      sourceConversationId: { type: 'char', length: 255, nullable: true },
       kind: 'string',
       runAt: { type: 'double', nullable: true },
       cronExpr: { type: 'text', nullable: true },
-      message: 'text',
+      goal: 'text',
+      timezone: 'string',
+      mentionCreator: 'unsigned',
+      event: { type: 'json', nullable: true },
       status: 'string',
       createdAt: 'double',
       updatedAt: 'double',
     },
     {
       autoInc: true,
-      indexes: [['creatorId'], ['status', 'kind'], ['status', 'runAt'], ['scope', 'channelId']],
+      indexes: [
+        ['creatorId'],
+        ['status', 'kind'],
+        ['status', 'runAt'],
+        ['sourceRoomId'],
+      ],
+    },
+  );
+
+  ctx.model.extend(
+    'automation_job_run',
+    {
+      id: 'unsigned',
+      jobId: 'unsigned',
+      triggeredAt: 'double',
+      startedAt: 'double',
+      finishedAt: { type: 'double', nullable: true },
+      status: 'string',
+      error: { type: 'text', nullable: true },
+      outputText: { type: 'text', nullable: true },
+      deliveryReceipt: { type: 'text', nullable: true },
+    },
+    {
+      autoInc: true,
+      indexes: [['jobId'], ['status', 'triggeredAt']],
     },
   );
 }
 
-function resolveTaskBot(ctx: Context, task: AutomationTask) {
-  return (
-    ctx.bots.find((bot) => bot.selfId === task.botSelfId && bot.platform === task.platform) ??
-    ctx.bots.find((bot) => bot.platform === task.platform) ??
-    ctx.bots[0]
+function formatJobSummary(job: Pick<AutomationJob, 'id' | 'kind' | 'status' | 'runAt' | 'cronExpr' | 'goal'>): string {
+  const schedule =
+    job.kind === 'once'
+      ? formatAutomationTimestamp(job.runAt ?? Date.now())
+      : `cron(${job.cronExpr ?? ''})`;
+  return `#${job.id} [${job.status}] ${schedule} ${job.goal}`;
+}
+
+function formatResolvedScheduleDetail(schedule: ResolvedSchedule, now = Date.now()): string {
+  if (schedule.kind === 'once') {
+    return `${formatNaturalRunAtText(schedule.runAt, now)}（${formatAutomationTimestamp(schedule.runAt)}, ${FIXED_TIMEZONE}）`;
+  }
+  return `${schedule.scheduleText}（cron: ${schedule.cronExpr}, ${FIXED_TIMEZONE}）`;
+}
+
+function formatJobScheduleDetail(job: Pick<AutomationJob, 'kind' | 'runAt' | 'cronExpr'>, now = Date.now()): string {
+  if (job.kind === 'once') {
+    const runAt = job.runAt ?? Date.now();
+    return `${formatNaturalRunAtText(runAt, now)}（${formatAutomationTimestamp(runAt)}, ${FIXED_TIMEZONE}）`;
+  }
+  return `cron(${job.cronExpr ?? ''}, ${FIXED_TIMEZONE})`;
+}
+
+function formatJobCreatedSummary(job: AutomationJob, schedule: ResolvedSchedule): string {
+  return `已创建自动化任务 #${job.id}：${formatResolvedScheduleDetail(schedule, job.createdAt)} 执行“${job.goal}”。`;
+}
+
+function formatJobUpdatedSummary(
+  job: Pick<AutomationJob, 'id' | 'kind' | 'status' | 'runAt' | 'cronExpr' | 'goal' | 'updatedAt'>,
+  schedule?: ResolvedSchedule,
+): string {
+  const detail = schedule ? formatResolvedScheduleDetail(schedule, job.updatedAt) : formatJobScheduleDetail(job, job.updatedAt);
+  return `已更新自动化任务 #${job.id}：${detail} 执行“${job.goal}”。`;
+}
+
+function normalizeGoal(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ');
+}
+
+function normalizeScheduleText(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ');
+}
+
+function serializeToolResult(value: unknown): string {
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value, null, 2);
+}
+
+function sanitizeEventSnapshot(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null;
+  try {
+    return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function createNoopChatEvents() {
+  return {
+    'llm-new-token': async () => undefined,
+    'llm-queue-waiting': async () => undefined,
+    'llm-used-token-count': async () => undefined,
+    'llm-call-tool': async () => undefined,
+    'llm-new-chunk': async () => undefined,
+  };
+}
+
+function createAutomationPrompt(job: AutomationJob, triggeredAt: number): string {
+  const lines = [
+    '你正在执行一个到点触发的自动化任务。',
+    `当前时间(UTC+8)：${formatAutomationTimestamp(triggeredAt)}`,
+    `任务类型：${job.kind === 'once' ? '一次性任务' : '周期任务'}`,
+    `触发会话：${job.scope === 'group' ? '群聊' : '私聊'}`,
+    job.kind === 'once'
+      ? `原计划执行时间：${formatAutomationTimestamp(job.runAt ?? triggeredAt)}`
+      : `cron 表达式：${job.cronExpr ?? ''}`,
+    `任务目标：${job.goal}`,
+    '请直接完成任务。你可以调用可用工具搜索、查询、整理信息，然后给出最终可发送结果。',
+  ];
+  return lines.join('\n');
+}
+
+async function getJobById(ctx: ContextWithAutomation, id: number): Promise<AutomationJob | null> {
+  const db = (ctx as any).database;
+  const rows = await db.get('automation_job', { id });
+  const job = rows[0] as AutomationJob | undefined;
+  return job ?? null;
+}
+
+async function createJobRun(ctx: ContextWithAutomation, jobId: number, triggeredAt: number): Promise<AutomationJobRun> {
+  const db = (ctx as any).database;
+  const created = (await db.create('automation_job_run', {
+    jobId,
+    triggeredAt,
+    startedAt: Date.now(),
+    finishedAt: null,
+    status: 'running',
+    error: null,
+    outputText: null,
+    deliveryReceipt: null,
+  })) as unknown as AutomationJobRun;
+  return created;
+}
+
+async function finishJobRun(
+  ctx: ContextWithAutomation,
+  runId: number,
+  patch: Pick<AutomationJobRun, 'status' | 'error' | 'outputText' | 'deliveryReceipt'>,
+): Promise<void> {
+  const db = (ctx as any).database;
+  await db.set(
+    'automation_job_run',
+    { id: runId },
+    {
+      ...patch,
+      finishedAt: Date.now(),
+    },
   );
 }
 
-async function sendSessionMessageByLines(session: Session, message: string): Promise<void> {
-  const normalized = normalizeOutboundMessage(message);
-  const { sendWhole, sendLine } = createSessionMessageDispatchers(session);
-  await dispatchNormalizedOutboundMessage(
-    normalized,
-    sendWhole,
-    sendLine,
+async function markInterruptedRunsFailed(ctx: ContextWithAutomation): Promise<void> {
+  const db = (ctx as any).database;
+  await db.set(
+    'automation_job_run',
+    { status: 'running' },
+    {
+      status: 'failed',
+      error: 'automation run interrupted by process restart',
+      finishedAt: Date.now(),
+    },
   );
 }
 
-async function sendSessionMessageOnce(session: Session, message: string): Promise<void> {
-  const content = message.trim();
-  if (!content) return;
-  const { sendWhole } = createSessionMessageDispatchers(session);
-  await sendWhole(content);
+async function resolveCurrentRoom(ctx: ContextWithAutomation, conversationId: string): Promise<AutomationRoomRow | null> {
+  const db = (ctx as any).database;
+  const rows = (await db.get('chathub_room', { conversationId })) as AutomationRoomRow[];
+  return rows[0] ?? null;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function assertPluginRoom(room: AutomationRoomRow): void {
+  const chatMode = String(room.chatMode ?? '').trim();
+  if (chatMode !== 'plugin') {
+    throw new Error(`automation tools require room.chatMode=plugin, got ${chatMode || 'unknown'}.`);
+  }
+}
+
+async function resolveToolCurrentRoom(
+  ctx: ContextWithAutomation,
+  config: ChatLunaToolRunnable,
+): Promise<ToolCurrentRoom> {
+  const session = config.configurable.session as unknown as Session;
+  const conversationId = String(config.configurable.conversationId ?? '').trim();
+  if (!session?.userId || !conversationId) {
+    throw new Error('automation tools require session.userId and conversationId.');
+  }
+
+  const room = await resolveCurrentRoom(ctx, conversationId);
+  if (!room) {
+    throw new Error('当前会话房间不存在，无法创建自动化任务。');
+  }
+
+  assertPluginRoom(room);
+  return { room, session, conversationId };
+}
+
+function resolveJobScope(session: Session): TaskScope {
+  return session.isDirect ? 'private' : 'group';
+}
+
+async function countAliveJobsForUser(ctx: ContextWithAutomation, userId: string): Promise<number> {
+  const db = (ctx as any).database;
+  const jobs = (await db.get('automation_job', { creatorId: userId })) as AutomationJob[];
+  return jobs.filter((job) => job.status === 'active' || job.status === 'paused').length;
+}
+
+async function createAutomationJob(
+  deps: AutomationToolDeps,
+  args: {
+    room: AutomationRoomRow;
+    session: Session;
+    kind: TaskKind;
+    runAt?: number | null;
+    cronExpr?: string | null;
+    goal: string;
+    timezone?: string;
+    mentionCreator?: boolean;
+  },
+): Promise<AutomationJob> {
+  const { ctx, runtime } = deps;
+  if (!args.session.userId || !args.session.bot?.selfId || !args.session.channelId) {
+    throw new Error('当前会话缺少必要上下文，无法创建自动化任务。');
+  }
+
+  const aliveCount = await countAliveJobsForUser(ctx, args.session.userId);
+  if (aliveCount >= runtime.maxJobsPerUser) {
+    throw new Error(`任务创建失败：你已达到上限（${runtime.maxJobsPerUser}）。`);
+  }
+
+  const now = Date.now();
+  const db = (ctx as any).database;
+  const created = (await db.create('automation_job', {
+    creatorId: args.session.userId,
+    scope: resolveJobScope(args.session),
+    channelId: args.session.channelId,
+    guildId: args.session.guildId ?? '',
+    platform: args.session.platform,
+    botSelfId: args.session.bot.selfId,
+    sourceRoomId: args.room.roomId,
+    sourceConversationId: args.room.conversationId?.trim() || null,
+    kind: args.kind,
+    runAt: args.kind === 'once' ? args.runAt ?? null : null,
+    cronExpr: args.kind === 'cron' ? args.cronExpr ?? null : null,
+    goal: normalizeGoal(args.goal),
+    timezone: args.timezone?.trim() || FIXED_TIMEZONE,
+    mentionCreator: resolveJobScope(args.session) === 'group' && args.mentionCreator !== false ? 1 : 0,
+    event: sanitizeEventSnapshot(args.session.event),
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+  })) as unknown as AutomationJob;
+
+  if (created.kind === 'cron') {
+    deps.lifecycle.registerCronJob(created);
+  }
+
+  return created;
+}
+
+async function getScopedJobs(ctx: ContextWithAutomation, roomId: number, userId: string): Promise<AutomationJob[]> {
+  const db = (ctx as any).database;
+  const jobs = (await db.get('automation_job', {
+    sourceRoomId: roomId,
+    creatorId: userId,
+  })) as AutomationJob[];
+  return jobs.filter((job) => job.status !== 'deleted').sort((left, right) => left.id - right.id);
+}
+
+async function getScopedJob(ctx: ContextWithAutomation, roomId: number, userId: string, id: number): Promise<AutomationJob | null> {
+  const db = (ctx as any).database;
+  const [job] = (await db.get('automation_job', {
+    id,
+    sourceRoomId: roomId,
+    creatorId: userId,
+  })) as AutomationJob[];
+  return job ?? null;
+}
+
+function assertJobCanUpdate(job: AutomationJob): void {
+  if (job.status === 'done') {
+    throw new Error(`自动化任务 #${job.id} 已完成，不能更新。`);
+  }
+  if (job.status === 'deleted') {
+    throw new Error(`自动化任务 #${job.id} 已删除，不能更新。`);
+  }
+}
+
+function buildListResult(jobs: AutomationJob[]): string {
+  if (!jobs.length) return '当前会话下没有自动化任务。';
+  return ['当前会话下的自动化任务：', ...jobs.map((job) => `- ${formatJobSummary(job)}`)].join('\n');
+}
+
+function ensureRunAtInFuture(runAt: number | null): number {
+  if (!runAt || !Number.isFinite(runAt)) {
+    throw new Error('无法解析一次性任务时间。');
+  }
+  if (runAt <= Date.now()) {
+    throw new Error('一次性任务时间必须晚于当前时间。');
+  }
+  return runAt;
+}
+
+function normalizeCronExpression(input: string): string {
+  const raw = input.trim();
+  if (!raw) {
+    throw new Error('无法解析周期任务时间。');
+  }
+  const parsed = parseCronExpr(raw) ?? raw;
+  if (!isValidCronExpr(parsed)) {
+    throw new Error(`无效的 cron 表达式：${raw}`);
+  }
+  return parsed;
+}
+
+function resolveScheduleText(raw: string, now = Date.now()): ResolvedSchedule {
+  const scheduleText = normalizeScheduleText(raw);
+  if (!scheduleText) {
+    throw new Error('scheduleText 不能为空。');
+  }
+
+  const onceRunAt = parseOnceRunAt(scheduleText, now);
+  const cronExpr = parseCronExpr(scheduleText);
+  const hasRecurringHint = RECURRING_SCHEDULE_HINT.test(scheduleText);
+
+  if (hasRecurringHint) {
+    if (cronExpr) {
+      return {
+        kind: 'cron',
+        cronExpr: normalizeCronExpression(cronExpr),
+        scheduleText,
+      };
+    }
+    if (onceRunAt) {
+      throw new Error(`无法明确解析时间表达：${scheduleText}。请更明确说明是一次性时间还是周期时间。`);
+    }
+    throw new Error(`无法解析时间表达：${scheduleText}。`);
+  }
+
+  if (onceRunAt && cronExpr) {
+    throw new Error(`无法明确解析时间表达：${scheduleText}。请更明确说明是一次性时间还是周期时间。`);
+  }
+
+  if (onceRunAt) {
+    return {
+      kind: 'once',
+      runAt: ensureRunAtInFuture(onceRunAt),
+      scheduleText,
+    };
+  }
+
+  if (cronExpr) {
+    return {
+      kind: 'cron',
+      cronExpr: normalizeCronExpression(cronExpr),
+      scheduleText,
+    };
+  }
+
+  throw new Error(`无法解析时间表达：${scheduleText}。`);
+}
+
+type AutomationJobPatch = Partial<Pick<AutomationJob, 'runAt' | 'cronExpr' | 'goal' | 'mentionCreator' | 'updatedAt'>>;
+
+function buildAutomationJobUpdatePatch(
+  job: AutomationJob,
+  input: {
+    scheduleText?: string;
+    goal?: string;
+    mentionCreator?: boolean;
+  },
+): { patch: AutomationJobPatch; schedule?: ResolvedSchedule } {
+  if (input.scheduleText === undefined && input.goal === undefined && input.mentionCreator === undefined) {
+    throw new Error('更新失败：至少提供一个可更新字段。');
+  }
+
+  const patch: AutomationJobPatch = {};
+  let schedule: ResolvedSchedule | undefined;
+
+  if (input.scheduleText !== undefined) {
+    schedule = resolveScheduleText(input.scheduleText);
+    if (job.kind !== schedule.kind) {
+      throw new Error(
+        job.kind === 'once'
+          ? `更新失败：一次性任务 #${job.id} 不能改成周期任务。`
+          : `更新失败：周期任务 #${job.id} 不能改成一次性任务。`,
+      );
+    }
+    if (schedule.kind === 'once') {
+      patch.runAt = schedule.runAt;
+      patch.cronExpr = null;
+    } else {
+      patch.cronExpr = schedule.cronExpr;
+      patch.runAt = null;
+    }
+  }
+
+  if (input.goal !== undefined) {
+    const goal = normalizeGoal(input.goal);
+    if (!goal) {
+      throw new Error('更新失败：goal 不能为空。');
+    }
+    patch.goal = goal;
+  }
+
+  if (input.mentionCreator !== undefined) {
+    patch.mentionCreator = job.scope === 'group' ? (input.mentionCreator ? 1 : 0) : 0;
+  }
+
+  patch.updatedAt = Date.now();
+  return { patch, schedule };
+}
+
+async function updateAutomationJob(
+  deps: AutomationToolDeps,
+  current: ToolCurrentRoom,
+  input: {
+    taskId: number;
+    scheduleText?: string;
+    goal?: string;
+    mentionCreator?: boolean;
+  },
+): Promise<{ job: AutomationJob; schedule?: ResolvedSchedule }> {
+  const job = await getScopedJob(deps.ctx, current.room.roomId, current.session.userId!, input.taskId);
+  if (!job) {
+    throw new Error(`未找到自动化任务 #${input.taskId}。`);
+  }
+
+  assertJobCanUpdate(job);
+  const { patch, schedule } = buildAutomationJobUpdatePatch(job, input);
+  const updated = { ...job, ...patch } as AutomationJob;
+
+  if (job.kind === 'cron' && job.status === 'active') {
+    deps.lifecycle.disposeCronJob(job.id);
+  }
+
+  await (deps.ctx as any).database.set('automation_job', { id: job.id }, patch);
+
+  if (updated.kind === 'cron' && updated.status === 'active') {
+    deps.lifecycle.registerCronJob(updated);
+  }
+
+  return { job: updated, schedule };
+}
+
+function stringifyReceipt(receipts: string[]): string | null {
+  if (!receipts.length) return null;
+  return JSON.stringify(receipts);
+}
+
+async function getNextRoomId(ctx: ContextWithAutomation): Promise<number> {
+  const db = (ctx as any).database;
+  const rooms = (await db.get('chathub_room', {} as Record<string, never>)) as AutomationRoomRow[];
+  const maxRoomId = rooms.reduce((current, room) => Math.max(current, Number(room.roomId ?? 0)), 0);
+  return maxRoomId + 1;
+}
+
+async function createConversationRoomRecord(
+  ctx: ContextWithAutomation,
+  session: Session,
+  room: AutomationRoomRow,
+): Promise<void> {
+  const db = (ctx as any).database;
+  await db.create('chathub_room', room);
+  await db.create('chathub_room_member', {
+    userId: session.userId,
+    roomId: room.roomId,
+    roomPermission: session.userId === room.roomMasterId ? 'owner' : 'member',
+  });
+  await db.upsert?.('chathub_user', [
+    {
+      userId: session.userId,
+      defaultRoomId: room.roomId,
+      groupId: session.isDirect ? '0' : session.guildId,
+    },
+  ]);
+  if (!session.isDirect && session.guildId) {
+    await db.create('chathub_room_group_member', {
+      groupId: session.guildId,
+      roomId: room.roomId,
+      roomVisibility: room.visibility,
+    });
+  }
+}
+
+async function deleteConversationRoomRecord(ctx: ContextWithAutomation, room: AutomationRoomRow): Promise<void> {
+  const db = (ctx as any).database;
+  await db.remove('chathub_room_group_member', { roomId: room.roomId });
+  await db.remove('chathub_room_member', { roomId: room.roomId });
+  await db.remove('chathub_user', { defaultRoomId: room.roomId });
+  if (room.conversationId) {
+    await db.remove('chathub_message', { conversation: room.conversationId });
+    await db.remove('chathub_conversation', { id: room.conversationId });
+  }
+  await db.remove('chathub_room', { roomId: room.roomId });
 }
 
 function createMentionedTextContent(userId: string, content: string, mode: 'preserve' | 'split'): BotMessageContent {
   const normalizedUserId = userId.trim();
-  if (!normalizedUserId) {
-    return content;
-  }
+  if (!normalizedUserId) return content;
 
   const normalizedContent = content.trim();
-  if (!normalizedContent) {
-    return h.at(normalizedUserId);
-  }
+  if (!normalizedContent) return h.at(normalizedUserId);
 
   return [h.at(normalizedUserId), h.text(mode === 'preserve' ? `\n${normalizedContent}` : ` ${normalizedContent}`)];
 }
@@ -549,7 +717,6 @@ async function dispatchNormalizedMessageWithMention(
       await sendWhole(h.at(normalizedUserId));
       return;
     }
-
     await sendWhole(createMentionedTextContent(normalizedUserId, content, 'preserve'));
     return;
   }
@@ -566,10 +733,9 @@ async function dispatchNormalizedMessageWithMention(
     return;
   }
 
-  await sendWhole(createMentionedTextContent(normalizedUserId, lines[0], 'split'));
+  await sendWhole(createMentionedTextContent(normalizedUserId, lines[0]!, 'split'));
 
   for (let index = 1; index < lines.length; index += 1) {
-    await sleep(calculateSmartSendDelayMs(lines[index - 1]!));
     await sendLine(lines[index]!);
   }
 }
@@ -579,539 +745,546 @@ export async function sendBotMessageByLines(
   channelId: string,
   message: string | NormalizedOutboundMessage,
   options: { mentionUserId?: string } = {},
-): Promise<void> {
+): Promise<string[]> {
+  const receipts: string[] = [];
   const normalized = typeof message === 'string' ? normalizeOutboundMessage(message) : message;
+  const recordReceipt = (result: unknown): void => {
+    if (Array.isArray(result)) {
+      receipts.push(...result.map((item) => String(item)));
+      return;
+    }
+    if (result != null) {
+      receipts.push(String(result));
+    }
+  };
+  const sendWhole = async (content: BotMessageContent): Promise<unknown> => {
+    const result = await bot.sendMessage(
+      channelId,
+      typeof content === 'string' ? h.text(content) : content,
+      undefined,
+      createBypassLineSplitOptions(),
+    );
+    recordReceipt(result);
+    return result;
+  };
+  const sendLine = async (content: BotMessageContent): Promise<unknown> => {
+    const result = await bot.sendMessage(
+      channelId,
+      typeof content === 'string' ? h.text(content) : content,
+      undefined,
+      createBypassLineSplitOptions(),
+    );
+    recordReceipt(result);
+    return result;
+  };
+
   if (!options.mentionUserId?.trim()) {
-    await sendBotMessageByNormalizedContent(bot, channelId, normalized);
-    return;
+    await dispatchNormalizedOutboundMessage(normalized, sendWhole, sendLine);
+    return receipts;
   }
 
-  const { sendWhole, sendLine } = createBotMessageDispatchers(bot, channelId);
   await dispatchNormalizedMessageWithMention(normalized, options.mentionUserId, sendWhole, sendLine);
+  return receipts;
 }
 
-async function sendTaskMessage(ctx: Context, task: AutomationTask, runtime: RuntimeConfig): Promise<boolean> {
-  const bot = resolveTaskBot(ctx, task);
+function resolveTaskBot(ctx: ContextWithAutomation, job: AutomationJob): ChatLunaBot | null {
+  const bots = ((ctx as any).bots ?? []) as ChatLunaBot[];
+  return (
+    bots.find((bot) => bot.selfId === job.botSelfId && bot.platform === job.platform) ??
+    bots.find((bot) => bot.platform === job.platform) ??
+    null
+  );
+}
+
+function createExecutionSession(bot: ChatLunaBot, job: AutomationJob): Session {
+  const event = sanitizeEventSnapshot(job.event) ?? {};
+  const created = typeof bot.session === 'function' ? bot.session(event) : ({} as Session);
+  const session = created as unknown as Session & { event?: Record<string, unknown> };
+  session.event = event as any;
+  Object.assign(session, {
+    platform: job.platform,
+    channelId: job.channelId,
+    guildId: job.guildId || undefined,
+    userId: job.creatorId,
+    isDirect: job.scope === 'private',
+    bot,
+  });
+  return session;
+}
+
+async function resolveSourceRoomContext(ctx: ContextWithAutomation, job: AutomationJob): Promise<SourceRoomContext> {
+  const room = (await getCurrentSourceRoom(ctx, job.sourceRoomId)) as AutomationRoomRow | null;
+  if (!room) {
+    throw new Error(`source room #${job.sourceRoomId} no longer exists`);
+  }
+  assertPluginRoom(room);
+
+  const bot = resolveTaskBot(ctx, job);
   if (!bot) {
-    logger.warn('task #%d skipped: no bot available', task.id);
-    return false;
+    throw new Error(`bot ${job.botSelfId}/${job.platform} is unavailable`);
   }
 
-  const finalMessage = task.kind === 'once' ? task.message : await buildDeliveryMessage(task, runtime);
+  return {
+    room,
+    session: createExecutionSession(bot, job),
+  };
+}
+
+async function getCurrentSourceRoom(ctx: ContextWithAutomation, roomId: number): Promise<AutomationRoomRow | null> {
+  const db = (ctx as any).database;
+  const rows = (await db.get('chathub_room', { roomId })) as AutomationRoomRow[];
+  return rows[0] ?? null;
+}
+
+async function createTemporaryExecutionRoom(
+  ctx: ContextWithAutomation,
+  sourceRoom: AutomationRoomRow,
+  session: Session,
+  job: AutomationJob,
+): Promise<AutomationRoomRow> {
+  const tempRoom: AutomationRoomRow = {
+    ...sourceRoom,
+    roomId: await getNextRoomId(ctx),
+    roomName: `automation-job-${job.id}`,
+    roomMasterId: job.creatorId,
+    conversationId: randomUUID(),
+    chatMode: 'plugin',
+    updatedTime: new Date(),
+    autoUpdate: false,
+  };
+  await createConversationRoomRecord(ctx, session, tempRoom);
+  return tempRoom;
+}
+
+async function resolveAutomationToolMask(
+  ctx: ContextWithAutomation,
+  session: Session,
+  sourceRoom: AutomationRoomRow,
+): Promise<ToolMask | undefined> {
+  const toolPolicy = (ctx as any).toolPolicy;
+  return toolPolicy?.resolveToolMask(session as any, 'automation', {
+    roomId: sourceRoom.roomId,
+    conversationId: sourceRoom.conversationId?.trim() || null,
+    groupId: session.guildId ?? null,
+  } as any);
+}
+
+async function executeAutomationJobRun(ctx: ContextWithAutomation, job: AutomationJob, run: AutomationJobRun): Promise<void> {
+  let tempRoom: AutomationRoomRow | null = null;
 
   try {
-    await sendBotMessageByLines(bot, task.channelId, finalMessage, {
-      mentionUserId: task.scope === 'group' ? task.creatorId : undefined,
+    const source = await resolveSourceRoomContext(ctx, job);
+    tempRoom = await createTemporaryExecutionRoom(ctx, source.room, source.session, job);
+    const toolMask = await resolveAutomationToolMask(ctx, source.session, source.room);
+    const message: ChatLunaMessage = {
+      content: createAutomationPrompt(job, run.triggeredAt),
+      additional_kwargs: {
+        qqbot_final_response_instruction: EXECUTION_FINAL_RESPONSE_INSTRUCTION,
+      },
+    };
+
+    const chatluna = (ctx as any).chatluna;
+    const response = await chatluna.chat(
+      source.session,
+      tempRoom,
+      message,
+      createNoopChatEvents(),
+      false,
+      {},
+      undefined,
+      `automation-job:${job.id}:${run.id}`,
+      toolMask,
+    );
+
+    const outputText =
+      typeof response.content === 'string'
+        ? response.content.trim()
+        : getMessageContent(response.content as never).trim();
+    if (!outputText) {
+      throw new Error('automation agent returned empty output');
+    }
+
+    const bot = resolveTaskBot(ctx, job);
+    if (!bot) {
+      throw new Error(`bot ${job.botSelfId}/${job.platform} is unavailable`);
+    }
+
+    const receipts = await sendBotMessageByLines(bot, job.channelId, outputText, {
+      mentionUserId: job.scope === 'group' && Number(job.mentionCreator ?? 0) === 1 ? job.creatorId : undefined,
     });
-    return true;
+
+    await finishJobRun(ctx, run.id, {
+      status: 'succeeded',
+      error: null,
+      outputText,
+      deliveryReceipt: stringifyReceipt(receipts),
+    });
   } catch (error) {
-    logger.warn('task #%d delivery failed: %s', task.id, (error as Error).message);
-    return false;
+    await finishJobRun(ctx, run.id, {
+      status: 'failed',
+      error: (error as Error).message,
+      outputText: null,
+      deliveryReceipt: null,
+    });
+    throw error;
+  } finally {
+    if (tempRoom) {
+      await deleteConversationRoomRecord(ctx, tempRoom).catch((error: unknown) => {
+        logger.warn('failed to delete temporary automation room #%s: %s', String(tempRoom!.roomId), (error as Error).message);
+      });
+    }
   }
 }
 
-async function getScopedTask(
-  ctx: Context,
-  id: number,
-  userId: string,
-  scope: ScopeContext,
-): Promise<AutomationTask | null> {
-  const query = {
-    id,
-    creatorId: userId,
-    scope: scope.scope,
-    channelId: scope.channelId,
+async function executeAutomationJob(ctx: ContextWithAutomation, jobId: number): Promise<void> {
+  const job = await getJobById(ctx, jobId);
+  if (!job || job.status !== 'active') return;
+
+  const run = await createJobRun(ctx, job.id, Date.now());
+
+  try {
+    await executeAutomationJobRun(ctx, job, run);
+  } catch (error) {
+    logger.warn('automation job #%d failed: %s', job.id, (error as Error).message);
+  } finally {
+    if (job.kind === 'once') {
+      await (ctx as any).database.set('automation_job', { id: job.id }, { status: 'done', updatedAt: Date.now() });
+    }
+  }
+}
+
+function createAutomationToolEntry(
+  toolName: string,
+  description: string,
+  createTool: () => StructuredTool,
+): ChatLunaTool {
+  return {
+    name: toolName,
+    description,
+    selector: () => true,
+    authorization: (session) => Boolean(session?.userId),
+    createTool: () => createTool(),
   };
-  const [task] = await ctx.database.get('automation_task', query);
-  return task ?? null;
+}
+
+class AutomationCreateTool extends StructuredTool {
+  name = AUTOMATION_TOOL_NAMES.create;
+
+  description =
+    'Create a new automation job in the current chat room. Use this only when the user wants to add a new timed or scheduled task. Always pass the user schedule as scheduleText in natural language. Do not convert it into ISO time or cron yourself. Do not use this to modify an existing task; use automation_update instead.';
+
+  schema = z.object({
+    scheduleText: z
+      .string()
+      .describe('The user schedule phrase in natural language, for example 今天23:45, 明天早上8点, 半小时后, 每周一早上9点. Copy the schedule meaning directly from the user. Do not convert it into ISO datetime or cron.'),
+    goal: z.string().describe('Natural-language task goal to execute when the job triggers.'),
+    mentionCreator: z.boolean().optional().describe('Whether to @ the creator when sending group results. Defaults to true.'),
+  });
+
+  constructor(private readonly deps: AutomationToolDeps) {
+    super({});
+  }
+
+  async _call(input: z.infer<typeof this.schema>, _runManager: unknown, config: ChatLunaToolRunnable): Promise<string> {
+    const current = await resolveToolCurrentRoom(this.deps.ctx, config);
+
+    const goal = normalizeGoal(input.goal);
+    if (!goal) {
+      throw new Error('goal 不能为空。');
+    }
+
+    const schedule = resolveScheduleText(input.scheduleText);
+
+    const created = await createAutomationJob(this.deps, {
+      room: current.room,
+      session: current.session,
+      kind: schedule.kind,
+      runAt: schedule.kind === 'once' ? schedule.runAt : null,
+      cronExpr: schedule.kind === 'cron' ? schedule.cronExpr : null,
+      goal,
+      timezone: FIXED_TIMEZONE,
+      mentionCreator: input.mentionCreator,
+    });
+
+    return formatJobCreatedSummary(created, schedule);
+  }
+}
+
+class AutomationListTool extends StructuredTool {
+  name = AUTOMATION_TOOL_NAMES.list;
+
+  description = 'List automation jobs created by the current user in the current room.';
+
+  schema = z.object({});
+
+  constructor(private readonly deps: AutomationToolDeps) {
+    super({});
+  }
+
+  async _call(_input: z.infer<typeof this.schema>, _runManager: unknown, config: ChatLunaToolRunnable): Promise<string> {
+    const current = await resolveToolCurrentRoom(this.deps.ctx, config);
+    const jobs = await getScopedJobs(this.deps.ctx, current.room.roomId, current.session.userId!);
+    return buildListResult(jobs);
+  }
+}
+
+const AutomationManageSchema = z.object({
+  taskId: z.number().int().positive().describe('Automation job id.'),
+});
+
+const AutomationUpdateSchema = AutomationManageSchema.extend({
+  scheduleText: z
+    .string()
+    .optional()
+    .describe('Updated user schedule phrase in natural language, for example 明天8点 or 每周二晚上7点. Do not convert it into ISO datetime or cron.'),
+  goal: z.string().optional().describe('Updated natural-language task goal.'),
+  mentionCreator: z.boolean().optional().describe('Whether to @ the creator when sending group results.'),
+});
+
+class AutomationUpdateTool extends StructuredTool {
+  name = AUTOMATION_TOOL_NAMES.update;
+
+  description =
+    'Update fields of an existing automation job created by the current user in the current room. When the user wants to change an existing task, always use this tool instead of deleting and recreating it. Always pass the user schedule as scheduleText in natural language. Do not convert it into ISO time or cron yourself. If this tool succeeds, do not call it again for the same requested change.';
+
+  schema = AutomationUpdateSchema;
+
+  constructor(private readonly deps: AutomationToolDeps) {
+    super({});
+  }
+
+  async _call(input: z.infer<typeof AutomationUpdateSchema>, _runManager: unknown, config: ChatLunaToolRunnable): Promise<string> {
+    const current = await resolveToolCurrentRoom(this.deps.ctx, config);
+    const updated = await updateAutomationJob(this.deps, current, input);
+    return formatJobUpdatedSummary(updated.job, updated.schedule);
+  }
+}
+
+class AutomationPauseTool extends StructuredTool {
+  name = AUTOMATION_TOOL_NAMES.pause;
+
+  description = 'Pause an automation job created by the current user in the current room.';
+
+  schema = AutomationManageSchema;
+
+  constructor(private readonly deps: AutomationToolDeps) {
+    super({});
+  }
+
+  async _call(input: z.infer<typeof AutomationManageSchema>, _runManager: unknown, config: ChatLunaToolRunnable): Promise<string> {
+    const current = await resolveToolCurrentRoom(this.deps.ctx, config);
+    const job = await getScopedJob(this.deps.ctx, current.room.roomId, current.session.userId!, input.taskId);
+    if (!job || job.status === 'deleted') {
+      throw new Error(`未找到自动化任务 #${input.taskId}。`);
+    }
+
+    this.deps.lifecycle.disposeCronJob(job.id);
+    await (this.deps.ctx as any).database.set('automation_job', { id: job.id }, { status: 'paused', updatedAt: Date.now() });
+    return `已暂停自动化任务 #${job.id}。`;
+  }
+}
+
+class AutomationResumeTool extends StructuredTool {
+  name = AUTOMATION_TOOL_NAMES.resume;
+
+  description = 'Resume a paused automation job created by the current user in the current room.';
+
+  schema = AutomationManageSchema;
+
+  constructor(private readonly deps: AutomationToolDeps) {
+    super({});
+  }
+
+  async _call(input: z.infer<typeof AutomationManageSchema>, _runManager: unknown, config: ChatLunaToolRunnable): Promise<string> {
+    const current = await resolveToolCurrentRoom(this.deps.ctx, config);
+    const job = await getScopedJob(this.deps.ctx, current.room.roomId, current.session.userId!, input.taskId);
+    if (!job || job.status === 'deleted') {
+      throw new Error(`未找到自动化任务 #${input.taskId}。`);
+    }
+
+    await (this.deps.ctx as any).database.set('automation_job', { id: job.id }, { status: 'active', updatedAt: Date.now() });
+    if (job.kind === 'cron') {
+      this.deps.lifecycle.registerCronJob({ ...job, status: 'active' });
+    }
+    return `已恢复自动化任务 #${job.id}。`;
+  }
+}
+
+class AutomationDeleteTool extends StructuredTool {
+  name = AUTOMATION_TOOL_NAMES.delete;
+
+  description =
+    'Delete an automation job created by the current user in the current room. Use this only when the user explicitly wants to remove a task, not when they want to modify it.';
+
+  schema = AutomationManageSchema;
+
+  constructor(private readonly deps: AutomationToolDeps) {
+    super({});
+  }
+
+  async _call(input: z.infer<typeof AutomationManageSchema>, _runManager: unknown, config: ChatLunaToolRunnable): Promise<string> {
+    const current = await resolveToolCurrentRoom(this.deps.ctx, config);
+    const job = await getScopedJob(this.deps.ctx, current.room.roomId, current.session.userId!, input.taskId);
+    if (!job || job.status === 'deleted') {
+      throw new Error(`未找到自动化任务 #${input.taskId}。`);
+    }
+
+    this.deps.lifecycle.disposeCronJob(job.id);
+    await (this.deps.ctx as any).database.set('automation_job', { id: job.id }, { status: 'deleted', updatedAt: Date.now() });
+    return `已删除自动化任务 #${job.id}。`;
+  }
+}
+
+function registerAutomationTools(ctx: ContextWithAutomation, runtime: RuntimeConfig, lifecycle: AutomationToolDeps['lifecycle']): Array<() => void> {
+  const deps: AutomationToolDeps = { ctx, runtime, lifecycle };
+  const platform = (ctx as any).chatluna.platform;
+  return [
+    platform.registerTool(
+      AUTOMATION_TOOL_NAMES.create,
+      createAutomationToolEntry(
+        AUTOMATION_TOOL_NAMES.create,
+        'Create an automation job in the current room.',
+        () => new AutomationCreateTool(deps),
+      ),
+    ),
+    platform.registerTool(
+      AUTOMATION_TOOL_NAMES.list,
+      createAutomationToolEntry(
+        AUTOMATION_TOOL_NAMES.list,
+        'List automation jobs created by the current user in the current room.',
+        () => new AutomationListTool(deps),
+      ),
+    ),
+    platform.registerTool(
+      AUTOMATION_TOOL_NAMES.update,
+      createAutomationToolEntry(
+        AUTOMATION_TOOL_NAMES.update,
+        'Update an automation job in the current room.',
+        () => new AutomationUpdateTool(deps),
+      ),
+    ),
+    platform.registerTool(
+      AUTOMATION_TOOL_NAMES.pause,
+      createAutomationToolEntry(
+        AUTOMATION_TOOL_NAMES.pause,
+        'Pause an automation job in the current room.',
+        () => new AutomationPauseTool(deps),
+      ),
+    ),
+    platform.registerTool(
+      AUTOMATION_TOOL_NAMES.resume,
+      createAutomationToolEntry(
+        AUTOMATION_TOOL_NAMES.resume,
+        'Resume a paused automation job in the current room.',
+        () => new AutomationResumeTool(deps),
+      ),
+    ),
+    platform.registerTool(
+      AUTOMATION_TOOL_NAMES.delete,
+      createAutomationToolEntry(
+        AUTOMATION_TOOL_NAMES.delete,
+        'Delete an automation job in the current room.',
+        () => new AutomationDeleteTool(deps),
+      ),
+    ),
+  ];
 }
 
 export function apply(ctx: Context, config: Config): void {
   const runtime = toRuntimeConfig(config);
-  const featurePolicy = (ctx as ContextWithFeaturePolicy).featurePolicy;
-  ensureTaskTable(ctx);
+  const serviceCtx = ctx as ContextWithAutomation;
+  ensureTaskTables(ctx);
 
   const cronDisposers = new Map<number, () => void>();
-  const preloadedOnceTasks = new Set<number>();
+  const runningJobs = new Set<number>();
   let onceTimer: NodeJS.Timeout | null = null;
-  let onceTicking = false;
+  let toolDisposers: Array<() => void> = [];
 
-  const disposeCronTask = (taskId: number) => {
-    const dispose = cronDisposers.get(taskId);
+  const disposeCronJob = (jobId: number): void => {
+    const dispose = cronDisposers.get(jobId);
     if (!dispose) return;
     dispose();
-    cronDisposers.delete(taskId);
+    cronDisposers.delete(jobId);
   };
 
-  const registerCronTask = (task: AutomationTask) => {
-    const MAX_TIMEOUT_MS = 0x7fffffff;
-    if (task.kind !== 'cron' || task.status !== 'active' || !task.cronExpr) return;
-    disposeCronTask(task.id);
+  const runJobIfNeeded = async (jobId: number): Promise<void> => {
+    if (runningJobs.has(jobId)) return;
+    runningJobs.add(jobId);
+    try {
+      await executeAutomationJob(serviceCtx, jobId);
+    } finally {
+      runningJobs.delete(jobId);
+    }
+  };
+
+  const registerCronJob = (job: AutomationJob): void => {
+    if (job.kind !== 'cron' || job.status !== 'active' || !job.cronExpr) return;
+    disposeCronJob(job.id);
+
     try {
       let timer: NodeJS.Timeout | null = null;
       let disposed = false;
 
       const scheduleNext = () => {
         if (disposed) return;
-        const nextAt = parseExpression(task.cronExpr!, { currentDate: new Date(), tz: FIXED_TIMEZONE }).next().getTime();
+        const nextAt = parseExpression(job.cronExpr!, { currentDate: new Date(), tz: FIXED_TIMEZONE }).next().getTime();
         const tick = () => {
           if (disposed) return;
           const remaining = nextAt - Date.now();
           if (remaining > 0) {
-            timer = setTimeout(tick, Math.min(remaining, MAX_TIMEOUT_MS));
+            timer = setTimeout(tick, Math.min(remaining, 0x7fffffff));
             return;
           }
-
           scheduleNext();
-          void (async () => {
-            const [latest] = await ctx.database.get('automation_task', { id: task.id });
-            if (!latest || latest.status !== 'active' || latest.kind !== 'cron') return;
-            await sendTaskMessage(ctx, latest, runtime);
-          })();
+          void runJobIfNeeded(job.id);
         };
-
         tick();
       };
 
       scheduleNext();
-      const dispose = () => {
+      cronDisposers.set(job.id, () => {
         disposed = true;
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
-      };
-      cronDisposers.set(task.id, dispose);
-    } catch (error) {
-      logger.warn('task #%d invalid cron expression "%s": %s', task.id, task.cronExpr, (error as Error).message);
-    }
-  };
-
-  const markExpiredOnceTasks = async () => {
-    const now = Date.now();
-    await ctx.database.set(
-      'automation_task',
-      {
-        kind: 'once',
-        status: 'active',
-        runAt: { $lte: now },
-      },
-      {
-        status: 'done',
-        updatedAt: now,
-      },
-    );
-  };
-
-  const preloadOnceTask = async (task: AutomationTask): Promise<void> => {
-    if (task.kind !== 'once' || task.status !== 'active' || !task.runAt) return;
-    if (preloadedOnceTasks.has(task.id)) return;
-    preloadedOnceTasks.add(task.id);
-    try {
-      const rawMessage = task.message;
-      const finalMessage = await buildOnceTaskMessage(
-        runtime,
-        {
-          scope: task.scope as TaskScope,
-          channelId: task.channelId,
-          guildId: task.guildId,
-        },
-        task.runAt,
-        rawMessage,
-      );
-      if (!finalMessage || finalMessage === rawMessage) return;
-
-      const [latest] = await ctx.database.get('automation_task', { id: task.id });
-      if (!latest || latest.kind !== 'once' || latest.status !== 'active' || latest.message !== rawMessage) return;
-
-      await ctx.database.set(
-        'automation_task',
-        { id: task.id },
-        {
-          message: finalMessage,
-          updatedAt: Date.now(),
-        },
-      );
-    } catch (error) {
-      preloadedOnceTasks.delete(task.id);
-      logger.warn('task #%d preload generation failed: %s', task.id, (error as Error).message);
-    }
-  };
-
-  const tickOnceTasks = async () => {
-    if (onceTicking) return;
-    onceTicking = true;
-    try {
-      const now = Date.now();
-      const preloadCandidates = await ctx.database.get('automation_task', {
-        kind: 'once',
-        status: 'active',
-        runAt: {
-          $gt: now,
-          $lte: now + ONCE_PRELOAD_WINDOW_MS,
-        },
+        if (timer) clearTimeout(timer);
       });
-      for (const task of preloadCandidates) {
-        await preloadOnceTask(task);
-      }
-
-      const dueTasks = await ctx.database.get('automation_task', {
-        kind: 'once',
-        status: 'active',
-        runAt: { $lte: now },
-      });
-      for (const task of dueTasks) {
-        await sendTaskMessage(ctx, task, runtime);
-        await ctx.database.set('automation_task', { id: task.id }, { status: 'done', updatedAt: Date.now() });
-        preloadedOnceTasks.delete(task.id);
-      }
-    } finally {
-      onceTicking = false;
+    } catch (error) {
+      logger.warn('automation job #%d has invalid cron expression "%s": %s', job.id, job.cronExpr, (error as Error).message);
     }
   };
 
-  const createTask = async (
-    session: Session,
-    scope: ScopeContext,
-    payload: Pick<AutomationTask, 'kind' | 'message'> & { runAt?: number; cronExpr?: string },
-  ): Promise<AutomationTask | null> => {
-    if (!session.userId || !session.bot?.selfId) return null;
-    const alive = (await ctx.database.get('automation_task', { creatorId: session.userId })).filter(
-      (task) => task.status === 'active' || task.status === 'paused',
-    );
-    if (alive.length >= runtime.maxTasksPerUser) {
-      await sendSessionMessageByLines(session, `任务创建失败：你已达到上限（${runtime.maxTasksPerUser}）。`);
-      return null;
-    }
-
-    const now = Date.now();
-    const created = await ctx.database.create('automation_task', {
-      creatorId: session.userId,
-      scope: scope.scope,
-      channelId: scope.channelId,
-      guildId: scope.guildId,
-      platform: session.platform,
-      botSelfId: session.bot.selfId,
-      kind: payload.kind,
-      runAt: payload.runAt ?? null,
-      cronExpr: payload.cronExpr ?? null,
-      message: payload.message,
+  const tickOnceJobs = async (): Promise<void> => {
+    const dueJobs = (await (serviceCtx as any).database.get('automation_job', {
+      kind: 'once',
       status: 'active',
-      createdAt: now,
-      updatedAt: now,
-    });
+      runAt: { $lte: Date.now() },
+    })) as AutomationJob[];
 
-    if (created.kind === 'cron') {
-      registerCronTask(created);
-    }
-    logger.info(
-      'task #%d created from chat intent: action=%s scope=%s channel=%s',
-      created.id,
-      created.kind,
-      created.scope,
-      created.channelId,
-    );
-    return created;
-  };
-
-  const formatTaskList = (tasks: AutomationTask[]): string => {
-    if (!tasks.length) return '当前没有任务。';
-    return ['当前任务：', ...tasks.slice(0, 30).map((task) => `- ${taskText(task)}`)].join('\n');
-  };
-
-  const handleIntent = async (session: Session, scope: ScopeContext, intent: AutomationIntent): Promise<boolean> => {
-    if (!session.userId) return false;
-
-    switch (intent.action) {
-      case 'list': {
-        const tasks = (
-          await ctx.database.get('automation_task', {
-            creatorId: session.userId,
-            scope: scope.scope,
-            channelId: scope.channelId,
-          })
-        ).filter(isVisibleInTaskList);
-        tasks.sort((a, b) => a.id - b.id);
-        await sendSessionMessageOnce(session, formatTaskList(tasks));
-        return true;
-      }
-      case 'delete': {
-        if (!intent.taskId) {
-          await sendSessionMessageByLines(session, '删除失败：请提供任务编号。');
-          return true;
-        }
-        const task = await getScopedTask(ctx, intent.taskId, session.userId, scope);
-        if (!task || task.status === 'deleted') {
-          await sendSessionMessageByLines(session, `删除失败：未找到任务 #${intent.taskId}。`);
-          return true;
-        }
-        disposeCronTask(task.id);
-        preloadedOnceTasks.delete(task.id);
-        await ctx.database.set('automation_task', { id: task.id }, { status: 'deleted', updatedAt: Date.now() });
-        await sendSessionMessageByLines(session, `已删除任务 #${task.id}。`);
-        return true;
-      }
-      case 'pause': {
-        if (!intent.taskId) {
-          await sendSessionMessageByLines(session, '暂停失败：请提供任务编号。');
-          return true;
-        }
-        const task = await getScopedTask(ctx, intent.taskId, session.userId, scope);
-        if (!task || task.status === 'deleted') {
-          await sendSessionMessageByLines(session, `暂停失败：未找到任务 #${intent.taskId}。`);
-          return true;
-        }
-        disposeCronTask(task.id);
-        preloadedOnceTasks.delete(task.id);
-        await ctx.database.set('automation_task', { id: task.id }, { status: 'paused', updatedAt: Date.now() });
-        await sendSessionMessageByLines(session, `已暂停任务 #${task.id}。`);
-        return true;
-      }
-      case 'resume': {
-        if (!intent.taskId) {
-          await sendSessionMessageByLines(session, '恢复失败：请提供任务编号。');
-          return true;
-        }
-        const task = await getScopedTask(ctx, intent.taskId, session.userId, scope);
-        if (!task || task.status === 'deleted') {
-          await sendSessionMessageByLines(session, `恢复失败：未找到任务 #${intent.taskId}。`);
-          return true;
-        }
-        await ctx.database.set('automation_task', { id: task.id }, { status: 'active', updatedAt: Date.now() });
-        if (task.kind === 'cron') registerCronTask({ ...task, status: 'active' });
-        await sendSessionMessageByLines(session, `已恢复任务 #${task.id}。`);
-        return true;
-      }
-      case 'create-cron': {
-        const cronExpr = (intent.cronExpr ?? '').trim();
-        if (!cronExpr || !isValidCronExpr(cronExpr)) {
-          await sendSessionMessageByLines(session, '创建失败：无法识别有效的周期表达式。');
-          return true;
-        }
-        const created = await createTask(session, scope, {
-          kind: 'cron',
-          cronExpr,
-          message: (intent.message ?? '定时提醒').trim() || '定时提醒',
-        });
-        if (created) {
-          const reply = buildDeterministicCreateReply({
-            kind: 'cron',
-            message: created.message,
-          });
-          await sendSessionMessageByLines(session, reply);
-          logger.info('task #%d create reply sent for cron intent', created.id);
-        }
-        return true;
-      }
-      case 'create-once': {
-        const runAt = intent.runAt;
-        if (!runAt || runAt <= Date.now()) {
-          await sendSessionMessageByLines(session, '创建失败：时间无效或已过。');
-          return true;
-        }
-        const rawMessage = (intent.message ?? '定时提醒').trim() || '定时提醒';
-        const created = await createTask(session, scope, {
-          kind: 'once',
-          runAt,
-          message: rawMessage,
-        });
-        if (created) {
-          const shouldPreloadNow = Boolean(created.runAt && created.runAt - Date.now() < ONCE_PRELOAD_WINDOW_MS);
-          if (shouldPreloadNow) {
-            void preloadOnceTask(created);
-          }
-          const reply = buildDeterministicCreateReply({
-            kind: 'once',
-            runAt,
-            message: created.message,
-          });
-          await sendSessionMessageByLines(session, reply);
-          logger.info('task #%d create reply sent for once intent', created.id);
-        }
-        return true;
-      }
-      default:
-        return false;
+    for (const job of dueJobs) {
+      await runJobIfNeeded(job.id);
     }
   };
-
-  const parseIntent = async (session: Session, content: string): Promise<AutomationIntent | null> => {
-    const ruleIntent = parseAutomationIntentByRule(content);
-    if (ruleIntent) return ruleIntent;
-    if (!shouldTryAutomationIntent(content)) return null;
-    return parseIntentByModel(content, runtime);
-  };
-
-  ctx.middleware(
-    async (session, next) => {
-      if (!runtime.intentEnabled) return next();
-      if (!session.userId || !session.content || session.userId === session.bot?.selfId) return next();
-
-      const scope = resolveScopeContext(session, runtime);
-      if (!scope) return next();
-      if (featurePolicy && !(await featurePolicy.resolveFeatureEnabled(session, 'TASK_AUTOMATION_INTENT_ENABLED'))) {
-        return next();
-      }
-
-      const content = normalizeMessageContent(session);
-      if (!content || isCommandLike(content)) return next();
-
-      const intent = await parseIntent(session, content);
-      if (!intent) return next();
-      logger.info(
-        'automation intent intercepted: action=%s user=%s channel=%s',
-        intent.action,
-        session.userId,
-        scope.channelId,
-      );
-
-      if (!(await checkPermission(session, runtime))) {
-        await sendSessionMessageByLines(session, '你没有权限管理自动化任务。');
-        return;
-      }
-
-      try {
-        const handled = await handleIntent(session, scope, intent);
-        if (handled) {
-          logger.info(
-            'automation intent handled: action=%s user=%s channel=%s',
-            intent.action,
-            session.userId,
-            scope.channelId,
-          );
-          return;
-        }
-      } catch (error) {
-        logger.warn('automation intent handling failed: %s', (error as Error).message);
-        await sendSessionMessageByLines(session, '自动化任务处理失败，请稍后重试。');
-        return;
-      }
-
-      return next();
-    },
-    true,
-  );
-
-  ctx.command('task.list', '查看当前会话下的任务').action(async ({ session }) => {
-    if (!session?.userId) return '';
-    const scope = resolveScopeContext(session, runtime);
-    if (!scope) return '当前会话不支持任务管理。';
-    if (!(await checkPermission(session, runtime))) return '你没有权限管理自动化任务。';
-    const tasks = (
-      await ctx.database.get('automation_task', {
-        creatorId: session.userId,
-        scope: scope.scope,
-        channelId: scope.channelId,
-      })
-    ).filter(isVisibleInTaskList);
-    tasks.sort((a, b) => a.id - b.id);
-    await sendSessionMessageOnce(session, formatTaskList(tasks));
-    return '';
-  });
-
-  ctx.command('task.del <id:number>', '删除任务').action(async ({ session }, id) => {
-    if (!session?.userId || !id) return '删除失败：请提供任务编号。';
-    const scope = resolveScopeContext(session, runtime);
-    if (!scope) return '当前会话不支持任务管理。';
-    if (!(await checkPermission(session, runtime))) return '你没有权限管理自动化任务。';
-    const task = await getScopedTask(ctx, id, session.userId, scope);
-    if (!task || task.status === 'deleted') return `删除失败：未找到任务 #${id}。`;
-    disposeCronTask(task.id);
-    preloadedOnceTasks.delete(task.id);
-    await ctx.database.set('automation_task', { id: task.id }, { status: 'deleted', updatedAt: Date.now() });
-    return `已删除任务 #${task.id}。`;
-  });
-
-  ctx.command('task.pause <id:number>', '暂停任务').action(async ({ session }, id) => {
-    if (!session?.userId || !id) return '暂停失败：请提供任务编号。';
-    const scope = resolveScopeContext(session, runtime);
-    if (!scope) return '当前会话不支持任务管理。';
-    if (!(await checkPermission(session, runtime))) return '你没有权限管理自动化任务。';
-    const task = await getScopedTask(ctx, id, session.userId, scope);
-    if (!task || task.status === 'deleted') return `暂停失败：未找到任务 #${id}。`;
-    disposeCronTask(task.id);
-    preloadedOnceTasks.delete(task.id);
-    await ctx.database.set('automation_task', { id: task.id }, { status: 'paused', updatedAt: Date.now() });
-    return `已暂停任务 #${task.id}。`;
-  });
-
-  ctx.command('task.resume <id:number>', '恢复任务').action(async ({ session }, id) => {
-    if (!session?.userId || !id) return '恢复失败：请提供任务编号。';
-    const scope = resolveScopeContext(session, runtime);
-    if (!scope) return '当前会话不支持任务管理。';
-    if (!(await checkPermission(session, runtime))) return '你没有权限管理自动化任务。';
-    const task = await getScopedTask(ctx, id, session.userId, scope);
-    if (!task || task.status === 'deleted') return `恢复失败：未找到任务 #${id}。`;
-    await ctx.database.set('automation_task', { id: task.id }, { status: 'active', updatedAt: Date.now() });
-    if (task.kind === 'cron') registerCronTask({ ...task, status: 'active' });
-    return `已恢复任务 #${task.id}。`;
-  });
-
-  ctx.command('task.add.once <input:text>', '创建一次性任务（格式：task.add.once <time> -- <message>）').action(
-    async ({ session }, input) => {
-      if (!session?.userId) return '创建失败：缺少用户信息。';
-      const scope = resolveScopeContext(session, runtime);
-      if (!scope) return '当前会话不支持任务管理。';
-      if (!(await checkPermission(session, runtime))) return '你没有权限管理自动化任务。';
-      const [timePart, ...rest] = (input ?? '').split('--');
-      const message = rest.join('--').trim();
-      if (!timePart?.trim() || !message) {
-        return '格式错误：task.add.once <time> -- <message>';
-      }
-      const runAt = parseOnceRunAt(timePart.trim());
-      if (!runAt || runAt <= Date.now()) return '创建失败：无法解析时间或时间已过。';
-      const created = await createTask(session, scope, {
-        kind: 'once',
-        runAt,
-        message,
-      });
-      if (!created) return '创建失败，请稍后重试。';
-      const shouldPreloadNow = Boolean(created.runAt && created.runAt - Date.now() < ONCE_PRELOAD_WINDOW_MS);
-      if (shouldPreloadNow) {
-        void preloadOnceTask(created);
-      }
-      return `已创建一次性任务 #${created.id}，执行时间：${formatTimestamp(runAt)}。`;
-    },
-  );
-
-  ctx.command('task.add.cron <input:text>', '创建周期任务（格式：task.add.cron <cron> -- <message>）').action(
-    async ({ session }, input) => {
-      if (!session?.userId) return '创建失败：缺少用户信息。';
-      const scope = resolveScopeContext(session, runtime);
-      if (!scope) return '当前会话不支持任务管理。';
-      if (!(await checkPermission(session, runtime))) return '你没有权限管理自动化任务。';
-      const [cronPart, ...rest] = (input ?? '').split('--');
-      const message = rest.join('--').trim();
-      if (!cronPart?.trim() || !message) {
-        return '格式错误：task.add.cron <cron> -- <message>';
-      }
-      const cronExpr = parseCronExpr(cronPart.trim()) ?? cronPart.trim();
-      if (!cronExpr || !isValidCronExpr(cronExpr)) return '创建失败：无效的 cron 表达式。';
-      const created = await createTask(session, scope, {
-        kind: 'cron',
-        cronExpr,
-        message,
-      });
-      if (!created) return '创建失败，请稍后重试。';
-      return `已创建周期任务 #${created.id}（cron: ${cronExpr}）。`;
-    },
-  );
 
   ctx.on('ready', async () => {
-    await markExpiredOnceTasks();
-    const cronTasks = await ctx.database.get('automation_task', { kind: 'cron', status: 'active' });
-    cronTasks.forEach(registerCronTask);
-    onceTimer = setInterval(() => void tickOnceTasks(), Math.max(5000, runtime.pollIntervalMs));
+    await markInterruptedRunsFailed(serviceCtx);
+    toolDisposers = registerAutomationTools(serviceCtx, runtime, {
+      registerCronJob,
+      disposeCronJob,
+    });
+
+    const cronJobs = (await (serviceCtx as any).database.get('automation_job', {
+      kind: 'cron',
+      status: 'active',
+    })) as AutomationJob[];
+    cronJobs.forEach(registerCronJob);
+
+    onceTimer = setInterval(() => {
+      void tickOnceJobs();
+    }, Math.max(5000, runtime.pollIntervalMs));
+
     logger.info(
-      'task automation loaded: groups=%d, listenPrivate=%s, intent=%s, timezone=%s, deliveryModel=%s, replyModel=%s, deliveryMaxTokens=%d, replyMaxTokens=%d',
-      runtime.enabledGroups.size,
-      runtime.listenPrivate,
-      runtime.intentEnabled,
-      FIXED_TIMEZONE,
-      runtime.deliveryModel,
-      runtime.chatReplyModel,
-      runtime.deliveryMaxTokens,
-      runtime.chatReplyMaxTokens,
+      'task automation loaded: pollIntervalMs=%d, maxJobsPerUser=%d, tools=%s',
+      runtime.pollIntervalMs,
+      runtime.maxJobsPerUser,
+      Object.values(AUTOMATION_TOOL_NAMES).join(','),
     );
   });
 
@@ -1120,8 +1293,11 @@ export function apply(ctx: Context, config: Config): void {
       clearInterval(onceTimer);
       onceTimer = null;
     }
-    preloadedOnceTasks.clear();
     cronDisposers.forEach((dispose) => dispose());
     cronDisposers.clear();
+    for (const dispose of toolDisposers) {
+      dispose();
+    }
+    toolDisposers = [];
   });
 }

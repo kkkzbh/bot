@@ -1,6 +1,6 @@
 import { Context, Logger, Schema, Session } from 'koishi';
 import type { FeaturePolicyServiceLike } from '../../../types/feature-policy.js';
-import { normalizeGroupId, parseGroupSet } from '../../automation/index.js';
+import { normalizeGroupId, parseGroupSet } from '../../shared/group-id.js';
 import {
   containsAlias,
   createEmptySpamState,

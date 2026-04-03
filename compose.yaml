@@ -27,7 +27,7 @@ services:
     image: ${LLBOT_IMAGE:-docker.io/linyuchen/llbot}:${LLBOT_TAG:-latest}
     container_name: llonebot
     environment:
-      pmhq_host: ${PMHQ_HOST:-host.containers.internal}
+      pmhq_host: ${PMHQ_HOST:-pmhq}
       pmhq_port: ${PMHQ_PORT:-13000}
       WEBUI_PORT: ${LLONEBOT_WEBUI_PORT:-3080}
       LLONEBOT_WS_PORT: ${LLONEBOT_WS_PORT:-3001}
