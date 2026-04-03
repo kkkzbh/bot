@@ -1,6 +1,6 @@
 FROM node:lts-alpine3.19
 
-ARG LLBOT_VERSION=7.9.0
+ARG LLBOT_VERSION=7.11.0
 
 RUN set -eux; \
     apk update; \

@@ -120,7 +120,8 @@ Official compose mode uses three services:
 - `voice-asr`: `faster-whisper small/int8 + ffmpeg` HTTP service for QQ voice transcription
 - Compose defaults to fully-qualified images (`docker.io/linyuchen/...`) to avoid Fedora short-name prompt issues.
 - `pmhq` and `llbot` must land on the same named Podman network `qqbot-stack_app_network`.
-- `llbot` only supports container-to-container discovery through `pmhq:13000`; any runtime where `podman exec llonebot node -e "require('node:dns').promises.lookup('pmhq').then(console.log)"` fails should be treated as broken.
+- `llbot` must talk to `pmhq` over the stack network using `pmhq:13000`.
+- LLBot host ports are pinned to loopback (`127.0.0.1:3001` and `127.0.0.1:3080`) so Koishi and SSH local-forwards use the same endpoint on both laptop and server.
 
 Watch login logs (QR code / login progress):
 
@@ -397,7 +398,7 @@ pnpm build
   - If QQ has not finished login yet, do not treat a missing `3001` listener as a stack bootstrap failure; verify `llonebot` WebUI and `PMHQ WebSocket 连接成功` first.
   - Confirm `ONEBOT_WS_ENDPOINT` points to LLBot OneBot WS endpoint.
   - Confirm `pmhq` and `llonebot` are both attached to `qqbot-stack_app_network`; if `podman inspect --format '{{json .NetworkSettings.Networks}}' llonebot` does not include that network, treat the deployment as failed.
-  - Confirm `podman exec llonebot node -e "require('node:dns').promises.lookup('pmhq').then(console.log)"` succeeds before checking any host-side bridge address.
+  - Confirm the host can reach LLBot on loopback: `node -e "require('node:net').createConnection({ host: '127.0.0.1', port: 3001 }).on('connect', () => { console.log('ok'); process.exit(0) }).on('error', (error) => { console.error(error.message); process.exit(1) })"`.
 - No QR/login prompt:
   - Check `podman compose logs -f pmhq` instead of only checking `llbot` logs.
   - Confirm `pmhq` container is `Up` and healthy.
@@ -510,7 +511,7 @@ Behavior:
 - `CI` runs on every `push` / `pull_request` (`pnpm typecheck`, `pnpm test`, `pnpm build`).
 - `Deploy` runs on `push` to `main` (or manual `workflow_dispatch`).
 - `Deploy` SSHes to your server, `rsync`s project files, then runs `pnpm install`, `pnpm build`, and restarts `qqbot.target`.
-- The generated `qqbot-stack.service` now runs `scripts/podman-stack-up.sh pmhq llbot` and `scripts/verify-pmhq-network.sh`, and fails fast when `llonebot` cannot resolve/reach `pmhq:13000` or finish the `PMHQ WebSocket` handshake.
+- The generated `qqbot-stack.service` now runs `scripts/podman-stack-up.sh pmhq llbot` and `scripts/verify-pmhq-network.sh`, and fails fast when host loopback cannot reach LLBot or LLBot never finishes the `PMHQ WebSocket` handshake.
 - Laptop-local `qqbot-voice-tts.service` is not managed by GitHub Actions and must be updated separately on your own machine.
 
 ### 18.1 GitHub Actions secrets (required)

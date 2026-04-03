@@ -27,6 +27,8 @@ describe('qq voice config wiring', () => {
     const content = readFileSync(resolve(process.cwd(), 'compose.yaml'), 'utf8');
 
     expect(content).toContain('"${PMHQ_BIND_HOST:-127.0.0.1}:${PMHQ_PORT:-13000}:13000"');
+    expect(content).toContain('"127.0.0.1:${LLONEBOT_WEBUI_PORT:-3080}:${LLONEBOT_WEBUI_PORT:-3080}"');
+    expect(content).toContain('"127.0.0.1:${LLONEBOT_WS_PORT:-3001}:3001"');
     expect(content).toContain('pmhq_host: ${PMHQ_HOST:-pmhq}');
     expect(content).toContain('pmhq_port: ${PMHQ_PORT:-13000}');
     expect(content).toContain('aliases:');
@@ -34,6 +36,7 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('name: qqbot-stack_app_network');
     expect(content).toContain('LLONEBOT_WS_PORT: ${LLONEBOT_WS_PORT:-3001}');
     expect(content).toContain('ONEBOT_TOKEN: ${ONEBOT_TOKEN:-}');
+    expect(content).toContain('docker.io/linyuchen/llbot}:${LLBOT_TAG:-7.11.0}');
     expect(content).toContain('voice-asr:');
     expect(content).toContain('"127.0.0.1:${VOICE_ASR_PORT:-5161}:8080"');
     expect(content).toContain('./data/voice/asr:/data/voice/asr:Z');
@@ -208,19 +211,22 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('sed -i \'s/"cniVersion": "1.0.0"/"cniVersion": "0.4.0"/\' "${config_path}"');
   });
 
-  it('ships a deployment verifier that rejects broken pmhq DNS and port wiring', () => {
+  it('ships a deployment verifier that rejects broken llonebot host reachability and websocket wiring', () => {
     const content = readFileSync(resolve(process.cwd(), 'scripts/verify-pmhq-network.sh'), 'utf8');
 
     expect(content).toContain('NETWORK_NAME="${QQBOT_PODMAN_NETWORK_NAME:-qqbot-stack_app_network}"');
+    expect(content).toContain('LLBOT_WS_PORT="${QQBOT_LLBOT_WS_PORT:-${LLONEBOT_WS_PORT:-3001}}"');
     expect(content).toContain('wait_until "${PMHQ_CONTAINER} joined ${NETWORK_NAME}"');
     expect(content).toContain('wait_until "${LLBOT_CONTAINER} joined ${NETWORK_NAME}"');
-    expect(content).toContain('wait_until "${LLBOT_CONTAINER} resolves ${PMHQ_HOST}"');
-    expect(content).toContain('wait_until "${LLBOT_CONTAINER} reaches ${PMHQ_HOST}:${PMHQ_PORT}"');
+    expect(content).toContain('wait_until "host reaches 127.0.0.1:${LLBOT_WS_PORT}"');
     expect(content).toContain('wait_until "host reaches 127.0.0.1:${LLBOT_WEBUI_PORT}"');
     expect(content).toContain('wait_until "${LLBOT_CONTAINER} completes PMHQ WebSocket handshake"');
     expect(content).toContain('== podman inspect network info ==');
     expect(content).toContain('== llonebot /etc/hosts ==');
+    expect(content).toContain('host 127.0.0.1:${LLBOT_WS_PORT}');
     expect(content).toContain('host 127.0.0.1:${LLBOT_WEBUI_PORT}');
+    expect(content).toContain('== host llonebot webui probe ==');
+    expect(content).toContain('host_http_probe');
     expect(content).toContain('== llonebot websocket status ==');
   });
 
