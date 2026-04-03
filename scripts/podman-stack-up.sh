@@ -7,6 +7,10 @@ NETWORK_NAME="${QQBOT_PODMAN_NETWORK_NAME:-qqbot-stack_app_network}"
 PRIMARY_NETWORK_NAME="${QQBOT_PODMAN_PRIMARY_NETWORK_NAME:-podman}"
 PMHQ_CONTAINER="${QQBOT_PMHQ_CONTAINER_NAME:-pmhq}"
 LLBOT_CONTAINER="${QQBOT_LLBOT_CONTAINER_NAME:-llonebot}"
+LEGACY_LLBOT_DATA_DIR="${ROOT_DIR}/data/llonebot"
+LLONEBOT_DATA_DIR="${LLONEBOT_DATA_DIR:-${ROOT_DIR}/.runtime/llonebot}"
+
+export LLONEBOT_DATA_DIR
 
 if [ "$#" -gt 0 ]; then
   SERVICES=("$@")
@@ -34,6 +38,32 @@ compose() {
   "${COMPOSE_CMD[@]}" -f "${COMPOSE_FILE}" "$@"
 }
 
+dir_has_entries() {
+  local dir_path="$1"
+
+  [ -d "${dir_path}" ] || return 1
+  find "${dir_path}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .
+}
+
+prepare_llonebot_data_dir() {
+  mkdir -p "${LLONEBOT_DATA_DIR}"
+
+  if [ "${LLONEBOT_DATA_DIR}" = "${LEGACY_LLBOT_DATA_DIR}" ]; then
+    return 0
+  fi
+
+  if ! dir_has_entries "${LEGACY_LLBOT_DATA_DIR}"; then
+    return 0
+  fi
+
+  if dir_has_entries "${LLONEBOT_DATA_DIR}"; then
+    return 0
+  fi
+
+  echo "Seeding llonebot runtime data from ${LEGACY_LLBOT_DATA_DIR} to ${LLONEBOT_DATA_DIR}" >&2
+  cp -a "${LEGACY_LLBOT_DATA_DIR}/." "${LLONEBOT_DATA_DIR}/"
+}
+
 patch_cni_config() {
   local config_path
 
@@ -47,6 +77,7 @@ patch_cni_config() {
 }
 
 cd "${ROOT_DIR}"
+prepare_llonebot_data_dir
 
 compose down --remove-orphans || true
 

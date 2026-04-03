@@ -37,6 +37,7 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('LLONEBOT_WS_PORT: ${LLONEBOT_WS_PORT:-3001}');
     expect(content).toContain('ONEBOT_TOKEN: ${ONEBOT_TOKEN:-}');
     expect(content).toContain('docker.io/linyuchen/llbot}:${LLBOT_TAG:-7.11.0}');
+    expect(content).toContain('"${LLONEBOT_DATA_DIR:-./.runtime/llonebot}:/app/llbot/data:Z"');
     expect(content).toContain('voice-asr:');
     expect(content).toContain('"127.0.0.1:${VOICE_ASR_PORT:-5161}:8080"');
     expect(content).toContain('./data/voice/asr:/data/voice/asr:Z');
@@ -51,6 +52,11 @@ describe('qq voice config wiring', () => {
 
     expect(content).toContain('PMHQ_HOST="${pmhq_host:-${PMHQ_HOST:-pmhq}}"');
     expect(content).toContain('PMHQ_PORT="${pmhq_port:-${PMHQ_PORT:-13000}}"');
+    expect(content).toContain("const dataDir = '/app/llbot/data'");
+    expect(content).toContain("item.type === 'ws-reverse'");
+    expect(content).toContain("item.url = ''");
+    expect(content).toContain("/^config_\\d+\\.json$/");
+    expect(content).toContain('writeManagedConfig(join(dataDir, name))');
     expect(content).toContain('"--pmhq-host=${PMHQ_HOST}"');
     expect(content).toContain('"--pmhq-port=${PMHQ_PORT}"');
   });
@@ -77,6 +83,7 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('TASK_AUTOMATION_DELIVERY_MODEL=');
     expect(content).not.toContain('TASK_AUTOMATION_CHAT_REPLY_MODEL=');
     expect(content).toContain('PMHQ_BIND_HOST=127.0.0.1');
+    expect(content).toContain('LLONEBOT_DATA_DIR=./.runtime/llonebot');
     expect(content).not.toContain('VOICE_TTS_GPT_WEIGHTS=/data/voice/tts/models/sakiko_v2pp-e15.ckpt');
     expect(content).not.toContain('VOICE_TTS_REF_BLACK=/data/voice/tts/references/black_sakiko.wav');
   });
@@ -99,6 +106,8 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('TASK_AUTOMATION_CHAT_REPLY_MODEL=');
     expect(content).toContain('PMHQ_BIND_HOST=127.0.0.1');
     expect(content).toContain('Set AUTO_LOGIN_QQ only if this server should use QQ quick-login by default.');
+    expect(content).toContain('only one side should keep AUTO_LOGIN_QQ enabled');
+    expect(content).toContain('LLONEBOT_DATA_DIR=/opt/qqbot/shared/llonebot');
     expect(content).toContain('llonebot must still resolve pmhq on');
     expect(content).not.toContain('host.containers.internal');
     expect(content).toContain('# Server deploy does not run voice-asr.');
@@ -205,6 +214,10 @@ describe('qq voice config wiring', () => {
     const content = readFileSync(resolve(process.cwd(), 'scripts/podman-stack-up.sh'), 'utf8');
 
     expect(content).toContain('NETWORK_NAME="${QQBOT_PODMAN_NETWORK_NAME:-qqbot-stack_app_network}"');
+    expect(content).toContain('LLONEBOT_DATA_DIR="${LLONEBOT_DATA_DIR:-${ROOT_DIR}/.runtime/llonebot}"');
+    expect(content).toContain('LEGACY_LLBOT_DATA_DIR="${ROOT_DIR}/data/llonebot"');
+    expect(content).toContain('prepare_llonebot_data_dir');
+    expect(content).toContain('Seeding llonebot runtime data from ${LEGACY_LLBOT_DATA_DIR} to ${LLONEBOT_DATA_DIR}');
     expect(content).toContain('compose down --remove-orphans || true');
     expect(content).toContain('podman network rm -f "${NETWORK_NAME}" >/dev/null');
     expect(content).toContain('podman network create "${NETWORK_NAME}" >/dev/null');
@@ -246,7 +259,10 @@ describe('qq voice config wiring', () => {
 
     expect(content).toContain('RUNTIME_ENV_FILE="${SHARED_DIR}/.env.runtime"');
     expect(content).toContain('RUNTIME_PRESET_DIR="${SHARED_DIR}/presets"');
+    expect(content).toContain('RUNTIME_LLBOT_DIR="${SHARED_DIR}/llonebot"');
+    expect(content).toContain('LEGACY_LLBOT_DIR="${APP_DIR}/data/llonebot"');
     expect(content).toContain('SEED_MARKER_FILE="${SHARED_DIR}/.runtime-layer.seeded"');
+    expect(content).toContain('cp -a "${LEGACY_LLBOT_DIR}/." "${RUNTIME_LLBOT_DIR}/"');
     expect(content).toContain("keyMatches = [...sourceText.matchAll(/key:\\s*'([^']+)'/g)]");
     expect(content).toContain("find \"${BUNDLED_PRESET_DIR}\" -maxdepth 1 -type f");
     expect(content).toContain("touch \"${SEED_MARKER_FILE}\"");

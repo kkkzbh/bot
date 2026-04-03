@@ -6,11 +6,13 @@ SHARED_DIR="${QQBOT_SHARED_DIR:-$(dirname "${APP_DIR}")/shared}"
 BASE_ENV_FILE="${APP_DIR}/.env.server"
 RUNTIME_ENV_FILE="${SHARED_DIR}/.env.runtime"
 RUNTIME_PRESET_DIR="${SHARED_DIR}/presets"
+RUNTIME_LLBOT_DIR="${SHARED_DIR}/llonebot"
 BUNDLED_PRESET_DIR="${APP_DIR}/data/chathub/presets"
+LEGACY_LLBOT_DIR="${APP_DIR}/data/llonebot"
 SEED_MARKER_FILE="${SHARED_DIR}/.runtime-layer.seeded"
 
-mkdir -p "${SHARED_DIR}" "${RUNTIME_PRESET_DIR}"
-chmod 700 "${SHARED_DIR}" "${RUNTIME_PRESET_DIR}"
+mkdir -p "${SHARED_DIR}" "${RUNTIME_PRESET_DIR}" "${RUNTIME_LLBOT_DIR}"
+chmod 700 "${SHARED_DIR}" "${RUNTIME_PRESET_DIR}" "${RUNTIME_LLBOT_DIR}"
 
 if [[ ! -f "${RUNTIME_ENV_FILE}" ]]; then
   if [[ -f "${BASE_ENV_FILE}" ]]; then
@@ -51,6 +53,12 @@ NODE
 fi
 
 if [[ ! -e "${SEED_MARKER_FILE}" ]]; then
+  if [[ -d "${LEGACY_LLBOT_DIR}" ]] && [[ -z "$(find "${RUNTIME_LLBOT_DIR}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    if [[ -n "$(find "${LEGACY_LLBOT_DIR}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+      cp -a "${LEGACY_LLBOT_DIR}/." "${RUNTIME_LLBOT_DIR}/"
+    fi
+  fi
+
   if [[ -d "${BUNDLED_PRESET_DIR}" ]]; then
     while IFS= read -r -d '' file_path; do
       cp -f "${file_path}" "${RUNTIME_PRESET_DIR}/$(basename "${file_path}")"

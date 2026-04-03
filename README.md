@@ -379,8 +379,11 @@ pnpm build
 - `compose.yaml` uses `:Z` on bind mount for SELinux Enforcing.
 - `compose.yaml` pins the shared network name to `qqbot-stack_app_network`, so both local and server runtime must place `pmhq` and `llbot` on that exact network.
 - `llonebot` must call `pmhq` through the service name `pmhq:13000`, never `127.0.0.1`, bridge gateways, or `host.containers.internal`.
+- `llonebot` runtime data must live in an environment-specific directory (`LLONEBOT_DATA_DIR`), not in the deploy payload. Local default is `./.runtime/llonebot`; server default is `/opt/qqbot/shared/llonebot`.
+- On every boot, `docker/llonebot-startup.sh` rewrites the managed transport fields in both `default_config.json` and each `config_*.json`, so WebUI / forward-WS / token stay repo-controlled while account login state remains environment-local.
 - `PMHQ_BIND_HOST` only controls how `pmhq` is exposed to the host; it does not participate in container-to-container addressing.
 - Server runtime may keep `AUTO_LOGIN_QQ` enabled for normal quick-login boot.
+- One QQ account should have exactly one active quick-login edge at a time. If laptop-local and server both set the same `AUTO_LOGIN_QQ`, expect one side to wedge into `登录系统连接异常`, stale QR state, or broken quick-login.
 - If server quick-login wedges QQ into `登录系统连接异常` or blocks QR fetch, run `scripts/server-recover-qq-login.sh prepare`, complete one manual login in LLBot WebUI, then run `scripts/server-recover-qq-login.sh restore` to return to auto-login.
 
 ## 14. Troubleshooting
@@ -403,6 +406,8 @@ pnpm build
 - No QR/login prompt:
   - Check `podman compose logs -f pmhq` instead of only checking `llbot` logs.
   - Confirm `pmhq` container is `Up` and healthy.
+  - Confirm local and server are not sharing the same `AUTO_LOGIN_QQ` at the same time for one QQ account.
+  - Confirm `LLONEBOT_DATA_DIR` is environment-specific; server should use `/opt/qqbot/shared/llonebot`, not `/opt/qqbot/current/data/llonebot`.
   - If server auto-login gets stuck in `登录系统连接异常`, do not permanently disable it. Use `scripts/server-recover-qq-login.sh prepare`, complete one manual login, then `scripts/server-recover-qq-login.sh restore`.
 - Model call fails:
   - Check `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`.
