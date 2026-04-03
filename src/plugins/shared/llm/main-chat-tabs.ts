@@ -569,6 +569,9 @@ function isCopilotModelId(model?: string | null): boolean {
   if (!normalized) return false;
   if (/\s/.test(normalized)) return false;
   if (normalized.includes('://')) return false;
+  // Copilot bridge runs via Responses API. Some upstream Gemini 3.x preview ids
+  // are advertised but fail hard on /responses with unsupported_api_for_model.
+  if (/^gemini-3\./i.test(normalized)) return false;
   return true;
 }
 

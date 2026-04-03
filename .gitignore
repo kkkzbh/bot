@@ -48,4 +48,10 @@ web/.vitepress/cache
 .codex/skills/qqbot-local-verify/scripts/*
 !.codex/skills/qqbot-local-verify/scripts/cleanup-probe-room.sh
 !.codex/skills/qqbot-local-verify/scripts/probe-local-bot.sh
+!.codex/skills/qqbot-mainline-ship/
+.codex/skills/qqbot-mainline-ship/*
+!.codex/skills/qqbot-mainline-ship/SKILL.md
+!.codex/skills/qqbot-mainline-ship/agents/
+.codex/skills/qqbot-mainline-ship/agents/*
+!.codex/skills/qqbot-mainline-ship/agents/openai.yaml
 package-lock.json

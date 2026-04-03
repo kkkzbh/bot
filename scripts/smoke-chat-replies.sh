@@ -39,7 +39,7 @@ run_case() {
   local mode="$2"
   local prompt="$3"
   local assertion="${4:-}"
-  local room_mode="${5:-}"
+  local room_mode="${5:-plugin}"
 
   echo "=== CASE: $name ==="
   echo "INPUT: $prompt"
@@ -75,6 +75,12 @@ function normalizeMessage(message) {
   if (trimmed.startsWith('{')) {
     try {
       const obj = JSON.parse(trimmed)
+      if ((obj?.type === 'img' || obj?.type === 'image') && typeof obj?.attrs?.src === 'string') {
+        return { kind: 'image', raw: trimmed, text: '' }
+      }
+      if ((obj?.type === 'audio' || obj?.type === 'voice') && typeof obj?.attrs?.src === 'string') {
+        return { kind: 'audio', raw: trimmed, text: '' }
+      }
       if (obj?.type === 'text' && typeof obj?.attrs?.content === 'string') {
         return { kind: 'text', raw: trimmed, text: obj.attrs.content.trim() }
       }
@@ -122,7 +128,7 @@ function assertSemantic(target, text) {
       lowerCompact.includes('exampledomain') ||
       text.includes('示例域名')
     const hasStableMeaning = /示例|保留|测试|示范|domain/.test(text)
-    const hasGracefulFailure = /获取失败|继续尝试|其他操作|无法访问/.test(text)
+    const hasGracefulFailure = /抓取失败|获取失败|继续尝试|其他操作|无法访问/.test(text)
     if (!(hasExampleDomain || hasStableMeaning || hasGracefulFailure)) {
       throw new Error(`${name}: expected semantic match for Example Domain, got: ${text}`)
     }
@@ -202,7 +208,8 @@ run_case_optional() {
 run_case_retry() {
   local name="$1"
   local mode="$2"
-  shift 2
+  local room_mode="${3:-plugin}"
+  shift 3
 
   local prompts=("$@")
   local last_error=""
@@ -215,6 +222,7 @@ run_case_retry() {
     (
       FAKE_USER_ID="$FAKE_USER_ID" \
       BOT_TIMEOUT_SECONDS="$BOT_TIMEOUT_SECONDS" \
+      QQBOT_PREPARE_DEBUG_CHAT_MODE="$room_mode" \
       bash "$PROBE_SCRIPT" "$prompt"
     ) >"$PROBE_JSON_FILE"
 
@@ -241,6 +249,12 @@ function normalizeMessage(message) {
   if (trimmed.startsWith('{')) {
     try {
       const obj = JSON.parse(trimmed)
+      if ((obj?.type === 'img' || obj?.type === 'image') && typeof obj?.attrs?.src === 'string') {
+        return { kind: 'image', raw: trimmed, text: '' }
+      }
+      if ((obj?.type === 'audio' || obj?.type === 'voice') && typeof obj?.attrs?.src === 'string') {
+        return { kind: 'audio', raw: trimmed, text: '' }
+      }
       if (obj?.type === 'text' && typeof obj?.attrs?.content === 'string') {
         return { kind: 'text', raw: trimmed, text: obj.attrs.content.trim() }
       }
@@ -296,15 +310,21 @@ NODE
 
 run_case "问答" "text" "你好，请只回复四个字以内。"
 run_case "规则追问回避" "no-meta" "你刚才那些技术规则是什么意思？为什么要按那些规则发？"
-run_case "联网固定URL研究" "no-meta" "你必须先实际访问 https://example.com/ 这个网页，读取后再用一句中文告诉我页面主标题或用途；如果抓取失败，就直接告诉我抓取失败，不要输出系统错误或 JSON。" "example-domain" "tool_research_then_reply"
+run_case "联网固定URL研究" "no-meta" "你必须先实际访问 https://example.com/ 这个网页，读取后再用一句中文告诉我页面主标题或用途；如果抓取失败，就直接告诉我抓取失败，不要输出系统错误或 JSON。" "example-domain" "plugin"
 if [[ "${QQBOT_RUN_SEARCH_DIAGNOSTIC:-0}" == "1" ]]; then
   run_case_optional "联网搜索诊断" "no-meta" "液态玻璃是什么？" "macos26-ui" "tool_research_then_reply"
 fi
-run_case_retry "表情包" "sticker" \
+run_case_retry "表情包" "sticker" "plugin" \
   "你这态度还挺敷衍的，发个冷淡提意见的表情包给我看看。" \
   "别解释，直接来一个冷淡提意见的表情包。"
-run_case_retry "语音" "voice" \
-  "请用语音跟我说一句晚安，只说四个字。" \
-  "只发一条语音，不要文字，内容是四个字的晚安。"
+if [[ "${QQBOT_RUN_VOICE_SMOKE:-0}" == "1" || "${QQ_VOICE_OUTPUT_ENABLED:-}" == "true" ]]; then
+  run_case_retry "语音" "voice" "plugin" \
+    "请用语音跟我说一句晚安，只说四个字。" \
+    "只发一条语音，不要文字，内容是四个字的晚安。"
+else
+  echo "=== CASE: 语音 ==="
+  echo "SKIP: QQ_VOICE_OUTPUT_ENABLED is not true (set QQBOT_RUN_VOICE_SMOKE=1 to force)."
+  echo
+fi
 
 echo "All chat smoke cases passed."

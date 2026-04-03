@@ -179,6 +179,7 @@ describe('isSupportedMainChatModelForTab', () => {
     expect(isSupportedMainChatModelForTab('copilot', 'gpt-4o')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'openai/gpt-4o')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'github-copilot/claude-haiku-4.5')).toBe(true);
+    expect(isSupportedMainChatModelForTab('copilot', 'openai/gemini-3.1-pro-preview')).toBe(false);
     expect(isSupportedMainChatModelForTab('copilot', 'bad model')).toBe(false);
   });
 });
