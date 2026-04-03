@@ -4,8 +4,11 @@ set -euo pipefail
 NETWORK_NAME="${QQBOT_PODMAN_NETWORK_NAME:-qqbot-stack_app_network}"
 PMHQ_CONTAINER="${QQBOT_PMHQ_CONTAINER_NAME:-pmhq}"
 LLBOT_CONTAINER="${QQBOT_LLBOT_CONTAINER_NAME:-llonebot}"
-LLBOT_WS_PORT="${QQBOT_LLBOT_WS_PORT:-${LLONEBOT_WS_PORT:-3001}}"
 LLBOT_WEBUI_PORT="${QQBOT_LLBOT_WEBUI_PORT:-${LLONEBOT_WEBUI_PORT:-3080}}"
+
+# LLBot 7.11.0 does not start the OneBot WS listener until QQ login succeeds,
+# so stack bootstrap should verify the container runtime path instead of host
+# loopback reachability on 3001.
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -98,10 +101,10 @@ diag_probe() {
   fi
 }
 
-host_http_probe() {
+llbot_http_probe() {
   local url="$1"
 
-  node -e "
+  podman exec "${LLBOT_CONTAINER}" node -e "
     const http = require('node:http');
     const req = http.get(process.argv[1], (res) => {
       if (res.statusCode && res.statusCode >= 200 && res.statusCode < 500) {
@@ -133,14 +136,13 @@ print_diagnostics() {
   podman exec "${LLBOT_CONTAINER}" cat /etc/hosts 2>/dev/null || true
 
   echo "== port probes =="
-  diag_probe "127.0.0.1" "${LLBOT_WS_PORT}" "host 127.0.0.1:${LLBOT_WS_PORT}"
   diag_probe "127.0.0.1" "${LLBOT_WEBUI_PORT}" "host 127.0.0.1:${LLBOT_WEBUI_PORT}"
 
-  echo "== host llonebot webui probe =="
-  if host_http_probe "http://127.0.0.1:${LLBOT_WEBUI_PORT}/" >/dev/null 2>&1; then
-    echo "host llonebot webui: OK"
+  echo "== llonebot webui probe =="
+  if llbot_http_probe "http://127.0.0.1:${LLBOT_WEBUI_PORT}/" >/dev/null 2>&1; then
+    echo "llonebot webui: OK"
   else
-    echo "host llonebot webui: FAILED"
+    echo "llonebot webui: FAILED"
   fi
 
   echo "== llonebot websocket status =="
@@ -161,11 +163,8 @@ wait_until "${LLBOT_CONTAINER} is running" container_is_running "${LLBOT_CONTAIN
 wait_until "${PMHQ_CONTAINER} joined ${NETWORK_NAME}" container_has_network "${PMHQ_CONTAINER}"
 wait_until "${LLBOT_CONTAINER} joined ${NETWORK_NAME}" container_has_network "${LLBOT_CONTAINER}"
 
-wait_until "host reaches 127.0.0.1:${LLBOT_WS_PORT}" \
-  node_probe "127.0.0.1" "${LLBOT_WS_PORT}" "host 127.0.0.1:${LLBOT_WS_PORT}"
-
-wait_until "host reaches 127.0.0.1:${LLBOT_WEBUI_PORT}" \
-  host_http_probe "http://127.0.0.1:${LLBOT_WEBUI_PORT}/"
+wait_until "${LLBOT_CONTAINER} serves WebUI on ${LLBOT_WEBUI_PORT}" \
+  llbot_http_probe "http://127.0.0.1:${LLBOT_WEBUI_PORT}/"
 
 wait_until "${LLBOT_CONTAINER} completes PMHQ WebSocket handshake" \
   llbot_logs_contain "PMHQ WebSocket 连接成功"

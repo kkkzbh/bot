@@ -395,10 +395,11 @@ pnpm build
 - OneBot WS cannot connect:
   - Confirm Koishi process is running.
   - Confirm LLBot `WebSocket正向` is enabled at `3001`.
+  - LLBot `7.11.0` only starts `3001` after QQ login succeeds; if `pmhq` logs `quick login failed` / `登录系统连接异常`, treat a missing `3001` listener as a login-state problem instead of a container-network bootstrap problem.
   - If QQ has not finished login yet, do not treat a missing `3001` listener as a stack bootstrap failure; verify `llonebot` WebUI and `PMHQ WebSocket 连接成功` first.
   - Confirm `ONEBOT_WS_ENDPOINT` points to LLBot OneBot WS endpoint.
   - Confirm `pmhq` and `llonebot` are both attached to `qqbot-stack_app_network`; if `podman inspect --format '{{json .NetworkSettings.Networks}}' llonebot` does not include that network, treat the deployment as failed.
-  - Confirm the host can reach LLBot on loopback: `node -e "require('node:net').createConnection({ host: '127.0.0.1', port: 3001 }).on('connect', () => { console.log('ok'); process.exit(0) }).on('error', (error) => { console.error(error.message); process.exit(1) })"`.
+  - Confirm `llonebot` itself serves WebUI inside the container: `podman exec llonebot node -e "require('node:http').get('http://127.0.0.1:3080/', (res) => { console.log(res.statusCode); process.exit(0) }).on('error', (error) => { console.error(error.message); process.exit(1) })"`.
 - No QR/login prompt:
   - Check `podman compose logs -f pmhq` instead of only checking `llbot` logs.
   - Confirm `pmhq` container is `Up` and healthy.
@@ -511,7 +512,8 @@ Behavior:
 - `CI` runs on every `push` / `pull_request` (`pnpm typecheck`, `pnpm test`, `pnpm build`).
 - `Deploy` runs on `push` to `main` (or manual `workflow_dispatch`).
 - `Deploy` SSHes to your server, `rsync`s project files, then runs `pnpm install`, `pnpm build`, and restarts `qqbot.target`.
-- The generated `qqbot-stack.service` now runs `scripts/podman-stack-up.sh pmhq llbot` and `scripts/verify-pmhq-network.sh`, and fails fast when host loopback cannot reach LLBot or LLBot never finishes the `PMHQ WebSocket` handshake.
+- The generated `qqbot-stack.service` now runs `scripts/podman-stack-up.sh pmhq llbot` and `scripts/verify-pmhq-network.sh`, and fails fast when LLBot never serves WebUI inside the container or never finishes the `PMHQ WebSocket` handshake.
+- The generated `qqbot-stack.service` uses `KillMode=none` so a failed verifier does not leave Podman containers with a killed `conmon` and broken host port forwarding.
 - Laptop-local `qqbot-voice-tts.service` is not managed by GitHub Actions and must be updated separately on your own machine.
 
 ### 18.1 GitHub Actions secrets (required)

@@ -165,6 +165,7 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('retry_cmd() {');
     expect(content).toContain('ConnectTimeout=30');
     expect(content).toContain('ConnectionAttempts=5');
+    expect(content).toContain('KillMode=none');
     expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
     expect(content).toContain('EnvironmentFile=-${SHARED_DIR}/.env.runtime');
     expect(content).toContain('DEPLOY_SHARED_DIR');
@@ -211,22 +212,19 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('sed -i \'s/"cniVersion": "1.0.0"/"cniVersion": "0.4.0"/\' "${config_path}"');
   });
 
-  it('ships a deployment verifier that rejects broken llonebot host reachability and websocket wiring', () => {
+  it('ships a deployment verifier that rejects broken llonebot runtime wiring', () => {
     const content = readFileSync(resolve(process.cwd(), 'scripts/verify-pmhq-network.sh'), 'utf8');
 
     expect(content).toContain('NETWORK_NAME="${QQBOT_PODMAN_NETWORK_NAME:-qqbot-stack_app_network}"');
-    expect(content).toContain('LLBOT_WS_PORT="${QQBOT_LLBOT_WS_PORT:-${LLONEBOT_WS_PORT:-3001}}"');
     expect(content).toContain('wait_until "${PMHQ_CONTAINER} joined ${NETWORK_NAME}"');
     expect(content).toContain('wait_until "${LLBOT_CONTAINER} joined ${NETWORK_NAME}"');
-    expect(content).toContain('wait_until "host reaches 127.0.0.1:${LLBOT_WS_PORT}"');
-    expect(content).toContain('wait_until "host reaches 127.0.0.1:${LLBOT_WEBUI_PORT}"');
+    expect(content).toContain('wait_until "${LLBOT_CONTAINER} serves WebUI on ${LLBOT_WEBUI_PORT}"');
     expect(content).toContain('wait_until "${LLBOT_CONTAINER} completes PMHQ WebSocket handshake"');
     expect(content).toContain('== podman inspect network info ==');
     expect(content).toContain('== llonebot /etc/hosts ==');
-    expect(content).toContain('host 127.0.0.1:${LLBOT_WS_PORT}');
     expect(content).toContain('host 127.0.0.1:${LLBOT_WEBUI_PORT}');
-    expect(content).toContain('== host llonebot webui probe ==');
-    expect(content).toContain('host_http_probe');
+    expect(content).toContain('== llonebot webui probe ==');
+    expect(content).toContain('llbot_http_probe');
     expect(content).toContain('== llonebot websocket status ==');
   });
 
