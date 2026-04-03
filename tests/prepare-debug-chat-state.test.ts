@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -64,6 +64,7 @@ create table chathub_user (
 }
 
 function writeEnvFile(path: string, content: string): void {
+  mkdirSync(resolve(path, '..'), { recursive: true });
   writeFileSync(path, `${content.trim()}\n`, 'utf8');
 }
 
@@ -205,5 +206,60 @@ CHATLUNA_COPILOT_DEFAULT_MODEL=gpt-5.4-mini
         "select roomName || '|' || preset || '|' || model || '|' || chatMode from chathub_room where roomMasterId = '91000999';",
       ),
     ).toBe('codex-debug-91000999|sakiko|gpt-5.4-mini|plugin');
+  });
+
+  it('prefers layered runtime env overrides when resolving the probe room model', () => {
+    const dir = createTempDir();
+    const dbPath = join(dir, 'koishi.db');
+    const baseEnvPath = join(dir, '.env.local');
+    const overrideEnvPath = join(dir, '.runtime/.env.runtime');
+    createBaseSchema(dbPath);
+
+    sqlite(
+      dbPath,
+      `
+insert into chathub_room (roomId, roomName, conversationId, roomMasterId, visibility, preset, model, chatMode, password, autoUpdate, updatedTime)
+values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'gpt-5.4-mini', 'plugin', 'pw', 0, 1);
+insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
+values ('template-conv', null, null, 1);
+      `,
+    );
+
+    writeEnvFile(
+      baseEnvPath,
+      `
+CHATLUNA_ACTIVE_TAB=copilot
+CHATLUNA_DEFAULT_PRESET=sakiko
+CHATLUNA_COPILOT_DEFAULT_MODEL=gpt-5.4-mini
+CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
+      `,
+    );
+    writeEnvFile(
+      overrideEnvPath,
+      `
+CHATLUNA_ACTIVE_TAB=openai
+CHATLUNA_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
+      `,
+    );
+
+    const output = execFileSync('bash', [resolve(process.cwd(), 'scripts/prepare-debug-chat-state.sh'), 'plugin'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        QQBOT_KOISHI_DB_PATH: dbPath,
+        QQBOT_ENV_BASE_FILE: baseEnvPath,
+        QQBOT_ENV_OVERRIDE_FILE: overrideEnvPath,
+        FAKE_USER_ID: '91000999',
+      },
+    });
+
+    expect(output).toContain('model=openai/gpt-5.4-medium-thinking');
+    expect(
+      sqlite(
+        dbPath,
+        "select roomName || '|' || preset || '|' || model || '|' || chatMode from chathub_room where roomMasterId = '91000999';",
+      ),
+    ).toBe('codex-debug-91000999|sakiko|openai/gpt-5.4-medium-thinking|plugin');
   });
 });

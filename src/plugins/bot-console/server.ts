@@ -134,6 +134,7 @@ const PRESET_DIR_RELATIVE = 'data/chathub/presets';
 const PRESET_ORDER_FILENAME = '.bot-console-preset-order.json';
 const PRESET_ROLE_SET = new Set(['system', 'user', 'assistant', 'tool']);
 const RUNTIME_ENV_FILE_BASENAME = '.env.runtime';
+const LOCAL_RUNTIME_ENV_RELATIVE = join('.runtime', RUNTIME_ENV_FILE_BASENAME);
 
 export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
   { key: 'QQ_VOICE_INPUT_ENABLED', label: '语音转文字', type: 'toggle', section: 'features' },
@@ -379,6 +380,15 @@ export function resolveBotEnvFiles(rootDir: string, env: NodeJS.ProcessEnv = pro
   const explicitOverride = env.QQBOT_ENV_OVERRIDE_FILE?.trim();
   if (!explicitBase && !explicitOverride) {
     const envFilePath = resolveBotEnvFilePath(rootDir, env);
+    if (envFilePath.endsWith(`/${LOCAL_ENV_FILE_BASENAME}`) || envFilePath.endsWith(`\\${LOCAL_ENV_FILE_BASENAME}`)) {
+      const overrideFilePath = join(rootDir, LOCAL_RUNTIME_ENV_RELATIVE);
+      return {
+        mode: 'layered',
+        baseFilePath: envFilePath,
+        overrideFilePath,
+        editTarget: overrideFilePath,
+      };
+    }
     return {
       mode: 'single',
       baseFilePath: envFilePath,

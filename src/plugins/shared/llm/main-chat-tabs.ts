@@ -84,7 +84,7 @@ const BASE_STRUCTURED_REPLY_MESSAGE_ITEMS = {
     {
       type: 'object',
       title: 'TextMessage',
-      description: 'A normal visible text reply sent to the user.',
+      description: 'A normal visible text reply sent to the user. Do not use this modality when the message needs a real @mention.',
       additionalProperties: false,
       required: ['modality', 'content'],
       properties: {
@@ -92,12 +92,69 @@ const BASE_STRUCTURED_REPLY_MESSAGE_ITEMS = {
           title: 'Modality',
           type: 'string',
           enum: ['text'],
-          description: 'Send the content as a normal text message.',
+          description: 'Send the content as plain visible text only. If you need to @ someone, do not use text; use rich_text with mention segments.',
         },
         content: {
           title: 'Content',
           type: 'string',
-          description: 'The exact text content to send to the user.',
+          description: 'The exact plain text content to send to the user. Never represent a required @mention as plain text such as @123456 here.',
+        },
+      },
+    },
+    {
+      type: 'object',
+      title: 'RichTextMessage',
+      description: 'A mixed inline message composed of text and real @mentions. Whenever the message needs to @ someone, you must use this modality.',
+      additionalProperties: false,
+      required: ['modality', 'segments'],
+      properties: {
+        modality: {
+          title: 'Modality',
+          type: 'string',
+          enum: ['rich_text'],
+          description: 'Send one rich-text message with inline text and real @mentions. Use this whenever the message needs to @ someone.',
+        },
+        segments: {
+          title: 'Segments',
+          type: 'array',
+          description: 'Ordered inline segments for one message. Real @mentions must be encoded as mention segments, not as plain text.',
+          items: {
+            anyOf: [
+              {
+                type: 'object',
+                title: 'TextSegment',
+                additionalProperties: false,
+                required: ['kind', 'text'],
+                properties: {
+                  kind: {
+                    type: 'string',
+                    enum: ['text'],
+                  },
+                  text: {
+                    type: 'string',
+                    description: 'Visible plain text only. Do not encode @mentions here, and do not output transport tags such as <at .../>.',
+                  },
+                },
+              },
+              {
+                type: 'object',
+                title: 'MentionSegment',
+                additionalProperties: false,
+                required: ['kind', 'userId'],
+                properties: {
+                  kind: {
+                    type: 'string',
+                    enum: ['mention'],
+                  },
+                  userId: {
+                    type: 'string',
+                    description: 'Literal QQ user id to mention. When you need to @ someone, you must express it with this field instead of writing @123456 in text.',
+                    pattern: '^\\s*\\d+\\s*$',
+                  },
+                },
+              },
+            ],
+          },
         },
       },
     },

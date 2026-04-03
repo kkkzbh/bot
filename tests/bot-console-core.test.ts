@@ -111,6 +111,18 @@ describe('bot-console env helpers', () => {
     });
   });
 
+  it('defaults local env files to layered mode with a runtime override file', () => {
+    const dir = createTempDir();
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=local-model\n', 'utf8');
+
+    expect(resolveBotEnvFiles(dir)).toEqual({
+      mode: 'layered',
+      baseFilePath: join(dir, '.env.local'),
+      overrideFilePath: join(dir, '.runtime/.env.runtime'),
+      editTarget: join(dir, '.runtime/.env.runtime'),
+    });
+  });
+
   it('merges managed env values with runtime override precedence', () => {
     const merged = mergeManagedEnvRecords(
       readManagedEnvPatchFromContent('CHATLUNA_DEFAULT_MODEL=base-model\nCHATLUNA_DEFAULT_PRESET=sakiko\n'),
@@ -402,6 +414,22 @@ describe('bot-console manager', () => {
       envBaseFilePath: baseEnvFilePath,
       envOverrideFilePath: overrideEnvFilePath,
     });
+
+    await expect(manager.saveEnv({ CHATLUNA_DEFAULT_MODEL: 'runtime-model' })).resolves.toMatchObject({
+      CHATLUNA_DEFAULT_MODEL: 'runtime-model',
+      CHATLUNA_DEFAULT_PRESET: 'sakiko',
+    });
+    expect(readFileSync(baseEnvFilePath, 'utf8')).toContain('CHATLUNA_DEFAULT_MODEL=base-model');
+    expect(readFileSync(overrideEnvFilePath, 'utf8')).toContain('CHATLUNA_DEFAULT_MODEL=runtime-model');
+  });
+
+  it('writes local default env updates into .runtime/.env.runtime instead of .env.local', async () => {
+    const dir = createTempDir();
+    const baseEnvFilePath = join(dir, '.env.local');
+    const overrideEnvFilePath = join(dir, '.runtime/.env.runtime');
+    writeFileSync(baseEnvFilePath, 'CHATLUNA_DEFAULT_MODEL=base-model\nCHATLUNA_DEFAULT_PRESET=sakiko\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir });
 
     await expect(manager.saveEnv({ CHATLUNA_DEFAULT_MODEL: 'runtime-model' })).resolves.toMatchObject({
       CHATLUNA_DEFAULT_MODEL: 'runtime-model',

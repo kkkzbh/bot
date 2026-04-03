@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_RUNTIME_ENV_FILE="${ROOT_DIR}/.runtime/.env.runtime"
 
 resolve_env_file() {
   if [[ -n "${QQBOT_ENV_FILE:-}" ]]; then
@@ -59,8 +60,17 @@ if [[ -n "$BASE_ENV_FILE" || -n "$OVERRIDE_ENV_FILE" ]]; then
   fi
 else
   ENV_FILE="$(resolve_env_file)"
-  load_env_file "$ENV_FILE"
-  echo "[info] Loaded bot env: $ENV_FILE"
+  if [[ "$ENV_FILE" == "${ROOT_DIR}/.env.local" ]]; then
+    load_env_file "$ENV_FILE"
+    [[ -f "$LOCAL_RUNTIME_ENV_FILE" ]] && load_env_file "$LOCAL_RUNTIME_ENV_FILE"
+    echo "[info] Loaded bot env base: $ENV_FILE"
+    if [[ -f "$LOCAL_RUNTIME_ENV_FILE" ]]; then
+      echo "[info] Loaded bot env override: $LOCAL_RUNTIME_ENV_FILE"
+    fi
+  else
+    load_env_file "$ENV_FILE"
+    echo "[info] Loaded bot env: $ENV_FILE"
+  fi
 fi
 
 cd "$ROOT_DIR"

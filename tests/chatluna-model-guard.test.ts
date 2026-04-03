@@ -168,6 +168,31 @@ describe('buildStructuredReplyRequestSpec', () => {
       },
     });
   });
+
+  it('exposes rich_text mention output in the main chat schema and forbids plain-text @mentions semantically', () => {
+    const schema = buildStructuredReplyRequestSpec({
+      model: 'openai/gpt-5.4-medium-thinking',
+    }).finalResponseSchema as {
+      properties?: {
+        messages?: {
+          anyOf?: Array<{
+            items?: {
+              anyOf?: Array<{ title?: string; description?: string; properties?: Record<string, { description?: string }> }>;
+            };
+          }>;
+        };
+      };
+    };
+
+    const messageSchemas = schema.properties?.messages?.anyOf?.find((item) => item.items?.anyOf)?.items?.anyOf ?? [];
+    const textMessage = messageSchemas.find((item) => item.title === 'TextMessage');
+    const richTextMessage = messageSchemas.find((item) => item.title === 'RichTextMessage');
+
+    expect(textMessage?.description).toContain('Do not use this modality when the message needs a real @mention');
+    expect(textMessage?.properties?.content?.description).toContain('Never represent a required @mention as plain text');
+    expect(richTextMessage?.description).toContain('Whenever the message needs to @ someone, you must use this modality');
+    expect(richTextMessage?.properties?.modality?.description).toContain('Use this whenever the message needs to @ someone');
+  });
 });
 
 describe('isSupportedMainChatModelForTab', () => {

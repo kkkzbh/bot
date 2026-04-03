@@ -4,9 +4,12 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DB_PATH="${QQBOT_KOISHI_DB_PATH:-$ROOT_DIR/data/koishi.db}"
 BOT_ENV_FILE="${QQBOT_ENV_FILE:-$ROOT_DIR/.env.local}"
+BOT_ENV_BASE_FILE="${QQBOT_ENV_BASE_FILE:-}"
+BOT_ENV_OVERRIDE_FILE="${QQBOT_ENV_OVERRIDE_FILE:-}"
 FAKE_USER_ID="${FAKE_USER_ID:-}"
 CHAT_MODE="${1:-${CHAT_MODE:-}}"
 ROOM_PREFIX="${ROOM_PREFIX:-codex-debug}"
+LOCAL_RUNTIME_ENV_FILE="${ROOT_DIR}/.runtime/.env.runtime"
 
 usage() {
   cat <<'EOF'
@@ -49,8 +52,34 @@ if [[ "$BOT_ENV_FILE" != /* ]]; then
   BOT_ENV_FILE="$ROOT_DIR/$BOT_ENV_FILE"
 fi
 
-if [[ ! -f "$BOT_ENV_FILE" ]]; then
-  echo "[error] Missing bot env file: $BOT_ENV_FILE" >&2
+resolve_optional_env_file() {
+  local explicit="$1"
+  if [[ -z "$explicit" ]]; then
+    return 1
+  fi
+  if [[ "$explicit" != /* ]]; then
+    explicit="${ROOT_DIR}/${explicit}"
+  fi
+  printf '%s\n' "$explicit"
+}
+
+BASE_ENV_FILE="$(resolve_optional_env_file "$BOT_ENV_BASE_FILE" || true)"
+OVERRIDE_ENV_FILE="$(resolve_optional_env_file "$BOT_ENV_OVERRIDE_FILE" || true)"
+
+if [[ -n "$BASE_ENV_FILE" || -n "$OVERRIDE_ENV_FILE" ]]; then
+  if [[ -z "$BASE_ENV_FILE" ]]; then
+    echo "[error] QQBOT_ENV_BASE_FILE is required when runtime env layering is enabled" >&2
+    exit 2
+  fi
+else
+  BASE_ENV_FILE="$BOT_ENV_FILE"
+  if [[ "$BASE_ENV_FILE" == "$ROOT_DIR/.env.local" ]]; then
+    OVERRIDE_ENV_FILE="$LOCAL_RUNTIME_ENV_FILE"
+  fi
+fi
+
+if [[ ! -f "$BASE_ENV_FILE" ]]; then
+  echo "[error] Missing bot env file: $BASE_ENV_FILE" >&2
   exit 1
 fi
 
@@ -64,7 +93,7 @@ if [[ -z "$CHAT_MODE" ]]; then
   exit 2
 fi
 
-export DB_PATH BOT_ENV_FILE FAKE_USER_ID CHAT_MODE ROOM_PREFIX
+export DB_PATH BASE_ENV_FILE OVERRIDE_ENV_FILE FAKE_USER_ID CHAT_MODE ROOM_PREFIX
 
 python3 <<'PY'
 import os
@@ -73,7 +102,8 @@ import time
 from pathlib import Path
 
 db_path = os.environ['DB_PATH']
-bot_env_file = os.environ['BOT_ENV_FILE']
+base_env_file = os.environ['BASE_ENV_FILE']
+override_env_file = os.environ.get('OVERRIDE_ENV_FILE', '').strip()
 fake_user_id = os.environ['FAKE_USER_ID']
 chat_mode = os.environ['CHAT_MODE'].strip()
 room_prefix = os.environ['ROOM_PREFIX']
@@ -113,10 +143,12 @@ def resolve_runtime_room_config(env_values: dict[str, str]) -> tuple[str, str]:
 
     preset = env_values.get('CHATLUNA_DEFAULT_PRESET', '').strip() or 'sakiko'
     if not model:
-        raise RuntimeError(f'no runtime main-chat model found in env file: {bot_env_file}')
+        raise RuntimeError(f'no runtime main-chat model found in env file: {base_env_file}')
     return preset, model
 
-env_values = parse_env_file(bot_env_file)
+env_values = parse_env_file(base_env_file)
+if override_env_file and Path(override_env_file).exists():
+    env_values.update(parse_env_file(override_env_file))
 preset_from_env, model_from_env = resolve_runtime_room_config(env_values)
 
 conn = sqlite3.connect(db_path)
