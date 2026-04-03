@@ -105,6 +105,10 @@ ensure_network_connected() {
   fi
 }
 
+pmhq_needs_dns_refresh=0
+if ! podman inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${PMHQ_CONTAINER}" 2>/dev/null | grep -Fx "${NETWORK_NAME}" >/dev/null; then
+  pmhq_needs_dns_refresh=1
+fi
 ensure_network_connected "${PMHQ_CONTAINER}" "pmhq"
 llbot_needs_dns_refresh=0
 if ! podman inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${LLBOT_CONTAINER}" 2>/dev/null | grep -Fx "${NETWORK_NAME}" >/dev/null; then
@@ -133,10 +137,14 @@ restart_with_retry() {
   return 1
 }
 
-# If podman-compose started llonebot on the default network first, we add it to the pinned stack
-# network after the fact. That leaves the container's resolv.conf pointing at the host DNS, which
-# cannot resolve service names like `pmhq`. Restart only in that case so Podman rewrites resolv.conf
-# for the stack network's dnsname plugin.
+# If podman-compose started either container on the default network first, we add it to the pinned
+# stack network after the fact. That leaves the container's resolv.conf pointing at stale DNS
+# servers instead of the stack network's dnsname plugin. Restart only in that case so Podman
+# rewrites resolv.conf for the pinned stack network.
+if [ "${pmhq_needs_dns_refresh}" -eq 1 ]; then
+  restart_with_retry "${PMHQ_CONTAINER}"
+fi
+
 if [ "${llbot_needs_dns_refresh}" -eq 1 ]; then
   restart_with_retry "${LLBOT_CONTAINER}"
 fi

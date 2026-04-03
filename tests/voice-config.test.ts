@@ -223,6 +223,10 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('podman network create "${NETWORK_NAME}" >/dev/null');
     expect(content).toContain('compose up -d "${SERVICES[@]}"');
     expect(content).toContain('sed -i \'s/"cniVersion": "1.0.0"/"cniVersion": "0.4.0"/\' "${config_path}"');
+    expect(content).toContain('pmhq_needs_dns_refresh=0');
+    expect(content).toContain('llbot_needs_dns_refresh=0');
+    expect(content).toContain('restart_with_retry "${PMHQ_CONTAINER}"');
+    expect(content).toContain('restart_with_retry "${LLBOT_CONTAINER}"');
   });
 
   it('ships a deployment verifier that rejects broken llonebot runtime wiring', () => {
@@ -231,9 +235,14 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('NETWORK_NAME="${QQBOT_PODMAN_NETWORK_NAME:-qqbot-stack_app_network}"');
     expect(content).toContain('wait_until "${PMHQ_CONTAINER} joined ${NETWORK_NAME}"');
     expect(content).toContain('wait_until "${LLBOT_CONTAINER} joined ${NETWORK_NAME}"');
+    expect(content).toContain('wait_until "${PMHQ_CONTAINER} uses ${NETWORK_NAME} dns gateway" pmhq_uses_stack_dns');
+    expect(content).toContain('wait_until "${PMHQ_CONTAINER} resolves qq.com" pmhq_resolves_host "qq.com"');
+    expect(content).toContain('wait_until "${PMHQ_CONTAINER} resolves txz.qq.com" pmhq_resolves_host "txz.qq.com"');
     expect(content).toContain('wait_until "${LLBOT_CONTAINER} serves WebUI on ${LLBOT_WEBUI_PORT}"');
     expect(content).toContain('wait_until "${LLBOT_CONTAINER} completes PMHQ WebSocket handshake"');
     expect(content).toContain('== podman inspect network info ==');
+    expect(content).toContain('== pmhq /etc/resolv.conf ==');
+    expect(content).toContain('== pmhq dns lookup ==');
     expect(content).toContain('== llonebot /etc/hosts ==');
     expect(content).toContain('host 127.0.0.1:${LLBOT_WEBUI_PORT}');
     expect(content).toContain('== llonebot webui probe ==');

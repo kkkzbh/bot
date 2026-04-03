@@ -58,6 +58,13 @@ container_has_network() {
   container_networks "${container_name}" | grep -Fx "${NETWORK_NAME}" >/dev/null || return 1
 }
 
+container_gateway() {
+  local container_name="$1"
+
+  podman inspect --format "{{with index .NetworkSettings.Networks \"${NETWORK_NAME}\"}}{{.Gateway}}{{end}}" \
+    "${container_name}" 2>/dev/null || return 1
+}
+
 container_is_running() {
   local container_name="$1"
 
@@ -87,6 +94,21 @@ llbot_logs_contain() {
   local pattern="$1"
 
   podman logs "${LLBOT_CONTAINER}" 2>&1 | grep -F "${pattern}" >/dev/null
+}
+
+pmhq_uses_stack_dns() {
+  local gateway
+  gateway="$(container_gateway "${PMHQ_CONTAINER}")"
+  [ -n "${gateway}" ] || return 1
+
+  podman exec "${PMHQ_CONTAINER}" sh -lc \
+    "grep -Eq '^nameserver[[:space:]]+${gateway}$' /etc/resolv.conf"
+}
+
+pmhq_resolves_host() {
+  local host="$1"
+
+  podman exec "${PMHQ_CONTAINER}" getent hosts "${host}" >/dev/null 2>&1
 }
 
 diag_probe() {
@@ -132,6 +154,12 @@ print_diagnostics() {
   echo "== pmhq logs =="
   podman logs "${PMHQ_CONTAINER}" 2>&1 || true
 
+  echo "== pmhq /etc/resolv.conf =="
+  podman exec "${PMHQ_CONTAINER}" cat /etc/resolv.conf 2>/dev/null || true
+
+  echo "== pmhq dns lookup =="
+  podman exec "${PMHQ_CONTAINER}" getent hosts qq.com txz.qq.com 2>/dev/null || true
+
   echo "== llonebot /etc/hosts =="
   podman exec "${LLBOT_CONTAINER}" cat /etc/hosts 2>/dev/null || true
 
@@ -162,6 +190,9 @@ wait_until "${PMHQ_CONTAINER} is running" container_is_running "${PMHQ_CONTAINER
 wait_until "${LLBOT_CONTAINER} is running" container_is_running "${LLBOT_CONTAINER}"
 wait_until "${PMHQ_CONTAINER} joined ${NETWORK_NAME}" container_has_network "${PMHQ_CONTAINER}"
 wait_until "${LLBOT_CONTAINER} joined ${NETWORK_NAME}" container_has_network "${LLBOT_CONTAINER}"
+wait_until "${PMHQ_CONTAINER} uses ${NETWORK_NAME} dns gateway" pmhq_uses_stack_dns
+wait_until "${PMHQ_CONTAINER} resolves qq.com" pmhq_resolves_host "qq.com"
+wait_until "${PMHQ_CONTAINER} resolves txz.qq.com" pmhq_resolves_host "txz.qq.com"
 
 wait_until "${LLBOT_CONTAINER} serves WebUI on ${LLBOT_WEBUI_PORT}" \
   llbot_http_probe "http://127.0.0.1:${LLBOT_WEBUI_PORT}/"
