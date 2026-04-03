@@ -95,6 +95,7 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('TASK_AUTOMATION_DELIVERY_MODEL=');
     expect(content).not.toContain('TASK_AUTOMATION_CHAT_REPLY_MODEL=');
     expect(content).toContain('PMHQ_BIND_HOST=127.0.0.1');
+    expect(content).toContain('Set AUTO_LOGIN_QQ only if this server should use QQ quick-login by default.');
     expect(content).toContain('llonebot must still resolve pmhq on');
     expect(content).not.toContain('host.containers.internal');
     expect(content).toContain('# Server deploy does not run voice-asr.');
@@ -215,11 +216,25 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('wait_until "${LLBOT_CONTAINER} joined ${NETWORK_NAME}"');
     expect(content).toContain('wait_until "${LLBOT_CONTAINER} resolves ${PMHQ_HOST}"');
     expect(content).toContain('wait_until "${LLBOT_CONTAINER} reaches ${PMHQ_HOST}:${PMHQ_PORT}"');
-    expect(content).toContain('wait_until "${LLBOT_CONTAINER} listens on ${LLBOT_WS_PORT}"');
-    expect(content).toContain('wait_until "host reaches 127.0.0.1:${LLBOT_WS_PORT}"');
+    expect(content).toContain('wait_until "host reaches 127.0.0.1:${LLBOT_WEBUI_PORT}"');
+    expect(content).toContain('wait_until "${LLBOT_CONTAINER} completes PMHQ WebSocket handshake"');
     expect(content).toContain('== podman inspect network info ==');
     expect(content).toContain('== llonebot /etc/hosts ==');
     expect(content).toContain('host 127.0.0.1:${LLBOT_WEBUI_PORT}');
+    expect(content).toContain('== llonebot websocket status ==');
+  });
+
+  it('ships a one-shot server login recovery helper instead of disabling auto login permanently', () => {
+    const content = readFileSync(resolve(process.cwd(), 'scripts/server-recover-qq-login.sh'), 'utf8');
+
+    expect(content).toContain('Usage: $0 prepare|restore');
+    expect(content).toContain('AUTO_LOGIN_QQ_ORIG=');
+    expect(content).toContain('systemctl --user stop qqbot.target');
+    expect(content).toContain('./scripts/podman-stack-up.sh pmhq llbot');
+    expect(content).toContain('./scripts/verify-pmhq-network.sh');
+    expect(content).toContain('AUTO_LOGIN_QQ is temporarily cleared for this stack run only.');
+    expect(content).toContain('systemctl --user restart qqbot.target');
+    expect(content).toContain('AUTO_LOGIN_QQ="${AUTO_LOGIN_QQ_ORIG:-${AUTO_LOGIN_QQ:-}}"');
   });
 
   it('ships a runtime layer migration script that seeds env and presets into the shared dir', () => {

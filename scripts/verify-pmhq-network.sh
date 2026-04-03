@@ -6,7 +6,6 @@ PMHQ_CONTAINER="${QQBOT_PMHQ_CONTAINER_NAME:-pmhq}"
 LLBOT_CONTAINER="${QQBOT_LLBOT_CONTAINER_NAME:-llonebot}"
 PMHQ_HOST="${QQBOT_PMHQ_HOST:-pmhq}"
 PMHQ_PORT="${QQBOT_PMHQ_PORT:-${PMHQ_PORT:-13000}}"
-LLBOT_WS_PORT="${QQBOT_LLBOT_WS_PORT:-${LLONEBOT_WS_PORT:-3001}}"
 LLBOT_WEBUI_PORT="${QQBOT_LLBOT_WEBUI_PORT:-${LLONEBOT_WEBUI_PORT:-3080}}"
 
 require_cmd() {
@@ -88,6 +87,12 @@ llbot_node() {
   podman exec "${LLBOT_CONTAINER}" node -e "${source}" "$@"
 }
 
+llbot_logs_contain() {
+  local pattern="$1"
+
+  podman logs "${LLBOT_CONTAINER}" 2>&1 | grep -F "${pattern}" >/dev/null
+}
+
 diag_probe() {
   local host="$1"
   local port="$2"
@@ -117,8 +122,10 @@ print_diagnostics() {
   podman exec "${LLBOT_CONTAINER}" cat /etc/hosts 2>/dev/null || true
 
   echo "== port probes =="
-  diag_probe "127.0.0.1" "${LLBOT_WS_PORT}" "host 127.0.0.1:${LLBOT_WS_PORT}"
   diag_probe "127.0.0.1" "${LLBOT_WEBUI_PORT}" "host 127.0.0.1:${LLBOT_WEBUI_PORT}"
+
+  echo "== llonebot websocket status =="
+  podman logs "${LLBOT_CONTAINER}" 2>&1 | grep -F "PMHQ WebSocket" || true
 }
 
 on_exit() {
@@ -150,15 +157,8 @@ wait_until "${LLBOT_CONTAINER} reaches ${PMHQ_HOST}:${PMHQ_PORT}" \
     socket.on('error', () => process.exit(1));
   " "${PMHQ_HOST}" "${PMHQ_PORT}"
 
-wait_until "${LLBOT_CONTAINER} listens on ${LLBOT_WS_PORT}" \
-  llbot_node "
-    const net = require('node:net');
-    const socket = net.createConnection({ host: '127.0.0.1', port: Number(process.argv[1]) });
-    socket.setTimeout(5000);
-    socket.on('connect', () => socket.end());
-    socket.on('close', () => process.exit(0));
-    socket.on('timeout', () => process.exit(1));
-    socket.on('error', () => process.exit(1));
-  " "${LLBOT_WS_PORT}"
+wait_until "host reaches 127.0.0.1:${LLBOT_WEBUI_PORT}" \
+  node_probe "127.0.0.1" "${LLBOT_WEBUI_PORT}" "host 127.0.0.1:${LLBOT_WEBUI_PORT}"
 
-wait_until "host reaches 127.0.0.1:${LLBOT_WS_PORT}" node_probe "127.0.0.1" "${LLBOT_WS_PORT}" "host 127.0.0.1:${LLBOT_WS_PORT}"
+wait_until "${LLBOT_CONTAINER} completes PMHQ WebSocket handshake" \
+  llbot_logs_contain "PMHQ WebSocket 连接成功"
