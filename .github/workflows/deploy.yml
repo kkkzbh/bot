@@ -495,7 +495,7 @@ jobs:
 
           if [ "${SYSTEMD_TARGET}" = "qqbot.target" ]; then
             for unit in qqbot-stack.service qqbot-koishi.service; do
-              for _ in $(seq 1 60); do
+              for _ in $(seq 1 150); do
                 if systemctl --user is-active --quiet "${unit}"; then
                   break
                 fi
@@ -510,6 +510,18 @@ jobs:
                 exit 1
               fi
             done
+
+            stack_status="$(systemctl --user show qqbot-stack.service -p Result -p ExecMainStatus --no-pager || true)"
+            if ! printf "%s\n" "${stack_status}" | grep -Fqx 'Result=success'; then
+              systemctl --user status qqbot-stack.service --no-pager >&2 || true
+              echo "${stack_status}" >&2
+              exit 1
+            fi
+            if ! printf "%s\n" "${stack_status}" | grep -Fqx 'ExecMainStatus=0'; then
+              systemctl --user status qqbot-stack.service --no-pager >&2 || true
+              echo "${stack_status}" >&2
+              exit 1
+            fi
 
             bash "${APP_DIR}/scripts/verify-pmhq-network.sh"
           fi

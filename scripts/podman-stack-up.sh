@@ -82,5 +82,3 @@ ensure_network_connected "${LLBOT_CONTAINER}"
 # pinned stack network.
 podman network disconnect "${PRIMARY_NETWORK_NAME}" "${PMHQ_CONTAINER}" >/dev/null 2>&1 || true
 podman network disconnect "${PRIMARY_NETWORK_NAME}" "${LLBOT_CONTAINER}" >/dev/null 2>&1 || true
-
-podman restart "${LLBOT_CONTAINER}" >/dev/null
