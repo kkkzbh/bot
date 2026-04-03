@@ -29,6 +29,9 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('"${PMHQ_BIND_HOST:-127.0.0.1}:${PMHQ_PORT:-13000}:13000"');
     expect(content).toContain('pmhq_host: ${PMHQ_HOST:-pmhq}');
     expect(content).toContain('pmhq_port: ${PMHQ_PORT:-13000}');
+    expect(content).toContain('aliases:');
+    expect(content).toContain('- pmhq');
+    expect(content).toContain('name: qqbot-stack_app_network');
     expect(content).toContain('LLONEBOT_WS_PORT: ${LLONEBOT_WS_PORT:-3001}');
     expect(content).toContain('ONEBOT_TOKEN: ${ONEBOT_TOKEN:-}');
     expect(content).toContain('voice-asr:');
@@ -91,7 +94,9 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('TASK_AUTOMATION_INTENT_ENABLED=');
     expect(content).not.toContain('TASK_AUTOMATION_DELIVERY_MODEL=');
     expect(content).not.toContain('TASK_AUTOMATION_CHAT_REPLY_MODEL=');
-    expect(content).toContain('PMHQ_BIND_HOST=10.88.0.1');
+    expect(content).toContain('PMHQ_BIND_HOST=127.0.0.1');
+    expect(content).toContain('llonebot must still resolve pmhq on');
+    expect(content).not.toContain('host.containers.internal');
     expect(content).toContain('# Server deploy does not run voice-asr.');
   });
 
@@ -152,8 +157,6 @@ describe('qq voice config wiring', () => {
 
     expect(content).toContain('PODMAN_COMPOSE_BIN="$(command -v podman-compose)"');
     expect(content).toContain('PODMAN_NETWORK_NAME="qqbot-stack_app_network"');
-    expect(content).toContain("podman network exists ${PODMAN_NETWORK_NAME} >/dev/null 2>&1 || podman network create ${PODMAN_NETWORK_NAME} >/dev/null");
-    expect(content).toContain(`sed -i 's/\\"cniVersion\\": \\"1.0.0\\"/\\"cniVersion\\": \\"0.4.0\\"/' '\${PODMAN_CNI_CONFIG}'`);
     expect(content).toContain('podman rm -f qqbot-voice-asr >/dev/null 2>&1 || true');
     expect(content).toContain('retry_cmd() {');
     expect(content).toContain('ConnectTimeout=30');
@@ -164,10 +167,13 @@ describe('qq voice config wiring', () => {
     expect(content).toContain("QQBOT_SHARED_DIR='${DEPLOY_SHARED_DIR}' bash '${DEPLOY_APP_DIR}/scripts/prepare-server-runtime-layer.sh'");
     expect(content).toContain('Environment=QQBOT_ENV_BASE_FILE=${APP_DIR}/.env.server');
     expect(content).toContain('Environment=QQBOT_ENV_OVERRIDE_FILE=${SHARED_DIR}/.env.runtime');
+    expect(content).toContain('Environment=QQBOT_PODMAN_COMPOSE_BIN=${PODMAN_COMPOSE_BIN}');
+    expect(content).toContain('Environment=QQBOT_PODMAN_NETWORK_NAME=${PODMAN_NETWORK_NAME}');
     expect(content).toContain('Environment=CHATLUNA_PRESET_DIRS=${SHARED_DIR}/presets:${APP_DIR}/data/chathub/presets');
     expect(content).toContain('Environment=CHATLUNA_RUNTIME_PRESET_DIR=${SHARED_DIR}/presets');
-    expect(content).toContain('ExecStart=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml up -d --force-recreate pmhq llbot');
+    expect(content).toContain("./scripts/podman-stack-up.sh pmhq llbot && ./scripts/verify-pmhq-network.sh");
     expect(content).toContain('ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop pmhq llbot');
+    expect(content).toContain('bash "${APP_DIR}/scripts/verify-pmhq-network.sh"');
     expect(content).toContain("--exclude='.env.local'");
     expect(content).toContain("--exclude='.env.server'");
     expect(content).toContain("cat > '${DEPLOY_APP_DIR}/.env.server'");
@@ -188,6 +194,32 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('apt-get install -y chromium');
     expect(content).not.toContain('pnpm install --no-frozen-lockfile');
     expect(content).not.toContain('up -d --build --force-recreate');
+  });
+
+  it('ships a dedicated Podman stack reset script for pmhq and llbot', () => {
+    const content = readFileSync(resolve(process.cwd(), 'scripts/podman-stack-up.sh'), 'utf8');
+
+    expect(content).toContain('NETWORK_NAME="${QQBOT_PODMAN_NETWORK_NAME:-qqbot-stack_app_network}"');
+    expect(content).toContain('compose down --remove-orphans || true');
+    expect(content).toContain('podman network rm -f "${NETWORK_NAME}" >/dev/null');
+    expect(content).toContain('podman network create "${NETWORK_NAME}" >/dev/null');
+    expect(content).toContain('compose up -d "${SERVICES[@]}"');
+    expect(content).toContain('sed -i \'s/"cniVersion": "1.0.0"/"cniVersion": "0.4.0"/\' "${config_path}"');
+  });
+
+  it('ships a deployment verifier that rejects broken pmhq DNS and port wiring', () => {
+    const content = readFileSync(resolve(process.cwd(), 'scripts/verify-pmhq-network.sh'), 'utf8');
+
+    expect(content).toContain('NETWORK_NAME="${QQBOT_PODMAN_NETWORK_NAME:-qqbot-stack_app_network}"');
+    expect(content).toContain('wait_until "${PMHQ_CONTAINER} joined ${NETWORK_NAME}"');
+    expect(content).toContain('wait_until "${LLBOT_CONTAINER} joined ${NETWORK_NAME}"');
+    expect(content).toContain('wait_until "${LLBOT_CONTAINER} resolves ${PMHQ_HOST}"');
+    expect(content).toContain('wait_until "${LLBOT_CONTAINER} reaches ${PMHQ_HOST}:${PMHQ_PORT}"');
+    expect(content).toContain('wait_until "${LLBOT_CONTAINER} listens on ${LLBOT_WS_PORT}"');
+    expect(content).toContain('wait_until "host reaches 127.0.0.1:${LLBOT_WS_PORT}"');
+    expect(content).toContain('== podman inspect network info ==');
+    expect(content).toContain('== llonebot /etc/hosts ==');
+    expect(content).toContain('host 127.0.0.1:${LLBOT_WEBUI_PORT}');
   });
 
   it('ships a runtime layer migration script that seeds env and presets into the shared dir', () => {

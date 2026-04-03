@@ -14,7 +14,9 @@ services:
     ports:
       - "${PMHQ_BIND_HOST:-127.0.0.1}:${PMHQ_PORT:-13000}:13000"
     networks:
-      - app_network
+      app_network:
+        aliases:
+          - pmhq
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:13000/health"]
@@ -90,4 +92,5 @@ volumes:
 
 networks:
   app_network:
+    name: qqbot-stack_app_network
     driver: bridge

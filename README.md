@@ -110,7 +110,7 @@ Embeddings are only used for long-memory recall/writeback and are expected to co
 
 ```bash
 podman compose pull pmhq llbot
-podman compose up -d --build
+podman compose up -d pmhq llbot
 ```
 
 Official compose mode uses three services:
@@ -119,6 +119,8 @@ Official compose mode uses three services:
 - `llbot`: OneBot + WebUI
 - `voice-asr`: `faster-whisper small/int8 + ffmpeg` HTTP service for QQ voice transcription
 - Compose defaults to fully-qualified images (`docker.io/linyuchen/...`) to avoid Fedora short-name prompt issues.
+- `pmhq` and `llbot` must land on the same named Podman network `qqbot-stack_app_network`.
+- `llbot` only supports container-to-container discovery through `pmhq:13000`; any runtime where `podman exec llonebot node -e "require('node:dns').promises.lookup('pmhq').then(console.log)"` fails should be treated as broken.
 
 Watch login logs (QR code / login progress):
 
@@ -374,8 +376,9 @@ pnpm build
 
 - This project is built for Podman (not Docker Desktop).
 - `compose.yaml` uses `:Z` on bind mount for SELinux Enforcing.
-- `llonebot` should call `pmhq` through the compose service name `pmhq`, not `127.0.0.1`.
-- `PMHQ_BIND_HOST` only controls how `pmhq` is exposed to the host; it does not need to be reused as the in-network target for `llonebot`.
+- `compose.yaml` pins the shared network name to `qqbot-stack_app_network`, so both local and server runtime must place `pmhq` and `llbot` on that exact network.
+- `llonebot` must call `pmhq` through the service name `pmhq:13000`, never `127.0.0.1`, bridge gateways, or `host.containers.internal`.
+- `PMHQ_BIND_HOST` only controls how `pmhq` is exposed to the host; it does not participate in container-to-container addressing.
 
 ## 14. Troubleshooting
 
@@ -390,6 +393,8 @@ pnpm build
   - Confirm Koishi process is running.
   - Confirm LLBot `WebSocket正向` is enabled at `3001`.
   - Confirm `ONEBOT_WS_ENDPOINT` points to LLBot OneBot WS endpoint.
+  - Confirm `pmhq` and `llonebot` are both attached to `qqbot-stack_app_network`; if `podman inspect --format '{{json .NetworkSettings.Networks}}' llonebot` does not include that network, treat the deployment as failed.
+  - Confirm `podman exec llonebot node -e "require('node:dns').promises.lookup('pmhq').then(console.log)"` succeeds before checking any host-side bridge address.
 - No QR/login prompt:
   - Check `podman compose logs -f pmhq` instead of only checking `llbot` logs.
   - Confirm `pmhq` container is `Up` and healthy.
@@ -501,7 +506,7 @@ Behavior:
 - `CI` runs on every `push` / `pull_request` (`pnpm typecheck`, `pnpm test`, `pnpm build`).
 - `Deploy` runs on `push` to `main` (or manual `workflow_dispatch`).
 - `Deploy` SSHes to your server, `rsync`s project files, then runs `pnpm install`, `pnpm build`, and restarts `qqbot.target`.
-- The generated `qqbot-stack.service` now runs `podman-compose up -d --force-recreate pmhq llbot`, so server deploy keeps only the text bot stack and never starts `voice-asr`.
+- The generated `qqbot-stack.service` now runs `scripts/podman-stack-up.sh pmhq llbot` and `scripts/verify-pmhq-network.sh`, so every restart rebuilds `qqbot-stack_app_network`, keeps only the text bot stack, and fails fast when `llonebot` cannot resolve or reach `pmhq:13000`.
 - Laptop-local `qqbot-voice-tts.service` is not managed by GitHub Actions and must be updated separately on your own machine.
 
 ### 18.1 GitHub Actions secrets (required)
