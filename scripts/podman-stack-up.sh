@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${QQBOT_COMPOSE_FILE:-${ROOT_DIR}/compose.yaml}"
 NETWORK_NAME="${QQBOT_PODMAN_NETWORK_NAME:-qqbot-stack_app_network}"
+PRIMARY_NETWORK_NAME="${QQBOT_PODMAN_PRIMARY_NETWORK_NAME:-podman}"
+PMHQ_CONTAINER="${QQBOT_PMHQ_CONTAINER_NAME:-pmhq}"
+LLBOT_CONTAINER="${QQBOT_LLBOT_CONTAINER_NAME:-llonebot}"
 
 if [ "$#" -gt 0 ]; then
   SERVICES=("$@")
@@ -55,3 +58,29 @@ podman network create "${NETWORK_NAME}" >/dev/null
 patch_cni_config
 
 compose up -d "${SERVICES[@]}"
+
+ensure_network_connected() {
+  local container_name="$1"
+  local alias="${2:-}"
+
+  if podman inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${container_name}" 2>/dev/null | grep -Fx "${NETWORK_NAME}" >/dev/null; then
+    return 0
+  fi
+
+  if [ -n "${alias}" ]; then
+    podman network connect --alias "${alias}" "${NETWORK_NAME}" "${container_name}" >/dev/null
+  else
+    podman network connect "${NETWORK_NAME}" "${container_name}" >/dev/null
+  fi
+}
+
+ensure_network_connected "${PMHQ_CONTAINER}" "pmhq"
+ensure_network_connected "${LLBOT_CONTAINER}"
+
+# podman-compose sometimes attaches containers to the default `podman` network even when
+# compose.yaml declares a named network. Disconnect to force service-name DNS through the
+# pinned stack network.
+podman network disconnect "${PRIMARY_NETWORK_NAME}" "${PMHQ_CONTAINER}" >/dev/null 2>&1 || true
+podman network disconnect "${PRIMARY_NETWORK_NAME}" "${LLBOT_CONTAINER}" >/dev/null 2>&1 || true
+
+podman restart "${LLBOT_CONTAINER}" >/dev/null
