@@ -75,6 +75,10 @@ ensure_network_connected() {
 }
 
 ensure_network_connected "${PMHQ_CONTAINER}" "pmhq"
+llbot_needs_dns_refresh=0
+if ! podman inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${LLBOT_CONTAINER}" 2>/dev/null | grep -Fx "${NETWORK_NAME}" >/dev/null; then
+  llbot_needs_dns_refresh=1
+fi
 ensure_network_connected "${LLBOT_CONTAINER}"
 
 # podman-compose sometimes attaches containers to the default `podman` network even when
@@ -82,3 +86,26 @@ ensure_network_connected "${LLBOT_CONTAINER}"
 # pinned stack network.
 podman network disconnect "${PRIMARY_NETWORK_NAME}" "${PMHQ_CONTAINER}" >/dev/null 2>&1 || true
 podman network disconnect "${PRIMARY_NETWORK_NAME}" "${LLBOT_CONTAINER}" >/dev/null 2>&1 || true
+
+restart_with_retry() {
+  local container_name="$1"
+  local attempt
+
+  for attempt in $(seq 1 10); do
+    if podman restart "${container_name}" >/dev/null; then
+      return 0
+    fi
+    sleep "${attempt}"
+  done
+
+  echo "Failed to restart ${container_name}" >&2
+  return 1
+}
+
+# If podman-compose started llonebot on the default network first, we add it to the pinned stack
+# network after the fact. That leaves the container's resolv.conf pointing at the host DNS, which
+# cannot resolve service names like `pmhq`. Restart only in that case so Podman rewrites resolv.conf
+# for the stack network's dnsname plugin.
+if [ "${llbot_needs_dns_refresh}" -eq 1 ]; then
+  restart_with_retry "${LLBOT_CONTAINER}"
+fi
