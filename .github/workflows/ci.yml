@@ -60,7 +60,6 @@ jobs:
           set -euo pipefail
           corepack enable
           cd chatluna-src
-          test -f yarn.lock || { echo "Missing chatluna-src/yarn.lock for ${CHATLUNA_REPO}@${CHATLUNA_REF}; refusing unlocked yarn install." >&2; exit 1; }
           yarn install --frozen-lockfile
 
       - name: Ensure linked ChatLuna runtime builds
