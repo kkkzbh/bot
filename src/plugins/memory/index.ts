@@ -15,6 +15,7 @@ import {
   MemoryV2Store,
   buildMemoryContextBlock,
   buildMemoryScope,
+  decodeStoredMessageText,
   extractPlainText,
   buildMemoryDocuments,
   planMemoryRecall,
@@ -24,6 +25,7 @@ import {
 import { consumePromptEnvelope, registerPromptFragment } from '../shared/prompt-context/index.js';
 import { MemoryV2StatusService } from './status.js';
 export { MemoryV2StatusService, createUnavailableMemoryV2StatusSnapshot } from './status.js';
+export { decodeStoredMessageText } from './store.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };

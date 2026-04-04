@@ -1,13 +1,31 @@
 export { Config, apply, inject, name, type Config as ReplyConfig } from './voice/generation.js';
 export {
+  applyReplyStructuredOutputRequest,
+  buildReplyTransportPlanFromResolvedActions,
+  buildTurnCapabilitySnapshot,
   createAudioDataUri,
   createVoiceRuntimeConfig,
+  deliverStandaloneReplyPlan,
   ensureCanSendRecord,
+  ensureStructuredReplyJsonSchemaModel,
   isVoiceOutputConfigured,
+  mergeReplyOverrideRequestParams,
+  resolveReplyCapabilitySnapshot,
   synthesizeVoice,
   type OneBotBotLike,
+  type ReplyCapabilitySnapshot,
 } from './voice/generation.js';
 export { formatStructuredLogBlock } from './pipeline/debug.js';
+export { buildReplyTurnInput } from './pipeline/context-builder.js';
+export { ReplyOrchestratorService } from './pipeline/orchestrator.js';
+export type { TurnContext } from './pipeline/types.js';
+export {
+  buildReplyCapabilityPromptFragments,
+  buildReplyRuntimeContractFragments,
+  buildReplyStructuredReplyContractFragments,
+  createPromptJsonFragment,
+  createPromptTextFragment,
+} from './prompt/compiler.js';
 export {
   buildNaturalTriggerReference,
   buildProactiveOpeningState,

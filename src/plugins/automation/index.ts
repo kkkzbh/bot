@@ -6,27 +6,23 @@ import type { ChatLunaTool, ChatLunaToolRunnable } from 'koishi-plugin-chatluna/
 import { z } from 'zod';
 import type { AutomationJob, AutomationJobRun, TaskKind, TaskScope } from '../../types/task-automation.js';
 import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
-import { decodeStoredMessageText } from '../memory/store.js';
-import {
-  buildReplyTurnInput,
-} from '../reply/pipeline/context-builder.js';
-import { ReplyOrchestratorService } from '../reply/pipeline/orchestrator.js';
-import type { TurnContext } from '../reply/pipeline/types.js';
-import {
-  buildReplyCapabilityPromptFragments,
-  buildReplyStructuredReplyContractFragments,
-  createPromptTextFragment,
-} from '../reply/prompt/compiler.js';
+import { decodeStoredMessageText } from '../memory/index.js';
 import {
   applyReplyStructuredOutputRequest,
+  buildReplyCapabilityPromptFragments,
+  buildReplyStructuredReplyContractFragments,
   buildReplyTransportPlanFromResolvedActions,
+  buildReplyTurnInput,
   buildTurnCapabilitySnapshot,
   createVoiceRuntimeConfig,
+  createPromptTextFragment,
   deliverStandaloneReplyPlan,
   ensureCanSendRecord,
   ensureStructuredReplyJsonSchemaModel,
+  ReplyOrchestratorService,
   resolveReplyCapabilitySnapshot,
-} from '../reply/voice/generation.js';
+  type TurnContext,
+} from '../reply/index.js';
 import {
   createBypassLineSplitOptions,
   createTextOnlyOutboundMessagePlan,
