@@ -84,6 +84,9 @@ const VOICE_WORD_SEGMENTER =
     : null;
 export const name = 'qq-voice';
 export const inject = { required: ['chatluna', 'database'], optional: ['featurePolicy'] } as const;
+const sharedReplyTransportSendStrand = createKeyedStrandRunner();
+const sharedReplyTransportCanSendRecordCache = new Map<string, boolean>();
+const sharedReplyTransportTtsCapabilityStates = new Map<string, TtsCapabilityState>();
 
 export interface Config {
   inputEnabled?: boolean;
@@ -141,7 +144,7 @@ interface QqVoiceState {
 
 type ReplyCapabilitySource = 'cached' | 'probed';
 
-interface ReplyCapabilitySnapshot {
+export interface ReplyCapabilitySnapshot {
   canMultiline: true;
   canVoice: boolean;
   source: ReplyCapabilitySource;
@@ -687,7 +690,7 @@ function removeStickerSegments(plan: ReplyTransportPlan): ReplyTransportPlan {
   };
 }
 
-function buildReplyTransportPlanFromResolvedActions(actions: ResolvedAction[]): ReplyTransportPlan {
+export function buildReplyTransportPlanFromResolvedActions(actions: ResolvedAction[]): ReplyTransportPlan {
   const segments: ReplyTransportPlan['segments'] = [];
 
   for (const action of actions) {
@@ -929,7 +932,7 @@ function setReplyRouteState(session: SessionWithVoiceState, route: ReplyRoute): 
   getReplyV2State(session).route = route;
 }
 
-function buildTurnCapabilitySnapshot(session: SessionWithVoiceState, snapshot: ReplyCapabilitySnapshot): NonNullable<TurnContext['capabilitySnapshot']> {
+export function buildTurnCapabilitySnapshot(session: SessionWithVoiceState, snapshot: ReplyCapabilitySnapshot): NonNullable<TurnContext['capabilitySnapshot']> {
   const stickerState = session.state?.qqSticker;
   const stickerAvailableCount = stickerState?.availableCount ?? 0;
   return {
@@ -955,7 +958,7 @@ function ensureReplyPluginRoom(room: ReplyRuntimeRoomLike | undefined): void {
   throw new Error(`qqbot reply requires room.chatMode=plugin, got ${chatMode || 'unknown'}.`);
 }
 
-function ensureStructuredReplyJsonSchemaModel(room: ReplyRuntimeRoomLike | undefined): void {
+export function ensureStructuredReplyJsonSchemaModel(room: ReplyRuntimeRoomLike | undefined): void {
   const model = typeof room?.model === 'string' ? room.model.trim() : '';
   const profile = resolveMainChatRuntimeProfileFromEnv(process.env);
   const strategyModel = model || profile.defaultModel;
@@ -964,9 +967,13 @@ function ensureStructuredReplyJsonSchemaModel(room: ReplyRuntimeRoomLike | undef
   throw new Error(`qqbot reply structured output requires a supported main chat model, got ${model || 'unknown'}.`);
 }
 
-function applyReplyStructuredOutputRequest(
+export function applyReplyStructuredOutputRequest(
   room: ReplyRuntimeRoomLike | undefined,
   inputMessage: NonNullable<MiddlewareContextLike['options']>['inputMessage'] | undefined,
+  options: {
+    replyMode?: 'agent' | 'automation';
+    includeFinalResponseInstruction?: boolean;
+  } = {},
 ): void {
   if (!inputMessage) return;
 
@@ -976,19 +983,21 @@ function applyReplyStructuredOutputRequest(
     model: typeof room?.model === 'string' ? room.model.trim() : profile.defaultModel,
   });
   const overrideRequestParams = mergeReplyOverrideRequestParams(inputMessage.additional_kwargs, structuredOutputSpec.overrideRequestParams);
+  const replyMode = options.replyMode ?? 'agent';
+  const includeFinalResponseInstruction = options.includeFinalResponseInstruction !== false;
 
   inputMessage.additional_kwargs = {
     ...(inputMessage.additional_kwargs ?? {}),
-    qqbot_reply_mode: 'agent',
+    qqbot_reply_mode: replyMode,
     qqbot_final_response_schema: structuredOutputSpec.finalResponseSchema ?? STRUCTURED_REPLY_V1_JSON_SCHEMA,
-    ...(structuredOutputSpec.finalResponseInstruction
+    ...(includeFinalResponseInstruction && structuredOutputSpec.finalResponseInstruction
       ? { qqbot_final_response_instruction: structuredOutputSpec.finalResponseInstruction }
       : {}),
     ...(overrideRequestParams ? { overrideRequestParams } : {}),
   };
 }
 
-function mergeReplyOverrideRequestParams(
+export function mergeReplyOverrideRequestParams(
   additionalKwargs: Record<string, unknown> | undefined,
   overridePatch: Record<string, unknown> | null,
 ): Record<string, unknown> | null {
@@ -1252,14 +1261,22 @@ async function runTtsHealthProbe(
   return task;
 }
 
-async function resolveReplyCapabilitySnapshot(args: {
+export async function resolveReplyCapabilitySnapshot(args: {
   runtime: RuntimeConfig;
   session: SessionWithVoiceState;
-  canSendRecordCache: Map<string, boolean>;
-  ttsCapabilityStates: Map<string, TtsCapabilityState>;
+  canSendRecordCache?: Map<string, boolean>;
+  ttsCapabilityStates?: Map<string, TtsCapabilityState>;
   voiceOutputEnabled?: boolean;
+  waitForProbe?: boolean;
 }): Promise<ReplyCapabilitySnapshot> {
-  const { runtime, session, canSendRecordCache, ttsCapabilityStates, voiceOutputEnabled = false } = args;
+  const {
+    runtime,
+    session,
+    canSendRecordCache = sharedReplyTransportCanSendRecordCache,
+    ttsCapabilityStates = sharedReplyTransportTtsCapabilityStates,
+    voiceOutputEnabled = false,
+    waitForProbe = false,
+  } = args;
   const snapshot: ReplyCapabilitySnapshot = {
     canMultiline: true,
     canVoice: false,
@@ -1279,6 +1296,14 @@ async function resolveReplyCapabilitySnapshot(args: {
   const ttsState = getTtsCapabilityState(runtime, ttsCapabilityStates);
   ttsState.turnCounter += 1;
   const due = isTtsProbeDue(ttsState, snapshot.refreshedAt);
+
+  if (waitForProbe && ttsState.lastKnownHealthy == null) {
+    try {
+      await runTtsHealthProbe(runtime, ttsState, true);
+    } catch (error) {
+      logger.warn('blocking tts probe failed: %s', (error as Error).message);
+    }
+  }
 
   if (due && snapshot.refreshedAt >= ttsState.failureBackoffUntil && !ttsState.pendingProbe) {
     void runTtsHealthProbe(runtime, ttsState).catch((error) => {
@@ -1418,17 +1443,36 @@ async function prepareStickerDeliveries(args: {
   return { preparedByRaw, effectivePlan: { segments: effectiveSegments } };
 }
 
-async function deliverReplyPlan(args: {
+async function deliverReplyPlanCore(args: {
   runtime: RuntimeConfig;
   session: SessionWithVoiceState;
   plan: ReplyTransportPlan;
-  sendStrand: ReturnType<typeof createKeyedStrandRunner>;
-  canSendRecordCache: Map<string, boolean>;
-  ttsCapabilityStates: Map<string, TtsCapabilityState>;
-  replyRuntime: ReplyRuntime;
-  runId: string;
+  sendStrand?: ReturnType<typeof createKeyedStrandRunner>;
+  canSendRecordCache?: Map<string, boolean>;
+  ttsCapabilityStates?: Map<string, TtsCapabilityState>;
+  queueKey?: string | null;
+  beginSend?: () => AbortSignal | null;
+  wasInterrupted?: () => boolean;
+  resolveQuoteTargetMessageId?: (supports: boolean) => string | null;
+  onPlannedUnitHistoryLines?: (historyLines: string[]) => void;
+  onCommittedUnit?: (historyLine: string) => void;
+  onDeliveryReceipt?: (receipt: unknown) => void;
 }): Promise<ReplyPlanDeliveryResult> {
-  const { runtime, session, plan, sendStrand, canSendRecordCache, ttsCapabilityStates, replyRuntime, runId } = args;
+  const {
+    runtime,
+    session,
+    plan,
+    sendStrand = sharedReplyTransportSendStrand,
+    canSendRecordCache = sharedReplyTransportCanSendRecordCache,
+    ttsCapabilityStates = sharedReplyTransportTtsCapabilityStates,
+    queueKey,
+    beginSend,
+    wasInterrupted,
+    resolveQuoteTargetMessageId,
+    onPlannedUnitHistoryLines,
+    onCommittedUnit,
+    onDeliveryReceipt,
+  } = args;
   const historyText = renderDeliveredReplyPlanHistoryText(plan);
   const fallbackText = renderReplyPlanFallbackText(plan);
   if (session.platform !== 'onebot' || !session.channelId) {
@@ -1460,38 +1504,51 @@ async function deliverReplyPlan(args: {
     preparedVoiceByRaw: preparedVoice.preparedByRaw,
     preparedStickerByRaw: preparedSticker.preparedByRaw,
   });
-  replyRuntime.setPlannedUnitHistory(runId, plannedUnitHistoryLines);
+  onPlannedUnitHistoryLines?.(plannedUnitHistoryLines);
   let beganSending = false;
   let sendAbortSignal: AbortSignal | null = null;
+  const committedHistoryLines: string[] = [];
   const wasSendAborted = () => (sendAbortSignal as AbortSignal | null)?.aborted === true;
   const sendTask = async () => {
-    sendAbortSignal = replyRuntime.beginSending(runId);
-    if (!sendAbortSignal || !replyRuntime.isCurrentRun(runId)) {
+    sendAbortSignal = beginSend?.() ?? null;
+    if (beginSend && !sendAbortSignal) {
       return;
     }
 
     const { sendWhole, sendLine } = createBotMessageDispatchers(bot, session.channelId!, session);
     await dispatchOutboundMessagePlan(outboundPlan, async (segment) => {
       const historyLine = plannedUnitHistoryLines[outboundPlan.segments.indexOf(segment)] ?? '';
-      const quoteTargetMessageId = replyRuntime.consumeFirstReplyQuote(runId, segment.kind !== 'voice-block');
+      const quoteTargetMessageId = resolveQuoteTargetMessageId?.(segment.kind !== 'voice-block') ?? null;
       if (segment.kind === 'multiline-block') {
         beganSending = true;
-        await sendWhole(createQuotedMessageContent(segment.content, quoteTargetMessageId));
-        replyRuntime.recordCommittedUnit(runId, historyLine);
+        const receipt = await sendWhole(createQuotedMessageContent(segment.content, quoteTargetMessageId));
+        onDeliveryReceipt?.(receipt);
+        if (historyLine) {
+          committedHistoryLines.push(historyLine);
+          onCommittedUnit?.(historyLine);
+        }
         return;
       }
 
       if (segment.kind === 'text-line') {
         beganSending = true;
-        await sendLine(createQuotedMessageContent(segment.content, quoteTargetMessageId));
-        replyRuntime.recordCommittedUnit(runId, historyLine);
+        const receipt = await sendLine(createQuotedMessageContent(segment.content, quoteTargetMessageId));
+        onDeliveryReceipt?.(receipt);
+        if (historyLine) {
+          committedHistoryLines.push(historyLine);
+          onCommittedUnit?.(historyLine);
+        }
         return;
       }
 
       if (segment.kind === 'rich-text-block') {
         beganSending = true;
-        await sendWhole(createQuotedMessageContent(renderRichTextSegmentsMessageContent(segment.segments), quoteTargetMessageId));
-        replyRuntime.recordCommittedUnit(runId, historyLine);
+        const receipt = await sendWhole(createQuotedMessageContent(renderRichTextSegmentsMessageContent(segment.segments), quoteTargetMessageId));
+        onDeliveryReceipt?.(receipt);
+        if (historyLine) {
+          committedHistoryLines.push(historyLine);
+          onCommittedUnit?.(historyLine);
+        }
         return;
       }
 
@@ -1502,15 +1559,23 @@ async function deliverReplyPlan(args: {
         }
 
         beganSending = true;
-        await sendWhole(createQuotedMessageContent(h.image(prepared.buffer, prepared.mime), quoteTargetMessageId));
-        replyRuntime.recordCommittedUnit(runId, historyLine);
+        const receipt = await sendWhole(createQuotedMessageContent(h.image(prepared.buffer, prepared.mime), quoteTargetMessageId));
+        onDeliveryReceipt?.(receipt);
+        if (historyLine) {
+          committedHistoryLines.push(historyLine);
+          onCommittedUnit?.(historyLine);
+        }
         return;
       }
 
       if (segment.kind === 'image-block') {
         beganSending = true;
-        await sendWhole(createQuotedMessageContent(h.image(segment.assetRef), quoteTargetMessageId));
-        replyRuntime.recordCommittedUnit(runId, historyLine);
+        const receipt = await sendWhole(createQuotedMessageContent(h.image(segment.assetRef), quoteTargetMessageId));
+        onDeliveryReceipt?.(receipt);
+        if (historyLine) {
+          committedHistoryLines.push(historyLine);
+          onCommittedUnit?.(historyLine);
+        }
         return;
       }
 
@@ -1520,15 +1585,18 @@ async function deliverReplyPlan(args: {
       }
 
       beganSending = true;
-      await sendWhole(h.audio(createAudioDataUri(prepared.wav)));
-      replyRuntime.recordCommittedUnit(runId, historyLine);
+      const receipt = await sendWhole(h.audio(createAudioDataUri(prepared.wav)));
+      onDeliveryReceipt?.(receipt);
+      if (historyLine) {
+        committedHistoryLines.push(historyLine);
+        onCommittedUnit?.(historyLine);
+      }
     }, {
-      abortSignal: sendAbortSignal,
+      abortSignal: sendAbortSignal ?? undefined,
     });
   };
 
   try {
-    const queueKey = resolveReplyQueueKey(session);
     if (queueKey) {
       await sendStrand.run(queueKey, sendTask);
     } else {
@@ -1536,20 +1604,69 @@ async function deliverReplyPlan(args: {
     }
   } catch (error) {
     logger.warn('reply plan delivery failed: %s', (error as Error).message);
-    if (wasSendAborted() || replyRuntime.wasInterrupted(runId)) {
-      return { status: 'interrupted', historyText: replyRuntime.getCommittedHistoryText(runId) };
+    const committedHistoryText = committedHistoryLines.join('\n').trim();
+    if (wasSendAborted() || wasInterrupted?.()) {
+      return { status: 'interrupted', historyText: committedHistoryText };
     }
     if (beganSending) {
-      return { status: 'failed_after_partial_send', historyText: replyRuntime.getCommittedHistoryText(runId) };
+      return { status: 'failed_after_partial_send', historyText: committedHistoryText };
     }
     return { status: 'failed_before_send', fallbackText: effectiveFallbackText, historyText: effectiveFallbackText };
   }
 
-  if (!sendAbortSignal || wasSendAborted() || replyRuntime.wasInterrupted(runId)) {
-    return { status: 'interrupted', historyText: replyRuntime.getCommittedHistoryText(runId) };
+  if ((beginSend && !sendAbortSignal) || wasSendAborted() || wasInterrupted?.()) {
+    return { status: 'interrupted', historyText: committedHistoryLines.join('\n').trim() };
   }
 
   return { status: 'delivered', historyText: effectiveHistoryText };
+}
+
+async function deliverReplyPlan(args: {
+  runtime: RuntimeConfig;
+  session: SessionWithVoiceState;
+  plan: ReplyTransportPlan;
+  replyRuntime: ReplyRuntime;
+  runId: string;
+}): Promise<ReplyPlanDeliveryResult> {
+  const { runtime, session, plan, replyRuntime, runId } = args;
+  return deliverReplyPlanCore({
+    runtime,
+    session,
+    plan,
+    queueKey: resolveReplyQueueKey(session),
+    beginSend: () => {
+      const signal = replyRuntime.beginSending(runId);
+      if (!signal || !replyRuntime.isCurrentRun(runId)) {
+        return null;
+      }
+      return signal;
+    },
+    wasInterrupted: () => replyRuntime.wasInterrupted(runId),
+    resolveQuoteTargetMessageId: (supports) => replyRuntime.consumeFirstReplyQuote(runId, supports),
+    onPlannedUnitHistoryLines: (historyLines) => replyRuntime.setPlannedUnitHistory(runId, historyLines),
+    onCommittedUnit: (historyLine) => replyRuntime.recordCommittedUnit(runId, historyLine),
+  });
+}
+
+export async function deliverStandaloneReplyPlan(args: {
+  runtime: RuntimeConfig;
+  session: SessionWithVoiceState;
+  plan: ReplyTransportPlan;
+}): Promise<ReplyPlanDeliveryResult & { receipts: unknown[] }> {
+  const receipts: unknown[] = [];
+  const result = await deliverReplyPlanCore({
+    runtime: args.runtime,
+    session: args.session,
+    plan: args.plan,
+    queueKey: resolveReplyQueueKey(args.session),
+    onDeliveryReceipt: (receipt) => {
+      receipts.push(receipt);
+    },
+  });
+  return {
+    ...result,
+    receipts,
+  };
 }
 
 function isReplyPlanSessionAvailable(session: Session): boolean {
@@ -1560,10 +1677,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
   assertVoiceRuntimeConfig(runtime);
   const featurePolicy = (ctx as ContextWithChatLuna).featurePolicy;
-  const sendStrand = createKeyedStrandRunner();
   const replyOrchestrator = new ReplyOrchestratorService();
-  const canSendRecordCache = new Map<string, boolean>();
-  const ttsCapabilityStates = new Map<string, TtsCapabilityState>();
   const replyCapabilitySnapshots = new Map<string, ReplyCapabilitySnapshot>();
 
   const resolveChatLunaService = (): ChatLunaLike | undefined => {
@@ -1668,8 +1782,6 @@ export function apply(ctx: Context, config: Config = {}): void {
       const snapshot = await resolveReplyCapabilitySnapshot({
         runtime,
         session,
-        canSendRecordCache,
-        ttsCapabilityStates,
         voiceOutputEnabled: voiceFeatureState.outputEnabled,
       });
       rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
@@ -1682,10 +1794,10 @@ export function apply(ctx: Context, config: Config = {}): void {
     await Promise.all(
       ctx.bots
         .filter((bot) => bot.platform === 'onebot')
-        .map(async (bot) => ensureCanSendRecord(bot as unknown as OneBotBotLike, canSendRecordCache, true)),
+        .map(async (bot) => ensureCanSendRecord(bot as unknown as OneBotBotLike, sharedReplyTransportCanSendRecordCache, true)),
     );
     if (isVoiceOutputConfigured(runtime)) {
-      const ttsState = getTtsCapabilityState(runtime, ttsCapabilityStates);
+      const ttsState = getTtsCapabilityState(runtime, sharedReplyTransportTtsCapabilityStates);
       void runTtsHealthProbe(runtime, ttsState, true).catch((error) => {
         logger.warn('initial tts health probe failed: %s', (error as Error).message);
       });
@@ -1793,8 +1905,6 @@ export function apply(ctx: Context, config: Config = {}): void {
           (await resolveReplyCapabilitySnapshot({
             runtime,
             session,
-            canSendRecordCache,
-            ttsCapabilityStates,
             voiceOutputEnabled: voiceFeatureState.outputEnabled,
           }));
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
@@ -1919,8 +2029,6 @@ export function apply(ctx: Context, config: Config = {}): void {
             (await resolveReplyCapabilitySnapshot({
               runtime,
               session,
-              canSendRecordCache,
-              ttsCapabilityStates,
               voiceOutputEnabled: voiceFeatureState.outputEnabled,
             }));
           rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
@@ -1962,9 +2070,6 @@ export function apply(ctx: Context, config: Config = {}): void {
             runtime,
             session,
             plan: executablePlan,
-            sendStrand,
-            canSendRecordCache,
-            ttsCapabilityStates,
             replyRuntime,
             runId,
           });

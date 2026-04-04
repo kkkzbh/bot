@@ -3,19 +3,43 @@ import { parseExpression } from 'cron-parser';
 import { StructuredTool } from '@langchain/core/tools';
 import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
 import type { ChatLunaTool, ChatLunaToolRunnable } from 'koishi-plugin-chatluna/llm-core/platform/types';
-import { getMessageContent } from 'koishi-plugin-chatluna/utils/string';
 import { z } from 'zod';
 import type { AutomationJob, AutomationJobRun, TaskKind, TaskScope } from '../../types/task-automation.js';
 import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
+import { decodeStoredMessageText } from '../memory/store.js';
+import {
+  buildReplyTurnInput,
+} from '../reply/pipeline/context-builder.js';
+import { ReplyOrchestratorService } from '../reply/pipeline/orchestrator.js';
+import type { TurnContext } from '../reply/pipeline/types.js';
+import {
+  buildReplyCapabilityPromptFragments,
+  buildReplyStructuredReplyContractFragments,
+  createPromptTextFragment,
+} from '../reply/prompt/compiler.js';
+import {
+  applyReplyStructuredOutputRequest,
+  buildReplyTransportPlanFromResolvedActions,
+  buildTurnCapabilitySnapshot,
+  createVoiceRuntimeConfig,
+  deliverStandaloneReplyPlan,
+  ensureCanSendRecord,
+  ensureStructuredReplyJsonSchemaModel,
+  resolveReplyCapabilitySnapshot,
+} from '../reply/voice/generation.js';
 import {
   createBypassLineSplitOptions,
+  createTextOnlyOutboundMessagePlan,
   dispatchNormalizedOutboundMessage,
+  renderOutboundMessageSegmentsHistoryText,
   normalizeOutboundMessage,
   splitMessageByLines,
   type BotMessageContent,
   type BotMessageSender,
   type NormalizedOutboundMessage,
 } from '../shared/outbound/index.js';
+import { compilePromptEnvelopeFromFragments, type PromptFragment } from '../shared/prompt-context/index.js';
+import { resolveStickerCapabilityArtifacts } from '../sticker/index.js';
 import {
   formatNaturalRunAtText,
   formatAutomationTimestamp,
@@ -31,9 +55,8 @@ const FIXED_TIMEZONE = 'Asia/Shanghai';
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_JOBS_PER_USER = 20;
 const RECURRING_SCHEDULE_HINT = /每(?:天|日|周|星期|月|隔)/;
-const EXECUTION_FINAL_RESPONSE_INSTRUCTION =
-  '你正在执行一个到点触发的自动化任务。你可以调用工具完成任务。' +
-  '最终只输出一条适合直接发送到 QQ 的纯文本结果，不要输出 Markdown、标题、代码围栏、解释过程、系统设定或调度器说明。';
+const AUTOMATION_RECENT_CONTEXT_LIMIT = 8;
+const automationReplyOrchestrator = new ReplyOrchestratorService();
 
 export const name = 'task-automation';
 export const inject = { required: ['database', 'chatluna'], optional: ['toolPolicy'] } as const;
@@ -109,6 +132,15 @@ type ChatLunaServiceLike = {
   platform: {
     registerTool: (name: string, tool: ChatLunaTool) => () => void;
   };
+  contextManager?: {
+    inject: (options: {
+      name: string;
+      value: unknown;
+      once?: boolean;
+      conversationId?: string;
+      stage?: string;
+    }) => void;
+  };
 };
 
 type ContextWithAutomation = Context & {
@@ -122,6 +154,12 @@ type SourceRoomContext = {
   room: AutomationRoomRow;
   session: Session;
 };
+
+type ReplyAutomationRoom = Omit<AutomationRoomRow, 'conversationId'> & {
+  conversationId?: string;
+};
+
+type AutomationCapabilitySnapshot = NonNullable<TurnContext['capabilitySnapshot']>;
 
 type AutomationToolDeps = {
   ctx: ContextWithAutomation;
@@ -215,6 +253,7 @@ function ensureTaskTables(ctx: Context): void {
       status: 'string',
       error: { type: 'text', nullable: true },
       outputText: { type: 'text', nullable: true },
+      outputPayload: { type: 'json', nullable: true } as any,
       deliveryReceipt: { type: 'text', nullable: true },
     },
     {
@@ -323,6 +362,7 @@ async function createJobRun(ctx: ContextWithAutomation, jobId: number, triggered
     status: 'running',
     error: null,
     outputText: null,
+    outputPayload: null,
     deliveryReceipt: null,
   })) as unknown as AutomationJobRun;
   return created;
@@ -331,7 +371,7 @@ async function createJobRun(ctx: ContextWithAutomation, jobId: number, triggered
 async function finishJobRun(
   ctx: ContextWithAutomation,
   runId: number,
-  patch: Pick<AutomationJobRun, 'status' | 'error' | 'outputText' | 'deliveryReceipt'>,
+  patch: Pick<AutomationJobRun, 'status' | 'error' | 'outputText' | 'outputPayload' | 'deliveryReceipt'>,
 ): Promise<void> {
   const db = (ctx as any).database;
   await db.set(
@@ -637,9 +677,14 @@ async function updateAutomationJob(
   return { job: updated, schedule };
 }
 
-function stringifyReceipt(receipts: string[]): string | null {
-  if (!receipts.length) return null;
-  return JSON.stringify(receipts);
+function stringifyReceipt(receipts: unknown[]): string | null {
+  const normalized = receipts.flatMap((item) => {
+    if (Array.isArray(item)) return item.map((value) => String(value)).filter(Boolean);
+    if (item == null) return [];
+    return [String(item)];
+  });
+  if (!normalized.length) return null;
+  return JSON.stringify(normalized);
 }
 
 async function getNextRoomId(ctx: ContextWithAutomation): Promise<number> {
@@ -869,19 +914,196 @@ async function resolveAutomationToolMask(
   } as any);
 }
 
+async function loadRecentConversationTurns(
+  ctx: ContextWithAutomation,
+  conversationId: string | null | undefined,
+  maxMessages = AUTOMATION_RECENT_CONTEXT_LIMIT,
+): Promise<Array<{ role: 'human' | 'ai'; text: string }>> {
+  const normalizedConversationId = conversationId?.trim();
+  if (!normalizedConversationId) return [];
+
+  const db = (ctx as any).database;
+  const [conversation] = (await db.get('chathub_conversation', { id: normalizedConversationId })) as Array<{
+    id?: string;
+    latestId?: string | null;
+  }>;
+  if (!conversation?.id || !conversation.latestId) return [];
+
+  const rows = (await db.get('chathub_message', { conversation: normalizedConversationId })) as Array<{
+    id: string;
+    role?: string | null;
+    parent?: string | null;
+    content?: unknown;
+  }>;
+  const messageMap = new Map(rows.map((row) => [row.id, row]));
+  const turns: Array<{ role: 'human' | 'ai'; text: string }> = [];
+  let cursor: string | null | undefined = conversation.latestId;
+  while (cursor && turns.length < maxMessages) {
+    const row = messageMap.get(cursor);
+    if (!row) break;
+    if (row.role === 'human' || row.role === 'ai') {
+      try {
+        const text = (await decodeAutomationRecentContextText(row.content)).trim();
+        if (text) {
+          turns.push({
+            role: row.role,
+            text,
+          });
+        }
+      } catch (error) {
+        logger.warn('failed to decode automation recent context message %s: %s', row.id, (error as Error).message);
+      }
+    }
+    cursor = row.parent ?? null;
+  }
+  return turns.reverse();
+}
+
+async function decodeAutomationRecentContextText(content: unknown): Promise<string> {
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+  if (content && typeof content === 'object' && 'text' in content) {
+    const text = (content as { text?: unknown }).text;
+    return typeof text === 'string' ? text.trim() : '';
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object' && 'text' in item) {
+          const text = (item as { text?: unknown }).text;
+          return typeof text === 'string' ? text : '';
+        }
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+
+  try {
+    return (await decodeStoredMessageText(content)).trim();
+  } catch {
+    return '';
+  }
+}
+
+function buildAutomationRecentContextFragment(
+  turns: Array<{ role: 'human' | 'ai'; text: string }>,
+): PromptFragment | null {
+  if (!turns.length) return null;
+  const lines = turns.map((turn) => `${turn.role === 'human' ? 'human' : 'assistant'}: ${turn.text}`);
+  return createPromptTextFragment(
+    'qqbot_automation_recent_context',
+    'Automation Recent Conversation Window',
+    'reference',
+    'turn',
+    lines.join('\n'),
+  );
+}
+
+function injectAutomationPromptFragments(
+  ctx: ContextWithAutomation,
+  conversationId: string | null | undefined,
+  fragments: PromptFragment[],
+): void {
+  const normalizedConversationId = conversationId?.trim();
+  if (!normalizedConversationId || !fragments.length) return;
+  const envelope = compilePromptEnvelopeFromFragments(fragments);
+  if (!envelope?.messages.length) return;
+  const promptMessages = envelope.messages as Array<{
+    role: 'system' | 'human' | 'ai';
+    content: string;
+    additional_kwargs?: Record<string, unknown>;
+  }>;
+  const contextManager = ((ctx as any).chatluna as { contextManager?: { inject: (options: any) => void } } | undefined)?.contextManager;
+  if (!contextManager) return;
+  const injectOptions: {
+    name: string;
+    value: unknown;
+    once?: boolean;
+    conversationId?: string;
+    stage?: string;
+  } = {
+    name: 'qqbot_automation_prompt_envelope',
+    value: promptMessages,
+    once: true,
+    conversationId: normalizedConversationId,
+    stage: 'after_scratchpad',
+  };
+  contextManager.inject(injectOptions);
+}
+
+async function prepareAutomationExecutionContext(
+  ctx: ContextWithAutomation,
+  sourceRoom: AutomationRoomRow,
+  tempRoom: AutomationRoomRow,
+  session: Session,
+): Promise<AutomationCapabilitySnapshot> {
+  const stickerArtifacts = resolveStickerCapabilityArtifacts(sourceRoom.preset?.trim() || null);
+  const currentState = ((session as Session & { state?: Record<string, unknown> }).state ?? {}) as Record<string, unknown>;
+  currentState.qqSticker = stickerArtifacts.state as unknown as Record<string, unknown>;
+  (session as Session & { state?: Record<string, unknown> }).state = currentState;
+
+  const voiceRuntime = createVoiceRuntimeConfig();
+  const replyCapability = await resolveReplyCapabilitySnapshot({
+    runtime: voiceRuntime,
+    session: session as never,
+    voiceOutputEnabled: voiceRuntime.outputEnabled,
+    waitForProbe: true,
+  });
+  if (
+    !replyCapability.canVoice &&
+    voiceRuntime.outputEnabled &&
+    voiceRuntime.ttsBaseUrl &&
+    (await ensureCanSendRecord(((session as Session).bot ?? {}) as never, new Map()))
+  ) {
+    replyCapability.canVoice = true;
+  }
+  const capabilitySnapshot = buildTurnCapabilitySnapshot(session as never, replyCapability);
+  const recentContextTurns = await loadRecentConversationTurns(ctx, sourceRoom.conversationId);
+  const recentContextFragment = buildAutomationRecentContextFragment(recentContextTurns);
+  const fragments = [
+    ...buildReplyStructuredReplyContractFragments(),
+    ...buildReplyCapabilityPromptFragments(
+      {
+        capabilitySnapshot,
+        continuationContext: null,
+      },
+      { includeContinuationContext: false },
+    ),
+    ...stickerArtifacts.fragments,
+    ...(recentContextFragment ? [recentContextFragment] : []),
+  ];
+  injectAutomationPromptFragments(ctx, tempRoom.conversationId, fragments);
+  return capabilitySnapshot;
+}
+
+function toReplyAutomationRoom(room: AutomationRoomRow): ReplyAutomationRoom {
+  return {
+    ...room,
+    conversationId: room.conversationId?.trim() || undefined,
+  };
+}
+
 async function executeAutomationJobRun(ctx: ContextWithAutomation, job: AutomationJob, run: AutomationJobRun): Promise<void> {
   let tempRoom: AutomationRoomRow | null = null;
 
   try {
     const source = await resolveSourceRoomContext(ctx, job);
     tempRoom = await createTemporaryExecutionRoom(ctx, source.room, source.session, job);
+    const replyRoom = toReplyAutomationRoom(tempRoom);
+    ensureStructuredReplyJsonSchemaModel(replyRoom);
+    const capabilitySnapshot = await prepareAutomationExecutionContext(ctx, source.room, tempRoom, source.session);
     const toolMask = await resolveAutomationToolMask(ctx, source.session, source.room);
     const message: ChatLunaMessage = {
       content: createAutomationPrompt(job, run.triggeredAt),
-      additional_kwargs: {
-        qqbot_final_response_instruction: EXECUTION_FINAL_RESPONSE_INSTRUCTION,
-      },
+      additional_kwargs: {},
     };
+    applyReplyStructuredOutputRequest(replyRoom, message as never, {
+      replyMode: 'automation',
+      includeFinalResponseInstruction: false,
+    });
 
     const chatluna = (ctx as any).chatluna;
     const response = await chatluna.chat(
@@ -895,13 +1117,34 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
       `automation-job:${job.id}:${run.id}`,
       toolMask,
     );
-
-    const outputText =
-      typeof response.content === 'string'
-        ? response.content.trim()
-        : getMessageContent(response.content as never).trim();
-    if (!outputText) {
-      throw new Error('automation agent returned empty output');
+    const turnInput = buildReplyTurnInput(source.session as never, replyRoom, message);
+    const orchestration = await automationReplyOrchestrator.handle(turnInput, source.session as never, {
+      responseMessage: response,
+      capabilitySnapshot,
+      routeHint: 'automation',
+    });
+    if (orchestration.status === 'no_reply') {
+      await finishJobRun(ctx, run.id, {
+        status: 'succeeded',
+        error: null,
+        outputText: null,
+        outputPayload: { decision: 'no_reply' },
+        deliveryReceipt: null,
+      });
+      return;
+    }
+    if (orchestration.status !== 'ready') {
+      throw new Error(`automation structured reply expected ready status, got ${orchestration.status}.`);
+    }
+    if (orchestration.actions.length === 1 && orchestration.actions[0]?.kind === 'no_reply') {
+      await finishJobRun(ctx, run.id, {
+        status: 'succeeded',
+        error: null,
+        outputText: null,
+        outputPayload: orchestration.reply,
+        deliveryReceipt: null,
+      });
+      return;
     }
 
     const bot = resolveTaskBot(ctx, job);
@@ -909,21 +1152,57 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
       throw new Error(`bot ${job.botSelfId}/${job.platform} is unavailable`);
     }
 
-    const receipts = await sendBotMessageByLines(bot, job.channelId, outputText, {
-      mentionUserId: job.scope === 'group' && Number(job.mentionCreator ?? 0) === 1 ? job.creatorId : undefined,
+    const plan = buildReplyTransportPlanFromResolvedActions(orchestration.actions);
+    if (!plan.segments.length) {
+      await finishJobRun(ctx, run.id, {
+        status: 'succeeded',
+        error: null,
+        outputText: null,
+        outputPayload: orchestration.reply,
+        deliveryReceipt: null,
+      });
+      return;
+    }
+
+    const voiceRuntime = createVoiceRuntimeConfig();
+    const delivery = await deliverStandaloneReplyPlan({
+      runtime: voiceRuntime,
+      session: source.session as never,
+      plan,
     });
+    if (delivery.status === 'interrupted') {
+      throw new Error('automation structured reply delivery interrupted');
+    }
+    if (delivery.status === 'failed_after_partial_send') {
+      throw new Error('automation structured reply delivery failed after partial send');
+    }
+
+    let outputText = delivery.historyText.trim() || null;
+    let deliveryReceipt = stringifyReceipt(delivery.receipts);
+
+    if (delivery.status === 'failed_before_send') {
+      const fallbackText = delivery.fallbackText.trim();
+      if (!fallbackText) {
+        throw new Error('automation structured reply delivery failed before send');
+      }
+      const receipts = await sendBotMessageByLines(bot, job.channelId, fallbackText);
+      outputText = renderOutboundMessageSegmentsHistoryText(createTextOnlyOutboundMessagePlan(fallbackText).segments) || fallbackText;
+      deliveryReceipt = stringifyReceipt(receipts);
+    }
 
     await finishJobRun(ctx, run.id, {
       status: 'succeeded',
       error: null,
       outputText,
-      deliveryReceipt: stringifyReceipt(receipts),
+      outputPayload: orchestration.reply,
+      deliveryReceipt,
     });
   } catch (error) {
     await finishJobRun(ctx, run.id, {
       status: 'failed',
       error: (error as Error).message,
       outputText: null,
+      outputPayload: null,
       deliveryReceipt: null,
     });
     throw error;

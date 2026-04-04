@@ -11,7 +11,7 @@ export interface ReplyPromptCompilerInput {
   workingContext: PromptFragment[];
 }
 
-function createTextFragment(
+export function createPromptTextFragment(
   source: string,
   title: string,
   authority: PromptFragment['authority'],
@@ -31,7 +31,7 @@ function createTextFragment(
   };
 }
 
-function createJsonFragment(
+export function createPromptJsonFragment(
   source: string,
   title: string,
   authority: PromptFragment['authority'],
@@ -51,7 +51,7 @@ function createJsonFragment(
   };
 }
 
-const PERSONA_INVARIANT_FRAGMENT = createTextFragment(
+const PERSONA_INVARIANT_FRAGMENT = createPromptTextFragment(
   'qqbot_persona_invariant',
   'Persona Invariant',
   'runtime_contract',
@@ -63,7 +63,7 @@ const PERSONA_INVARIANT_FRAGMENT = createTextFragment(
   ].join('\n'),
 );
 
-const CONTEXT_INTERPRETATION_FRAGMENT = createTextFragment(
+const CONTEXT_INTERPRETATION_FRAGMENT = createPromptTextFragment(
   'qqbot_context_interpretation_protocol',
   'Context Interpretation Protocol',
   'runtime_contract',
@@ -78,7 +78,7 @@ const CONTEXT_INTERPRETATION_FRAGMENT = createTextFragment(
   ].join('\n'),
 );
 
-const AGENT_REPLY_CONTRACT_FRAGMENT = createTextFragment(
+const AGENT_REPLY_CONTRACT_FRAGMENT = createPromptTextFragment(
   'qqbot_agent_reply_contract',
   'Agent Reply Contract',
   'runtime_contract',
@@ -99,15 +99,26 @@ const AGENT_REPLY_CONTRACT_FRAGMENT = createTextFragment(
   ].join('\n'),
 );
 
-function buildReplyWorkingContext(
+export function buildReplyStructuredReplyContractFragments(): PromptFragment[] {
+  return [AGENT_REPLY_CONTRACT_FRAGMENT];
+}
+
+export function buildReplyRuntimeContractFragments(): PromptFragment[] {
+  return [
+    ...buildReplyStructuredReplyContractFragments(),
+    CONTEXT_INTERPRETATION_FRAGMENT,
+  ];
+}
+
+export function buildReplyCapabilityPromptFragments(
   turnContext: Pick<TurnContext, 'capabilitySnapshot' | 'continuationContext'>,
-  workingContext: PromptFragment[],
+  options: { includeContinuationContext?: boolean } = {},
 ): PromptFragment[] {
   const fragments: PromptFragment[] = [];
 
   if (turnContext.capabilitySnapshot) {
     fragments.push(
-      createJsonFragment(
+      createPromptJsonFragment(
         'qqbot_reply_capability_snapshot',
         'Reply Capability Snapshot',
         'runtime_contract',
@@ -117,9 +128,9 @@ function buildReplyWorkingContext(
     );
   }
 
-  if (turnContext.continuationContext) {
+  if (options.includeContinuationContext !== false && turnContext.continuationContext) {
     fragments.push(
-      createJsonFragment(
+      createPromptJsonFragment(
         'qqbot_reply_continuation_context',
         'Reply Continuation Context',
         'assistant_state',
@@ -129,7 +140,7 @@ function buildReplyWorkingContext(
     );
   }
 
-  return [...workingContext, ...fragments];
+  return fragments;
 }
 
 export function buildReplyPromptCompilerInput(
@@ -138,8 +149,11 @@ export function buildReplyPromptCompilerInput(
 ): ReplyPromptCompilerInput {
   return {
     persona: [PERSONA_INVARIANT_FRAGMENT],
-    runtimeContract: [AGENT_REPLY_CONTRACT_FRAGMENT, CONTEXT_INTERPRETATION_FRAGMENT],
-    workingContext: buildReplyWorkingContext(turnContext, workingContext),
+    runtimeContract: buildReplyRuntimeContractFragments(),
+    workingContext: [
+      ...workingContext,
+      ...buildReplyCapabilityPromptFragments(turnContext),
+    ],
   };
 }
 

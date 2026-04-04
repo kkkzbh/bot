@@ -3,9 +3,10 @@ import {
   buildStickerCapabilityDescriptor,
   buildStickerCapabilityPolicy,
   loadStickerCatalog,
+  type LoadedStickerCatalog,
   type StickerCapabilityState,
 } from './selection.js';
-import { registerPromptFragment } from '../shared/prompt-context/index.js';
+import { registerPromptFragment, type PromptFragment } from '../shared/prompt-context/index.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -25,6 +26,9 @@ export {
 } from './selection.js';
 
 const logger = new Logger(name);
+const DEFAULT_STICKER_DIR = './data/chathub/stickers';
+let runtimeStickerDir = DEFAULT_STICKER_DIR;
+let runtimeStickerCatalog: LoadedStickerCatalog | null | undefined;
 
 export interface Config {
   stickerDir?: string;
@@ -83,9 +87,74 @@ function resolveChatLunaService(ctx: ContextWithChatLuna): ChatLunaLike | undefi
   return byGetter ?? ctx.chatluna;
 }
 
+function loadRuntimeStickerCatalog(): LoadedStickerCatalog | null {
+  if (runtimeStickerCatalog !== undefined) {
+    return runtimeStickerCatalog ?? null;
+  }
+  runtimeStickerCatalog = loadStickerCatalog(runtimeStickerDir);
+  return runtimeStickerCatalog ?? null;
+}
+
+function setRuntimeStickerCatalog(stickerDir: string, catalog: LoadedStickerCatalog | null): void {
+  runtimeStickerDir = stickerDir;
+  runtimeStickerCatalog = catalog;
+}
+
+export function resolveStickerCapabilityArtifacts(preset?: string | null): {
+  state: StickerCapabilityState;
+  fragments: PromptFragment[];
+} {
+  const normalizedPreset = preset?.trim() || null;
+  const catalog = loadRuntimeStickerCatalog();
+  const availableCount =
+    catalog?.entries.filter(
+      (entry) => entry.scopes.includes('global') || (normalizedPreset ? entry.scopes.includes(`persona:${normalizedPreset}`) : false),
+    ).length ?? 0;
+  const state: StickerCapabilityState = {
+    catalog: catalog ?? null,
+    preset: normalizedPreset,
+    availableCount,
+  };
+  const fragments: PromptFragment[] = [];
+  const capability = catalog ? buildStickerCapabilityDescriptor({ catalog, preset: normalizedPreset }) : null;
+  if (!capability || !catalog) {
+    return { state, fragments };
+  }
+
+  fragments.push({
+    source: 'qqbot_sticker_capability',
+    title: 'Sticker Capability State',
+    authority: 'runtime_contract',
+    trust: 'trusted',
+    ttl: 'turn',
+    payload: {
+      kind: 'json',
+      value: capability,
+    },
+  });
+
+  const policy = buildStickerCapabilityPolicy({ catalog, preset: normalizedPreset });
+  if (policy) {
+    fragments.push({
+      source: 'qqbot_sticker_execution_rules',
+      title: 'Sticker Execution Rules',
+      authority: 'runtime_contract',
+      trust: 'trusted',
+      ttl: 'turn',
+      payload: {
+        kind: 'text',
+        value: policy,
+      },
+    });
+  }
+
+  return { state, fragments };
+}
+
 export function apply(ctx: Context, config: Config = {}): void {
-  const stickerDir = config.stickerDir?.trim() || './data/chathub/stickers';
+  const stickerDir = config.stickerDir?.trim() || DEFAULT_STICKER_DIR;
   const catalog = loadStickerCatalog(stickerDir);
+  setRuntimeStickerCatalog(stickerDir, catalog);
   if (!catalog?.entries.length) {
     logger.warn('sticker catalog is unavailable: %s/%s', stickerDir, 'catalog.generated.json');
   } else {
@@ -111,46 +180,15 @@ export function apply(ctx: Context, config: Config = {}): void {
 
         const room = context.options?.room;
         const preset = room?.preset?.trim() || null;
-        const availableCount =
-          catalog?.entries.filter(
-            (entry) => entry.scopes.includes('global') || (preset ? entry.scopes.includes(`persona:${preset}`) : false),
-          ).length ?? 0;
-        setStickerCapabilityState(session, {
-          catalog: catalog ?? null,
-          preset,
-          availableCount,
-        });
-
+        const { state, fragments } = resolveStickerCapabilityArtifacts(preset);
+        setStickerCapabilityState(session, state);
         const conversationId = room?.conversationId;
-        const capability = catalog ? buildStickerCapabilityDescriptor({ catalog, preset }) : null;
-        if (!conversationId || !capability || !catalog) {
+        if (!conversationId || !fragments.length) {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
 
-        registerPromptFragment(conversationId, {
-          source: 'qqbot_sticker_capability',
-          title: 'Sticker Capability State',
-          authority: 'runtime_contract',
-          trust: 'trusted',
-          ttl: 'turn',
-          payload: {
-            kind: 'json',
-            value: capability,
-          },
-        });
-        const policy = buildStickerCapabilityPolicy({ catalog, preset });
-        if (policy) {
-          registerPromptFragment(conversationId, {
-            source: 'qqbot_sticker_execution_rules',
-            title: 'Sticker Execution Rules',
-            authority: 'runtime_contract',
-            trust: 'trusted',
-            ttl: 'turn',
-            payload: {
-              kind: 'text',
-              value: policy,
-            },
-          });
+        for (const fragment of fragments) {
+          registerPromptFragment(conversationId, fragment);
         }
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })

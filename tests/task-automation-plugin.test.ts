@@ -51,14 +51,27 @@ vi.mock('koishi', () => {
       enum: () => createSchemaNode(),
     },
     Session: class {},
-    h: {
+    h: Object.assign(
+      ((type: string, attrs: Record<string, unknown>) => ({ type, attrs, children: [] })) as any,
+      {
       at: (id: string) => ({ type: 'at', attrs: { id }, children: [] }),
       text: (content: string) => ({
         type: 'text',
         attrs: { content },
         children: [],
       }),
-    },
+        image: (src: unknown, mime?: string) => ({
+          type: 'image',
+          attrs: { src, mime },
+          children: [],
+        }),
+        audio: (src: unknown) => ({
+          type: 'audio',
+          attrs: { src },
+          children: [],
+        }),
+      },
+    ),
   };
 });
 
@@ -131,6 +144,10 @@ function createHarness(seed: Record<string, Record<string, any>[]> = {}) {
   const bot = {
     selfId: 'bot-1',
     platform: 'onebot',
+    internal: {
+      canSendRecord: vi.fn(async () => true),
+      sendGroupMsg: vi.fn(async () => ['msg-id']),
+    },
     sendMessage: vi.fn(async () => ['msg-id']),
     session(event: Record<string, any> = {}) {
       return {
@@ -152,6 +169,9 @@ function createHarness(seed: Record<string, Record<string, any>[]> = {}) {
     middleware: vi.fn(),
     command: vi.fn(),
     chatluna: {
+      contextManager: {
+        inject: vi.fn(),
+      },
       platform: {
         registerTool: vi.fn((name: string, tool: any) => {
           tools[name] = tool;
@@ -161,7 +181,15 @@ function createHarness(seed: Record<string, Record<string, any>[]> = {}) {
         }),
       },
       chat: vi.fn(async (_session: any, _room: any, _message: any, _events: any, _stream: boolean, _vars: any, _post: any, _req: string, _toolMask: any) => ({
-        content: '自动化执行结果',
+        content: JSON.stringify({
+          decision: 'reply',
+          messages: [
+            {
+              modality: 'text',
+              content: '自动化执行结果',
+            },
+          ],
+        }),
         additional_kwargs: {},
       })),
     },
@@ -262,14 +290,18 @@ function createJob(overrides: Record<string, any> = {}) {
 }
 
 describe('task automation tools and execution', () => {
+  const originalActiveTab = process.env.CHATLUNA_ACTIVE_TAB;
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-03T10:00:00+08:00'));
+    process.env.CHATLUNA_ACTIVE_TAB = 'openai';
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    process.env.CHATLUNA_ACTIVE_TAB = originalActiveTab;
   });
 
   it('creates a once automation job from same-day natural schedule text', async () => {
@@ -401,7 +433,7 @@ describe('task automation tools and execution', () => {
     ]);
   });
 
-  it('executes due once jobs via independent agent run and sends group mention result', async () => {
+  it('executes due once jobs via independent agent run and uses shared structured reply schema', async () => {
     const automationMask = {
       mode: 'allow',
       allow: ['web_search'],
@@ -445,6 +477,16 @@ describe('task automation tools and execution', () => {
       'automation',
       expect.objectContaining({ roomId: 7, conversationId: 'conv-1' }),
     );
+    const modelMessage = harness.ctx.chatluna.chat.mock.calls[0]?.[2] as { additional_kwargs?: Record<string, unknown> } | undefined;
+    expect(modelMessage?.additional_kwargs).toEqual(
+      expect.objectContaining({
+        qqbot_reply_mode: 'automation',
+        qqbot_final_response_schema: expect.objectContaining({
+          title: 'StructuredReplyV1',
+        }),
+      }),
+    );
+    expect(modelMessage?.additional_kwargs).not.toHaveProperty('qqbot_final_response_instruction');
     expect(harness.ctx.chatluna.chat.mock.calls[0]?.[8]).toEqual(automationMask);
     expect(harness.bot.sendMessage).toHaveBeenCalled();
     expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
@@ -454,6 +496,9 @@ describe('task automation tools and execution', () => {
       expect.objectContaining({
         status: 'succeeded',
         outputText: '自动化执行结果',
+        outputPayload: expect.objectContaining({
+          decision: 'reply',
+        }),
       }),
     ]);
   });
@@ -510,8 +555,223 @@ describe('task automation tools and execution', () => {
       expect.objectContaining({
         status: 'succeeded',
         outputText: '自动化执行结果',
+        outputPayload: expect.objectContaining({
+          decision: 'reply',
+        }),
       }),
     ]);
+  });
+
+  it('injects structured reply contract and recent source conversation context before execution', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间', conversationId: 'conv-ctx' })],
+      chathub_conversation: [
+        {
+          id: 'conv-ctx',
+          latestId: 'm3',
+        },
+      ],
+      chathub_message: [
+        {
+          id: 'm1',
+          conversation: 'conv-ctx',
+          role: 'human',
+          parent: null,
+          content: '第一句用户消息',
+        },
+        {
+          id: 'm2',
+          conversation: 'conv-ctx',
+          role: 'ai',
+          parent: 'm1',
+          content: '上一轮助手回复',
+        },
+        {
+          id: 'm3',
+          conversation: 'conv-ctx',
+          role: 'human',
+          parent: 'm2',
+          content: '第二句用户消息',
+        },
+      ],
+      automation_job: [createJob({ runAt: Date.now() - 1, sourceConversationId: 'conv-ctx' })],
+    });
+    await harness.runReady();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(harness.ctx.chatluna.contextManager.inject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'qqbot_automation_prompt_envelope',
+        conversationId: expect.any(String),
+        stage: 'after_scratchpad',
+        value: expect.arrayContaining([
+          expect.objectContaining({
+            role: 'system',
+            content: expect.stringContaining('qqbot_agent_reply_contract'),
+          }),
+          expect.objectContaining({
+            role: 'system',
+            content: expect.stringContaining('qqbot_automation_recent_context'),
+          }),
+          expect.objectContaining({
+            role: 'system',
+            content: expect.stringContaining('第一句用户消息'),
+          }),
+          expect.objectContaining({
+            role: 'system',
+            content: expect.stringContaining('上一轮助手回复'),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('sends real mention segments from structured rich_text without mentionCreator wrapper', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间' })],
+      automation_job: [createJob({ runAt: Date.now() - 1, mentionCreator: 0 })],
+    });
+    harness.ctx.chatluna.chat.mockResolvedValueOnce({
+      content: JSON.stringify({
+        decision: 'reply',
+        messages: [
+          {
+            modality: 'rich_text',
+            segments: [
+              { kind: 'mention', userId: '3623807220' },
+              { kind: 'text', text: ' 继续看《Ave Mujica》。' },
+            ],
+          },
+        ],
+      }),
+      additional_kwargs: {},
+    });
+    await harness.runReady();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(harness.bot.sendMessage).toHaveBeenCalledTimes(1);
+    const richTextSendCall = harness.bot.sendMessage.mock.calls[0] as unknown[] | undefined;
+    expect(richTextSendCall?.[1]).toEqual([
+      { type: 'at', attrs: { id: '3623807220' }, children: [] },
+      { type: 'text', attrs: { content: ' 继续看《Ave Mujica》。' }, children: [] },
+    ]);
+    expect(await harness.database.get('automation_job_run', { jobId: 1 })).toEqual([
+      expect.objectContaining({
+        status: 'succeeded',
+        outputText: '@3623807220 继续看《Ave Mujica》。',
+      }),
+    ]);
+  });
+
+  it('accepts decision=no_reply as a successful automation run', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间' })],
+      automation_job: [createJob({ runAt: Date.now() - 1 })],
+    });
+    harness.ctx.chatluna.chat.mockResolvedValueOnce({
+      content: JSON.stringify({
+        decision: 'no_reply',
+      }),
+      additional_kwargs: {},
+    });
+    await harness.runReady();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(harness.bot.sendMessage).not.toHaveBeenCalled();
+    expect(await harness.database.get('automation_job_run', { jobId: 1 })).toEqual([
+      expect.objectContaining({
+        status: 'succeeded',
+        outputText: null,
+        outputPayload: { decision: 'no_reply' },
+      }),
+    ]);
+  });
+
+  it('delivers voice replies through the shared reply transport executor', async () => {
+    const originalTtsBaseUrl = process.env.QQ_VOICE_TTS_BASE_URL;
+    const originalVoiceOutputEnabled = process.env.QQ_VOICE_OUTPUT_ENABLED;
+    try {
+      process.env.QQ_VOICE_TTS_BASE_URL = 'http://tts.local';
+      process.env.QQ_VOICE_OUTPUT_ENABLED = 'true';
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/healthz')) {
+          return new Response('ok', { status: 200 });
+        }
+        if (url.endsWith('/synthesize')) {
+          return new Response(Uint8Array.from([82, 73, 70, 70, 36, 0, 0, 0, 87, 65, 86, 69, 102, 109, 116, 32, 16, 0, 0, 0, 1, 0, 1, 0, 64, 31, 0, 0, 128, 62, 0, 0, 2, 0, 16, 0, 100, 97, 116, 97, 0, 0, 0, 0]), { status: 200 });
+        }
+        return new Response('not-found', { status: 404 });
+      }));
+      const harness = createHarness({
+        chathub_room: [createRoom({ roomName: '当前群房间' })],
+        automation_job: [createJob({ runAt: Date.now() - 1 })],
+      });
+      harness.ctx.chatluna.chat.mockResolvedValueOnce({
+        content: JSON.stringify({
+          decision: 'reply',
+          messages: [
+            {
+              modality: 'voice',
+              content: '这是语音回复。',
+            },
+          ],
+        }),
+        additional_kwargs: {},
+      });
+      await harness.runReady();
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(await harness.database.get('automation_job_run', { jobId: 1 })).toEqual([
+        expect.objectContaining({
+          status: 'succeeded',
+        }),
+      ]);
+      expect(harness.bot.sendMessage).toHaveBeenCalledTimes(1);
+      const voiceSendCall = harness.bot.sendMessage.mock.calls[0] as unknown[] | undefined;
+      expect(voiceSendCall?.[1]).toEqual(
+        expect.objectContaining({
+          type: 'audio',
+        }),
+      );
+    } finally {
+      process.env.QQ_VOICE_TTS_BASE_URL = originalTtsBaseUrl;
+      process.env.QQ_VOICE_OUTPUT_ENABLED = originalVoiceOutputEnabled;
+    }
+  });
+
+  it('delivers meme replies through the shared reply transport executor', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间' })],
+      automation_job: [createJob({ runAt: Date.now() - 1 })],
+    });
+    harness.ctx.chatluna.chat.mockResolvedValueOnce({
+      content: JSON.stringify({
+        decision: 'reply',
+        messages: [
+          {
+            modality: 'meme',
+            content: '无语地看对方一眼',
+          },
+        ],
+      }),
+      additional_kwargs: {},
+    });
+    await harness.runReady();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(harness.bot.sendMessage).toHaveBeenCalledTimes(1);
+    const memeSendCall = harness.bot.sendMessage.mock.calls[0] as unknown[] | undefined;
+    expect(memeSendCall?.[1]).toEqual(
+      expect.objectContaining({
+        type: 'image',
+      }),
+    );
   });
 
   it('follows the latest source room model at execution time', async () => {

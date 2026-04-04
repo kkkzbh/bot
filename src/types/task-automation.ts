@@ -36,6 +36,7 @@ export interface AutomationJobRun {
   status: AutomationJobRunStatus;
   error: string | null;
   outputText: string | null;
+  outputPayload: unknown | null;
   deliveryReceipt: string | null;
 }
 
