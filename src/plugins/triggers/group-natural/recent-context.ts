@@ -1,8 +1,9 @@
+import { HumanMessage, type MessageContent, type MessageContentComplex } from '@langchain/core/messages';
 import { resolveSessionDisplayName } from '../../shared/session/index.js';
 
 const DEFAULT_MAX_GROUPS = 128;
 const DEFAULT_MAX_MESSAGES_PER_GROUP = 24;
-const DEFAULT_RECENT_CONTEXT_TAIL_LIMIT = 4;
+const DEFAULT_RECENT_CONTEXT_TAIL_LIMIT = 12;
 
 type SessionLike = {
   platform?: string;
@@ -19,26 +20,13 @@ type SessionLike = {
   username?: string | null;
 };
 
-type PromptRuntimeMessageLike = {
-  id?: unknown;
-  name?: string;
-  content?: unknown;
-  additional_kwargs?: Record<string, unknown>;
-  getType: () => string;
-};
-
-type PromptRuntimeLike = {
-  chatHistory?: PromptRuntimeMessageLike[];
-  input?: PromptRuntimeMessageLike | null;
-  configurable?: {
-    session?: SessionLike | null;
-  } | null;
-};
-
 export interface GroupRecentContextEntry {
   messageId: string | null;
   userId: string;
+  speakerName: string;
   renderedText: string;
+  imageCount: number;
+  sessionSnapshot: SessionLike;
   capturedAt: number;
 }
 
@@ -104,6 +92,44 @@ export class GroupRecentContextCache {
     this.buckets.set(normalizedKey, nextBucket);
   }
 
+  consume(
+    groupScopeKey: string,
+    options: {
+      limit?: number;
+      exclude?: (entry: GroupRecentContextEntry) => boolean;
+    } = {},
+  ): GroupRecentContextEntry[] {
+    const normalizedKey = groupScopeKey.trim();
+    if (!normalizedKey) return [];
+
+    const bucket = this.buckets.get(normalizedKey);
+    if (!bucket?.length) return [];
+
+    const limit = Number.isFinite(options.limit) ? Math.max(1, Math.floor(options.limit as number)) : DEFAULT_RECENT_CONTEXT_TAIL_LIMIT;
+    const exclude = options.exclude ?? (() => false);
+    const retained: GroupRecentContextEntry[] = [];
+    const consumed: GroupRecentContextEntry[] = [];
+
+    for (let index = bucket.length - 1; index >= 0; index -= 1) {
+      const entry = bucket[index];
+      if (exclude(entry)) {
+        retained.unshift(entry);
+        continue;
+      }
+
+      if (consumed.length < limit) {
+        consumed.unshift(entry);
+      }
+    }
+
+    this.buckets.delete(normalizedKey);
+    if (retained.length > 0) {
+      this.buckets.set(normalizedKey, retained);
+    }
+
+    return consumed;
+  }
+
   clear(): void {
     this.buckets.clear();
   }
@@ -132,22 +158,79 @@ export function buildGroupScopeKey(session: SessionLike): string | null {
   return `${platform}:${botSelfId}:group:${groupId}`;
 }
 
+function sanitizeContextText(text: string): string {
+  return text
+    .replace(/\[CQ:reply,[^\]]+\]/gi, ' ')
+    .replace(/<img\b[^>]*>/gi, ' ')
+    .replace(/\[CQ:image,[^\]]+\]/gi, ' ')
+    .trim();
+}
+
 function normalizeMessageContent(session: SessionLike): string {
-  const stripped = typeof session.stripped?.content === 'string' ? session.stripped.content.trim() : '';
+  const stripped = typeof session.stripped?.content === 'string' ? sanitizeContextText(session.stripped.content) : '';
   if (stripped) return stripped;
-  return typeof session.content === 'string' ? session.content.trim() : '';
+  return typeof session.content === 'string' ? sanitizeContextText(session.content) : '';
+}
+
+function normalizeImageUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function extractImageUrlsFromElements(session: SessionLike): string[] {
+  const elements = Array.isArray(session.elements) ? session.elements : [];
+  return [...new Set(elements
+    .map((element) => {
+      const typedElement =
+        element && typeof element === 'object'
+          ? (element as { type?: unknown; attrs?: Record<string, unknown> })
+          : null;
+      const type = typeof typedElement?.type === 'string' ? typedElement.type.toLowerCase() : '';
+      if (type !== 'img' && type !== 'image') return null;
+
+      const attrs = typedElement?.attrs ?? {};
+      return (
+        normalizeImageUrl(attrs.imageUrl) ??
+        normalizeImageUrl(attrs.url) ??
+        normalizeImageUrl(attrs.src)
+      );
+    })
+    .filter((url): url is string => Boolean(url)))];
+}
+
+function extractImageUrlsFromRawContent(rawContent: string): string[] {
+  const urls = [
+    ...rawContent.matchAll(/<img\b[^>]*\bsrc=(["'])(.*?)\1/gi),
+  ].map((match) => match[2]?.trim() ?? '').filter(Boolean);
+
+  for (const match of rawContent.matchAll(/\[CQ:image,([^\]]+)\]/gi)) {
+    const attrs = match[1] ?? '';
+    const resolved =
+      attrs.match(/(?:^|,)url=([^,\]]+)/i)?.[1] ??
+      attrs.match(/(?:^|,)src=([^,\]]+)/i)?.[1] ??
+      attrs.match(/(?:^|,)file=(base64:\/\/[^,\]]+)/i)?.[1] ??
+      attrs.match(/(?:^|,)file=(data:image[^,\]]+)/i)?.[1];
+    if (resolved?.trim()) {
+      urls.push(resolved.trim());
+    }
+  }
+
+  return [...new Set(urls)];
+}
+
+function collectImageUrls(session: SessionLike): string[] {
+  const elementUrls = extractImageUrlsFromElements(session);
+  if (elementUrls.length > 0) return elementUrls;
+
+  const rawContent = typeof session.content === 'string' ? session.content : '';
+  if (!rawContent) return [];
+  return extractImageUrlsFromRawContent(rawContent);
 }
 
 function countImageInputParts(session: SessionLike): number {
-  const elements = Array.isArray(session.elements) ? session.elements : [];
-  const elementCount = elements.filter((element) => {
-    const type =
-      typeof (element as { type?: unknown } | null | undefined)?.type === 'string'
-        ? String((element as { type?: unknown }).type).toLowerCase()
-        : '';
-    return type === 'img' || type === 'image';
-  }).length;
-  if (elementCount > 0) return elementCount;
+  const imageUrls = collectImageUrls(session);
+  if (imageUrls.length > 0) return imageUrls.length;
 
   const rawContent = typeof session.content === 'string' ? session.content : '';
   const cqMatches = rawContent.match(/\[CQ:image,[^\]]+\]/gi)?.length ?? 0;
@@ -177,50 +260,47 @@ function buildRenderedBody(text: string, imageCount: number): string {
   return `${normalizedText}\n${placeholder}`;
 }
 
-function flattenInputContent(content: unknown): string {
-  if (typeof content === 'string') return content.trim();
-  if (!Array.isArray(content)) return '';
-
-  return content
-    .map((part) => {
-      if (!part || typeof part !== 'object') return '';
-      return typeof (part as { text?: unknown }).text === 'string'
-        ? String((part as { text?: unknown }).text).trim()
-        : '';
-    })
-    .filter(Boolean)
-    .join('\n')
-    .trim();
+function resolveSpeakerName(session: SessionLike, userId: string): string {
+  return resolveSessionDisplayName({
+    author: session.author
+      ? {
+          ...(typeof session.author.nick === 'string' ? { nick: session.author.nick } : {}),
+          ...(typeof session.author.name === 'string' ? { name: session.author.name } : {}),
+        }
+      : undefined,
+    username: typeof session.username === 'string' ? session.username : undefined,
+    userId,
+  });
 }
 
-function isCurrentTurnEntry(
-  entry: GroupRecentContextEntry,
-  session: SessionLike,
-  currentInput: PromptRuntimeLike['input'],
-): boolean {
-  const currentMessageId =
-    typeof session.messageId === 'string' && session.messageId.trim() ? session.messageId.trim() : null;
-  if (currentMessageId) {
-    return entry.messageId === currentMessageId;
-  }
-
-  const currentUserId =
-    typeof currentInput?.id === 'string' && currentInput.id.trim()
-      ? currentInput.id.trim()
-      : typeof session.userId === 'string' && session.userId.trim()
-        ? session.userId.trim()
-        : null;
-  if (!currentUserId || entry.userId !== currentUserId) return false;
-
-  const currentRenderedText = flattenInputContent(currentInput?.content);
-  if (!currentRenderedText) return false;
-  return entry.renderedText === currentRenderedText;
+function buildSessionSnapshot(session: SessionLike): SessionLike {
+  return {
+    platform: session.platform,
+    bot: session.bot,
+    guildId: session.guildId,
+    channelId: session.channelId,
+    userId: session.userId,
+    isDirect: session.isDirect,
+    messageId: session.messageId,
+    content: session.content,
+    stripped: session.stripped ? { content: session.stripped.content } : undefined,
+    elements: Array.isArray(session.elements) ? [...session.elements] : undefined,
+    author: session.author
+      ? {
+          ...(typeof session.author.nick === 'string' ? { nick: session.author.nick } : {}),
+          ...(typeof session.author.name === 'string' ? { name: session.author.name } : {}),
+        }
+      : undefined,
+    username: session.username,
+  };
 }
 
-export function capturePassiveGroupRecentContext(session: SessionLike): GroupRecentContextEntry | null {
-  const groupScopeKey = buildGroupScopeKey(session);
-  if (!groupScopeKey) return null;
-
+function buildRenderedContextPayload(session: SessionLike): {
+  userId: string;
+  speakerName: string;
+  renderedText: string;
+  imageCount: number;
+} | null {
   const userId = typeof session.userId === 'string' ? session.userId.trim() : '';
   if (!userId || userId === session.bot?.selfId) return null;
 
@@ -228,56 +308,144 @@ export function capturePassiveGroupRecentContext(session: SessionLike): GroupRec
   const imageCount = countImageInputParts(session);
   if (!text && imageCount < 1) return null;
 
-  const renderedText = formatSpeakerLine(
+  const speakerName = resolveSpeakerName(session, userId);
+  return {
     userId,
-    resolveSessionDisplayName({
-      author: session.author
-        ? {
-            ...(typeof session.author.nick === 'string' ? { nick: session.author.nick } : {}),
-            ...(typeof session.author.name === 'string' ? { name: session.author.name } : {}),
-          }
-        : undefined,
-      username: typeof session.username === 'string' ? session.username : undefined,
-      userId,
-    }),
-    buildRenderedBody(text, imageCount),
-  );
+    speakerName,
+    imageCount,
+    renderedText: formatSpeakerLine(userId, speakerName, buildRenderedBody(text, imageCount)),
+  };
+}
+
+function isCurrentSessionEntry(
+  entry: GroupRecentContextEntry,
+  session: SessionLike,
+): boolean {
+  const currentMessageId =
+    typeof session.messageId === 'string' && session.messageId.trim() ? session.messageId.trim() : null;
+  if (currentMessageId) {
+    return entry.messageId === currentMessageId;
+  }
+
+  const payload = buildRenderedContextPayload(session);
+  if (!payload) return false;
+  return entry.userId === payload.userId && entry.renderedText === payload.renderedText;
+}
+
+export function capturePassiveGroupRecentContext(session: SessionLike): GroupRecentContextEntry | null {
+  const groupScopeKey = buildGroupScopeKey(session);
+  if (!groupScopeKey) return null;
+
+  const payload = buildRenderedContextPayload(session);
+  if (!payload) return null;
 
   const entry: GroupRecentContextEntry = {
     messageId:
       typeof session.messageId === 'string' && session.messageId.trim() ? session.messageId.trim() : null,
-    userId,
-    renderedText,
+    userId: payload.userId,
+    speakerName: payload.speakerName,
+    renderedText: payload.renderedText,
+    imageCount: payload.imageCount,
+    sessionSnapshot: buildSessionSnapshot(session),
     capturedAt: Date.now(),
   };
   groupRecentContextCache.append(groupScopeKey, entry);
   return entry;
 }
 
-function toRuntimeMessage(entry: GroupRecentContextEntry): PromptRuntimeMessageLike {
-  return {
-    content: entry.renderedText,
-    id: entry.userId,
-    additional_kwargs: {},
-    getType: () => 'human',
-  };
+export function consumePassiveGroupRecentContext(
+  session: SessionLike,
+  limit = DEFAULT_RECENT_CONTEXT_TAIL_LIMIT,
+): GroupRecentContextEntry[] {
+  const groupScopeKey = buildGroupScopeKey(session);
+  if (!groupScopeKey) return [];
+
+  return groupRecentContextCache.consume(groupScopeKey, {
+    limit,
+    exclude: (entry) => isCurrentSessionEntry(entry, session),
+  });
 }
 
-export function mergeRuntimeChatHistoryWithGroupRecentContext(
-  runtime: PromptRuntimeLike,
-): void {
-  const session = runtime.configurable?.session as SessionLike | undefined;
-  if (!session || session.isDirect) return;
+function isTextContentPart(part: unknown): part is MessageContentComplex & { type: 'text'; text: string } {
+  return Boolean(
+    part &&
+      typeof part === 'object' &&
+      (part as { type?: unknown }).type === 'text' &&
+      typeof (part as { text?: unknown }).text === 'string',
+  );
+}
 
-  const groupScopeKey = buildGroupScopeKey(session);
-  if (!groupScopeKey) return;
+function formatSpeakerTaggedMessageContent(
+  content: MessageContent,
+  speakerId: string,
+  speakerName: string,
+): MessageContent {
+  if (typeof content === 'string') {
+    return formatSpeakerLine(speakerId, speakerName, content);
+  }
 
-  const cachedEntries = groupRecentContextCache
-    .get(groupScopeKey)
-    .filter((entry) => !isCurrentTurnEntry(entry, session, runtime.input))
-    .slice(-DEFAULT_RECENT_CONTEXT_TAIL_LIMIT);
+  if (!Array.isArray(content)) {
+    return formatSpeakerLine(speakerId, speakerName, '');
+  }
 
-  if (!cachedEntries.length) return;
+  const parts = content.filter((part): part is MessageContentComplex => Boolean(part && typeof part === 'object'));
+  const textIndex = parts.findIndex((part) => isTextContentPart(part));
+  if (textIndex < 0) {
+    return [
+      { type: 'text', text: formatSpeakerLine(speakerId, speakerName, '') },
+      ...parts,
+    ];
+  }
 
-  runtime.chatHistory = [...(runtime.chatHistory ?? []), ...cachedEntries.map(toRuntimeMessage)];
+  return parts.map((part, index) => {
+    if (index !== textIndex || !isTextContentPart(part)) {
+      return part;
+    }
+
+    return {
+      ...part,
+      text: formatSpeakerLine(speakerId, speakerName, part.text),
+    } satisfies MessageContentComplex;
+  });
+}
+
+export function buildGroupRecentContextFallbackContent(entry: GroupRecentContextEntry): MessageContent | null {
+  const text = normalizeMessageContent(entry.sessionSnapshot);
+  const imageUrls = collectImageUrls(entry.sessionSnapshot);
+  if (!text && imageUrls.length < 1) return null;
+
+  if (imageUrls.length < 1) return text;
+
+  const parts: MessageContentComplex[] = imageUrls.map((url) => ({
+    type: 'image_url',
+    image_url: { url },
+  }));
+  if (text) {
+    parts.unshift({ type: 'text', text });
+  }
+
+  return parts;
+}
+
+export function toGroupRecentContextHistoryMessage(
+  entry: GroupRecentContextEntry,
+  options: { content?: MessageContent } = {},
+): HumanMessage {
+  const content =
+    options.content !== undefined
+      ? formatSpeakerTaggedMessageContent(options.content, entry.userId, entry.speakerName)
+      : entry.renderedText;
+  return new HumanMessage({
+    content,
+    id: entry.userId,
+    additional_kwargs: {
+      qqbot_speaker_format: {
+        version: 'speaker_id_v1',
+        speakerId: entry.userId,
+        speakerName: entry.speakerName,
+        isDirect: false,
+        preformatted: true,
+      },
+    },
+  });
 }

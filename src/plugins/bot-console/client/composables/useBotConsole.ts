@@ -76,6 +76,7 @@ export const MODEL_SHARED_KEYS = [
   'OPENAI_API_KEY',
   'OPENAI_MODEL',
   'CHATLUNA_DEFAULT_PRESET',
+  'CHATLUNA_MAX_CONTEXT_RATIO',
 ] as const
 
 export const MODEL_TAB_IDS = ['siliconflow', 'openai', 'copilot'] as const satisfies readonly BotConsoleModelTabId[]

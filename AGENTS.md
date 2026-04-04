@@ -41,6 +41,7 @@
 - 当前常用线上排查命令：`ssh -o ClearAllForwardings=yes bot 'systemctl --user status qqbot.target qqbot-stack.service qqbot-koishi.service'`
 - 当前本机已约定 `ssh bot` 作为入口，并自带 SSH 隧道：本地 `13080 -> 服务器 3080`（WebUI），本地 `15140 -> 服务器 5140`（Koishi 控制台）。
 - 若需要只执行远程命令而不占用本地转发端口，追加 `-o ClearAllForwardings=yes`。
+- 服务器排查时，复杂远程命令不要硬塞进单行 SSH 引号；优先本地先写临时脚本，再用 `ssh ... 'bash -s' < /tmp/script.sh` 喂给远端。若还要进容器，继续优先用第二个临时脚本配合 `podman exec -i ... bash -s < /tmp/in-container.sh`，避免多层引号/转义错误。
 
 ## 注意
 1. 不要忽略 bot 的双环境配置；新增或修改 bot 环境变量时，必须同步检查 `.env.example`（本地模板）、`.env.server.example`（服务器模板）、`.env.local`、`.env.server`

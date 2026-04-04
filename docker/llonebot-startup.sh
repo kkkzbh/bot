@@ -6,15 +6,18 @@ cd /app/llbot
 FILE="default_config.json"
 WEBUI_PORT="${WEBUI_PORT:-3080}"
 LLONEBOT_WS_PORT="${LLONEBOT_WS_PORT:-3001}"
+LLONEBOT_DISABLE_WEBUI_AUTH="${LLONEBOT_DISABLE_WEBUI_AUTH:-false}"
 PMHQ_HOST="${pmhq_host:-${PMHQ_HOST:-pmhq}}"
 PMHQ_PORT="${pmhq_port:-${PMHQ_PORT:-13000}}"
 
 node <<'EOF_NODE'
-const { existsSync, readdirSync, readFileSync, writeFileSync } = require('node:fs')
+const { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs')
 const { join } = require('node:path')
 
 const file = 'default_config.json'
 const dataDir = '/app/llbot/data'
+const llbotEntrypoint = '/app/llbot/llbot.js'
+const disableWebUIAuth = /^(1|true|yes|on)$/i.test(process.env.LLONEBOT_DISABLE_WEBUI_AUTH || '')
 
 function applyManagedConfig(config) {
   const ws = config.ob11?.connect?.find((item) => item.type === 'ws')
@@ -66,6 +69,30 @@ function writeManagedConfig(filePath) {
   writeFileSync(filePath, `${JSON.stringify(applyManagedConfig(config), null, 2)}\n`)
 }
 
+function disableWebUIAuthMiddleware() {
+  if (!disableWebUIAuth) {
+    return
+  }
+
+  const source = readFileSync(llbotEntrypoint, 'utf8')
+  const startMarker = 'function authMiddleware(req, res, next) {'
+  const endMarker = '\n//#endregion\n//#region src/webui/BE/utils.ts'
+  const start = source.indexOf(startMarker)
+  const end = source.indexOf(endMarker, start)
+
+  if (start === -1 || end === -1) {
+    throw new Error('Failed to locate llbot WebUI auth middleware')
+  }
+
+  const replacement = `${startMarker}\n\tnext();\n}`
+  writeFileSync(llbotEntrypoint, `${source.slice(0, start)}${replacement}${source.slice(end)}`)
+
+  const tokenPath = join(dataDir, 'webui_token.txt')
+  if (existsSync(tokenPath)) {
+    rmSync(tokenPath)
+  }
+}
+
 writeManagedConfig(file)
 
 if (existsSync(dataDir)) {
@@ -74,6 +101,8 @@ if (existsSync(dataDir)) {
     writeManagedConfig(join(dataDir, name))
   }
 }
+
+disableWebUIAuthMiddleware()
 EOF_NODE
 
 mkdir -p /app/llbot/data

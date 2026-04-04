@@ -33,6 +33,7 @@ services:
       pmhq_port: ${PMHQ_PORT:-13000}
       WEBUI_PORT: ${LLONEBOT_WEBUI_PORT:-3080}
       LLONEBOT_WS_PORT: ${LLONEBOT_WS_PORT:-3001}
+      LLONEBOT_DISABLE_WEBUI_AUTH: ${LLONEBOT_DISABLE_WEBUI_AUTH:-true}
       ONEBOT_TOKEN: ${ONEBOT_TOKEN:-}
       TZ: ${TZ:-Asia/Shanghai}
     ports:

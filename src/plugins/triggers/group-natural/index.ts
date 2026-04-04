@@ -1,4 +1,5 @@
 import { Context, Logger, Schema, Session } from 'koishi';
+import type { MessageContent } from '@langchain/core/messages';
 import type { FeaturePolicyServiceLike } from '../../../types/feature-policy.js';
 import { normalizeGroupId, parseGroupSet } from '../../shared/group-id.js';
 import {
@@ -18,13 +19,16 @@ import {
 } from './state.js';
 import {
   buildGroupScopeKey,
+  buildGroupRecentContextFallbackContent,
   capturePassiveGroupRecentContext,
+  consumePassiveGroupRecentContext,
   groupRecentContextCache,
-  mergeRuntimeChatHistoryWithGroupRecentContext,
+  toGroupRecentContextHistoryMessage,
 } from './recent-context.js';
 
 const logger = new Logger('group-natural-trigger');
 const allowReplyResolverName = 'group-natural-trigger';
+const CHAT_CHAIN_CONTINUE = 2;
 
 export const name = 'group-natural-trigger';
 export const inject = { required: ['chatluna'], optional: ['featurePolicy'] } as const;
@@ -119,10 +123,49 @@ type ContextWithFeaturePolicy = Context & {
       name: string,
       resolver: (arg: { session: Session; context: unknown }) => boolean | void | Promise<boolean | void>,
     ) => () => void;
-    contextManager?: {
-      pipeline: (stage: string, middleware: (runtime: unknown, next: () => Promise<void>) => Promise<void>, priority?: number) => () => void;
+    chatChain?: {
+      middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => ChainHookBuilder;
+    };
+    queryInterfaceWrapper?: (room: unknown, autoCreate?: boolean) => {
+      query: (room: unknown, create?: boolean) => Promise<{
+        chatHistory?: {
+          addMessages?: (messages: unknown[]) => Promise<void>;
+        };
+      }>;
+    } | undefined;
+    messageTransformer?: {
+      transform: (
+        session: unknown,
+        message: unknown[],
+        model?: string,
+        command?: unknown,
+        options?: Record<string, unknown>,
+      ) => Promise<{
+        content?: unknown;
+      }>;
     };
   };
+};
+
+type ChainHookBuilder = {
+  after: (name: string) => ChainHookBuilder;
+  before: (name: string) => ChainHookBuilder;
+};
+
+type MiddlewareContextLike = {
+  options?: {
+    room?: {
+      conversationId?: string;
+      roomId?: string | number;
+      model?: string;
+    };
+  };
+};
+
+type PromotionRoom = {
+  conversationId?: string;
+  roomId?: string | number;
+  model?: string;
 };
 
 function sleep(ms: number): Promise<void> {
@@ -296,6 +339,55 @@ function shouldHandleGroup(session: Session, runtime: RuntimeConfig): boolean {
   return runtime.enabledGroups.has(groupId);
 }
 
+async function buildPromotedHistoryMessage(
+  chatluna: ContextWithFeaturePolicy['chatluna'],
+  room: PromotionRoom,
+  entry: Parameters<typeof toGroupRecentContextHistoryMessage>[0],
+) {
+  if (entry.imageCount < 1) {
+    return toGroupRecentContextHistoryMessage(entry);
+  }
+
+  const messageTransformer = chatluna.messageTransformer;
+  const elements = Array.isArray(entry.sessionSnapshot.elements) ? entry.sessionSnapshot.elements : [];
+  const model = typeof room.model === 'string' ? room.model : '';
+
+  if (messageTransformer && elements.length > 0) {
+    try {
+      const transformed = await messageTransformer.transform(
+        entry.sessionSnapshot as unknown as Session,
+        elements,
+        model,
+        undefined,
+        {
+          quote: false,
+          includeQuoteReply: false,
+        },
+      );
+      if (transformed?.content !== undefined) {
+        return toGroupRecentContextHistoryMessage(entry, {
+          content: transformed.content as MessageContent,
+        });
+      }
+    } catch (error) {
+      logger.warn(
+        'recent group context image promotion fell back to raw image urls for message %s: %s',
+        entry.messageId ?? 'unknown',
+        (error as Error).message,
+      );
+    }
+  }
+
+  const fallbackContent = buildGroupRecentContextFallbackContent(entry);
+  if (fallbackContent != null) {
+    return toGroupRecentContextHistoryMessage(entry, {
+      content: fallbackContent,
+    });
+  }
+
+  return toGroupRecentContextHistoryMessage(entry);
+}
+
 export function apply(ctx: Context, config: Config): void {
   const runtime = toRuntimeConfig(config);
   const serviceCtx = ctx as ContextWithFeaturePolicy;
@@ -304,7 +396,7 @@ export function apply(ctx: Context, config: Config): void {
   const spamStates = new Map<string, SpamState>();
   const nextReplyAt = new Map<string, number>();
   let disposeAllowReplyResolver: (() => void) | null = null;
-  let disposeRecentChatPipeline: (() => void) | null = null;
+  let recentContextPromotionRegistered = false;
 
   const ensureAllowReplyResolverRegistered = (): void => {
     if (disposeAllowReplyResolver) return;
@@ -323,24 +415,62 @@ export function apply(ctx: Context, config: Config): void {
     logger.info('natural trigger allow resolver registered.');
   };
 
-  const ensureRecentChatPipelineRegistered = (): void => {
-    if (disposeRecentChatPipeline) return;
+  const ensureRecentContextPromotionRegistered = (): void => {
+    if (recentContextPromotionRegistered) return;
 
-    const contextManager = serviceCtx.chatluna.contextManager;
-    if (!contextManager) {
-      logger.warn('chatluna context manager is unavailable, skip recent group context pipeline registration.');
+    const chain = serviceCtx.chatluna.chatChain;
+    const queryInterfaceWrapper = serviceCtx.chatluna.queryInterfaceWrapper;
+    if (!chain || typeof queryInterfaceWrapper !== 'function') {
+      logger.warn('chatluna chat chain is unavailable, skip recent group context promotion middleware registration.');
       return;
     }
 
-    disposeRecentChatPipeline = contextManager.pipeline(
-      'chat_history',
-      async (runtime, next) => {
-        mergeRuntimeChatHistoryWithGroupRecentContext(runtime as Parameters<typeof mergeRuntimeChatHistoryWithGroupRecentContext>[0]);
-        await next();
-      },
-      -100,
-    );
-    logger.info('recent group context chat_history pipeline registered.');
+    chain
+      .middleware('qqbot_group_recent_context_promotion', async (rawSession, rawContext) => {
+        const session = rawSession as Session;
+        const context = rawContext as MiddlewareContextLike;
+        const naturalTrigger = getNaturalTriggerState(session as unknown as Record<string, unknown>);
+        if (!naturalTrigger || session.isDirect) {
+          return CHAT_CHAIN_CONTINUE;
+        }
+
+        const room = context.options?.room;
+        const conversationId = typeof room?.conversationId === 'string' ? room.conversationId.trim() : '';
+        if (!room || !conversationId) {
+          return CHAT_CHAIN_CONTINUE;
+        }
+
+        const entries = consumePassiveGroupRecentContext(session);
+        if (!entries.length) {
+          return CHAT_CHAIN_CONTINUE;
+        }
+
+        const interfaceWrapper = queryInterfaceWrapper(room, true);
+        const chatInterface = await interfaceWrapper?.query(room, true);
+        const chatHistory = chatInterface?.chatHistory;
+        if (typeof chatHistory?.addMessages !== 'function') {
+          logger.warn(
+            'recent group context promotion skipped: chat history is unavailable (conversationId=%s).',
+            conversationId,
+          );
+          return CHAT_CHAIN_CONTINUE;
+        }
+
+        await chatHistory.addMessages(
+          await Promise.all(entries.map((entry) => buildPromotedHistoryMessage(serviceCtx.chatluna, room, entry))),
+        );
+        logger.info(
+          'promoted %d recent group context message(s) into conversation history (conversationId=%s).',
+          entries.length,
+          conversationId,
+        );
+        return CHAT_CHAIN_CONTINUE;
+      })
+      .after('chatluna_model_guard')
+      .before('resolve_model');
+
+    recentContextPromotionRegistered = true;
+    logger.info('recent group context promotion middleware registered.');
   };
 
   ctx.middleware(async (session, next) => {
@@ -452,7 +582,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.on('ready', () => {
     ensureAllowReplyResolverRegistered();
-    ensureRecentChatPipelineRegistered();
+    ensureRecentContextPromotionRegistered();
     logger.info(
       'group natural trigger loaded: groups=%d, aliases=%d, direct=%s, focusWindowMs=%d, replyIntervalMs=%d, spam=%d/%dms mute=%dms',
       runtime.enabledGroups.size,
@@ -470,10 +600,6 @@ export function apply(ctx: Context, config: Config): void {
     if (disposeAllowReplyResolver) {
       disposeAllowReplyResolver();
       disposeAllowReplyResolver = null;
-    }
-    if (disposeRecentChatPipeline) {
-      disposeRecentChatPipeline();
-      disposeRecentChatPipeline = null;
     }
   });
 }

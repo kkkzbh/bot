@@ -1,4 +1,4 @@
 interface:
   display_name: "QQBot Mainline Ship"
-  short_description: "Ship qqbot via an independent agent with tests, deploy, and log review"
-  default_prompt: "Use $qqbot-mainline-ship to prepare a modification summary, hand execution to an independent Codex agent, and have it ship qqbot through local validation, probe reporting, main push, GitHub CI/Deploy, and server Koishi log verification."
+  short_description: "Quickly ship qqbot with related checks, deploy, and log review"
+  default_prompt: "Use $qqbot-mainline-ship to quickly complete the qqbot submit and release workflow with atomic commits, related low-cost validation, minimal probe, main push, GitHub CI/Deploy tracking, and server Koishi log review."

@@ -12,6 +12,7 @@ export const FIELD_LABELS: Record<string, string> = {
   CHATLUNA_BASE_URL: '对话模型接口地址',
   CHATLUNA_API_KEY: '对话模型接口密钥',
   CHATLUNA_DEFAULT_MODEL: '对话默认模型',
+  CHATLUNA_MAX_CONTEXT_RATIO: '上下文窗口使用比例',
   CHATLUNA_SILICONFLOW_BASE_URL: '硅基流动接口地址',
   CHATLUNA_SILICONFLOW_API_KEY: '硅基流动接口密钥',
   CHATLUNA_SILICONFLOW_DEFAULT_MODEL: '硅基流动默认模型',
@@ -41,6 +42,8 @@ export const FIELD_HINTS: Record<string, string> = {
     '限制文件系统工具默认可访问的根目录。留空时会跟随 Koishi 启动目录，也就是当前 bot 的工作目录。',
   CHATLUNA_DEFAULT_MODEL:
     '普通聊天默认走这里配置的模型。建议填写完整规范名，例如 siliconflow/Pro/moonshotai/Kimi-K2.5。',
+  CHATLUNA_MAX_CONTEXT_RATIO:
+    '控制主聊天可使用的模型上下文窗口比例。会跟随当前实际 room model 动态计算 token limit，不按 tab 名硬编码。',
   CHATLUNA_OPENAI_DEFAULT_MODEL:
     'OpenAI Tab 当前按 OpenAI 兼容 provider 处理，默认推荐 openai/gpt-5.4-medium-thinking。',
   CHATLUNA_COPILOT_DEFAULT_MODEL:
