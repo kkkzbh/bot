@@ -6,7 +6,6 @@ import type { ChatLunaTool, ChatLunaToolRunnable } from 'koishi-plugin-chatluna/
 import { z } from 'zod';
 import type { AutomationJob, AutomationJobRun, TaskKind, TaskScope } from '../../types/task-automation.js';
 import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
-import { decodeStoredMessageText } from '../memory/index.js';
 import {
   applyReplyStructuredOutputRequest,
   buildReplyCapabilityPromptFragments,
@@ -35,6 +34,7 @@ import {
   type NormalizedOutboundMessage,
 } from '../shared/outbound/index.js';
 import { compilePromptEnvelopeFromFragments, type PromptFragment } from '../shared/prompt-context/index.js';
+import { decodeStoredMessageText } from '../shared/stored-message.js';
 import { resolveStickerCapabilityArtifacts } from '../sticker/index.js';
 import {
   formatNaturalRunAtText,
