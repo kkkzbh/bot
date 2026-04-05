@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apply, inject } from '../src/plugins/triggers/group-natural/index.js';
 import type { NaturalTriggerState } from '../src/plugins/triggers/group-natural/state.js';
-import { buildGroupScopeKey, groupRecentContextCache } from '../src/plugins/triggers/group-natural/recent-context.js';
 
 vi.mock('koishi', () => {
   type MockSchemaNode = {
@@ -52,10 +51,9 @@ function createHarness(
 ): {
   middleware: Middleware;
   chatChainMiddlewares: Map<string, ChatChainMiddleware>;
-  addMessages: ReturnType<typeof vi.fn>;
   messageTransformer: { transform: ReturnType<typeof vi.fn> };
-  registerAllowReplyResolver: ReturnType<typeof vi.fn>;
   queryInterfaceWrapper: ReturnType<typeof vi.fn>;
+  registerAllowReplyResolver: ReturnType<typeof vi.fn>;
   disposeAllowReplyResolver: ReturnType<typeof vi.fn>;
   runReady: () => Promise<void>;
   runDispose: () => Promise<void>;
@@ -64,28 +62,9 @@ function createHarness(
   const chatChainMiddlewares = new Map<string, ChatChainMiddleware>();
   const listeners = new Map<string, EventListener[]>();
   const disposeAllowReplyResolver = vi.fn();
-  const addMessages = vi.fn(async () => undefined);
-  const query = vi.fn(async () => ({
-    chatHistory: {
-      addMessages,
-    },
-  }));
-  const queryInterfaceWrapper = vi.fn(() => ({ query }));
+  const queryInterfaceWrapper = vi.fn();
   const messageTransformer = {
-    transform: vi.fn(async (_session: Record<string, any>, message: unknown[]) => {
-      const image = (message as Array<{ type?: string; attrs?: Record<string, unknown> }>).find(
-        (element) => element?.type === 'img' || element?.type === 'image',
-      );
-      const imageUrl = String(image?.attrs?.imageUrl ?? image?.attrs?.url ?? image?.attrs?.src ?? '');
-      if (imageUrl) {
-        return {
-          content: [{ type: 'image_url', image_url: { url: imageUrl } }],
-        };
-      }
-      return {
-        content: typeof _session.stripped?.content === 'string' ? _session.stripped.content : String(_session.content ?? ''),
-      };
-    }),
+    transform: vi.fn(),
   };
   const registerAllowReplyResolver = vi.fn(function (this: any, _name: string, _resolver: AllowReplyResolver) {
     if (this !== chatlunaService) {
@@ -139,10 +118,9 @@ function createHarness(
   return {
     middleware: middlewares[0],
     chatChainMiddlewares,
-    addMessages,
     messageTransformer,
-    registerAllowReplyResolver,
     queryInterfaceWrapper,
+    registerAllowReplyResolver,
     disposeAllowReplyResolver,
     runReady: () => runHook('ready'),
     runDispose: () => runHook('dispose'),
@@ -184,7 +162,6 @@ describe('group natural trigger middleware', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
-    groupRecentContextCache.clear();
   });
 
   it('declares chatluna as a required injection', () => {
@@ -244,169 +221,14 @@ describe('group natural trigger middleware', () => {
     expect(result.naturalTrigger).toBeNull();
   });
 
-  it('captures passive group context even when natural trigger is disabled', async () => {
-    const { middleware } = createHarness({
-      enabled: false,
-      enabledGroups: '',
-      replyIntervalMs: 0,
-    });
-
-    const session = createSession({
-      channelId: '100',
-      guildId: '100',
-      userId: 'u9',
-      messageId: 'msg-passive-1',
-      content: '这条只是普通群消息',
-    });
-    const result = await runAndCapture(middleware, session);
-
-    expect(result.naturalTrigger).toBeNull();
-    expect(groupRecentContextCache.get(buildGroupScopeKey(session) ?? '')).toEqual([
-      expect.objectContaining({
-        messageId: 'msg-passive-1',
-        userId: 'u9',
-        renderedText: '[speaker_id=u9 speaker_name="u9"] 这条只是普通群消息',
-      }),
-    ]);
-  });
-
-  it('removes the triggering message from passive cache once it enters the session chain', async () => {
-    const { middleware } = createHarness({ replyIntervalMs: 0 });
-
-    const session = createSession({
-      channelId: '100',
-      guildId: '100',
-      userId: 'u7',
-      messageId: 'msg-trigger-1',
-      content: '祥子 帮我看看',
-    });
-
-    const result = await runAndCapture(middleware, session);
-
-    expect(result.naturalTrigger).toEqual({ reason: 'alias', explicit: true });
-    expect(groupRecentContextCache.get(buildGroupScopeKey(session) ?? '')).toEqual([]);
-  });
-
-  it('promotes cached passive group context into real chat history exactly once after a trigger enters the main chain', async () => {
-    const { middleware, runReady, chatChainMiddlewares, addMessages, queryInterfaceWrapper } = createHarness({
-      replyIntervalMs: 0,
-    });
+  it('does not register realtime promotion or media middleware on ready', async () => {
+    const { runReady, chatChainMiddlewares, queryInterfaceWrapper, messageTransformer } = createHarness();
 
     await runReady();
 
-    await runAndCapture(
-      middleware,
-      createSession({
-        channelId: '100',
-        guildId: '100',
-        userId: 'u1',
-        messageId: 'msg-a1',
-        username: '甲',
-        content: '前置消息一',
-      }),
-    );
-    await runAndCapture(
-      middleware,
-      createSession({
-        channelId: '100',
-        guildId: '100',
-        userId: 'u2',
-        messageId: 'msg-a2',
-        username: '乙',
-        content: '前置消息二',
-      }),
-    );
-
-    const promotion = chatChainMiddlewares.get('qqbot_group_recent_context_promotion');
-    expect(promotion).toBeTypeOf('function');
-
-    const triggerSession = createSession({
-      channelId: '100',
-      guildId: '100',
-      userId: 'u3',
-      messageId: 'msg-trigger',
-      username: '丙',
-      content: '祥子 帮我看看',
-    });
-
-    await middleware(triggerSession, async () => {
-      const chainContext = {
-        options: {
-          room: {
-            roomId: 1,
-            conversationId: 'conv-1',
-            model: 'gpt-5.4-mini',
-          },
-        },
-      };
-      await promotion?.(triggerSession, chainContext);
-      await promotion?.(triggerSession, chainContext);
-      return triggerSession.content;
-    });
-
-    expect(queryInterfaceWrapper).toHaveBeenCalledTimes(1);
-    expect(addMessages).toHaveBeenCalledTimes(1);
-    const promotedMessages = addMessages.mock.calls[0]?.[0] as Array<{ content?: string; id?: string }>;
-    expect(promotedMessages.map((message) => message.content)).toEqual([
-      '[speaker_id=u1 speaker_name="甲"] 前置消息一',
-      '[speaker_id=u2 speaker_name="乙"] 前置消息二',
-    ]);
-    expect(promotedMessages.map((message) => message.id)).toEqual(['u1', 'u2']);
-    expect(groupRecentContextCache.get(buildGroupScopeKey(triggerSession) ?? '')).toEqual([]);
-  });
-
-  it('promotes cached image messages as multimodal history instead of text placeholders', async () => {
-    const { middleware, runReady, chatChainMiddlewares, addMessages, messageTransformer } = createHarness({
-      replyIntervalMs: 0,
-    });
-
-    await runReady();
-
-    await runAndCapture(
-      middleware,
-      createSession({
-        channelId: '100',
-        guildId: '100',
-        userId: 'u8',
-        messageId: 'msg-image-cache',
-        username: '图图',
-        content: '',
-        stripped: { content: '' },
-        elements: [{ type: 'img', attrs: { src: 'https://example.com/cache.png' }, children: [] }],
-      }),
-    );
-
-    const promotion = chatChainMiddlewares.get('qqbot_group_recent_context_promotion');
-    const triggerSession = createSession({
-      channelId: '100',
-      guildId: '100',
-      userId: 'u9',
-      messageId: 'msg-trigger-image',
-      username: '触发者',
-      content: '祥子 描述一下这张图',
-    });
-
-    await middleware(triggerSession, async () => {
-      await promotion?.(triggerSession, {
-        options: {
-          room: {
-            roomId: 1,
-            conversationId: 'conv-image-1',
-            model: 'gpt-5.4-mini',
-          },
-        },
-      });
-      return triggerSession.content;
-    });
-
-    expect(messageTransformer.transform).toHaveBeenCalledTimes(1);
-    expect(addMessages).toHaveBeenCalledTimes(1);
-    const promotedMessages = addMessages.mock.calls[0]?.[0] as Array<{ content?: unknown }>;
-    expect(promotedMessages).toHaveLength(1);
-    expect(promotedMessages[0]?.content).toEqual([
-      { type: 'text', text: '[speaker_id=u8 speaker_name="图图"]' },
-      { type: 'image_url', image_url: { url: 'https://example.com/cache.png' } },
-    ]);
+    expect(chatChainMiddlewares.size).toBe(0);
+    expect(queryInterfaceWrapper).not.toHaveBeenCalled();
+    expect(messageTransformer.transform).not.toHaveBeenCalled();
   });
 
   it('keeps reply interval isolated by group', async () => {

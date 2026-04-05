@@ -144,6 +144,18 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     source: 'project',
   }),
   buildCatalogEntry({
+    toolName: 'realtime_message_history',
+    title: '查看实时消息缓存',
+    category: 'builtin',
+    description: '查看当前群聊里尚未注入主链路会话历史的实时消息缓存。',
+    compatibility: 'compatible',
+    compatibilityNote: '只读工具，用于让 reply 主链路按需查看当前群的被动消息缓存。',
+    hardDependencies: [],
+    relatedTools: [],
+    riskLevel: 'low',
+    source: 'project',
+  }),
+  buildCatalogEntry({
     toolName: 'file_read',
     title: '读取文件',
     category: 'file',

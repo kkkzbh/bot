@@ -1,5 +1,9 @@
-import { h } from 'koishi';
-import { formatMentionText } from '../../shared/mention-text.js';
+export {
+  extractFirstIncomingVoice,
+  extractTextContentWithoutVoice,
+  mergeVoiceInputText,
+  type IncomingVoiceElement,
+} from '../../shared/voice/index.js';
 
 const NEGATIVE_STYLE_KEYWORDS = [
   '与你无关',
@@ -32,71 +36,7 @@ const CHINESE_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', 
 const CHINESE_SMALL_UNITS = ['', '十', '百', '千'] as const;
 const CHINESE_SECTION_UNITS = ['', '万', '亿', '兆'] as const;
 
-export interface IncomingVoiceElement {
-  src?: string;
-  file?: string;
-  audioCount: number;
-}
-
 export type VoiceStyle = 'white' | 'black';
-
-export function extractFirstIncomingVoice(content: string): IncomingVoiceElement | null {
-  const elements = h.parse(content);
-  let firstVoice: IncomingVoiceElement | null = null;
-  let audioCount = 0;
-
-  for (const element of elements) {
-    if (element.type !== 'audio') continue;
-    audioCount += 1;
-    if (!firstVoice) {
-      firstVoice = {
-        src: typeof element.attrs?.src === 'string' ? element.attrs.src : undefined,
-        file: typeof element.attrs?.file === 'string' ? element.attrs.file : undefined,
-        audioCount: 0,
-      };
-    }
-  }
-
-  if (!firstVoice) return null;
-  firstVoice.audioCount = audioCount;
-  return firstVoice;
-}
-
-export function extractTextContentWithoutVoice(content: string): string {
-  const parts: string[] = [];
-  const elements = h.parse(content);
-
-  for (const element of elements) {
-    if (element.type === 'audio') continue;
-    if (element.type === 'text') {
-      const text = typeof element.attrs?.content === 'string' ? element.attrs.content : '';
-      if (text.trim()) parts.push(text.trim());
-      continue;
-    }
-
-    if (element.type === 'at') {
-      const mention = formatMentionText({
-        name: typeof element.attrs?.name === 'string' ? element.attrs.name : undefined,
-        id: typeof element.attrs?.id === 'string' ? element.attrs.id : undefined,
-      });
-      if (mention) parts.push(mention);
-    }
-  }
-
-  return parts.join(' ').replace(/\s+/g, ' ').trim();
-}
-
-export function mergeVoiceInputText(originalText: string, transcript: string): string {
-  const original = originalText.trim();
-  const voice = transcript.trim();
-
-  if (!original) return voice;
-  if (!voice) return original;
-  if (original.includes(voice)) return original;
-  if (voice.includes(original)) return voice;
-
-  return `${original}\n${voice}`;
-}
 
 export function pickVoiceStyle(text: string): VoiceStyle {
   const normalized = text.replace(WHITESPACE_PATTERN, '');

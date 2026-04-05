@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { Context, h, Logger, Schema, type Session, type Universal } from 'koishi';
 import type { FeaturePolicyServiceLike } from '../../../types/feature-policy.js';
 import type { ScopedFeatureKey } from '../../../types/feature-policy.js';
@@ -10,12 +9,17 @@ import {
 } from '../../sticker/index.js';
 import {
   buildVoiceFailureReply,
-  extractFirstIncomingVoice,
-  extractTextContentWithoutVoice,
-  mergeVoiceInputText,
   normalizeVoiceSynthesisText,
   pickVoiceStyle,
 } from './tts.js';
+import {
+  downloadIncomingAudio,
+  extractFirstIncomingVoice,
+  extractTextContentWithoutVoice,
+  isVoiceInputRuntimeAvailable,
+  mergeVoiceInputText,
+  transcribeAudio,
+} from '../../shared/voice/index.js';
 import {
   buildOutboundMessagePlanFromReplyPlan,
   createBotMessageDispatchers,
@@ -231,19 +235,6 @@ type ReplySpeakerFormatMeta = {
   preformatted?: boolean;
 };
 
-interface DownloadedAudioPayload {
-  bytes: Uint8Array;
-  source: string;
-  filename: string;
-  contentType: string;
-}
-
-interface AsrResponse {
-  text: string;
-  language?: string;
-  durationMs: number;
-}
-
 interface TtsCapabilityState {
   lastKnownHealthy: boolean | null;
   lastProbeAt: number;
@@ -412,153 +403,6 @@ function assertVoiceRuntimeConfig(runtime: RuntimeConfig): void {
 function createAuthHeaders(apiKey: string): Record<string, string> {
   const token = apiKey.trim();
   return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-function decodeBase64Payload(payload: string): Uint8Array {
-  return Uint8Array.from(Buffer.from(payload, 'base64'));
-}
-
-function parseDataUri(uri: string): { bytes: Uint8Array; contentType: string } | null {
-  const matched = uri.match(/^data:([^;,]+);base64,(.+)$/i);
-  if (!matched) return null;
-  return {
-    contentType: matched[1] ?? 'application/octet-stream',
-    bytes: decodeBase64Payload(matched[2] ?? ''),
-  };
-}
-
-function guessContentTypeFromPath(pathLike: string): string {
-  const normalized = pathLike.toLowerCase();
-  if (normalized.endsWith('.wav')) return 'audio/wav';
-  if (normalized.endsWith('.mp3')) return 'audio/mpeg';
-  if (normalized.endsWith('.ogg')) return 'audio/ogg';
-  if (normalized.endsWith('.amr')) return 'audio/amr';
-  if (normalized.endsWith('.m4a')) return 'audio/mp4';
-  return 'application/octet-stream';
-}
-
-async function fetchBytes(url: string, headers: Record<string, string>, timeoutMs: number): Promise<Uint8Array> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, { headers, signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`http ${response.status}`);
-    }
-
-    return new Uint8Array(await response.arrayBuffer());
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function loadAudioResource(resource: string, timeoutMs: number): Promise<{ bytes: Uint8Array; contentType: string }> {
-  if (resource.startsWith('data:')) {
-    const parsed = parseDataUri(resource);
-    if (!parsed) throw new Error('invalid data uri');
-    return parsed;
-  }
-
-  if (resource.startsWith('base64://')) {
-    return {
-      bytes: decodeBase64Payload(resource.slice('base64://'.length)),
-      contentType: 'application/octet-stream',
-    };
-  }
-
-  if (/^https?:\/\//i.test(resource)) {
-    return {
-      bytes: await fetchBytes(resource, {}, timeoutMs),
-      contentType: guessContentTypeFromPath(resource),
-    };
-  }
-
-  const bytes = new Uint8Array(await readFile(resource));
-  return {
-    bytes,
-    contentType: guessContentTypeFromPath(resource),
-  };
-}
-
-async function downloadIncomingAudio(
-  session: SessionWithVoiceState,
-  runtime: RuntimeConfig,
-  bot: OneBotBotLike,
-): Promise<DownloadedAudioPayload> {
-  const incoming = extractFirstIncomingVoice(session.content ?? '');
-  if (!incoming) {
-    throw new Error('missing voice element');
-  }
-
-  if (incoming.src) {
-    try {
-      const payload = await loadAudioResource(incoming.src, runtime.transcribeTimeoutMs);
-      return {
-        ...payload,
-        source: 'src',
-        filename: 'qq-voice-input',
-      };
-    } catch (error) {
-      logger.warn('voice src fetch failed, fallback to get_record: %s', (error as Error).message);
-    }
-  }
-
-  if (!incoming.file || typeof bot.internal?.getRecord !== 'function') {
-    throw new Error('voice record id unavailable');
-  }
-
-  const record = await bot.internal.getRecord(incoming.file, 'wav');
-  if (!record?.file) {
-    throw new Error('get_record returned empty file');
-  }
-
-  const payload = await loadAudioResource(record.file, runtime.transcribeTimeoutMs);
-  return {
-    ...payload,
-    source: 'get_record',
-    filename: 'qq-voice-input.wav',
-  };
-}
-
-async function transcribeAudio(runtime: RuntimeConfig, audio: DownloadedAudioPayload): Promise<AsrResponse> {
-  if (!runtime.asrBaseUrl) {
-    throw new Error('missing ASR base url');
-  }
-
-  const form = new FormData();
-  form.append(
-    'file',
-    new Blob([Buffer.from(audio.bytes)], {
-      type: audio.contentType || 'application/octet-stream',
-    }),
-    audio.filename,
-  );
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), runtime.transcribeTimeoutMs);
-
-  try {
-    const response = await fetch(`${runtime.asrBaseUrl}/transcribe`, {
-      method: 'POST',
-      headers: createAuthHeaders(runtime.asrApiKey),
-      body: form,
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`ASR http ${response.status}`);
-    }
-
-    const payload = (await response.json()) as Partial<AsrResponse>;
-    return {
-      text: String(payload.text ?? '').trim(),
-      language: typeof payload.language === 'string' ? payload.language : undefined,
-      durationMs: Number(payload.durationMs ?? 0),
-    };
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 export async function synthesizeVoice(
@@ -1726,7 +1570,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     async (rawSession, next) => {
       const session = rawSession as SessionWithVoiceState;
       const voiceFeatureState = await resolveVoiceFeatureState(session);
-      if (!voiceFeatureState.inputEnabled) {
+      if (!voiceFeatureState.inputEnabled || !isVoiceInputRuntimeAvailable(runtime)) {
         return next();
       }
       if (session.platform !== 'onebot') return next();

@@ -3,6 +3,7 @@ import { computed, inject, reactive, ref } from 'vue'
 import { useToast } from '../../composables/useToast'
 import {
   FEATURE_KEYS,
+  FEATURE_NUMBER_KEYS,
   FEATURE_TEXT_KEYS,
   normalizeBoolean,
   type FeatureOverrideMode,
@@ -54,7 +55,8 @@ function buildOverrideKey(scope: ConsoleFeatureScope, featureKey: ScopedFeatureK
 }
 
 function isPrivateUnsupported(scope: ConsoleFeatureScope, featureKey: ScopedFeatureKey): boolean {
-  return scope.scopeKind === 'private_default' && featureKey === 'CHAT_NATURAL_TRIGGER_ENABLED'
+  return scope.scopeKind === 'private_default'
+    && (featureKey === 'CHAT_NATURAL_TRIGGER_ENABLED' || featureKey === 'QQBOT_REALTIME_MESSAGE_ENABLED')
 }
 
 function getScopeOverrideMode(scope: ConsoleFeatureScope, featureKey: ScopedFeatureKey): FeatureOverrideMode {
@@ -327,10 +329,48 @@ async function handleBatchDelete(targets: ConversationTarget[]) {
       </label>
     </div>
 
+    <div
+      v-if="FEATURE_NUMBER_KEYS.length > 0"
+      class="bc-field-grid"
+      style="margin-top: 1rem;"
+    >
+      <label
+        v-for="key in FEATURE_NUMBER_KEYS"
+        :key="key"
+        class="bc-field"
+      >
+        <span class="bc-field-label">
+          {{ getFieldLabel(key) }}
+          <span
+            v-if="getFieldHint(key)"
+            class="bc-field-help"
+            tabindex="0"
+            role="note"
+            :aria-label="getFieldHint(key)"
+          >
+            <span aria-hidden="true">!</span>
+            <span class="bc-field-tooltip" role="tooltip">{{ getFieldHint(key) }}</span>
+          </span>
+          <span
+            v-if="changedKeys.has(key)"
+            class="bc-field-modified"
+          >已修改</span>
+        </span>
+
+        <input
+          type="number"
+          :value="envDraft[key] ?? ''"
+          min="1"
+          step="1"
+          @input="(event) => { envDraft[key] = (event.target as HTMLInputElement).value }"
+        />
+      </label>
+    </div>
+
     <div class="bc-panel-subhead" style="margin-top: 1.25rem;">
       <div>
         <strong>作用域覆盖</strong>
-        <p class="bc-muted">作用域卡片使用“跟随默认 / 开启 / 关闭”。私聊不提供群聊自然触发。</p>
+        <p class="bc-muted">作用域卡片使用“跟随默认 / 开启 / 关闭”。私聊不提供群聊自然触发和实时消息。</p>
       </div>
       <span
         v-if="changedFeatureOverrideKeys.size > 0"

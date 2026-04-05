@@ -1,9 +1,11 @@
 // ─── Label maps ───────────────────────────────────────────────────────────────
 
 export const FIELD_LABELS: Record<string, string> = {
+  QQBOT_REALTIME_MESSAGE_ENABLED: '实时消息',
   QQ_VOICE_INPUT_ENABLED: '语音转文字',
   QQ_VOICE_OUTPUT_ENABLED: '语音回复',
   CHAT_NATURAL_TRIGGER_ENABLED: '群聊自然触发',
+  QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT: '实时消息注入条数上限',
   QQBOT_REPLY_INTERRUPT_ENABLED: '回复期中断',
   CHATLUNA_COMMON_FS: '文件系统工具总开关',
   CHATLUNA_COMMON_FS_SCOPE_PATH: '文件系统作用域目录',
@@ -50,6 +52,8 @@ export const FIELD_HINTS: Record<string, string> = {
     'GitHub Copilot Tab 当前按 OAuth + 本地 bridge 处理，默认推荐 gpt-5.4-mini。',
   CHAT_NATURAL_TRIGGER_GROUPS:
     '只有填在这里的群号才会命中群聊自然触发。多个群号用英文逗号分隔；留空时不会在任何群自动触发。',
+  QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT:
+    '每次主链路触发时，最多注入这么多条尚未写入会话历史的实时消息；注入后旧缓存会整体清空。',
 }
 
 export const ROLE_LABELS: Record<string, string> = {
@@ -129,6 +133,7 @@ export const UNIT_FILE_STATE_LABELS: Record<string, string> = {
 
 /** Items shown in the Overview panel's features chip list. */
 export const OVERVIEW_FEATURE_ITEMS: [string, string][] = [
+  ['QQBOT_REALTIME_MESSAGE_ENABLED', '实时消息'],
   ['QQ_VOICE_INPUT_ENABLED', '语音转文字'],
   ['QQ_VOICE_OUTPUT_ENABLED', '语音回复'],
   ['CHAT_NATURAL_TRIGGER_ENABLED', '自然触发'],

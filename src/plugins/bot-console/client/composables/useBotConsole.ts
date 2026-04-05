@@ -53,6 +53,7 @@ import {
 // ─── Env key groups ───────────────────────────────────────────────────────────
 
 export const FEATURE_KEYS = [
+  'QQBOT_REALTIME_MESSAGE_ENABLED',
   'QQ_VOICE_INPUT_ENABLED',
   'QQ_VOICE_OUTPUT_ENABLED',
   'CHAT_NATURAL_TRIGGER_ENABLED',
@@ -63,13 +64,17 @@ export const FEATURE_TEXT_KEYS = [
   'CHAT_NATURAL_TRIGGER_GROUPS',
 ] as const
 
+export const FEATURE_NUMBER_KEYS = [
+  'QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT',
+] as const
+
 export const FILE_SYSTEM_CONTROL_KEYS = [
   'CHATLUNA_COMMON_FS',
   'CHATLUNA_COMMON_FS_SCOPE_PATH',
 ] as const
 
 export const PRIVATE_DEFAULT_SCOPE_ID = 'private-default'
-export const PRIVATE_UNSUPPORTED_FEATURE_KEYS = ['CHAT_NATURAL_TRIGGER_ENABLED'] as const
+export const PRIVATE_UNSUPPORTED_FEATURE_KEYS = ['CHAT_NATURAL_TRIGGER_ENABLED', 'QQBOT_REALTIME_MESSAGE_ENABLED'] as const
 
 export const MODEL_SHARED_KEYS = [
   'OPENAI_BASE_URL',
@@ -89,6 +94,7 @@ export const BASIC_KEYS = [
 export const ALL_ENV_KEYS = [
   ...FEATURE_KEYS,
   ...FEATURE_TEXT_KEYS,
+  ...FEATURE_NUMBER_KEYS,
   ...FILE_SYSTEM_CONTROL_KEYS,
   ...MODEL_SHARED_KEYS,
   ...BASIC_KEYS,

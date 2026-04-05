@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('koishi', () => {
   class MockLogger {
@@ -13,6 +13,10 @@ vi.mock('koishi', () => {
 });
 
 import { apply, PRIVATE_DEFAULT_SCOPE_ID } from '../src/plugins/feature-policy/index.js';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 type Row = Record<string, any>;
 
@@ -167,6 +171,53 @@ describe('feature policy service', () => {
       service.resolveFeatureEnabled(
         { isDirect: true, userId: 'u1', channelId: 'p1' } as any,
         'CHAT_NATURAL_TRIGGER_ENABLED',
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it('supports realtime-message defaults and group-only overrides', async () => {
+    vi.stubEnv('QQBOT_REALTIME_MESSAGE_ENABLED', 'false');
+    const { ctx } = createHarness();
+    const service = ctx.featurePolicy as NonNullable<typeof ctx.featurePolicy>;
+
+    await expect(
+      service.resolveFeatureEnabled(
+        { isDirect: false, userId: 'u1', guildId: '10001', channelId: '10001' } as any,
+        'QQBOT_REALTIME_MESSAGE_ENABLED',
+      ),
+    ).resolves.toBe(false);
+
+    await expect(
+      service.saveFeatureOverrides([
+        {
+          featureKey: 'QQBOT_REALTIME_MESSAGE_ENABLED',
+          scopeKind: 'private_default',
+          scopeId: PRIVATE_DEFAULT_SCOPE_ID,
+          enabled: true,
+        },
+      ]),
+    ).rejects.toThrow('实时消息不支持私聊默认作用域');
+
+    await service.saveFeatureOverrides([
+      {
+        featureKey: 'QQBOT_REALTIME_MESSAGE_ENABLED',
+        scopeKind: 'group',
+        scopeId: '10001',
+        enabled: true,
+      },
+    ]);
+
+    await expect(
+      service.resolveFeatureEnabled(
+        { isDirect: false, userId: 'u1', guildId: '10001', channelId: '10001' } as any,
+        'QQBOT_REALTIME_MESSAGE_ENABLED',
+      ),
+    ).resolves.toBe(true);
+
+    await expect(
+      service.resolveFeatureEnabled(
+        { isDirect: true, userId: 'u1', channelId: 'private-u1' } as any,
+        'QQBOT_REALTIME_MESSAGE_ENABLED',
       ),
     ).resolves.toBe(false);
   });

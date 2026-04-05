@@ -364,6 +364,23 @@ describe('bot-console manager', () => {
     });
   });
 
+  it('accepts realtime-message env settings through managed env saves', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    await expect(
+      manager.saveEnv({
+        QQBOT_REALTIME_MESSAGE_ENABLED: 'false',
+        QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT: '24',
+      }),
+    ).resolves.toMatchObject({
+      QQBOT_REALTIME_MESSAGE_ENABLED: 'false',
+      QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT: '24',
+    });
+  });
+
   it('accepts file system env controls through managed env saves', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
