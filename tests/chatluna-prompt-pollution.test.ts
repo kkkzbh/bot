@@ -73,6 +73,7 @@ describe('chatluna prompt pollution regression', () => {
     expect(envelope?.messages.every((message) => message.role === 'system')).toBe(true);
     expect(envelope?.messages.some((message) => String(message.content).includes('submit_reply_plan'))).toBe(false);
     expect(envelope?.messages.some((message) => String(message.content).includes('submit_working_state'))).toBe(false);
+    expect(envelope?.messages.some((message) => String(message.content).includes('qqbot_reply_chat_style'))).toBe(false);
   });
 
   it('uses a chatluna build without pseudo natural-language after_user_message injection', () => {

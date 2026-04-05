@@ -12,13 +12,12 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
       title: 'Type',
       type: 'string',
       enum: ['message'],
-      description: 'Use message for normal text chatting.',
+      description: 'A normal chat message.',
     },
     content: {
       title: 'Content',
       type: 'string',
-      description:
-        'Plain text content for this message item. Multiple short message items usually feel more natural than one long block. One sentence per message item is a good default, while code blocks, lists, or quoted content can stay in one message item.',
+      description: 'Flat plain-text content for this chat message.',
     },
   };
   const required = ['type', 'content'];
@@ -28,7 +27,7 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
       title: 'Mentions',
       type: 'array',
       description:
-        'QQ group @mentions. Usually leave this empty and do not mention the user unless mentioning them is actually necessary. If no mention is needed, use an empty array [].',
+        'QQ group @mentions. Mentions usually force a message notification. Use them when you need to call someone who is not currently talking in the group. Otherwise, do not mention anyone. If no mention is needed, use an empty array [].',
       items: {
         type: 'string',
         pattern: QQ_USER_ID_PATTERN,
@@ -40,13 +39,33 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
   return {
     type: 'object',
     title: 'MessageItem',
-    description:
-      'Use message for normal text chatting. Multiple short message items usually feel more natural than one long block.',
+    description: 'A normal chat message.',
     additionalProperties: false,
     required,
     properties,
   } as const;
 }
+
+const STRUCTURED_BLOCK_SCHEMA = {
+  type: 'object',
+  title: 'StructuredBlockItem',
+  description: 'A structured content block that should stay together in one message, such as a code block, list, or quote.',
+  additionalProperties: false,
+  required: ['type', 'content'],
+  properties: {
+    type: {
+      title: 'Type',
+      type: 'string',
+      enum: ['structured_block'],
+      description: 'A structured content block that should stay together in one message.',
+    },
+    content: {
+      title: 'Content',
+      type: 'string',
+      description: 'Structured plain-text content, such as a code block, list, or quote.',
+    },
+  },
+} as const;
 
 const VOICE_MESSAGE_SCHEMA = {
   type: 'object',
@@ -91,7 +110,10 @@ const MEME_MESSAGE_SCHEMA = {
 } as const;
 
 export function buildStructuredReplyJsonSchema(options: StructuredReplySchemaOptions = {}): Record<string, unknown> {
-  const outboundSchemas: Record<string, unknown>[] = [buildMessageMessageSchema(options)];
+  const outboundSchemas: Record<string, unknown>[] = [
+    buildMessageMessageSchema(options),
+    STRUCTURED_BLOCK_SCHEMA,
+  ];
 
   if (options.canVoice !== false) {
     outboundSchemas.push(VOICE_MESSAGE_SCHEMA);

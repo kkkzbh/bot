@@ -1734,9 +1734,10 @@ describe('qq voice plugin', () => {
     expect(chatluna.normalizeResearchReplyHistory).not.toHaveBeenCalled();
   });
 
-  it('keeps one message item atomic even when content contains multiple lines', async () => {
+  it('splits ordinary multi-line messages into separate sends', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+    vi.useFakeTimers();
 
     await ready();
     await flushMicrotasks();
@@ -1763,9 +1764,11 @@ describe('qq voice plugin', () => {
       },
     };
 
-    const result = await executor?.(session, context);
+    const pending = executor?.(session, context);
+    await vi.runAllTimersAsync();
+    const result = await pending;
     expect(typeof result).toBe('number');
-    expect(extractSentMessagePayloads(bot)).toEqual(['echo hi\npwd']);
+    expect(extractSentMessagePayloads(bot)).toEqual(['echo hi', 'pwd']);
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-1' }),
@@ -1773,9 +1776,10 @@ describe('qq voice plugin', () => {
     );
   });
 
-  it('keeps structured message items atomic while preserving surrounding text order', async () => {
+  it('keeps structured blocks atomic while preserving surrounding text order', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+    vi.useFakeTimers();
 
     await ready();
     await flushMicrotasks();
@@ -1802,14 +1806,16 @@ describe('qq voice plugin', () => {
           decision: 'reply',
           outbound_messages: [
             { type: 'message', content: '先看这个清单。', mentions: [] },
-            { type: 'message', content: '- 牛奶\n- 面包', mentions: [] },
+            { type: 'structured_block', content: '- 牛奶\n- 面包' },
             { type: 'message', content: '照着买。', mentions: [] },
           ],
         }),
       },
     };
 
-    const result = await executor?.(session, context);
+    const pending = executor?.(session, context);
+    await vi.runAllTimersAsync();
+    const result = await pending;
     expect(typeof result).toBe('number');
     expect(extractSentMessagePayloads(bot)).toEqual([
       '先看这个清单。',

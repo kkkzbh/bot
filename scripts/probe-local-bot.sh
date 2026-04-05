@@ -8,20 +8,22 @@ Usage:
   printf '%s' '<prompt>' | probe-local-bot.sh
 
 Description:
-  Inject a synthetic private-message or group-message event into the locally
-  running Koishi bot, capture only the reply for the fake target channel, and
-  print a JSON result. The script temporarily opens Node inspector on
-  127.0.0.1:9229 when needed and closes it after the probe by default.
+  Inject a synthetic QQ group message into the locally running Koishi bot,
+  capture only the real outbound reply for that group, and print a JSON result.
+  This probe is group-only and must not be used to infer private-chat behavior.
+  The script temporarily opens Node inspector on 127.0.0.1:9229 when needed
+  and closes it after the probe by default.
+  For workflow and result interpretation, use $qqbot-group-probe at
+  /home/kkkzbh/code/qqbot/.codex/skills/qqbot-group-probe/SKILL.md
 
 Environment:
-  FAKE_USER_ID          Fake private chat user id (default: derived from timestamp)
-  FAKE_GROUP_ID         If set, dispatch a synthetic group message to this QQ group id
-  FAKE_GROUP_NAME       Optional synthetic group name (default: codex-debug-group)
-  FAKE_GROUP_CARD       Optional synthetic sender group card (default: codex-debug)
+  FAKE_USER_ID          Fake QQ user id (default: derived from timestamp)
+  FAKE_GROUP_ID         Optional override for the probe group id (default: 829573670)
+  FAKE_GROUP_NAME       Optional synthetic group name (default: codex-probe-group)
+  FAKE_GROUP_CARD       Optional synthetic sender group card (default: codex-probe)
+  PROBE_TRIGGER_PREFIX  Trigger prefix injected when the input lacks an obvious
+                       group trigger keyword (default: saki )
   BOT_TIMEOUT_SECONDS   Max seconds to wait for reply stability (default: 40)
-  QQBOT_PREPARE_DEBUG_CHAT_MODE
-                       If set, prepare the fake user's debug room to this chatMode
-                       before dispatching the probe message (private probe only)
   KEEP_INSPECTOR        Set to 1 to keep inspector open after the probe
 EOF
 }
@@ -50,6 +52,7 @@ fi
 require_cmd curl
 require_cmd node
 require_cmd base64
+require_cmd mkdir
 
 prompt=""
 if [[ "$#" -gt 0 ]]; then
@@ -66,34 +69,85 @@ fi
 
 timeout_seconds="${BOT_TIMEOUT_SECONDS:-40}"
 keep_inspector="${KEEP_INSPECTOR:-0}"
+probe_trigger_prefix="${PROBE_TRIGGER_PREFIX:-saki }"
 ensure_positive_int "BOT_TIMEOUT_SECONDS" "$timeout_seconds"
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+cd "$repo_root"
+default_group_id="$(
+  node -e "const shared=require('./scripts/lib/probe-local-bot-shared.cjs'); process.stdout.write(shared.DEFAULT_PROBE_GROUP_ID)"
+)"
+default_group_name="$(
+  node -e "const shared=require('./scripts/lib/probe-local-bot-shared.cjs'); process.stdout.write(shared.DEFAULT_PROBE_GROUP_NAME)"
+)"
+default_group_card="$(
+  node -e "const shared=require('./scripts/lib/probe-local-bot-shared.cjs'); process.stdout.write(shared.DEFAULT_PROBE_GROUP_CARD)"
+)"
+probe_lock_dir="$(
+  node -e "const shared=require('./scripts/lib/probe-local-bot-shared.cjs'); process.stdout.write(shared.PROBE_LOCK_DIR)"
+)"
 
 if [[ -z "${FAKE_USER_ID:-}" ]]; then
   fake_user_id="9$(date +%s%N | cut -c1-9)"
 else
   fake_user_id="$FAKE_USER_ID"
 fi
-fake_group_id="${FAKE_GROUP_ID:-}"
-fake_group_name="${FAKE_GROUP_NAME:-codex-debug-group}"
-fake_group_card="${FAKE_GROUP_CARD:-codex-debug}"
+fake_group_id="${FAKE_GROUP_ID:-$default_group_id}"
+fake_group_name="${FAKE_GROUP_NAME:-$default_group_name}"
+fake_group_card="${FAKE_GROUP_CARD:-$default_group_card}"
 
 if ! [[ "$fake_user_id" =~ ^[0-9]+$ ]]; then
   echo "[error] FAKE_USER_ID must be numeric." >&2
   exit 2
 fi
 
-if [[ -n "$fake_group_id" ]] && ! [[ "$fake_group_id" =~ ^[0-9]+$ ]]; then
+if ! [[ "$fake_group_id" =~ ^[0-9]+$ ]]; then
   echo "[error] FAKE_GROUP_ID must be numeric." >&2
   exit 2
 fi
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/.." && pwd)"
-cd "$repo_root"
-
-if [[ -n "${QQBOT_PREPARE_DEBUG_CHAT_MODE:-}" && -z "$fake_group_id" ]]; then
-  FAKE_USER_ID="$fake_user_id" bash "$repo_root/scripts/prepare-debug-chat-state.sh" "$QQBOT_PREPARE_DEBUG_CHAT_MODE" >/dev/null
+if [[ -n "${QQBOT_PREPARE_DEBUG_CHAT_MODE:-}" ]]; then
+  echo "[error] QQBOT_PREPARE_DEBUG_CHAT_MODE is no longer supported. probe-local-bot.sh is group-only." >&2
+  exit 2
 fi
+
+original_prompt="$prompt"
+
+if ! printf '%s' "$prompt" | rg -qi '(^|[[:space:][:punct:]])(saki|祥)([[:space:][:punct:]]|$)'; then
+  prompt="${probe_trigger_prefix}${prompt}"
+fi
+
+if [[ -d "$probe_lock_dir" ]]; then
+  stale_pid="$(cat "$probe_lock_dir/pid" 2>/dev/null || true)"
+  if [[ -n "$stale_pid" ]] && ! kill -0 "$stale_pid" >/dev/null 2>&1; then
+    rm -rf "$probe_lock_dir"
+  fi
+fi
+
+if ! mkdir "$probe_lock_dir" 2>/dev/null; then
+  echo "[error] Another group probe is already running. Wait for it to finish before starting a new one." >&2
+  exit 1
+fi
+
+cleanup_probe_lock() {
+  rm -rf "$probe_lock_dir" >/dev/null 2>&1 || true
+}
+
+cleanup_non_default_probe_state() {
+  if [[ "$fake_group_id" == "$default_group_id" ]]; then
+    return
+  fi
+  bash "$repo_root/scripts/cleanup-probe-chat-state.sh" "$fake_user_id" "$fake_group_id" >/dev/null 2>&1 || true
+}
+
+cleanup_on_exit() {
+  cleanup_non_default_probe_state
+  cleanup_probe_lock
+}
+
+trap cleanup_on_exit EXIT
+printf '%s\n' "$$" > "$probe_lock_dir/pid"
 
 worker_pid="$(ps -ef | awk '/koishi\/lib\/worker/ && !/awk/ {print $2; exit}')"
 if [[ -z "$worker_pid" ]]; then
@@ -119,10 +173,10 @@ if ! curl -fsS http://127.0.0.1:9229/json/list >/dev/null 2>&1; then
 fi
 
 prompt_b64="$(printf '%s' "$prompt" | base64 | tr -d '\n')"
-probe_started_at="$(date +%s%3N)"
 
 probe_json="$(
   QQBOT_TEST_PROMPT_B64="$prompt_b64" \
+  QQBOT_ORIGINAL_PROMPT_B64="$(printf '%s' "$original_prompt" | base64 | tr -d '\n')" \
   QQBOT_FAKE_USER_ID="$fake_user_id" \
   QQBOT_FAKE_GROUP_ID="$fake_group_id" \
   QQBOT_FAKE_GROUP_NAME="$fake_group_name" \
@@ -131,17 +185,24 @@ probe_json="$(
   QQBOT_KEEP_INSPECTOR="$keep_inspector" \
   QQBOT_OPENED_INSPECTOR="$opened_inspector" \
   node <<'NODE'
+const path = require('path')
 const http = require('http')
+const {
+  normalizeVisibleContent,
+  serializePayload,
+} = require(path.join(process.cwd(), 'scripts/lib/probe-local-bot-shared.cjs'))
+const normalizeVisibleContentSource = normalizeVisibleContent.toString()
+const serializePayloadSource = serializePayload.toString()
 
 const prompt = Buffer.from(process.env.QQBOT_TEST_PROMPT_B64 || '', 'base64').toString('utf8')
+const originalPrompt = Buffer.from(process.env.QQBOT_ORIGINAL_PROMPT_B64 || '', 'base64').toString('utf8')
 const fakeUserId = Number(process.env.QQBOT_FAKE_USER_ID || '0')
 const fakeGroupId = Number(process.env.QQBOT_FAKE_GROUP_ID || '0')
-const fakeGroupName = String(process.env.QQBOT_FAKE_GROUP_NAME || 'codex-debug-group')
-const fakeGroupCard = String(process.env.QQBOT_FAKE_GROUP_CARD || 'codex-debug')
+const fakeGroupName = String(process.env.QQBOT_FAKE_GROUP_NAME || 'codex-probe-group')
+const fakeGroupCard = String(process.env.QQBOT_FAKE_GROUP_CARD || 'codex-probe')
 const timeoutSeconds = Number(process.env.QQBOT_TIMEOUT_SECONDS || '40')
 const keepInspector = process.env.QQBOT_KEEP_INSPECTOR === '1'
 const openedInspector = process.env.QQBOT_OPENED_INSPECTOR === '1'
-const isGroupProbe = Number.isFinite(fakeGroupId) && fakeGroupId > 0
 
 if (!prompt) {
   console.error('[error] Empty prompt after base64 decode.')
@@ -150,6 +211,11 @@ if (!prompt) {
 
 if (!Number.isFinite(fakeUserId) || fakeUserId <= 0) {
   console.error('[error] Invalid fake user id.')
+  process.exit(2)
+}
+
+if (!Number.isFinite(fakeGroupId) || fakeGroupId <= 0) {
+  console.error('[error] Invalid fake group id.')
   process.exit(2)
 }
 
@@ -249,8 +315,10 @@ async function main() {
 
     const call = await send('Runtime.callFunctionOn', {
       objectId: loader,
-      functionDeclaration: `async function(input, fakeUserId, fakeGroupId, fakeGroupName, fakeGroupCard, timeoutSeconds) {
+      functionDeclaration: `async function(input, originalInput, fakeUserId, fakeGroupId, fakeGroupName, fakeGroupCard, timeoutSeconds) {
         try {
+          const normalizeVisibleContent = ${normalizeVisibleContentSource}
+          const serializePayload = ${serializePayloadSource}
           const { OneBot } = process.mainModule.require('koishi-plugin-adapter-onebot')
           const dispatchSession = OneBot && OneBot.dispatchSession
           if (typeof dispatchSession !== 'function') {
@@ -303,19 +371,29 @@ async function main() {
             return JSON.stringify({ ok: false, error: 'onebot bot not found' })
           }
 
-          const isGroupProbe = Number.isFinite(fakeGroupId) && fakeGroupId > 0
-          const fakeChannelId = isGroupProbe ? String(fakeGroupId) : 'private:' + fakeUserId
+          const fakeChannelId = String(fakeGroupId)
+          const probeMessageId = Date.now()
           const captures = []
-          const normalize = (content) => {
-            if (typeof content === 'string') return content
-            if (Array.isArray(content)) return content.map(normalize).join('')
-            if (!content || typeof content !== 'object') return String(content)
-            if (typeof content.type === 'string' && content.data && typeof content.data === 'object') {
-              return JSON.stringify(content)
-            }
-            if (typeof content.attrs?.content === 'string') return content.attrs.content
-            if (typeof content.content === 'string') return content.content
-            return JSON.stringify(content)
+          const orchestrationCaptures = []
+          let directGroupCaptureAllowed = false
+          const isProbeSend = (channelId, options) => {
+            if (String(channelId) !== fakeChannelId) return false
+            const session = options && typeof options === 'object' ? options.session : null
+            if (!session || typeof session !== 'object') return false
+            if (String(session.channelId ?? '') !== fakeChannelId) return false
+            if (String(session.userId ?? '') !== String(fakeUserId)) return false
+            return Number(session.messageId ?? 0) === probeMessageId
+          }
+          const capture = (route, content, extra = {}) => {
+            const visibleText = normalizeVisibleContent(content).trim()
+            captures.push({
+              route,
+              channelId: fakeChannelId,
+              visibleText,
+              payload: serializePayload(content),
+              at: Date.now(),
+              ...extra,
+            })
           }
 
           const originalSendMessage = bot.sendMessage
@@ -328,14 +406,40 @@ async function main() {
           const originalRequest = bot.internal && typeof bot.internal._request === 'function'
             ? bot.internal._request
             : null
+          let ReplyOrchestratorService = null
+          try {
+            const orchestratorModule = process.mainModule.require(process.cwd() + '/dist/plugins/reply/pipeline/orchestrator.js')
+            ReplyOrchestratorService = orchestratorModule && orchestratorModule.ReplyOrchestratorService
+          } catch {}
+          const originalOrchestratorHandle =
+            ReplyOrchestratorService && ReplyOrchestratorService.prototype && typeof ReplyOrchestratorService.prototype.handle === 'function'
+              ? ReplyOrchestratorService.prototype.handle
+              : null
+
+          if (originalOrchestratorHandle) {
+            ReplyOrchestratorService.prototype.handle = async function(turnInput, session, context = {}) {
+              const result = await originalOrchestratorHandle.call(this, turnInput, session, context)
+              if (
+                session &&
+                String(session.userId ?? '') === String(fakeUserId) &&
+                String(session.channelId ?? '') === fakeChannelId &&
+                Number(session.messageId ?? 0) === probeMessageId
+              ) {
+                orchestrationCaptures.push({
+                  at: Date.now(),
+                  turnInput: serializePayload(turnInput),
+                  routeHint: context && typeof context === 'object' ? context.routeHint ?? null : null,
+                  responseMessage: serializePayload(context && typeof context === 'object' ? context.responseMessage ?? null : null),
+                  result: serializePayload(result),
+                })
+              }
+              return result
+            }
+          }
+
           bot.sendMessage = async function(channelId, content, guildId, options) {
-            if (channelId === fakeChannelId) {
-              captures.push({
-                channelId,
-                guildId: guildId ?? null,
-                content: normalize(content),
-                at: Date.now(),
-              })
+            if (isProbeSend(channelId, options)) {
+              capture('sendMessage', content, { guildId: guildId ?? null })
               return ['debug-' + captures.length]
             }
             return originalSendMessage.call(this, channelId, content, guildId, options)
@@ -343,28 +447,14 @@ async function main() {
 
           if (originalSendPrivateMsg) {
             bot.internal.sendPrivateMsg = async function(userId, message, autoEscape) {
-              if (String(userId) === String(fakeUserId)) {
-                captures.push({
-                  channelId: fakeChannelId,
-                  guildId: null,
-                  content: normalize(message),
-                  at: Date.now(),
-                })
-                return 'debug-private'
-              }
               return originalSendPrivateMsg.call(this, userId, message, autoEscape)
             }
           }
 
           if (originalSendGroupMsg) {
             bot.internal.sendGroupMsg = async function(groupId, message, autoEscape) {
-              if (isGroupProbe && String(groupId) === String(fakeGroupId)) {
-                captures.push({
-                  channelId: fakeChannelId,
-                  guildId: String(fakeGroupId),
-                  content: normalize(message),
-                  at: Date.now(),
-                })
+              if (directGroupCaptureAllowed && String(groupId) === fakeChannelId) {
+                capture('sendGroupMsg', message, { guildId: fakeChannelId })
                 return 'debug-group'
               }
               return originalSendGroupMsg.call(this, groupId, message, autoEscape)
@@ -374,31 +464,12 @@ async function main() {
           if (originalRequest) {
             bot.internal._request = async function(action, params) {
               if (
-                !isGroupProbe &&
-                action === 'send_private_msg' &&
-                params &&
-                String(params.user_id) === String(fakeUserId)
-              ) {
-                captures.push({
-                  channelId: fakeChannelId,
-                  guildId: null,
-                  content: normalize(params.message),
-                  at: Date.now(),
-                })
-                return { message_id: 'debug-private-request' }
-              }
-              if (
-                isGroupProbe &&
+                directGroupCaptureAllowed &&
                 action === 'send_group_msg' &&
                 params &&
-                String(params.group_id) === String(fakeGroupId)
+                String(params.group_id) === fakeChannelId
               ) {
-                captures.push({
-                  channelId: fakeChannelId,
-                  guildId: String(fakeGroupId),
-                  content: normalize(params.message),
-                  at: Date.now(),
-                })
+                capture('_request:send_group_msg', params.message, { guildId: fakeChannelId })
                 return { message_id: 'debug-group-request' }
               }
               return originalRequest.call(this, action, params)
@@ -406,50 +477,37 @@ async function main() {
           }
 
           try {
-            const messageId = Date.now()
             const baseMessageEvent = {
               post_type: 'message',
               self_id: Number(bot.selfId),
               user_id: fakeUserId,
-              message_id: messageId,
-              time: Math.floor(messageId / 1000),
+              message_id: probeMessageId,
+              time: Math.floor(probeMessageId / 1000),
               message: input,
               raw_message: input,
               font: 0,
             }
-            await dispatchSession(
-              bot,
-              isGroupProbe
-                ? {
-                    ...baseMessageEvent,
-                    message_type: 'group',
-                    sub_type: 'normal',
-                    group_id: fakeGroupId,
-                    group_name: fakeGroupName,
-                    anonymous: null,
-                    message_seq: messageId,
-                    sender: {
-                      user_id: fakeUserId,
-                      nickname: 'codex-debug',
-                      card: fakeGroupCard,
-                      sex: 'unknown',
-                      age: 0,
-                      area: '',
-                      level: '0',
-                      role: 'member',
-                      title: '',
-                    },
-                  }
-                : {
-                    ...baseMessageEvent,
-                    message_type: 'private',
-                    sub_type: 'friend',
-                    sender: {
-                      user_id: fakeUserId,
-                      nickname: 'codex-debug',
-                    },
-                  }
-            )
+            directGroupCaptureAllowed = true
+            await dispatchSession(bot, {
+              ...baseMessageEvent,
+              message_type: 'group',
+              sub_type: 'normal',
+              group_id: fakeGroupId,
+              group_name: fakeGroupName,
+              anonymous: null,
+              message_seq: probeMessageId,
+              sender: {
+                user_id: fakeUserId,
+                nickname: 'codex-probe',
+                card: fakeGroupCard,
+                sex: 'unknown',
+                age: 0,
+                area: '',
+                level: '0',
+                role: 'member',
+                title: '',
+              },
+            })
 
             const deadline = Date.now() + timeoutSeconds * 1000
             let lastCount = captures.length
@@ -464,24 +522,42 @@ async function main() {
               }
             }
 
-            const messages = captures.map((item) => item.content)
+            directGroupCaptureAllowed = false
+            const visibleMessages = captures.map((item) => item.visibleText).filter((value) => value.length > 0)
+            const payloadCaptures = captures.map((item) => ({
+              route: item.route,
+              channelId: item.channelId,
+              guildId: item.guildId ?? null,
+              payload: item.payload,
+              visibleText: item.visibleText,
+              at: item.at,
+            }))
             return JSON.stringify({
               ok: true,
               input,
+              originalInput: originalInput || input,
+              dispatchedInput: input,
               fakeChannelId,
-              mode: isGroupProbe ? 'group' : 'private',
+              mode: 'group',
               bot: {
                 sid: bot.sid,
                 selfId: bot.selfId,
                 platform: bot.platform,
               },
+              targetGroupId: fakeChannelId,
               captureCount: captures.length,
-              messages,
-              combined: messages.join('\\n'),
-              captures,
+              orchestrationCount: orchestrationCaptures.length,
+              orchestrations: orchestrationCaptures,
+              visibleMessages,
+              payloadCaptures,
+              combined: visibleMessages.join('\\n'),
               timeout: captures.length === 0,
             })
           } finally {
+            directGroupCaptureAllowed = false
+            if (originalOrchestratorHandle) {
+              ReplyOrchestratorService.prototype.handle = originalOrchestratorHandle
+            }
             bot.sendMessage = originalSendMessage
             if (originalSendPrivateMsg) {
               bot.internal.sendPrivateMsg = originalSendPrivateMsg
@@ -502,8 +578,9 @@ async function main() {
       }`,
       arguments: [
         { value: prompt },
+        { value: originalPrompt },
         { value: fakeUserId },
-        { value: isGroupProbe ? fakeGroupId : 0 },
+        { value: fakeGroupId },
         { value: fakeGroupName },
         { value: fakeGroupCard },
         { value: timeoutSeconds },
@@ -538,82 +615,11 @@ main().catch((error) => {
 NODE
 )"
 
-capture_count="$(
-  printf '%s' "$probe_json" | node -e "let data='';process.stdin.on('data',c=>data+=c);process.stdin.on('end',()=>{const parsed=JSON.parse(data);process.stdout.write(String(parsed.captureCount ?? 0));});"
-)"
+printf '%s\n' "$probe_json"
 timeout_flag="$(
   printf '%s' "$probe_json" | node -e "let data='';process.stdin.on('data',c=>data+=c);process.stdin.on('end',()=>{const parsed=JSON.parse(data);process.stdout.write(parsed.timeout ? 'true' : 'false');});"
 )"
-
-if [[ "$capture_count" -gt 0 && "$timeout_flag" != "true" ]]; then
-  printf '%s\n' "$probe_json"
-  exit 0
+if [[ "$timeout_flag" == "true" ]]; then
+  exit 1
 fi
-
-trace_deadline=$(( $(date +%s) + timeout_seconds ))
-trace_payload=""
-while (( $(date +%s) < trace_deadline )); do
-  traces_json="$(curl -fsS 'http://127.0.0.1:5140/trace/api/traces?limit=20' 2>/dev/null || true)"
-  if [[ -n "$traces_json" ]]; then
-    trace_payload="$(
-      TRACE_JSON="$traces_json" \
-      TRACE_FAKE_USER_ID="$fake_user_id" \
-      TRACE_FAKE_GROUP_ID="$fake_group_id" \
-      TRACE_PROMPT="$prompt" \
-      TRACE_STARTED_AT="$probe_started_at" \
-      node <<'NODE'
-const payload = JSON.parse(process.env.TRACE_JSON || '{"traces":[]}')
-const fakeUserId = String(process.env.TRACE_FAKE_USER_ID || '')
-const fakeGroupId = String(process.env.TRACE_FAKE_GROUP_ID || '')
-const prompt = String(process.env.TRACE_PROMPT || '')
-const startedAt = Number(process.env.TRACE_STARTED_AT || '0')
-const traces = Array.isArray(payload.traces) ? payload.traces : []
-const expectedChannelId = fakeGroupId ? fakeGroupId : `private:${fakeUserId}`
-const match = traces.find((trace) => {
-  if (String(trace.userId ?? '') !== fakeUserId) return false
-  if (String(trace.channelId ?? '') !== expectedChannelId) return false
-  if (String(trace.inputPreview ?? '') !== prompt) return false
-  if (Number(trace.createdAt ?? 0) + 1000 < startedAt) return false
-  return true
-})
-process.stdout.write(match ? JSON.stringify(match) : '')
-NODE
-    )"
-    if [[ -n "$trace_payload" ]]; then
-      trace_status="$(
-        TRACE_MATCH="$trace_payload" node -e "const parsed=JSON.parse(process.env.TRACE_MATCH||'{}');process.stdout.write(String(parsed.status||''));"
-      )"
-      trace_reply="$(
-        TRACE_MATCH="$trace_payload" node -e "const parsed=JSON.parse(process.env.TRACE_MATCH||'{}');process.stdout.write(String(parsed.finalReplyPreview||''));"
-      )"
-      if [[ "$trace_status" != "running" && -n "$trace_reply" ]]; then
-        merged_json="$(
-          PROBE_JSON="$probe_json" TRACE_MATCH="$trace_payload" node <<'NODE'
-const probe = JSON.parse(process.env.PROBE_JSON || '{}')
-const trace = JSON.parse(process.env.TRACE_MATCH || '{}')
-probe.timeout = false
-probe.trace = {
-  traceId: trace.traceId ?? null,
-  status: trace.status ?? null,
-  model: trace.model ?? null,
-  finalReplyPreview: trace.finalReplyPreview ?? null,
-  conversationId: trace.conversationId ?? null,
-  updatedAtText: trace.updatedAtText ?? null,
-}
-if ((!Array.isArray(probe.messages) || probe.messages.length === 0) && trace.finalReplyPreview) {
-  probe.messages = [trace.finalReplyPreview]
-  probe.combined = trace.finalReplyPreview
-}
-process.stdout.write(JSON.stringify(probe))
-NODE
-        )"
-        printf '%s\n' "$merged_json"
-        exit 0
-      fi
-    fi
-  fi
-  sleep 1
-done
-
-printf '%s\n' "$probe_json"
-exit 1
+exit 0

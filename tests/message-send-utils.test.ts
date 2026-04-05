@@ -332,14 +332,15 @@ describe('message send utils', () => {
     expect(sentLine).toEqual([]);
   });
 
-  it('dispatches ordered plan segments sequentially and keeps message items atomic', async () => {
+  it('dispatches ordered plan segments sequentially and splits ordinary message lines', async () => {
     vi.useFakeTimers();
     const sent: string[] = [];
     const pending = dispatchOutboundMessagePlan(
       buildOutboundMessagePlanFromReplyPlan({
         segments: [
           { kind: 'message', content: '第一句', mentions: [] },
-          { kind: 'message', content: '整块一\n整块二', mentions: [] },
+          { kind: 'message', content: '第二句\n第三句', mentions: [] },
+          { kind: 'structured_block', content: '整块一\n整块二' },
           { kind: 'message', content: '第二句', mentions: ['123456'] },
         ],
       }),
@@ -349,6 +350,8 @@ describe('message send utils', () => {
             ? `${segment.kind}:${segment.assetRef}`
             : segment.kind === 'message-block'
               ? `${segment.kind}:${segment.mentions.length ? `${segment.mentions.map((id) => `@${id}`).join(' ')}${segment.content ? ` ${segment.content}` : ''}` : segment.content}`
+              : segment.kind === 'structured-block'
+                ? `${segment.kind}:${segment.content}`
               : `${segment.kind}:${segment.content}`,
         );
       },
@@ -358,8 +361,10 @@ describe('message send utils', () => {
     await pending;
 
     expect(sent).toEqual([
-      'message-block:第一句',
-      'message-block:整块一\n整块二',
+      'text-line:第一句',
+      'text-line:第二句',
+      'text-line:第三句',
+      'structured-block:整块一\n整块二',
       'message-block:@123456 第二句',
     ]);
   });
@@ -369,7 +374,8 @@ describe('message send utils', () => {
       buildOutboundMessagePlanFromReplyPlan({
         segments: [
           { kind: 'message', content: '第一句\n第二句', mentions: [] },
-          { kind: 'message', content: '整块一\n整块二', mentions: ['123456'] },
+          { kind: 'structured_block', content: '整块一\n整块二' },
+          { kind: 'message', content: '先问下\n第二行', mentions: ['123456'] },
           { kind: 'voice', content: '晚安' },
           { kind: 'sticker', content: '无语地看对方一眼' },
           { kind: 'image', assetRef: 'asset://image-1', alt: '夜空照片' },
@@ -377,35 +383,38 @@ describe('message send utils', () => {
       }),
     ).toEqual({
       segments: [
-        { kind: 'message-block', content: '第一句\n第二句', mentions: [], raw: 'reply-plan:message:0:第一句\n第二句' },
-        { kind: 'message-block', content: '整块一\n整块二', mentions: ['123456'], raw: 'reply-plan:message:1:@123456 整块一\n整块二' },
+        { kind: 'text-line', content: '第一句', raw: 'reply-plan:message:0:line:0:第一句' },
+        { kind: 'text-line', content: '第二句', raw: 'reply-plan:message:0:line:1:第二句' },
+        { kind: 'structured-block', content: '整块一\n整块二', raw: 'reply-plan:structured_block:1:整块一\n整块二' },
+        { kind: 'message-block', content: '先问下', mentions: ['123456'], raw: 'reply-plan:message:2:@123456 先问下' },
+        { kind: 'text-line', content: '第二行', raw: 'reply-plan:message:2:line:1:第二行' },
         {
           kind: 'voice-block',
           content: '晚安',
-          raw: 'reply-plan:voice:2:晚安',
+          raw: 'reply-plan:voice:3:晚安',
         },
         {
           kind: 'sticker-block',
           content: '无语地看对方一眼',
-          raw: 'reply-plan:sticker:3:无语地看对方一眼',
+          raw: 'reply-plan:sticker:4:无语地看对方一眼',
         },
         {
           kind: 'image-block',
           assetRef: 'asset://image-1',
           alt: '夜空照片',
-          raw: 'reply-plan:image:4:asset://image-1',
+          raw: 'reply-plan:image:5:asset://image-1',
         },
       ],
     });
   });
 
-  it('keeps message reply segments atomic and preserves inline mention order', () => {
+  it('keeps first-line mention order and splits remaining message lines', () => {
     expect(
       buildOutboundMessagePlanFromReplyPlan({
         segments: [
           {
             kind: 'message',
-            content: '先问下这件事。',
+            content: '先问下这件事。\n等你回复',
             mentions: ['123456'],
           },
         ],
@@ -417,6 +426,11 @@ describe('message send utils', () => {
           content: '先问下这件事。',
           mentions: ['123456'],
           raw: 'reply-plan:message:0:@123456 先问下这件事。',
+        },
+        {
+          kind: 'text-line',
+          content: '等你回复',
+          raw: 'reply-plan:message:0:line:1:等你回复',
         },
       ],
     });

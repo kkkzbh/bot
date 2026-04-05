@@ -550,6 +550,13 @@ export function buildReplyTransportPlanFromResolvedActions(actions: ResolvedActi
       });
       continue;
     }
+    if (action.kind === 'structured_block') {
+      segments.push({
+        kind: 'structured_block' as const,
+        content: action.content,
+      });
+      continue;
+    }
     if (action.kind === 'voice') {
       segments.push({
         kind: 'voice' as const,
@@ -576,6 +583,9 @@ function renderReplyPlanSegmentTextForFallback(segment: ReplyTransportPlan['segm
   }
   if (segment.kind === 'message') {
     return renderMessageVisibleText(segment);
+  }
+  if (segment.kind === 'structured_block') {
+    return sanitizeStructuredReplySegmentContent(segment.content);
   }
   return sanitizeStructuredReplySegmentContent(segment.content);
 }
@@ -640,6 +650,9 @@ function buildPlannedUnitHistoryLines(args: {
     }
     if (segment.kind === 'message-block') {
       return renderMessageVisibleText(segment);
+    }
+    if (segment.kind === 'structured-block') {
+      return sanitizeStructuredReplySegmentContent(segment.content);
     }
     if (segment.kind === 'image-block') {
       return segment.alt ? `（发送图片：${segment.alt}）` : '（发送图片）';
@@ -1364,6 +1377,17 @@ async function deliverReplyPlanCore(args: {
       if (segment.kind === 'message-block') {
         beganSending = true;
         const receipt = await sendWhole(createQuotedMessageContent(createMessageMessageContent(segment), quoteTargetMessageId));
+        onDeliveryReceipt?.(receipt);
+        if (historyLine) {
+          committedHistoryLines.push(historyLine);
+          onCommittedUnit?.(historyLine);
+        }
+        return;
+      }
+
+      if (segment.kind === 'structured-block') {
+        beganSending = true;
+        const receipt = await sendWhole(createQuotedMessageContent(h.text(segment.content), quoteTargetMessageId));
         onDeliveryReceipt?.(receipt);
         if (historyLine) {
           committedHistoryLines.push(historyLine);

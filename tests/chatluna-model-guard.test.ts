@@ -222,13 +222,24 @@ describe('buildStructuredReplyRequestSpec', () => {
         }
       | undefined;
 
-    expect(textMessage?.description).toContain('normal text chatting');
-    expect(textMessage?.properties?.content?.description).toContain('Plain text content');
-    expect(textMessage?.properties?.content?.description).toContain('One sentence per message item is a good default');
-    expect(textMessage?.properties?.mentions?.description).toContain('Usually leave this empty');
+    expect(textMessage?.description).toContain('normal chat message');
+    expect(textMessage?.properties?.type?.description).toContain('normal chat message');
+    expect(textMessage?.properties?.content?.description).toContain('Flat plain-text content');
+    expect(textMessage?.properties?.mentions?.description).toContain('Mentions usually force a message notification');
+    expect(textMessage?.properties?.mentions?.description).toContain('not currently talking in the group');
     expect(textMessage?.properties?.mentions?.description).toContain('empty array []');
     expect(textMessage?.required).toContain('mentions');
     assertStrictRequiredForAllObjects(schema);
+
+    const structuredBlock = messageSchemas.find((item) => item.title === 'StructuredBlockItem') as
+      | {
+          description?: string;
+          properties?: Record<string, { description?: string }>;
+        }
+      | undefined;
+    expect(structuredBlock?.description).toContain('should stay together in one message');
+    expect(structuredBlock?.properties?.type?.description).toContain('should stay together in one message');
+    expect(structuredBlock?.properties?.content?.description).toContain('Structured plain-text content');
 
     const privateSchema = buildStructuredReplyRequestSpec({
       model: 'openai/gpt-5.4-medium-thinking',

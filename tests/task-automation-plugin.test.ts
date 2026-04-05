@@ -563,7 +563,7 @@ describe('task automation tools and execution', () => {
     ]);
   });
 
-  it('injects structured reply contract and recent source conversation context before execution', async () => {
+  it('injects shared chat style guidance and recent source conversation context before execution', async () => {
     const harness = createHarness({
       chathub_room: [createRoom({ roomName: '当前群房间', conversationId: 'conv-ctx' })],
       chathub_conversation: [

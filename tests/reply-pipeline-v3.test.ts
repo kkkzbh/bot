@@ -218,7 +218,7 @@ describe('reply pipeline v3', () => {
     ]);
   });
 
-  it('keeps structured content inside a single message item', async () => {
+  it('resolves structured block content as a dedicated action', async () => {
     const orchestrator = new ReplyOrchestratorService();
     const ready = await orchestrator.handle(createTurnInput('列个清单'), {} as never, {
       routeHint: 'agent',
@@ -229,13 +229,13 @@ describe('reply pipeline v3', () => {
         stickerAvailableCount: 0,
         source: 'test',
       },
-        responseMessage: createStructuredResponse({
-          decision: 'reply',
-          outbound_messages: [
-            { type: 'message', content: '- 牛奶\n- 面包', mentions: [] },
-          ],
-        }),
-      });
+      responseMessage: createStructuredResponse({
+        decision: 'reply',
+        outbound_messages: [
+          { type: 'structured_block', content: '- 牛奶\n- 面包' },
+        ],
+      }),
+    });
 
     expect(ready.status).toBe('ready');
     if (ready.status !== 'ready') {
@@ -244,11 +244,11 @@ describe('reply pipeline v3', () => {
     expect(ready.reply).toEqual({
       decision: 'reply',
       outbound_messages: [
-        { type: 'message', content: '- 牛奶\n- 面包', mentions: [] },
+        { type: 'structured_block', content: '- 牛奶\n- 面包' },
       ],
     });
     expect(ready.actions).toEqual([
-      { kind: 'message', content: '- 牛奶\n- 面包', mentions: [] },
+      { kind: 'structured_block', content: '- 牛奶\n- 面包' },
     ]);
   });
 

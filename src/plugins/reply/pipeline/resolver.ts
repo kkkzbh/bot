@@ -44,6 +44,16 @@ export class ActionResolverService {
         continue;
       }
 
+      if (message.type === 'structured_block') {
+        const content = sanitizeStructuredReplySegmentContent(message.content);
+        if (!content) continue;
+        resolved.push({
+          kind: 'structured_block',
+          content,
+        });
+        continue;
+      }
+
       const content = sanitizeStructuredReplySegmentContent(message.content);
       const mentions = normalizeMentionIds(message.mentions);
       if (!content && !mentions.length) {

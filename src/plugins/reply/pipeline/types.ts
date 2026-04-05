@@ -57,6 +57,10 @@ export type StructuredReplyMessage =
       mentions?: string[];
     }
   | {
+      type: 'structured_block';
+      content: string;
+    }
+  | {
       type: 'voice';
       content: string;
     }
@@ -75,6 +79,10 @@ export type ResolvedAction =
       kind: 'message';
       content: string;
       mentions: string[];
+    }
+  | {
+      kind: 'structured_block';
+      content: string;
     }
   | {
       kind: 'voice';
@@ -96,6 +104,11 @@ const STRUCTURED_REPLY_MESSAGE_ITEM_SCHEMA = z.object({
   mentions: STRUCTURED_REPLY_MESSAGE_USER_IDS_SCHEMA.optional(),
 });
 
+const STRUCTURED_REPLY_STRUCTURED_BLOCK_ITEM_SCHEMA = z.object({
+  type: z.literal('structured_block'),
+  content: z.string(),
+});
+
 const STRUCTURED_REPLY_VOICE_ITEM_SCHEMA = z.object({
   type: z.literal('voice'),
   content: z.string(),
@@ -108,6 +121,7 @@ const STRUCTURED_REPLY_MEME_ITEM_SCHEMA = z.object({
 
 const STRUCTURED_REPLY_OUTBOUND_ITEM_SCHEMA = z.discriminatedUnion('type', [
   STRUCTURED_REPLY_MESSAGE_ITEM_SCHEMA,
+  STRUCTURED_REPLY_STRUCTURED_BLOCK_ITEM_SCHEMA,
   STRUCTURED_REPLY_VOICE_ITEM_SCHEMA,
   STRUCTURED_REPLY_MEME_ITEM_SCHEMA,
 ]);
@@ -142,6 +156,11 @@ export function normalizeStructuredReply(raw: unknown): StructuredReply | null {
             content: sanitizeStructuredReplySegmentContent(message.content),
             ...(message.mentions ? { mentions: normalizeMentionIds(message.mentions) } : {}),
           }
+        : message.type === 'structured_block'
+          ? {
+              type: 'structured_block',
+              content: sanitizeStructuredReplySegmentContent(message.content),
+            }
         : message.type === 'voice'
           ? {
               type: 'voice',

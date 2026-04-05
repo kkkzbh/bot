@@ -72,19 +72,28 @@ export type OutboundMessageSegment =
       content: string;
       mentions: string[];
       raw: string;
+    }
+  | {
+      kind: 'structured-block';
+      content: string;
+      raw: string;
     };
 
 export interface OutboundMessagePlan {
   segments: OutboundMessageSegment[];
 }
 
-export type ReplyTransportSegmentKind = 'message' | 'voice' | 'sticker' | 'image';
+export type ReplyTransportSegmentKind = 'message' | 'structured_block' | 'voice' | 'sticker' | 'image';
 
 export type ReplyTransportSegment =
   | {
       kind: 'message';
       content: string;
       mentions: string[];
+    }
+  | {
+      kind: 'structured_block';
+      content: string;
     }
   | {
       kind: 'voice' | 'sticker';
@@ -480,11 +489,44 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
       const content = sanitizeStructuredReplySegmentContent(segment.content);
       const mentions = segment.mentions.map((value) => value.trim()).filter(Boolean);
       if (!content && !mentions.length) continue;
+      const lines = splitMessageByLines(content);
+      if (!lines.length) {
+        segments.push({
+          kind: 'message-block',
+          content: '',
+          mentions,
+          raw: createStructuredRaw(segment.kind, index, renderMessageVisibleText({ content: '', mentions })),
+        });
+        continue;
+      }
+
+      for (const [lineIndex, line] of lines.entries()) {
+        if (lineIndex === 0 && mentions.length > 0) {
+          segments.push({
+            kind: 'message-block',
+            content: line,
+            mentions,
+            raw: createStructuredRaw(segment.kind, index, renderMessageVisibleText({ content: line, mentions })),
+          });
+          continue;
+        }
+
+        segments.push({
+          kind: 'text-line',
+          content: line,
+          raw: createStructuredRaw(segment.kind, index, `line:${lineIndex}:${line}`),
+        });
+      }
+      continue;
+    }
+
+    if (segment.kind === 'structured_block') {
+      const content = sanitizeStructuredReplySegmentContent(segment.content);
+      if (!content.trim()) continue;
       segments.push({
-        kind: 'message-block',
+        kind: 'structured-block',
         content,
-        mentions,
-        raw: createStructuredRaw(segment.kind, index, renderMessageVisibleText({ content, mentions })),
+        raw: createStructuredRaw(segment.kind, index, content),
       });
       continue;
     }
@@ -543,6 +585,10 @@ export function renderOutboundMessageSegmentsHistoryText(segments: OutboundMessa
         return renderMessageVisibleText(segment);
       }
 
+      if (segment.kind === 'structured-block') {
+        return segment.content;
+      }
+
       return segment.content;
     })
     .filter((segment) => segment.trim().length > 0)
@@ -565,8 +611,14 @@ export async function dispatchOutboundMessagePlan(
     if (!nextSegment) continue;
 
     const delayMs =
-      segment.kind === 'text-line' || segment.kind === 'message-block'
-        ? calculateSmartSendDelayMs(segment.kind === 'text-line' ? segment.content : renderMessageVisibleText(segment))
+      segment.kind === 'text-line' || segment.kind === 'message-block' || segment.kind === 'structured-block'
+        ? calculateSmartSendDelayMs(
+            segment.kind === 'text-line'
+              ? segment.content
+              : segment.kind === 'message-block'
+                ? renderMessageVisibleText(segment)
+                : segment.content,
+          )
         : NON_TEXT_SEGMENT_DELAY_MS;
     await sleep(delayMs, options.abortSignal);
   }
