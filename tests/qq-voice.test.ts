@@ -328,7 +328,7 @@ function createHarness(overrides: {
           invoke: async () => ({
             content: JSON.stringify({
               decision: 'reply',
-              messages: [{ modality: 'text', content: '默认回复' }],
+              outbound_messages: [{ type: 'message', content: '默认回复' }],
             }),
           }),
         })),
@@ -440,7 +440,7 @@ function createReplyV2Response(input: string | Record<string, unknown>) {
     typeof input === 'string'
       ? {
           decision: 'reply',
-          messages: [{ modality: 'text', content: input }],
+          outbound_messages: [{ type: 'message', content: input }],
         }
       : input;
   return {
@@ -450,7 +450,7 @@ function createReplyV2Response(input: string | Record<string, unknown>) {
 }
 
 function extractSchemaMessageTitles(schema: Record<string, any> | undefined): string[] {
-  const rawMessageSchemas = schema?.properties?.messages?.anyOf?.find((item: any) => item.items?.anyOf)?.items?.anyOf ?? [];
+  const rawMessageSchemas = schema?.properties?.outbound_messages?.anyOf?.find((item: any) => item.items?.anyOf)?.items?.anyOf ?? [];
   return rawMessageSchemas.flatMap((item: any) => (Array.isArray(item.anyOf) ? item.anyOf : [item])).map((item: any) => item.title).filter(Boolean);
 }
 
@@ -998,7 +998,7 @@ describe('qq voice plugin', () => {
         value: expect.arrayContaining([
           expect.objectContaining({
             role: 'system',
-            content: expect.stringContaining('qqbot_agent_reply_contract'),
+            content: expect.stringContaining('qqbot_context_interpretation_protocol'),
           }),
         ]),
       }),
@@ -1017,7 +1017,7 @@ describe('qq voice plugin', () => {
       }),
     );
     const groupSchema = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_schema;
-    expect(extractSchemaMessageTitles(groupSchema)).toContain('MentionMessage');
+    expect(extractSchemaMessageTitles(groupSchema)).toContain('MessageItem');
     expect(context.options.inputMessage.additional_kwargs).not.toHaveProperty('qqbot_final_response_instruction');
   });
 
@@ -1053,9 +1053,10 @@ describe('qq voice plugin', () => {
     await promptCompiler?.(session, context);
 
     const schema = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_schema as Record<string, any> | undefined;
-    const titles = extractSchemaMessageTitles(schema);
-    expect(titles).not.toContain('MentionMessage');
-    expect(titles).not.toContain('MentionOnlyMessage');
+    const messageSchema = (schema?.properties?.outbound_messages?.anyOf?.find((item: any) => item.items?.anyOf)?.items?.anyOf ?? [])
+      .flatMap((item: any) => (Array.isArray(item.anyOf) ? item.anyOf : [item]))
+      .find((item: any) => item.title === 'MessageItem');
+    expect(messageSchema?.properties?.mentions).toBeUndefined();
   });
 
   it('injects explicit group speaker identity rules and current speaker identity into the reply prompt envelope', async () => {
@@ -1278,11 +1279,11 @@ describe('qq voice plugin', () => {
         room: createPluginRoom('conv-mention'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
-          messages: [
+          outbound_messages: [
             {
-              modality: 'mention',
-              userId: '123456',
+              type: 'message',
               content: '先问下这件事。',
+              mentions: ['123456'],
             },
           ],
         }),
@@ -1331,7 +1332,7 @@ describe('qq voice plugin', () => {
         room: createPluginRoom('conv-empty-reply'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
-          messages: [{ modality: 'text', content: '' }],
+          outbound_messages: [{ type: 'message', content: '' }],
         }),
       },
     };
@@ -1364,7 +1365,13 @@ describe('qq voice plugin', () => {
       const context = {
         options: {
           room: createPluginRoom('conv-quote-text'),
-          responseMessage: createReplyV2Response('第一句\n第二句'),
+          responseMessage: createReplyV2Response({
+            decision: 'reply',
+            outbound_messages: [
+              { type: 'message', content: '第一句' },
+              { type: 'message', content: '第二句' },
+            ],
+          }),
         },
       };
 
@@ -1404,11 +1411,11 @@ describe('qq voice plugin', () => {
           room: createPluginRoom('conv-quote-mention'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
-            messages: [
+            outbound_messages: [
               {
-                modality: 'mention',
-                userId: '123456',
+                type: 'message',
                 content: '先问下这件事。',
+                mentions: ['123456'],
               },
             ],
           }),
@@ -1468,7 +1475,7 @@ describe('qq voice plugin', () => {
         room: createPluginRoom('conv-voice'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
-          messages: [{ modality: 'voice', content: '收到。' }],
+          outbound_messages: [{ type: 'voice', content: '收到。' }],
         }),
       },
     };
@@ -1530,9 +1537,9 @@ describe('qq voice plugin', () => {
           room: createPluginRoom('conv-quote-voice'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
-            messages: [
-              { modality: 'voice', content: '收到。' },
-              { modality: 'text', content: '第二句' },
+            outbound_messages: [
+              { type: 'voice', content: '收到。' },
+              { type: 'message', content: '第二句' },
             ],
           }),
         },
@@ -1577,7 +1584,7 @@ describe('qq voice plugin', () => {
         room: createPluginRoom('conv-voice-fallback'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
-          messages: [{ modality: 'voice', content: '收到。' }],
+          outbound_messages: [{ type: 'voice', content: '收到。' }],
         }),
       },
     };
@@ -1615,9 +1622,9 @@ describe('qq voice plugin', () => {
         room: createPluginRoom('conv-sticker'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
-          messages: [
-            { modality: 'text', content: '……随你' },
-            { modality: 'meme', content: '无语地看对方一眼' },
+          outbound_messages: [
+            { type: 'message', content: '……随你' },
+            { type: 'meme', content: '无语地看对方一眼' },
           ],
         }),
       },
@@ -1669,7 +1676,7 @@ describe('qq voice plugin', () => {
           room: createPluginRoom('conv-quote-sticker'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
-            messages: [{ modality: 'meme', content: '无语地看对方一眼' }],
+            outbound_messages: [{ type: 'meme', content: '无语地看对方一眼' }],
           }),
         },
       };
@@ -1714,9 +1721,9 @@ describe('qq voice plugin', () => {
         room: createPluginRoom('conv-sticker-drop'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
-          messages: [
-            { modality: 'text', content: '还是先说正事。' },
-            { modality: 'meme', content: '无语地看对方一眼' },
+          outbound_messages: [
+            { type: 'message', content: '还是先说正事。' },
+            { type: 'meme', content: '无语地看对方一眼' },
           ],
         }),
       },
@@ -1727,7 +1734,7 @@ describe('qq voice plugin', () => {
     expect(chatluna.normalizeResearchReplyHistory).not.toHaveBeenCalled();
   });
 
-  it('splits multiline text actions through the executor and suppresses the raw JSON response', async () => {
+  it('keeps one message item atomic even when content contains multiple lines', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -1758,7 +1765,7 @@ describe('qq voice plugin', () => {
 
     const result = await executor?.(session, context);
     expect(typeof result).toBe('number');
-    expect(extractSentMessagePayloads(bot)).toEqual(['echo hi', 'pwd']);
+    expect(extractSentMessagePayloads(bot)).toEqual(['echo hi\npwd']);
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-1' }),
@@ -1766,7 +1773,7 @@ describe('qq voice plugin', () => {
     );
   });
 
-  it('keeps structured multiline replies atomic while preserving surrounding text order', async () => {
+  it('keeps structured message items atomic while preserving surrounding text order', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -1793,10 +1800,10 @@ describe('qq voice plugin', () => {
         room: createPluginRoom('conv-structured-multiline'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
-          messages: [
-            { modality: 'text', content: '先看这个清单。' },
-            { modality: 'multiline', semantic: 'unordered_list', content: '- 牛奶\n- 面包' },
-            { modality: 'text', content: '照着买。' },
+          outbound_messages: [
+            { type: 'message', content: '先看这个清单。' },
+            { type: 'message', content: '- 牛奶\n- 面包' },
+            { type: 'message', content: '照着买。' },
           ],
         }),
       },
@@ -1950,7 +1957,7 @@ describe('qq voice plugin', () => {
       options: {
         room: createPluginRoom('conv-fenced-json'),
         responseMessage: createRawReplyResponse(
-          ['```json', '{"decision":"reply","messages":[{"modality":"text","content":"收到"}]}', '```'].join('\n'),
+          ['```json', '{"decision":"reply","outbound_messages":[{"type":"message","content":"收到"}]}', '```'].join('\n'),
         ),
       },
     };

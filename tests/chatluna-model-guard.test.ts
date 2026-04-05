@@ -175,7 +175,7 @@ describe('buildStructuredReplyRequestSpec', () => {
       canMention: true,
     }).finalResponseSchema as {
       properties?: {
-        messages?: {
+        outbound_messages?: {
           anyOf?: Array<{
             items?: {
               anyOf?: Array<{
@@ -190,24 +190,20 @@ describe('buildStructuredReplyRequestSpec', () => {
       };
     };
 
-    const rawMessageSchemas = schema.properties?.messages?.anyOf?.find((item) => item.items?.anyOf)?.items?.anyOf ?? [];
+    const rawMessageSchemas = schema.properties?.outbound_messages?.anyOf?.find((item) => item.items?.anyOf)?.items?.anyOf ?? [];
     const messageSchemas = rawMessageSchemas.flatMap((item) => item.anyOf ?? [item]);
-    const textMessage = messageSchemas.find((item) => item.title === 'TextMessage');
-    const mentionMessage = messageSchemas.find((item) => item.title === 'MentionMessage');
-    const mentionOnlyMessage = messageSchemas.find((item) => item.title === 'MentionOnlyMessage');
+    const textMessage = messageSchemas.find((item) => item.title === 'MessageItem');
 
-    expect(textMessage?.description).toContain('normal visible text reply');
-    expect(textMessage?.properties?.content?.description).toContain('exact plain text content');
-    expect(mentionMessage?.description).toContain('visible text in the same message');
-    expect(mentionMessage?.properties?.content?.description).toContain('Visible text in the same message after the @mention');
-    expect(mentionOnlyMessage?.description).toContain('no visible body text');
+    expect(textMessage?.description).toContain('final chat message');
+    expect(textMessage?.properties?.content?.description).toContain('multiple message items');
+    expect(textMessage?.properties?.mentions?.description).toContain('QQ group @mentions');
 
     const privateSchema = buildStructuredReplyRequestSpec({
       model: 'openai/gpt-5.4-medium-thinking',
       canMention: false,
     }).finalResponseSchema as {
       properties?: {
-        messages?: {
+        outbound_messages?: {
           anyOf?: Array<{
             items?: {
               anyOf?: Array<{
@@ -221,10 +217,12 @@ describe('buildStructuredReplyRequestSpec', () => {
       };
     };
 
-    const privateRawSchemas = privateSchema.properties?.messages?.anyOf?.find((item) => item.items?.anyOf)?.items?.anyOf ?? [];
+    const privateRawSchemas = privateSchema.properties?.outbound_messages?.anyOf?.find((item) => item.items?.anyOf)?.items?.anyOf ?? [];
     const privateMessageSchemas = privateRawSchemas.flatMap((item) => item.anyOf ?? [item]);
-    expect(privateMessageSchemas.find((item) => item.title === 'MentionMessage')).toBeUndefined();
-    expect(privateMessageSchemas.find((item) => item.title === 'MentionOnlyMessage')).toBeUndefined();
+    const privateTextMessage = privateMessageSchemas.find((item) => item.title === 'MessageItem') as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    expect(privateTextMessage?.properties?.mentions).toBeUndefined();
   });
 });
 

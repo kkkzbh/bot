@@ -6,7 +6,6 @@ import {
   type LoadedStickerCatalog,
   type StickerCapabilityState,
 } from './selection.js';
-import { registerPromptFragment, type PromptFragment } from '../shared/prompt-context/index.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -102,7 +101,6 @@ function setRuntimeStickerCatalog(stickerDir: string, catalog: LoadedStickerCata
 
 export function resolveStickerCapabilityArtifacts(preset?: string | null): {
   state: StickerCapabilityState;
-  fragments: PromptFragment[];
 } {
   const normalizedPreset = preset?.trim() || null;
   const catalog = loadRuntimeStickerCatalog();
@@ -115,40 +113,15 @@ export function resolveStickerCapabilityArtifacts(preset?: string | null): {
     preset: normalizedPreset,
     availableCount,
   };
-  const fragments: PromptFragment[] = [];
   const capability = catalog ? buildStickerCapabilityDescriptor({ catalog, preset: normalizedPreset }) : null;
   if (!capability || !catalog) {
-    return { state, fragments };
+    return { state };
   }
-
-  fragments.push({
-    source: 'qqbot_sticker_capability',
-    title: 'Sticker Capability State',
-    authority: 'runtime_contract',
-    trust: 'trusted',
-    ttl: 'turn',
-    payload: {
-      kind: 'json',
-      value: capability,
-    },
-  });
 
   const policy = buildStickerCapabilityPolicy({ catalog, preset: normalizedPreset });
-  if (policy) {
-    fragments.push({
-      source: 'qqbot_sticker_execution_rules',
-      title: 'Sticker Execution Rules',
-      authority: 'runtime_contract',
-      trust: 'trusted',
-      ttl: 'turn',
-      payload: {
-        kind: 'text',
-        value: policy,
-      },
-    });
-  }
-
-  return { state, fragments };
+  void capability;
+  void policy;
+  return { state };
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
@@ -180,16 +153,8 @@ export function apply(ctx: Context, config: Config = {}): void {
 
         const room = context.options?.room;
         const preset = room?.preset?.trim() || null;
-        const { state, fragments } = resolveStickerCapabilityArtifacts(preset);
+        const { state } = resolveStickerCapabilityArtifacts(preset);
         setStickerCapabilityState(session, state);
-        const conversationId = room?.conversationId;
-        if (!conversationId || !fragments.length) {
-          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        }
-
-        for (const fragment of fragments) {
-          registerPromptFragment(conversationId, fragment);
-        }
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
       .after('read_chat_message')

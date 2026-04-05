@@ -1,14 +1,7 @@
 import { z } from 'zod';
-import {
-  normalizeMention,
-  sanitizeStructuredReplySegmentContent,
-  type ReplyMention,
-} from '../../shared/outbound/index.js';
+import { sanitizeStructuredReplySegmentContent } from '../../shared/outbound/index.js';
 import type { PromptFragment } from '../../shared/prompt-context/types.js';
-import {
-  STRUCTURED_REPLY_JSON_SCHEMA,
-  STRUCTURED_REPLY_MULTILINE_SEMANTICS,
-} from '../../shared/llm/structured-reply-schema.js';
+import { STRUCTURED_REPLY_JSON_SCHEMA } from '../../shared/llm/structured-reply-schema.js';
 
 export const REPLY_ROUTES = [
   'no_reply',
@@ -57,50 +50,31 @@ export interface TurnContext {
   continuationContext: TurnContinuationContext | null;
 }
 
-export type StructuredReplyMultilineSemantic = (typeof STRUCTURED_REPLY_MULTILINE_SEMANTICS)[number];
-
 export type StructuredReplyMessage =
   | {
-      modality: 'text';
+      type: 'message';
+      content: string;
+      mentions?: string[];
+    }
+  | {
+      type: 'voice';
       content: string;
     }
   | {
-      modality: 'mention';
-      userId: string;
-      content?: string;
-    }
-  | {
-      modality: 'voice';
-      content: string;
-    }
-  | {
-      modality: 'meme';
-      content: string;
-    }
-  | {
-      modality: 'multiline';
-      semantic: StructuredReplyMultilineSemantic;
+      type: 'meme';
       content: string;
     };
 
 export interface StructuredReply {
   decision: 'reply' | 'no_reply';
-  messages?: StructuredReplyMessage[];
+  outbound_messages?: StructuredReplyMessage[];
 }
 
 export type ResolvedAction =
   | {
-      kind: 'text';
+      kind: 'message';
       content: string;
-    }
-  | {
-      kind: 'mention';
-      mention: ReplyMention;
-    }
-  | {
-      kind: 'multiline';
-      semantic: StructuredReplyMultilineSemantic;
-      content: string;
+      mentions: string[];
     }
   | {
       kind: 'voice';
@@ -114,45 +88,40 @@ export type ResolvedAction =
       kind: 'no_reply';
     };
 
-const STRUCTURED_REPLY_TEXT_MESSAGE_SCHEMA = z.object({
-  modality: z.literal('text'),
+const STRUCTURED_REPLY_MESSAGE_USER_IDS_SCHEMA = z.array(z.string().regex(/^\s*\d+\s*$/));
+
+const STRUCTURED_REPLY_MESSAGE_ITEM_SCHEMA = z.object({
+  type: z.literal('message'),
+  content: z.string(),
+  mentions: STRUCTURED_REPLY_MESSAGE_USER_IDS_SCHEMA.optional(),
+});
+
+const STRUCTURED_REPLY_VOICE_ITEM_SCHEMA = z.object({
+  type: z.literal('voice'),
   content: z.string(),
 });
 
-const STRUCTURED_REPLY_MENTION_MESSAGE_SCHEMA = z.object({
-  modality: z.literal('mention'),
-  userId: z.string().regex(/^\s*\d+\s*$/),
-  content: z.string().optional(),
-});
-
-const STRUCTURED_REPLY_VOICE_MESSAGE_SCHEMA = z.object({
-  modality: z.literal('voice'),
+const STRUCTURED_REPLY_MEME_ITEM_SCHEMA = z.object({
+  type: z.literal('meme'),
   content: z.string(),
 });
 
-const STRUCTURED_REPLY_MEME_MESSAGE_SCHEMA = z.object({
-  modality: z.literal('meme'),
-  content: z.string(),
-});
-
-const STRUCTURED_REPLY_MULTILINE_MESSAGE_SCHEMA = z.object({
-  modality: z.literal('multiline'),
-  semantic: z.enum(STRUCTURED_REPLY_MULTILINE_SEMANTICS),
-  content: z.string(),
-});
-
-const STRUCTURED_REPLY_MESSAGE_SCHEMA = z.discriminatedUnion('modality', [
-  STRUCTURED_REPLY_TEXT_MESSAGE_SCHEMA,
-  STRUCTURED_REPLY_MENTION_MESSAGE_SCHEMA,
-  STRUCTURED_REPLY_VOICE_MESSAGE_SCHEMA,
-  STRUCTURED_REPLY_MEME_MESSAGE_SCHEMA,
-  STRUCTURED_REPLY_MULTILINE_MESSAGE_SCHEMA,
+const STRUCTURED_REPLY_OUTBOUND_ITEM_SCHEMA = z.discriminatedUnion('type', [
+  STRUCTURED_REPLY_MESSAGE_ITEM_SCHEMA,
+  STRUCTURED_REPLY_VOICE_ITEM_SCHEMA,
+  STRUCTURED_REPLY_MEME_ITEM_SCHEMA,
 ]);
 
 export const STRUCTURED_REPLY_SCHEMA = z.object({
   decision: z.enum(['reply', 'no_reply']),
-  messages: z.array(STRUCTURED_REPLY_MESSAGE_SCHEMA).nullable().optional(),
+  outbound_messages: z.array(STRUCTURED_REPLY_OUTBOUND_ITEM_SCHEMA).nullable().optional(),
 }).strict();
+
+function normalizeMentionIds(mentions: string[] | undefined): string[] {
+  return (mentions ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
 
 export function normalizeStructuredReply(raw: unknown): StructuredReply | null {
   const parsed = STRUCTURED_REPLY_SCHEMA.safeParse(raw);
@@ -166,23 +135,20 @@ export function normalizeStructuredReply(raw: unknown): StructuredReply | null {
 
   return {
     decision: 'reply',
-    messages: parsed.data.messages?.map((message) =>
-      message.modality === 'multiline'
+    outbound_messages: parsed.data.outbound_messages?.map((message) =>
+      message.type === 'message'
         ? {
-            modality: message.modality,
-            semantic: message.semantic,
+            type: 'message',
             content: sanitizeStructuredReplySegmentContent(message.content),
+            ...(message.mentions ? { mentions: normalizeMentionIds(message.mentions) } : {}),
           }
-        : message.modality === 'mention'
+        : message.type === 'voice'
           ? {
-              modality: message.modality,
-              ...(normalizeMention({
-                userId: message.userId,
-                content: message.content,
-              }) ?? { userId: message.userId.trim() }),
+              type: 'voice',
+              content: sanitizeStructuredReplySegmentContent(message.content),
             }
           : {
-              modality: message.modality,
+              type: 'meme',
               content: sanitizeStructuredReplySegmentContent(message.content),
             },
     ),
@@ -195,3 +161,5 @@ export function classifyReplyRoute(input: TurnInput, routeHint?: ReplyRoute | nu
   if (routeHint === 'agent') return 'agent';
   return 'agent';
 }
+
+export { STRUCTURED_REPLY_JSON_SCHEMA };

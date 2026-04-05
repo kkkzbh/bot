@@ -1,7 +1,8 @@
 import { h, type Session, type Universal } from 'koishi';
 
-const MIN_SMART_SEND_DELAY_MS = 1000;
+const MIN_SMART_SEND_DELAY_MS = 2000;
 const MAX_SMART_SEND_DELAY_MS = 4000;
+const NON_TEXT_SEGMENT_DELAY_MS = 2500;
 const META_LEAK_FALLBACK_TEXT = '你在说什么怪话……我听不懂';
 const bypassSplitOptions = new WeakSet<Universal.SendOptions>();
 const LEAKED_REASONING_LINE_PATTERN =
@@ -51,11 +52,6 @@ export type OutboundMessageSegment =
       raw: string;
     }
   | {
-      kind: 'multiline-block';
-      content: string;
-      raw: string;
-    }
-  | {
       kind: 'voice-block';
       content: string;
       raw: string;
@@ -72,8 +68,9 @@ export type OutboundMessageSegment =
       raw: string;
     }
   | {
-      kind: 'mention-block';
-      mention: ReplyMention;
+      kind: 'message-block';
+      content: string;
+      mentions: string[];
       raw: string;
     };
 
@@ -81,16 +78,17 @@ export interface OutboundMessagePlan {
   segments: OutboundMessageSegment[];
 }
 
-export type ReplyTransportSegmentKind = 'text' | 'mention' | 'multiline' | 'voice' | 'sticker' | 'image';
+export type ReplyTransportSegmentKind = 'message' | 'voice' | 'sticker' | 'image';
 
 export type ReplyTransportSegment =
   | {
-      kind: 'text' | 'multiline' | 'voice' | 'sticker';
+      kind: 'message';
       content: string;
+      mentions: string[];
     }
   | {
-      kind: 'mention';
-      mention: ReplyMention;
+      kind: 'voice' | 'sticker';
+      content: string;
     }
   | {
       kind: 'image';
@@ -320,6 +318,16 @@ export function renderMentionVisibleText(mention: ReplyMention): string {
   return normalized.content ? `@${normalized.userId} ${normalized.content}` : `@${normalized.userId}`;
 }
 
+export function renderMessageVisibleText(message: { content: string; mentions?: string[] }): string {
+  const mentions = (message.mentions ?? [])
+    .map((userId) => userId.trim())
+    .filter(Boolean)
+    .map((userId) => `@${userId}`);
+  const content = sanitizeStructuredReplySegmentContent(message.content);
+  const parts = [...mentions, content].filter((value) => value.trim().length > 0);
+  return parts.join(' ').trim();
+}
+
 export function createMentionMessageContent(
   mention: ReplyMention,
   options: { separator?: 'space' | 'newline' | 'none' } = {},
@@ -331,6 +339,22 @@ export function createMentionMessageContent(
   const separator = options.separator ?? 'space';
   const prefix = separator === 'newline' ? '\n' : separator === 'none' ? '' : ' ';
   return [h.at(normalized.userId), h.text(`${prefix}${normalized.content}`)];
+}
+
+export function createMessageMessageContent(message: { content: string; mentions?: string[] }): BotMessageContent {
+  const normalizedMentions = (message.mentions ?? [])
+    .map((userId) => userId.trim())
+    .filter(Boolean);
+  const content = sanitizeStructuredReplySegmentContent(message.content);
+  if (!normalizedMentions.length) {
+    return h.text(content);
+  }
+
+  const elements = normalizedMentions.map((userId) => h.at(userId));
+  if (content) {
+    elements.push(h.text(` ${content}`));
+  }
+  return elements;
 }
 
 export function createQuotedMessageContent(content: BotMessageContent, targetMessageId?: string | null): BotMessageContent {
@@ -452,19 +476,16 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
     `reply-plan:${kind}:${index}:${value}`;
 
   for (const [index, segment] of plan.segments.entries()) {
-    if (segment.kind === 'mention') {
-      const normalizedMention = normalizeMention(segment.mention);
-      if (!normalizedMention) continue;
+    if (segment.kind === 'message') {
+      const content = sanitizeStructuredReplySegmentContent(segment.content);
+      const mentions = segment.mentions.map((value) => value.trim()).filter(Boolean);
+      if (!content && !mentions.length) continue;
       segments.push({
-        kind: 'mention-block',
-        mention: normalizedMention,
-        raw: createStructuredRaw(segment.kind, index, renderMentionVisibleText(normalizedMention)),
+        kind: 'message-block',
+        content,
+        mentions,
+        raw: createStructuredRaw(segment.kind, index, renderMessageVisibleText({ content, mentions })),
       });
-      continue;
-    }
-
-    if (segment.kind === 'text') {
-      segments.push(...createTextOutboundSegments(segment.content));
       continue;
     }
 
@@ -483,15 +504,6 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
 
     const content = sanitizeStructuredReplySegmentContent(segment.content);
     if (!content.trim()) continue;
-
-    if (segment.kind === 'multiline') {
-      segments.push({
-        kind: 'multiline-block',
-        content,
-        raw: createStructuredRaw(segment.kind, index, content),
-      });
-      continue;
-    }
 
     if (segment.kind === 'sticker') {
       segments.push({
@@ -527,8 +539,8 @@ export function renderOutboundMessageSegmentsHistoryText(segments: OutboundMessa
         return segment.alt ? `（发送图片：${segment.alt}）` : '（发送图片）';
       }
 
-      if (segment.kind === 'mention-block') {
-        return renderMentionVisibleText(segment.mention);
+      if (segment.kind === 'message-block') {
+        return renderMessageVisibleText(segment);
       }
 
       return segment.content;
@@ -551,9 +563,12 @@ export async function dispatchOutboundMessagePlan(
 
     const nextSegment = plan.segments[index + 1];
     if (!nextSegment) continue;
-    if (segment.kind !== 'text-line') continue;
 
-    await sleep(calculateSmartSendDelayMs(segment.content), options.abortSignal);
+    const delayMs =
+      segment.kind === 'text-line' || segment.kind === 'message-block'
+        ? calculateSmartSendDelayMs(segment.kind === 'text-line' ? segment.content : renderMessageVisibleText(segment))
+        : NON_TEXT_SEGMENT_DELAY_MS;
+    await sleep(delayMs, options.abortSignal);
   }
 }
 

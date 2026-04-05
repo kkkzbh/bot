@@ -147,9 +147,9 @@ describe('reply pipeline v3', () => {
       },
       responseMessage: createStructuredResponse({
         decision: 'reply',
-        messages: [
-          { modality: 'voice', content: '收到。' },
-          { modality: 'meme', content: '无语地看对方一眼' },
+        outbound_messages: [
+          { type: 'voice', content: '收到。' },
+          { type: 'meme', content: '无语地看对方一眼' },
         ],
       }),
     });
@@ -160,9 +160,9 @@ describe('reply pipeline v3', () => {
     }
     expect(ready.reply).toEqual({
       decision: 'reply',
-      messages: [
-        { modality: 'voice', content: '收到。' },
-        { modality: 'meme', content: '无语地看对方一眼' },
+      outbound_messages: [
+        { type: 'voice', content: '收到。' },
+        { type: 'meme', content: '无语地看对方一眼' },
       ],
     });
     expect(ready.actions).toEqual([
@@ -171,12 +171,13 @@ describe('reply pipeline v3', () => {
     ]);
   });
 
-  it('resolves mention actions with inline visible text', async () => {
+  it('resolves message actions with inline mentions', async () => {
     const orchestrator = new ReplyOrchestratorService();
     const ready = await orchestrator.handle(createTurnInput('提醒一下对方'), {} as never, {
       routeHint: 'agent',
       capabilitySnapshot: {
         canMultiline: true,
+        canMention: true,
         canVoice: false,
         canSticker: false,
         stickerAvailableCount: 0,
@@ -184,11 +185,11 @@ describe('reply pipeline v3', () => {
       },
       responseMessage: createStructuredResponse({
         decision: 'reply',
-        messages: [
+        outbound_messages: [
           {
-            modality: 'mention',
-            userId: '123456',
+            type: 'message',
             content: '先问下这件事。',
+            mentions: ['123456'],
           },
         ],
       }),
@@ -200,26 +201,24 @@ describe('reply pipeline v3', () => {
     }
     expect(ready.reply).toEqual({
       decision: 'reply',
-      messages: [
+      outbound_messages: [
         {
-          modality: 'mention',
-          userId: '123456',
+          type: 'message',
           content: '先问下这件事。',
+          mentions: ['123456'],
         },
       ],
     });
     expect(ready.actions).toEqual([
       {
-        kind: 'mention',
-        mention: {
-          userId: '123456',
-          content: '先问下这件事。',
-        },
+        kind: 'message',
+        content: '先问下这件事。',
+        mentions: ['123456'],
       },
     ]);
   });
 
-  it('resolves multiline actions when the capability is available', async () => {
+  it('keeps structured content inside a single message item', async () => {
     const orchestrator = new ReplyOrchestratorService();
     const ready = await orchestrator.handle(createTurnInput('列个清单'), {} as never, {
       routeHint: 'agent',
@@ -232,8 +231,8 @@ describe('reply pipeline v3', () => {
       },
       responseMessage: createStructuredResponse({
         decision: 'reply',
-        messages: [
-          { modality: 'multiline', semantic: 'unordered_list', content: '- 牛奶\n- 面包' },
+        outbound_messages: [
+          { type: 'message', content: '- 牛奶\n- 面包' },
         ],
       }),
     });
@@ -244,12 +243,12 @@ describe('reply pipeline v3', () => {
     }
     expect(ready.reply).toEqual({
       decision: 'reply',
-      messages: [
-        { modality: 'multiline', semantic: 'unordered_list', content: '- 牛奶\n- 面包' },
+      outbound_messages: [
+        { type: 'message', content: '- 牛奶\n- 面包' },
       ],
     });
     expect(ready.actions).toEqual([
-      { kind: 'multiline', semantic: 'unordered_list', content: '- 牛奶\n- 面包' },
+      { kind: 'message', content: '- 牛奶\n- 面包', mentions: [] },
     ]);
   });
 
@@ -263,7 +262,7 @@ describe('reply pipeline v3', () => {
           decision: 'reply',
         }),
       }),
-    ).rejects.toThrow('must include at least one message');
+    ).rejects.toThrow('must include at least one outbound message');
   });
 
   it('treats reply outputs with only empty normalized messages as no_reply', async () => {
@@ -274,14 +273,14 @@ describe('reply pipeline v3', () => {
         routeHint: 'agent',
         responseMessage: createStructuredResponse({
           decision: 'reply',
-          messages: [{ modality: 'text', content: '' }],
+          outbound_messages: [{ type: 'message', content: '' }],
         }),
       }),
     ).resolves.toMatchObject({
       status: 'ready',
       reply: {
         decision: 'reply',
-        messages: [{ modality: 'text', content: '' }],
+        outbound_messages: [{ type: 'message', content: '' }],
       },
       actions: [{ kind: 'no_reply' }],
     });
@@ -295,14 +294,14 @@ describe('reply pipeline v3', () => {
         routeHint: 'agent',
         responseMessage: createStructuredResponse({
           decision: 'reply',
-          messages: [{ modality: 'text', content: '收到。' }],
+          outbound_messages: [{ type: 'message', content: '收到。' }],
         }),
       }),
     ).resolves.toMatchObject({
       status: 'ready',
       reply: {
         decision: 'reply',
-        messages: [{ modality: 'text', content: '收到。' }],
+        outbound_messages: [{ type: 'message', content: '收到。' }],
       },
     });
 
@@ -323,7 +322,7 @@ describe('reply pipeline v3', () => {
       orchestrator.handle(createTurnInput('回一句'), {} as never, {
         routeHint: 'agent',
         responseMessage: {
-          content: ['```json', '{"decision":"reply","messages":[{"modality":"text","content":"收到。"}]}', '```'].join(
+          content: ['```json', '{"decision":"reply","outbound_messages":[{"type":"message","content":"收到。"}]}', '```'].join(
             '\n',
           ),
         },
@@ -346,16 +345,16 @@ describe('reply pipeline v3', () => {
         },
         responseMessage: createStructuredResponse({
           decision: 'reply',
-          messages: [
-            { modality: 'voice', content: '查到了。' },
-            { modality: 'meme', content: '无语地看对方一眼' },
+          outbound_messages: [
+            { type: 'voice', content: '查到了。' },
+            { type: 'meme', content: '无语地看对方一眼' },
           ],
         }),
       }),
     ).rejects.toThrow('voice output but voice capability is unavailable');
   });
 
-  it('rejects multiline messages without semantic', async () => {
+  it('rejects message mentions with non-numeric user ids', async () => {
     const orchestrator = new ReplyOrchestratorService();
 
     await expect(
@@ -363,64 +362,9 @@ describe('reply pipeline v3', () => {
         routeHint: 'agent',
         responseMessage: createStructuredResponse({
           decision: 'reply',
-          messages: [{ modality: 'multiline', content: '- 一\n- 二' }],
+          outbound_messages: [{ type: 'message', content: 'hi', mentions: ['u1'] }],
         }),
       }),
-    ).rejects.toThrow('messages.0.semantic Required');
-  });
-
-  it('rejects multiline messages with unknown semantic', async () => {
-    const orchestrator = new ReplyOrchestratorService();
-
-    await expect(
-      orchestrator.handle(createTurnInput('列个清单'), {} as never, {
-        routeHint: 'agent',
-        responseMessage: createStructuredResponse({
-          decision: 'reply',
-          messages: [{ modality: 'multiline', semantic: 'table_block', content: 'a | b' }],
-        }),
-      }),
-    ).rejects.toThrow('messages.0.semantic');
-  });
-
-  it('rejects unavailable multiline outputs instead of downgrading them', async () => {
-    const orchestrator = new ReplyOrchestratorService();
-
-    await expect(
-      orchestrator.handle(createTurnInput('列个清单'), {} as never, {
-        routeHint: 'agent',
-        capabilitySnapshot: {
-          canMultiline: false,
-          canVoice: false,
-          canSticker: false,
-          stickerAvailableCount: 0,
-          source: 'test',
-        },
-        responseMessage: createStructuredResponse({
-          decision: 'reply',
-          messages: [{ modality: 'multiline', semantic: 'ordered_list', content: '1. 一\n2. 二' }],
-        }),
-      }),
-    ).rejects.toThrow('multiline output but multiline capability is unavailable');
-  });
-
-  it('rejects mention messages with non-numeric user ids', async () => {
-    const orchestrator = new ReplyOrchestratorService();
-
-    await expect(
-      orchestrator.handle(createTurnInput('提醒一下对方'), {} as never, {
-        routeHint: 'agent',
-        responseMessage: createStructuredResponse({
-          decision: 'reply',
-          messages: [
-            {
-              modality: 'mention',
-              userId: 'u1',
-              content: '先问下这件事。',
-            },
-          ],
-        }),
-      }),
-    ).rejects.toThrow('messages.0.userId');
+    ).rejects.toThrow('outbound_messages.0.mentions.0');
   });
 });

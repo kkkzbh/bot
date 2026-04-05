@@ -23,12 +23,12 @@ import {
 import {
   buildOutboundMessagePlanFromReplyPlan,
   createBotMessageDispatchers,
-  createMentionMessageContent,
+  createMessageMessageContent,
   createSessionMessageDispatchers,
   createQuotedMessageContent,
   createKeyedStrandRunner,
   dispatchOutboundMessagePlan,
-  renderMentionVisibleText,
+  renderMessageVisibleText,
   resolveReplyActorKey,
   resolveReplyQueueKey,
   sanitizeStructuredReplySegmentContent,
@@ -520,8 +520,9 @@ function downgradeVoiceSegmentsToText(plan: ReplyTransportPlan): ReplyTransportP
     segments: plan.segments.map((segment) =>
       segment.kind === 'voice'
         ? {
-            kind: 'text',
+            kind: 'message',
             content: segment.content,
+            mentions: [],
           }
         : segment,
     ),
@@ -541,10 +542,11 @@ export function buildReplyTransportPlanFromResolvedActions(actions: ResolvedActi
     if (action.kind === 'no_reply') {
       continue;
     }
-    if (action.kind === 'multiline') {
+    if (action.kind === 'message') {
       segments.push({
-        kind: 'multiline' as const,
+        kind: 'message' as const,
         content: action.content,
+        mentions: action.mentions,
       });
       continue;
     }
@@ -555,13 +557,6 @@ export function buildReplyTransportPlanFromResolvedActions(actions: ResolvedActi
       });
       continue;
     }
-    if (action.kind === 'mention') {
-      segments.push({
-        kind: 'mention' as const,
-        mention: action.mention,
-      });
-      continue;
-    }
     if (action.kind === 'sticker') {
       segments.push({
         kind: 'sticker' as const,
@@ -569,10 +564,6 @@ export function buildReplyTransportPlanFromResolvedActions(actions: ResolvedActi
       });
       continue;
     }
-    segments.push({
-      kind: 'text' as const,
-      content: action.content,
-    });
   }
 
   return { segments };
@@ -583,8 +574,8 @@ function renderReplyPlanSegmentTextForFallback(segment: ReplyTransportPlan['segm
   if (segment.kind === 'image') {
     return sanitizeStructuredReplySegmentContent(segment.alt ?? '');
   }
-  if (segment.kind === 'mention') {
-    return renderMentionVisibleText(segment.mention);
+  if (segment.kind === 'message') {
+    return renderMessageVisibleText(segment);
   }
   return sanitizeStructuredReplySegmentContent(segment.content);
 }
@@ -620,17 +611,17 @@ function renderDeliveredReplyPlanHistoryText(
         return `（发送语音：${sanitizeStructuredReplySegmentContent(segment.content)}）`;
       }
 
-      if (segment.kind === 'mention') {
-        return renderMentionVisibleText(segment.mention);
+      if (segment.kind === 'message') {
+        return renderMessageVisibleText(segment);
       }
 
-      if (segment.kind !== 'sticker') {
-        return sanitizeStructuredReplySegmentContent(segment.content);
+      if (segment.kind === 'sticker') {
+        const outboundSticker = stickerSegments[stickerIndex];
+        stickerIndex += 1;
+        return outboundSticker ? stickerHistoryByRaw.get(outboundSticker.raw) ?? '（发送表情包）' : '（发送表情包）';
       }
 
-      const outboundSticker = stickerSegments[stickerIndex];
-      stickerIndex += 1;
-      return outboundSticker ? stickerHistoryByRaw.get(outboundSticker.raw) ?? '（发送表情包）' : '（发送表情包）';
+      return sanitizeStructuredReplySegmentContent(segment.content);
     })
     .filter((segment) => segment.trim().length > 0)
     .join('\n')
@@ -644,11 +635,11 @@ function buildPlannedUnitHistoryLines(args: {
 }): string[] {
   const { outboundPlan, preparedVoiceByRaw, preparedStickerByRaw } = args;
   return outboundPlan.segments.map((segment) => {
-    if (segment.kind === 'text-line' || segment.kind === 'multiline-block') {
+    if (segment.kind === 'text-line') {
       return segment.content;
     }
-    if (segment.kind === 'mention-block') {
-      return renderMentionVisibleText(segment.mention);
+    if (segment.kind === 'message-block') {
+      return renderMessageVisibleText(segment);
     }
     if (segment.kind === 'image-block') {
       return segment.alt ? `（发送图片：${segment.alt}）` : '（发送图片）';
@@ -809,7 +800,7 @@ export function applyReplyStructuredOutputRequest(
   options: {
     replyMode?: 'agent' | 'automation';
     includeFinalResponseInstruction?: boolean;
-    capabilitySnapshot?: Pick<NonNullable<TurnContext['capabilitySnapshot']>, 'canMention'> | null;
+    capabilitySnapshot?: Pick<NonNullable<TurnContext['capabilitySnapshot']>, 'canMention' | 'canVoice' | 'canSticker'> | null;
   } = {},
 ): void {
   if (!inputMessage) return;
@@ -819,6 +810,8 @@ export function applyReplyStructuredOutputRequest(
     profile,
     model: typeof room?.model === 'string' ? room.model.trim() : profile.defaultModel,
     canMention: options.capabilitySnapshot?.canMention !== false,
+    canVoice: options.capabilitySnapshot?.canVoice !== false,
+    canMeme: options.capabilitySnapshot?.canSticker === true,
   });
   const overrideRequestParams = mergeReplyOverrideRequestParams(inputMessage.additional_kwargs, structuredOutputSpec.overrideRequestParams);
   const replyMode = options.replyMode ?? 'agent';
@@ -1357,17 +1350,6 @@ async function deliverReplyPlanCore(args: {
     await dispatchOutboundMessagePlan(outboundPlan, async (segment) => {
       const historyLine = plannedUnitHistoryLines[outboundPlan.segments.indexOf(segment)] ?? '';
       const quoteTargetMessageId = resolveQuoteTargetMessageId?.(segment.kind !== 'voice-block') ?? null;
-      if (segment.kind === 'multiline-block') {
-        beganSending = true;
-        const receipt = await sendWhole(createQuotedMessageContent(segment.content, quoteTargetMessageId));
-        onDeliveryReceipt?.(receipt);
-        if (historyLine) {
-          committedHistoryLines.push(historyLine);
-          onCommittedUnit?.(historyLine);
-        }
-        return;
-      }
-
       if (segment.kind === 'text-line') {
         beganSending = true;
         const receipt = await sendLine(createQuotedMessageContent(segment.content, quoteTargetMessageId));
@@ -1379,11 +1361,9 @@ async function deliverReplyPlanCore(args: {
         return;
       }
 
-      if (segment.kind === 'mention-block') {
+      if (segment.kind === 'message-block') {
         beganSending = true;
-        const receipt = await sendWhole(
-          createQuotedMessageContent(createMentionMessageContent(segment.mention), quoteTargetMessageId),
-        );
+        const receipt = await sendWhole(createQuotedMessageContent(createMessageMessageContent(segment), quoteTargetMessageId));
         onDeliveryReceipt?.(receipt);
         if (historyLine) {
           committedHistoryLines.push(historyLine);
@@ -1783,6 +1763,8 @@ export function apply(ctx: Context, config: Config = {}): void {
         const turnCapabilitySnapshot = capability ? buildTurnCapabilitySnapshot(session, capability) : null;
         const schemaCapabilitySnapshot = {
           canMention: canSessionUseMention(session),
+          canVoice: turnCapabilitySnapshot?.canVoice ?? false,
+          canSticker: turnCapabilitySnapshot?.canSticker ?? false,
         };
         injectReplyPromptEnvelope({
           chatluna: chatlunaService,

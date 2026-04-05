@@ -287,10 +287,10 @@ describe('message send utils', () => {
   });
 
   it('keeps smart delay within 1-4 seconds', () => {
-    expect(calculateSmartSendDelayMs('好')).toBe(1000);
+    expect(calculateSmartSendDelayMs('好')).toBe(2000);
     const longLine = '这是一条很长很长很长很长很长很长很长很长很长很长很长很长的消息。';
     expect(calculateSmartSendDelayMs(longLine)).toBeLessThanOrEqual(4000);
-    expect(calculateSmartSendDelayMs(longLine)).toBeGreaterThanOrEqual(1000);
+    expect(calculateSmartSendDelayMs(longLine)).toBeGreaterThanOrEqual(2000);
   });
 
   it('sends lines sequentially with smart interval', async () => {
@@ -332,23 +332,23 @@ describe('message send utils', () => {
     expect(sentLine).toEqual([]);
   });
 
-  it('dispatches ordered plan segments sequentially and keeps multiline atomic', async () => {
+  it('dispatches ordered plan segments sequentially and keeps message items atomic', async () => {
     vi.useFakeTimers();
     const sent: string[] = [];
     const pending = dispatchOutboundMessagePlan(
       buildOutboundMessagePlanFromReplyPlan({
         segments: [
-          { kind: 'text', content: '第一句' },
-          { kind: 'multiline', content: '整块一\n整块二' },
-          { kind: 'text', content: '第二句' },
+          { kind: 'message', content: '第一句', mentions: [] },
+          { kind: 'message', content: '整块一\n整块二', mentions: [] },
+          { kind: 'message', content: '第二句', mentions: ['123456'] },
         ],
       }),
       async (segment) => {
         sent.push(
           segment.kind === 'image-block'
             ? `${segment.kind}:${segment.assetRef}`
-            : segment.kind === 'mention-block'
-              ? `${segment.kind}:${segment.mention.content ? `@${segment.mention.userId} ${segment.mention.content}` : `@${segment.mention.userId}`}`
+            : segment.kind === 'message-block'
+              ? `${segment.kind}:${segment.mentions.length ? `${segment.mentions.map((id) => `@${id}`).join(' ')}${segment.content ? ` ${segment.content}` : ''}` : segment.content}`
               : `${segment.kind}:${segment.content}`,
         );
       },
@@ -358,9 +358,9 @@ describe('message send utils', () => {
     await pending;
 
     expect(sent).toEqual([
-      'text-line:第一句',
-      'multiline-block:整块一\n整块二',
-      'text-line:第二句',
+      'message-block:第一句',
+      'message-block:整块一\n整块二',
+      'message-block:@123456 第二句',
     ]);
   });
 
@@ -368,8 +368,8 @@ describe('message send utils', () => {
     expect(
       buildOutboundMessagePlanFromReplyPlan({
         segments: [
-          { kind: 'text', content: '第一句\n第二句' },
-          { kind: 'multiline', content: '整块一\n整块二' },
+          { kind: 'message', content: '第一句\n第二句', mentions: [] },
+          { kind: 'message', content: '整块一\n整块二', mentions: ['123456'] },
           { kind: 'voice', content: '晚安' },
           { kind: 'sticker', content: '无语地看对方一眼' },
           { kind: 'image', assetRef: 'asset://image-1', alt: '夜空照片' },
@@ -377,13 +377,8 @@ describe('message send utils', () => {
       }),
     ).toEqual({
       segments: [
-        { kind: 'text-line', content: '第一句', raw: '第一句' },
-        { kind: 'text-line', content: '第二句', raw: '第二句' },
-        {
-          kind: 'multiline-block',
-          content: '整块一\n整块二',
-          raw: 'reply-plan:multiline:1:整块一\n整块二',
-        },
+        { kind: 'message-block', content: '第一句\n第二句', mentions: [], raw: 'reply-plan:message:0:第一句\n第二句' },
+        { kind: 'message-block', content: '整块一\n整块二', mentions: ['123456'], raw: 'reply-plan:message:1:@123456 整块一\n整块二' },
         {
           kind: 'voice-block',
           content: '晚安',
@@ -404,28 +399,24 @@ describe('message send utils', () => {
     });
   });
 
-  it('keeps mention reply segments atomic and preserves inline mention order', () => {
+  it('keeps message reply segments atomic and preserves inline mention order', () => {
     expect(
       buildOutboundMessagePlanFromReplyPlan({
         segments: [
           {
-            kind: 'mention',
-            mention: {
-              userId: '123456',
-              content: '先问下这件事。',
-            },
+            kind: 'message',
+            content: '先问下这件事。',
+            mentions: ['123456'],
           },
         ],
       }),
     ).toEqual({
       segments: [
         {
-          kind: 'mention-block',
-          mention: {
-            userId: '123456',
-            content: '先问下这件事。',
-          },
-          raw: 'reply-plan:mention:0:@123456 先问下这件事。',
+          kind: 'message-block',
+          content: '先问下这件事。',
+          mentions: ['123456'],
+          raw: 'reply-plan:message:0:@123456 先问下这件事。',
         },
       ],
     });

@@ -380,6 +380,8 @@ export function buildStructuredReplyRequestSpec(args: {
   model?: string | null;
   profile?: MainChatRuntimeProfile | null;
   canMention?: boolean;
+  canVoice?: boolean;
+  canMeme?: boolean;
 }): MainChatStructuredOutputSpec {
   const strategy = args.profile
     ? getMainChatProviderStrategy(args.profile.strategyId)
@@ -390,6 +392,8 @@ export function buildStructuredReplyRequestSpec(args: {
     ...baseSpec,
     finalResponseSchema: buildStructuredReplyJsonSchema({
       canMention: args.canMention,
+      canVoice: args.canVoice,
+      canMeme: args.canMeme,
     }),
   };
 }

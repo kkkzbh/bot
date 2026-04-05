@@ -1,5 +1,11 @@
-import { normalizeMention, sanitizeStructuredReplySegmentContent } from '../../shared/outbound/index.js';
+import { sanitizeStructuredReplySegmentContent } from '../../shared/outbound/index.js';
 import type { ResolvedAction, StructuredReply, TurnContext } from './types.js';
+
+function normalizeMentionIds(mentions: string[] | undefined): string[] {
+  return (mentions ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
 
 export class ActionResolverService {
   resolve(reply: StructuredReply, turnContext: TurnContext): ResolvedAction[] {
@@ -7,36 +13,20 @@ export class ActionResolverService {
       return [{ kind: 'no_reply' }];
     }
 
-    const messages = reply.messages ?? [];
+    const messages = reply.outbound_messages ?? [];
     if (!messages.length) {
-      throw new Error('structured reply with decision=reply must include at least one message.');
+      throw new Error('structured reply with decision=reply must include at least one outbound message.');
     }
 
     const resolved: ResolvedAction[] = [];
     const capabilitySnapshot = turnContext.capabilitySnapshot;
-    const canMultiline = capabilitySnapshot?.canMultiline === true;
     const canVoice = capabilitySnapshot?.canVoice === true;
     const canSticker = capabilitySnapshot?.canSticker === true && (capabilitySnapshot?.stickerAvailableCount ?? 0) > 0;
 
     for (const message of messages) {
-      if (message.modality === 'mention') {
-        const mention = normalizeMention({
-          userId: message.userId,
-          content: message.content,
-        });
-        if (!mention) {
-          continue;
-        }
-        resolved.push({ kind: 'mention', mention });
-        continue;
-      }
-
-      const content = sanitizeStructuredReplySegmentContent(message.content);
-      if (!content) {
-        continue;
-      }
-
-      if (message.modality === 'voice') {
+      if (message.type === 'voice') {
+        const content = sanitizeStructuredReplySegmentContent(message.content);
+        if (!content) continue;
         if (!canVoice) {
           throw new Error('structured reply requested voice output but voice capability is unavailable.');
         }
@@ -44,7 +34,9 @@ export class ActionResolverService {
         continue;
       }
 
-      if (message.modality === 'meme') {
+      if (message.type === 'meme') {
+        const content = sanitizeStructuredReplySegmentContent(message.content);
+        if (!content) continue;
         if (!canSticker) {
           throw new Error('structured reply requested meme output but sticker capability is unavailable.');
         }
@@ -52,19 +44,17 @@ export class ActionResolverService {
         continue;
       }
 
-      if (message.modality === 'multiline') {
-        if (!canMultiline) {
-          throw new Error('structured reply requested multiline output but multiline capability is unavailable.');
-        }
-        resolved.push({
-          kind: 'multiline',
-          semantic: message.semantic,
-          content,
-        });
+      const content = sanitizeStructuredReplySegmentContent(message.content);
+      const mentions = normalizeMentionIds(message.mentions);
+      if (!content && !mentions.length) {
         continue;
       }
 
-      resolved.push({ kind: 'text', content });
+      resolved.push({
+        kind: 'message',
+        content,
+        mentions,
+      });
     }
 
     if (!resolved.length) {

@@ -148,7 +148,7 @@ describe('chatluna sticker plugin', () => {
     expect(getPolicy()).toBeTypeOf('function');
   });
 
-  it('injects a sticker policy and stores sticker capability state on the session', async () => {
+  it('stores sticker capability state on the session without injecting prompt fragments', async () => {
     const catalog = {
       version: 1,
       generatedAt: '2026-03-16T00:00:00.000Z',
@@ -206,26 +206,7 @@ describe('chatluna sticker plugin', () => {
       preset: 'sakiko',
       availableCount: 1,
     });
-    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
-      'conv-1',
-      expect.objectContaining({
-        source: 'qqbot_sticker_capability',
-        payload: {
-          kind: 'json',
-          value: capability,
-        },
-      }),
-    );
-    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
-      'conv-1',
-      expect.objectContaining({
-        source: 'qqbot_sticker_execution_rules',
-        payload: {
-          kind: 'text',
-          value: 'sticker policy',
-        },
-      }),
-    );
+    expect(promptAssemblyMocks.registerPromptFragment).not.toHaveBeenCalled();
   });
 
   it('skips policy injection when no scoped sticker is available', async () => {

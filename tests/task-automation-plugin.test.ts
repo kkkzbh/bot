@@ -184,9 +184,9 @@ function createHarness(seed: Record<string, Record<string, any>[]> = {}) {
       chat: vi.fn(async (_session: any, _room: any, _message: any, _events: any, _stream: boolean, _vars: any, _post: any, _req: string, _toolMask: any) => ({
         content: JSON.stringify({
           decision: 'reply',
-          messages: [
+          outbound_messages: [
             {
-              modality: 'text',
+              type: 'message',
               content: '自动化执行结果',
             },
           ],
@@ -609,10 +609,6 @@ describe('task automation tools and execution', () => {
         value: expect.arrayContaining([
           expect.objectContaining({
             role: 'system',
-            content: expect.stringContaining('qqbot_agent_reply_contract'),
-          }),
-          expect.objectContaining({
-            role: 'system',
             content: expect.stringContaining('qqbot_automation_recent_context'),
           }),
           expect.objectContaining({
@@ -636,11 +632,11 @@ describe('task automation tools and execution', () => {
     harness.ctx.chatluna.chat.mockResolvedValueOnce({
       content: JSON.stringify({
         decision: 'reply',
-        messages: [
+        outbound_messages: [
           {
-            modality: 'mention',
-            userId: '3623807220',
+            type: 'message',
             content: '继续看《Ave Mujica》。',
+            mentions: ['3623807220'],
           },
         ],
       }),
@@ -712,9 +708,9 @@ describe('task automation tools and execution', () => {
       harness.ctx.chatluna.chat.mockResolvedValueOnce({
         content: JSON.stringify({
           decision: 'reply',
-          messages: [
+          outbound_messages: [
             {
-              modality: 'voice',
+              type: 'voice',
               content: '这是语音回复。',
             },
           ],
@@ -751,9 +747,9 @@ describe('task automation tools and execution', () => {
     harness.ctx.chatluna.chat.mockResolvedValueOnce({
       content: JSON.stringify({
         decision: 'reply',
-        messages: [
+        outbound_messages: [
           {
-            modality: 'meme',
+            type: 'meme',
             content: '无语地看对方一眼',
           },
         ],

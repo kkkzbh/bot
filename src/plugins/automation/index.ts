@@ -8,8 +8,6 @@ import type { AutomationJob, AutomationJobRun, TaskKind, TaskScope } from '../..
 import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
 import {
   applyReplyStructuredOutputRequest,
-  buildReplyCapabilityPromptFragments,
-  buildReplyStructuredReplyContractFragments,
   buildReplyTransportPlanFromResolvedActions,
   buildReplyTurnInput,
   buildTurnCapabilitySnapshot,
@@ -999,18 +997,7 @@ async function prepareAutomationExecutionContext(
   const capabilitySnapshot = buildTurnCapabilitySnapshot(session as never, replyCapability);
   const recentContextTurns = await loadRecentConversationTurns(ctx, sourceRoom.conversationId);
   const recentContextFragment = buildAutomationRecentContextFragment(recentContextTurns);
-  const fragments = [
-    ...buildReplyStructuredReplyContractFragments(),
-    ...buildReplyCapabilityPromptFragments(
-      {
-        capabilitySnapshot,
-        continuationContext: null,
-      },
-      { includeContinuationContext: false },
-    ),
-    ...stickerArtifacts.fragments,
-    ...(recentContextFragment ? [recentContextFragment] : []),
-  ];
+  const fragments = recentContextFragment ? [recentContextFragment] : [];
   injectAutomationPromptFragments(ctx, tempRoom.conversationId, fragments);
   return capabilitySnapshot;
 }
