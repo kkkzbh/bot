@@ -222,9 +222,10 @@ describe('buildStructuredReplyRequestSpec', () => {
         }
       | undefined;
 
-    expect(textMessage?.description).toContain('final chat message');
-    expect(textMessage?.properties?.content?.description).toContain('multiple message items');
-    expect(textMessage?.properties?.mentions?.description).toContain('QQ group @mentions');
+    expect(textMessage?.description).toContain('normal text chatting');
+    expect(textMessage?.properties?.content?.description).toContain('Plain text content');
+    expect(textMessage?.properties?.content?.description).toContain('One sentence per message item is a good default');
+    expect(textMessage?.properties?.mentions?.description).toContain('Usually leave this empty');
     expect(textMessage?.properties?.mentions?.description).toContain('empty array []');
     expect(textMessage?.required).toContain('mentions');
     assertStrictRequiredForAllObjects(schema);

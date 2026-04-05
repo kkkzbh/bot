@@ -12,12 +12,13 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
       title: 'Type',
       type: 'string',
       enum: ['message'],
-      description: 'Send one final chat message.',
+      description: 'Use message for normal text chatting.',
     },
     content: {
       title: 'Content',
       type: 'string',
-      description: 'One final chat message. Send multiple messages by outputting multiple message items. Put code blocks, lists, and quotes inside one message item.',
+      description:
+        'Plain text content for this message item. Multiple short message items usually feel more natural than one long block. One sentence per message item is a good default, while code blocks, lists, or quoted content can stay in one message item.',
     },
   };
   const required = ['type', 'content'];
@@ -26,7 +27,8 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
     properties.mentions = {
       title: 'Mentions',
       type: 'array',
-      description: 'QQ group @mentions. Use this to mention one or more QQ users in a group message. If this message should not mention anyone, use an empty array [].',
+      description:
+        'QQ group @mentions. Usually leave this empty and do not mention the user unless mentioning them is actually necessary. If no mention is needed, use an empty array [].',
       items: {
         type: 'string',
         pattern: QQ_USER_ID_PATTERN,
@@ -38,7 +40,8 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
   return {
     type: 'object',
     title: 'MessageItem',
-    description: 'One final chat message. Send multiple messages by outputting multiple message items.',
+    description:
+      'Use message for normal text chatting. Multiple short message items usually feel more natural than one long block.',
     additionalProperties: false,
     required,
     properties,
@@ -77,7 +80,7 @@ const MEME_MESSAGE_SCHEMA = {
       title: 'Type',
       type: 'string',
       enum: ['meme'],
-      description: 'Send a meme image.',
+      description: 'Send a meme when it helps express mood, attitude, or emotional nuance better than plain text.',
     },
     content: {
       title: 'Content',
