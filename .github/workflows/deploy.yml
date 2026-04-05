@@ -35,13 +35,13 @@ jobs:
       DEPLOY_CHATLUNA_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chatluna_ref || 'v1-dev' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.deploy_ref || github.ref }}
           persist-credentials: false
 
       - name: Checkout linked ChatLuna
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.DEPLOY_CHATLUNA_REPO }}
           ref: ${{ env.DEPLOY_CHATLUNA_REF }}
@@ -55,12 +55,12 @@ jobs:
           test -f "${GITHUB_WORKSPACE}/../chatluna/packages/core/package.json"
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 9.15.4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -112,7 +112,7 @@ jobs:
           pnpm build
 
       - name: Setup SSH key
-        uses: webfactory/ssh-agent@v0.9.0
+        uses: webfactory/ssh-agent@v0.10.0
         with:
           ssh-private-key: ${{ secrets.QQBOT_SSH_PRIVATE_KEY }}
 
