@@ -850,15 +850,6 @@ export async function ensureCanSendRecord(
   }
 
   if (typeof bot.internal?._request !== 'function') {
-    if (
-      typeof bot.internal?.sendPrivateMsg === 'function' ||
-      typeof bot.internal?.sendGroupMsg === 'function'
-    ) {
-      logger.warn('internal._request is unavailable for %s, fallback to optimistic record support.', cacheKey);
-      capabilityCache.set(cacheKey, true);
-      return true;
-    }
-
     capabilityCache.delete(cacheKey);
     return false;
   }
@@ -867,13 +858,9 @@ export async function ensureCanSendRecord(
   try {
     result = (await bot.internal?.canSendRecord?.()) ?? false;
   } catch (error) {
-    if (
-      /_request is not a function/i.test((error as Error).message) &&
-      (typeof bot.internal?.sendPrivateMsg === 'function' || typeof bot.internal?.sendGroupMsg === 'function')
-    ) {
-      logger.warn('canSendRecord probe is broken for %s, fallback to optimistic record support.', cacheKey);
-      capabilityCache.set(cacheKey, true);
-      return true;
+    if (/_request is not a function/i.test((error as Error).message)) {
+      capabilityCache.delete(cacheKey);
+      return false;
     }
 
     logger.warn('canSendRecord failed for %s: %s', cacheKey, (error as Error).message);
@@ -1799,11 +1786,6 @@ export function apply(ctx: Context, config: Config = {}): void {
   );
 
   ctx.on('ready', async () => {
-    await Promise.all(
-      ctx.bots
-        .filter((bot) => bot.platform === 'onebot')
-        .map(async (bot) => ensureCanSendRecord(bot as unknown as OneBotBotLike, sharedReplyTransportCanSendRecordCache, true)),
-    );
     if (isVoiceOutputConfigured(runtime)) {
       const ttsState = getTtsCapabilityState(runtime, sharedReplyTransportTtsCapabilityStates);
       void runTtsHealthProbe(runtime, ttsState, true).catch((error) => {

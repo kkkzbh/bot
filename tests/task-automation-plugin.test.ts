@@ -145,6 +145,7 @@ function createHarness(seed: Record<string, Record<string, any>[]> = {}) {
     selfId: 'bot-1',
     platform: 'onebot',
     internal: {
+      _request: vi.fn(async () => ({ retcode: 0, data: { yes: true } })),
       canSendRecord: vi.fn(async () => true),
       sendGroupMsg: vi.fn(async () => ['msg-id']),
     },

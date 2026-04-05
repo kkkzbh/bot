@@ -155,7 +155,8 @@ vi.mock('../src/plugins/shared/prompt-context/index.js', async () => {
   };
 });
 
-import { apply, inject } from '../src/plugins/reply/index.js';
+import { sendVoiceByBridge } from '../src/plugins/bot-console/voice-bridge.js';
+import { apply, ensureCanSendRecord, inject } from '../src/plugins/reply/index.js';
 import { ReplyRuntime } from '../src/plugins/reply/runtime/index.js';
 
 type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
@@ -558,6 +559,82 @@ describe('qq voice plugin', () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  it('treats missing onebot rpc transport as record-unavailable without optimistic fallback', async () => {
+    const { bot } = createHarness({ includeInternalRequest: false });
+    const capabilityCache = new Map<string, boolean>([['onebot:bot-1', true]]);
+
+    await expect(ensureCanSendRecord(bot as never, capabilityCache, true)).resolves.toBe(false);
+    expect(capabilityCache.has('onebot:bot-1')).toBe(false);
+    expect(bot.internal.canSendRecord).not.toHaveBeenCalled();
+    expect(
+      loggerMocks.warn.mock.calls.some(([message]) => String(message).includes('fallback to optimistic record support')),
+    ).toBe(false);
+  });
+
+  it('treats _request probe errors as transport-not-ready without optimistic fallback', async () => {
+    const { bot } = createHarness({
+      canSendRecordImpl: async () => {
+        throw new Error('_request is not a function');
+      },
+    });
+    const capabilityCache = new Map<string, boolean>([['onebot:bot-1', true]]);
+
+    await expect(ensureCanSendRecord(bot as never, capabilityCache, true)).resolves.toBe(false);
+    expect(capabilityCache.has('onebot:bot-1')).toBe(false);
+    expect(bot.internal.canSendRecord).toHaveBeenCalledTimes(1);
+    expect(
+      loggerMocks.warn.mock.calls.some(([message]) => String(message).includes('fallback to optimistic record support')),
+    ).toBe(false);
+  });
+
+  it('does not preheat canSendRecord during ready', async () => {
+    const { ready, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    expect(bot.internal.canSendRecord).not.toHaveBeenCalled();
+  });
+
+  it('returns bot_unavailable from the voice bridge when onebot rpc transport is not ready', async () => {
+    vi.stubEnv('ONEBOT_SELF_ID', 'bot-1');
+    vi.stubEnv('QQ_VOICE_OUTPUT_ENABLED', 'true');
+    vi.stubEnv('QQ_VOICE_TTS_BASE_URL', 'http://tts.local');
+    vi.stubEnv('QQ_VOICE_TTS_API_KEY', 'qqbot-voice-tts-token');
+    const { bot } = createHarness({ includeInternalRequest: false });
+
+    await expect(
+      sendVoiceByBridge({ bots: [bot] } as never, {
+        chatType: 'private',
+        targetId: 'u1',
+        text: '你好',
+      }),
+    ).rejects.toMatchObject({
+      status: 503,
+      code: 'bot_unavailable',
+    });
+  });
+
+  it('returns record_unavailable from the voice bridge when can_send_record is false', async () => {
+    vi.stubEnv('ONEBOT_SELF_ID', 'bot-1');
+    vi.stubEnv('QQ_VOICE_OUTPUT_ENABLED', 'true');
+    vi.stubEnv('QQ_VOICE_TTS_BASE_URL', 'http://tts.local');
+    vi.stubEnv('QQ_VOICE_TTS_API_KEY', 'qqbot-voice-tts-token');
+    const { bot } = createHarness({ canSendRecord: false });
+
+    await expect(
+      sendVoiceByBridge({ bots: [bot] } as never, {
+        chatType: 'group',
+        targetId: '100',
+        text: '你好',
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: 'record_unavailable',
+    });
   });
 
   it('serializes turns instead of interrupting when reply interrupt is disabled', async () => {

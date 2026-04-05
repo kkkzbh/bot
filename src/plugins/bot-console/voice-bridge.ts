@@ -177,6 +177,9 @@ export async function sendVoiceByBridge(ctx: Context, request: QqVoiceBridgeRequ
   }
 
   const bot = resolveOneBotBot(ctx);
+  if (typeof bot.internal?._request !== 'function') {
+    throw new QqVoiceBridgeHttpError(503, 'bot_unavailable', 'current onebot rpc transport is not ready');
+  }
   const canSendRecord = await ensureCanSendRecord(bot, canSendRecordCache, true);
   if (!canSendRecord) {
     throw new QqVoiceBridgeHttpError(409, 'record_unavailable', 'current bot cannot send voice records');

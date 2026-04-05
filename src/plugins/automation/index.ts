@@ -16,7 +16,6 @@ import {
   createVoiceRuntimeConfig,
   createPromptTextFragment,
   deliverStandaloneReplyPlan,
-  ensureCanSendRecord,
   ensureStructuredReplyJsonSchemaModel,
   ReplyOrchestratorService,
   resolveReplyCapabilitySnapshot,
@@ -997,14 +996,6 @@ async function prepareAutomationExecutionContext(
     voiceOutputEnabled: voiceRuntime.outputEnabled,
     waitForProbe: true,
   });
-  if (
-    !replyCapability.canVoice &&
-    voiceRuntime.outputEnabled &&
-    voiceRuntime.ttsBaseUrl &&
-    (await ensureCanSendRecord(((session as Session).bot ?? {}) as never, new Map()))
-  ) {
-    replyCapability.canVoice = true;
-  }
   const capabilitySnapshot = buildTurnCapabilitySnapshot(session as never, replyCapability);
   const recentContextTurns = await loadRecentConversationTurns(ctx, sourceRoom.conversationId);
   const recentContextFragment = buildAutomationRecentContextFragment(recentContextTurns);
