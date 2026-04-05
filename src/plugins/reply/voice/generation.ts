@@ -81,6 +81,7 @@ const TTS_PROBE_TURN_INTERVAL = 12;
 const TTS_PROBE_TIME_INTERVAL_MS = 45_000;
 const TTS_PROBE_FAILURE_BACKOFF_MS = 10_000;
 const TTS_PROBE_TIMEOUT_MS = 5_000;
+const INITIAL_TTS_PROBE_DELAY_MS = 15_000;
 const VOICE_WORD_SEGMENTER =
   typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
     ? new Intl.Segmenter('zh', { granularity: 'word' })
@@ -1518,6 +1519,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const featurePolicy = (ctx as ContextWithChatLuna).featurePolicy;
   const replyOrchestrator = new ReplyOrchestratorService();
   const replyCapabilitySnapshots = new Map<string, ReplyCapabilitySnapshot>();
+  let initialTtsProbeTimer: NodeJS.Timeout | null = null;
 
   const resolveChatLunaService = (): ChatLunaLike | undefined => {
     const byGetter = typeof (ctx as { get?: (name: string) => unknown }).get === 'function'
@@ -1632,9 +1634,12 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.on('ready', async () => {
     if (isVoiceOutputConfigured(runtime)) {
       const ttsState = getTtsCapabilityState(runtime, sharedReplyTransportTtsCapabilityStates);
-      void runTtsHealthProbe(runtime, ttsState, true).catch((error) => {
-        logger.warn('initial tts health probe failed: %s', (error as Error).message);
-      });
+      ttsState.failureBackoffUntil = Math.max(ttsState.failureBackoffUntil, Date.now() + INITIAL_TTS_PROBE_DELAY_MS);
+      initialTtsProbeTimer = setTimeout(() => {
+        void runTtsHealthProbe(runtime, ttsState, true).catch((error) => {
+          logger.warn('initial tts health probe failed: %s', (error as Error).message);
+        });
+      }, INITIAL_TTS_PROBE_DELAY_MS);
     }
 
     const chatluna = resolveChatLunaService();
@@ -1941,5 +1946,12 @@ export function apply(ctx: Context, config: Config = {}): void {
       }) as ChatLunaChainBuilderLike;
     executorBuilder.after('request_model');
     executorBuilder.before('censor');
+  });
+
+  ctx.on('dispose', () => {
+    if (initialTtsProbeTimer) {
+      clearTimeout(initialTtsProbeTimer);
+      initialTtsProbeTimer = null;
+    }
   });
 }

@@ -866,6 +866,22 @@ describe('qq voice plugin', () => {
     expect(getExecutor()).toBeTypeOf('function');
   });
 
+  it('delays the initial tts health probe until after startup grace period', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { ready } = createHarness();
+
+    await ready();
+    expect(fetchMock.mock.calls.some((call: any[]) => String(call[0]).includes('/healthz'))).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(fetchMock.mock.calls.some((call: any[]) => String(call[0]).includes('/healthz'))).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock.mock.calls.some((call: any[]) => String(call[0]).includes('http://127.0.0.1:8082/healthz'))).toBe(true);
+  });
+
   it('injects recent tool memory as assistant_state before reply planning', async () => {
     const { ready, getToolMemoryState, bot } = createHarness({
       databaseGetImpl: async (table: string, query: Record<string, unknown>) => {
@@ -1166,6 +1182,7 @@ describe('qq voice plugin', () => {
   });
 
   it('amortizes tts probing across turns and refreshes again on the 12th turn', async () => {
+    vi.useFakeTimers();
     const { ready, capabilityMiddleware, bot } = createHarness();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -1177,6 +1194,7 @@ describe('qq voice plugin', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await ready();
+    await vi.advanceTimersByTimeAsync(15_000);
     await flushMicrotasks();
 
     const session = createSession(bot, {
