@@ -26,9 +26,9 @@ import {
   createBypassLineSplitOptions,
   createTextOnlyOutboundMessagePlan,
   dispatchNormalizedOutboundMessage,
+  dispatchNormalizedOutboundMessageWithMention,
   renderOutboundMessageSegmentsHistoryText,
   normalizeOutboundMessage,
-  splitMessageByLines,
   type BotMessageContent,
   type BotMessageSender,
   type NormalizedOutboundMessage,
@@ -730,57 +730,6 @@ async function deleteConversationRoomRecord(ctx: ContextWithAutomation, room: Au
   await db.remove('chathub_room', { roomId: room.roomId });
 }
 
-function createMentionedTextContent(userId: string, content: string, mode: 'preserve' | 'split'): BotMessageContent {
-  const normalizedUserId = userId.trim();
-  if (!normalizedUserId) return content;
-
-  const normalizedContent = content.trim();
-  if (!normalizedContent) return h.at(normalizedUserId);
-
-  return [h.at(normalizedUserId), h.text(mode === 'preserve' ? `\n${normalizedContent}` : ` ${normalizedContent}`)];
-}
-
-async function dispatchNormalizedMessageWithMention(
-  message: NormalizedOutboundMessage,
-  mentionUserId: string,
-  sendWhole: (content: BotMessageContent) => Promise<unknown>,
-  sendLine: (line: BotMessageContent) => Promise<unknown>,
-): Promise<void> {
-  const normalizedUserId = mentionUserId.trim();
-  if (!normalizedUserId) {
-    await dispatchNormalizedOutboundMessage(message, sendWhole, sendLine);
-    return;
-  }
-
-  if (message.mode === 'preserve') {
-    const content = message.content.trim();
-    if (!content) {
-      await sendWhole(h.at(normalizedUserId));
-      return;
-    }
-    await sendWhole(createMentionedTextContent(normalizedUserId, content, 'preserve'));
-    return;
-  }
-
-  const content = message.content.trim();
-  if (!content) {
-    await sendWhole(h.at(normalizedUserId));
-    return;
-  }
-
-  const lines = splitMessageByLines(content);
-  if (!lines.length) {
-    await sendWhole(h.at(normalizedUserId));
-    return;
-  }
-
-  await sendWhole(createMentionedTextContent(normalizedUserId, lines[0]!, 'split'));
-
-  for (let index = 1; index < lines.length; index += 1) {
-    await sendLine(lines[index]!);
-  }
-}
-
 export async function sendBotMessageByLines(
   bot: BotMessageSender,
   channelId: string,
@@ -824,7 +773,7 @@ export async function sendBotMessageByLines(
     return receipts;
   }
 
-  await dispatchNormalizedMessageWithMention(normalized, options.mentionUserId, sendWhole, sendLine);
+  await dispatchNormalizedOutboundMessageWithMention(normalized, options.mentionUserId, sendWhole, sendLine);
   return receipts;
 }
 
@@ -1099,6 +1048,7 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
     applyReplyStructuredOutputRequest(replyRoom, message as never, {
       replyMode: 'automation',
       includeFinalResponseInstruction: false,
+      capabilitySnapshot,
     });
 
     const chatluna = (ctx as any).chatluna;

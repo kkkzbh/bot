@@ -6,7 +6,7 @@ import { ActionResolverService } from './resolver.js';
 import type {
   ReplyRoute,
   ResolvedAction,
-  StructuredReplyV1,
+  StructuredReply,
   TurnContext,
   TurnInput,
 } from './types.js';
@@ -41,7 +41,7 @@ export type ReplyOrchestratorHandleResult =
       status: 'ready';
       route: 'agent' | 'automation';
       turnContext: TurnContext;
-      reply: StructuredReplyV1;
+      reply: StructuredReply;
       actions: ResolvedAction[];
     };
 

@@ -38,7 +38,7 @@ export const TOOL_ROUTE_PROFILES: ToolRouteProfileInfo[] = [
   {
     id: 'agent',
     title: 'Agent 回复',
-    description: 'qqbot reply 唯一的工具型回复链路。模型可先走原生 tool loop，最后一跳返回 StructuredReplyV1。',
+    description: 'qqbot reply 唯一的工具型回复链路。模型可先走原生 tool loop，最后一跳返回 StructuredReply。',
     note: '仅允许 plugin 房间进入。',
   },
   {

@@ -1,8 +1,8 @@
-import { normalizeRichTextSegments, sanitizeStructuredReplySegmentContent } from '../../shared/outbound/index.js';
-import type { ResolvedAction, StructuredReplyV1, TurnContext } from './types.js';
+import { normalizeMention, sanitizeStructuredReplySegmentContent } from '../../shared/outbound/index.js';
+import type { ResolvedAction, StructuredReply, TurnContext } from './types.js';
 
 export class ActionResolverService {
-  resolve(reply: StructuredReplyV1, turnContext: TurnContext): ResolvedAction[] {
+  resolve(reply: StructuredReply, turnContext: TurnContext): ResolvedAction[] {
     if (reply.decision === 'no_reply') {
       return [{ kind: 'no_reply' }];
     }
@@ -19,12 +19,15 @@ export class ActionResolverService {
     const canSticker = capabilitySnapshot?.canSticker === true && (capabilitySnapshot?.stickerAvailableCount ?? 0) > 0;
 
     for (const message of messages) {
-      if (message.modality === 'rich_text') {
-        const segments = normalizeRichTextSegments(message.segments);
-        if (!segments.length) {
+      if (message.modality === 'mention') {
+        const mention = normalizeMention({
+          userId: message.userId,
+          content: message.content,
+        });
+        if (!mention) {
           continue;
         }
-        resolved.push({ kind: 'rich_text', segments });
+        resolved.push({ kind: 'mention', mention });
         continue;
       }
 

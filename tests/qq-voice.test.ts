@@ -448,6 +448,11 @@ function createReplyV2Response(input: string | Record<string, unknown>) {
   };
 }
 
+function extractSchemaMessageTitles(schema: Record<string, any> | undefined): string[] {
+  const rawMessageSchemas = schema?.properties?.messages?.anyOf?.find((item: any) => item.items?.anyOf)?.items?.anyOf ?? [];
+  return rawMessageSchemas.flatMap((item: any) => (Array.isArray(item.anyOf) ? item.anyOf : [item])).map((item: any) => item.title).filter(Boolean);
+}
+
 function createRawReplyResponse(content: unknown) {
   return {
     content,
@@ -909,7 +914,7 @@ describe('qq voice plugin', () => {
       expect.objectContaining({
         qqbot_reply_mode: 'agent',
         qqbot_final_response_schema: expect.objectContaining({
-          title: 'StructuredReplyV1',
+          title: 'StructuredReply',
           properties: expect.objectContaining({
             decision: expect.objectContaining({
               description: expect.any(String),
@@ -918,7 +923,46 @@ describe('qq voice plugin', () => {
         }),
       }),
     );
+    const groupSchema = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_schema;
+    expect(extractSchemaMessageTitles(groupSchema)).toContain('MentionMessage');
     expect(context.options.inputMessage.additional_kwargs).not.toHaveProperty('qqbot_final_response_instruction');
+  });
+
+  it('removes mention modality from the injected schema for private chats', async () => {
+    const { ready, getPrepare, getPolicy, getPromptCompiler, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const prepare = getPrepare();
+    const policy = getPolicy();
+    const promptCompiler = getPromptCompiler();
+    const session = createSession(bot, {
+      isDirect: true,
+      channelId: 'private:u1',
+      guildId: undefined,
+      content: '请@我一下',
+      strippedContent: '请@我一下',
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-private'),
+        inputMessage: {
+          content: '请@我一下',
+          additional_kwargs: {},
+        },
+      },
+    };
+
+    await prepare?.(session, context);
+    await policy?.(session, context);
+    await promptCompiler?.(session, context);
+
+    const schema = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_schema as Record<string, any> | undefined;
+    const titles = extractSchemaMessageTitles(schema);
+    expect(titles).not.toContain('MentionMessage');
+    expect(titles).not.toContain('MentionOnlyMessage');
   });
 
   it('injects explicit group speaker identity rules and current speaker identity into the reply prompt envelope', async () => {
@@ -1112,7 +1156,7 @@ describe('qq voice plugin', () => {
     );
   });
 
-  it('executes a rich_text structured reply through the executor as inline mention elements', async () => {
+  it('executes a mention structured reply through the executor as one atomic mention message', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -1136,17 +1180,14 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-rich-text'),
+        room: createPluginRoom('conv-mention'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           messages: [
             {
-              modality: 'rich_text',
-              segments: [
-                { kind: 'text', text: '先问下 ' },
-                { kind: 'mention', userId: '123456' },
-                { kind: 'text', text: ' 这件事。' },
-              ],
+              modality: 'mention',
+              userId: '123456',
+              content: '先问下这件事。',
             },
           ],
         }),
@@ -1158,14 +1199,13 @@ describe('qq voice plugin', () => {
     expect(bot.sendMessage).toHaveBeenCalledTimes(1);
     const calls = bot.sendMessage.mock.calls as any[][];
     expect(calls[0]?.[1]).toEqual([
-      expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: '先问下 ' }) }),
       expect.objectContaining({ type: 'at', attrs: expect.objectContaining({ id: '123456' }) }),
-      expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: ' 这件事。' }) }),
+      expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: ' 先问下这件事。' }) }),
     ]);
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
-      expect.objectContaining({ conversationId: 'conv-rich-text' }),
-      '先问下 @123456 这件事。',
+      expect.objectContaining({ conversationId: 'conv-mention' }),
+      '@123456 先问下这件事。',
     );
   });
 
@@ -1247,7 +1287,7 @@ describe('qq voice plugin', () => {
     }
   });
 
-  it('quotes a rich_text reply as one inline message when the runtime exposes a first-reply quote target', async () => {
+  it('quotes a mention reply as one atomic message when the runtime exposes a first-reply quote target', async () => {
     const { ready, getExecutor, bot } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -1266,17 +1306,14 @@ describe('qq voice plugin', () => {
       });
       const context = {
         options: {
-          room: createPluginRoom('conv-quote-rich-text'),
+          room: createPluginRoom('conv-quote-mention'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
             messages: [
               {
-                modality: 'rich_text',
-                segments: [
-                  { kind: 'text', text: '先问下 ' },
-                  { kind: 'mention', userId: '123456' },
-                  { kind: 'text', text: ' 这件事。' },
-                ],
+                modality: 'mention',
+                userId: '123456',
+                content: '先问下这件事。',
               },
             ],
           }),
@@ -1289,9 +1326,8 @@ describe('qq voice plugin', () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]?.[1]).toEqual([
         expect.objectContaining({ type: 'quote', attrs: expect.objectContaining({ id: 'msg-b' }) }),
-        expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: '先问下 ' }) }),
         expect.objectContaining({ type: 'at', attrs: expect.objectContaining({ id: '123456' }) }),
-        expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: ' 这件事。' }) }),
+        expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: ' 先问下这件事。' }) }),
       ]);
     } finally {
       quoteSpy.mockRestore();

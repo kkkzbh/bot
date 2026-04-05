@@ -171,7 +171,7 @@ describe('reply pipeline v3', () => {
     ]);
   });
 
-  it('resolves rich_text actions with inline mention segments', async () => {
+  it('resolves mention actions with inline visible text', async () => {
     const orchestrator = new ReplyOrchestratorService();
     const ready = await orchestrator.handle(createTurnInput('提醒一下对方'), {} as never, {
       routeHint: 'agent',
@@ -186,12 +186,9 @@ describe('reply pipeline v3', () => {
         decision: 'reply',
         messages: [
           {
-            modality: 'rich_text',
-            segments: [
-              { kind: 'text', text: '先问下 ' },
-              { kind: 'mention', userId: '123456' },
-              { kind: 'text', text: ' 这件事。' },
-            ],
+            modality: 'mention',
+            userId: '123456',
+            content: '先问下这件事。',
           },
         ],
       }),
@@ -205,23 +202,19 @@ describe('reply pipeline v3', () => {
       decision: 'reply',
       messages: [
         {
-          modality: 'rich_text',
-          segments: [
-            { kind: 'text', text: '先问下 ' },
-            { kind: 'mention', userId: '123456' },
-            { kind: 'text', text: ' 这件事。' },
-          ],
+          modality: 'mention',
+          userId: '123456',
+          content: '先问下这件事。',
         },
       ],
     });
     expect(ready.actions).toEqual([
       {
-        kind: 'rich_text',
-        segments: [
-          { kind: 'text', text: '先问下 ' },
-          { kind: 'mention', userId: '123456' },
-          { kind: 'text', text: ' 这件事。' },
-        ],
+        kind: 'mention',
+        mention: {
+          userId: '123456',
+          content: '先问下这件事。',
+        },
       },
     ]);
   });
@@ -411,7 +404,7 @@ describe('reply pipeline v3', () => {
     ).rejects.toThrow('multiline output but multiline capability is unavailable');
   });
 
-  it('rejects rich_text mention segments with non-numeric user ids', async () => {
+  it('rejects mention messages with non-numeric user ids', async () => {
     const orchestrator = new ReplyOrchestratorService();
 
     await expect(
@@ -421,15 +414,13 @@ describe('reply pipeline v3', () => {
           decision: 'reply',
           messages: [
             {
-              modality: 'rich_text',
-              segments: [
-                { kind: 'text', text: '先问下 ' },
-                { kind: 'mention', userId: 'u1' },
-              ],
+              modality: 'mention',
+              userId: 'u1',
+              content: '先问下这件事。',
             },
           ],
         }),
       }),
-    ).rejects.toThrow('messages.0.segments.1.userId');
+    ).rejects.toThrow('messages.0.userId');
   });
 });

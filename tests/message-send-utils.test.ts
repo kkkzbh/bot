@@ -347,8 +347,8 @@ describe('message send utils', () => {
         sent.push(
           segment.kind === 'image-block'
             ? `${segment.kind}:${segment.assetRef}`
-            : segment.kind === 'rich-text-block'
-              ? `${segment.kind}:${segment.segments.map((part) => (part.kind === 'mention' ? `@${part.userId}` : part.text)).join('')}`
+            : segment.kind === 'mention-block'
+              ? `${segment.kind}:${segment.mention.content ? `@${segment.mention.userId} ${segment.mention.content}` : `@${segment.mention.userId}`}`
               : `${segment.kind}:${segment.content}`,
         );
       },
@@ -404,30 +404,28 @@ describe('message send utils', () => {
     });
   });
 
-  it('keeps rich_text reply segments atomic and preserves inline mention order', () => {
+  it('keeps mention reply segments atomic and preserves inline mention order', () => {
     expect(
       buildOutboundMessagePlanFromReplyPlan({
         segments: [
           {
-            kind: 'rich_text',
-            segments: [
-              { kind: 'text', text: '先问下 ' },
-              { kind: 'mention', userId: '123456' },
-              { kind: 'text', text: ' 这件事。' },
-            ],
+            kind: 'mention',
+            mention: {
+              userId: '123456',
+              content: '先问下这件事。',
+            },
           },
         ],
       }),
     ).toEqual({
       segments: [
         {
-          kind: 'rich-text-block',
-          segments: [
-            { kind: 'text', text: '先问下 ' },
-            { kind: 'mention', userId: '123456' },
-            { kind: 'text', text: ' 这件事。' },
-          ],
-          raw: 'reply-plan:rich_text:0:先问下 @123456 这件事。',
+          kind: 'mention-block',
+          mention: {
+            userId: '123456',
+            content: '先问下这件事。',
+          },
+          raw: 'reply-plan:mention:0:@123456 先问下这件事。',
         },
       ],
     });

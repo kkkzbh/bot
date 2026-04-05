@@ -39,15 +39,10 @@ export interface NormalizedOutboundMessage {
   content: string;
 }
 
-export type ReplyRichTextSegment =
-  | {
-      kind: 'text';
-      text: string;
-    }
-  | {
-      kind: 'mention';
-      userId: string;
-    };
+export interface ReplyMention {
+  userId: string;
+  content?: string;
+}
 
 export type OutboundMessageSegment =
   | {
@@ -77,8 +72,8 @@ export type OutboundMessageSegment =
       raw: string;
     }
   | {
-      kind: 'rich-text-block';
-      segments: ReplyRichTextSegment[];
+      kind: 'mention-block';
+      mention: ReplyMention;
       raw: string;
     };
 
@@ -86,7 +81,7 @@ export interface OutboundMessagePlan {
   segments: OutboundMessageSegment[];
 }
 
-export type ReplyTransportSegmentKind = 'text' | 'multiline' | 'voice' | 'sticker' | 'image' | 'rich_text';
+export type ReplyTransportSegmentKind = 'text' | 'mention' | 'multiline' | 'voice' | 'sticker' | 'image';
 
 export type ReplyTransportSegment =
   | {
@@ -94,8 +89,8 @@ export type ReplyTransportSegment =
       content: string;
     }
   | {
-      kind: 'rich_text';
-      segments: ReplyRichTextSegment[];
+      kind: 'mention';
+      mention: ReplyMention;
     }
   | {
       kind: 'image';
@@ -296,36 +291,46 @@ function toMessageElements(content: BotMessageContent): Array<ReturnType<typeof 
   return [content];
 }
 
-function sanitizeRichTextTextSegment(text: string): string {
+function sanitizeMentionText(text: string): string {
   return text.replace(/\r\n?/g, '\n');
 }
 
-function renderMentionVisibleText(userId: string): string {
-  return `@${userId}`;
+export function normalizeMention(mention: ReplyMention): ReplyMention | null {
+  const userId = mention.userId.trim();
+  if (!userId) return null;
+
+  const normalizedContent =
+    typeof mention.content === 'string'
+      ? sanitizeStructuredReplySegmentContent(sanitizeMentionText(mention.content))
+      : '';
+
+  return normalizedContent
+    ? {
+        userId,
+        content: normalizedContent,
+      }
+    : {
+        userId,
+      };
 }
 
-export function normalizeRichTextSegments(segments: ReplyRichTextSegment[]): ReplyRichTextSegment[] {
-  return segments.flatMap<ReplyRichTextSegment>((segment) => {
-    if (segment.kind === 'text') {
-      const text = sanitizeRichTextTextSegment(segment.text);
-      return text ? [{ kind: 'text' as const, text }] : [];
-    }
-
-    const userId = segment.userId.trim();
-    return userId ? [{ kind: 'mention' as const, userId }] : [];
-  });
+export function renderMentionVisibleText(mention: ReplyMention): string {
+  const normalized = normalizeMention(mention);
+  if (!normalized) return '';
+  return normalized.content ? `@${normalized.userId} ${normalized.content}` : `@${normalized.userId}`;
 }
 
-export function renderRichTextSegmentsVisibleText(segments: ReplyRichTextSegment[]): string {
-  return normalizeRichTextSegments(segments)
-    .map((segment) => (segment.kind === 'mention' ? renderMentionVisibleText(segment.userId) : segment.text))
-    .join('');
-}
+export function createMentionMessageContent(
+  mention: ReplyMention,
+  options: { separator?: 'space' | 'newline' | 'none' } = {},
+): BotMessageContent {
+  const normalized = normalizeMention(mention);
+  if (!normalized) return [];
+  if (!normalized.content) return h.at(normalized.userId);
 
-export function renderRichTextSegmentsMessageContent(segments: ReplyRichTextSegment[]): BotMessageContent {
-  return normalizeRichTextSegments(segments).map((segment) =>
-    segment.kind === 'mention' ? h.at(segment.userId) : h.text(segment.text),
-  );
+  const separator = options.separator ?? 'space';
+  const prefix = separator === 'newline' ? '\n' : separator === 'none' ? '' : ' ';
+  return [h.at(normalized.userId), h.text(`${prefix}${normalized.content}`)];
 }
 
 export function createQuotedMessageContent(content: BotMessageContent, targetMessageId?: string | null): BotMessageContent {
@@ -447,13 +452,13 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
     `reply-plan:${kind}:${index}:${value}`;
 
   for (const [index, segment] of plan.segments.entries()) {
-    if (segment.kind === 'rich_text') {
-      const normalizedSegments = normalizeRichTextSegments(segment.segments);
-      if (!normalizedSegments.length) continue;
+    if (segment.kind === 'mention') {
+      const normalizedMention = normalizeMention(segment.mention);
+      if (!normalizedMention) continue;
       segments.push({
-        kind: 'rich-text-block',
-        segments: normalizedSegments,
-        raw: createStructuredRaw(segment.kind, index, renderRichTextSegmentsVisibleText(normalizedSegments)),
+        kind: 'mention-block',
+        mention: normalizedMention,
+        raw: createStructuredRaw(segment.kind, index, renderMentionVisibleText(normalizedMention)),
       });
       continue;
     }
@@ -522,8 +527,8 @@ export function renderOutboundMessageSegmentsHistoryText(segments: OutboundMessa
         return segment.alt ? `（发送图片：${segment.alt}）` : '（发送图片）';
       }
 
-      if (segment.kind === 'rich-text-block') {
-        return renderRichTextSegmentsVisibleText(segment.segments);
+      if (segment.kind === 'mention-block') {
+        return renderMentionVisibleText(segment.mention);
       }
 
       return segment.content;
@@ -549,6 +554,47 @@ export async function dispatchOutboundMessagePlan(
     if (segment.kind !== 'text-line') continue;
 
     await sleep(calculateSmartSendDelayMs(segment.content), options.abortSignal);
+  }
+}
+
+export async function dispatchNormalizedOutboundMessageWithMention(
+  message: NormalizedOutboundMessage,
+  mentionUserId: string,
+  sendWhole: (content: BotMessageContent) => Promise<unknown>,
+  sendLine: (line: BotMessageContent) => Promise<unknown>,
+): Promise<void> {
+  const normalizedUserId = mentionUserId.trim();
+  if (!normalizedUserId) {
+    await dispatchNormalizedOutboundMessage(message, sendWhole, sendLine);
+    return;
+  }
+
+  if (message.mode === 'preserve') {
+    const content = message.content.trim();
+    if (!content) {
+      await sendWhole(createMentionMessageContent({ userId: normalizedUserId }));
+      return;
+    }
+    await sendWhole(createMentionMessageContent({ userId: normalizedUserId, content }, { separator: 'newline' }));
+    return;
+  }
+
+  const content = message.content.trim();
+  if (!content) {
+    await sendWhole(createMentionMessageContent({ userId: normalizedUserId }));
+    return;
+  }
+
+  const lines = splitMessageByLines(content);
+  if (!lines.length) {
+    await sendWhole(createMentionMessageContent({ userId: normalizedUserId }));
+    return;
+  }
+
+  await sendWhole(createMentionMessageContent({ userId: normalizedUserId, content: lines[0]! }, { separator: 'space' }));
+
+  for (let index = 1; index < lines.length; index += 1) {
+    await sendLine(lines[index]!);
   }
 }
 

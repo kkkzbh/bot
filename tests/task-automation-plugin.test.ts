@@ -482,7 +482,7 @@ describe('task automation tools and execution', () => {
       expect.objectContaining({
         qqbot_reply_mode: 'automation',
         qqbot_final_response_schema: expect.objectContaining({
-          title: 'StructuredReplyV1',
+          title: 'StructuredReply',
         }),
       }),
     );
@@ -627,7 +627,7 @@ describe('task automation tools and execution', () => {
     );
   });
 
-  it('sends real mention segments from structured rich_text without mentionCreator wrapper', async () => {
+  it('sends real mention messages from structured mention output without mentionCreator wrapper', async () => {
     const harness = createHarness({
       chathub_room: [createRoom({ roomName: '当前群房间' })],
       automation_job: [createJob({ runAt: Date.now() - 1, mentionCreator: 0 })],
@@ -637,11 +637,9 @@ describe('task automation tools and execution', () => {
         decision: 'reply',
         messages: [
           {
-            modality: 'rich_text',
-            segments: [
-              { kind: 'mention', userId: '3623807220' },
-              { kind: 'text', text: ' 继续看《Ave Mujica》。' },
-            ],
+            modality: 'mention',
+            userId: '3623807220',
+            content: '继续看《Ave Mujica》。',
           },
         ],
       }),
@@ -652,8 +650,8 @@ describe('task automation tools and execution', () => {
     await vi.advanceTimersByTimeAsync(5000);
 
     expect(harness.bot.sendMessage).toHaveBeenCalledTimes(1);
-    const richTextSendCall = harness.bot.sendMessage.mock.calls[0] as unknown[] | undefined;
-    expect(richTextSendCall?.[1]).toEqual([
+    const mentionSendCall = harness.bot.sendMessage.mock.calls[0] as unknown[] | undefined;
+    expect(mentionSendCall?.[1]).toEqual([
       { type: 'at', attrs: { id: '3623807220' }, children: [] },
       { type: 'text', attrs: { content: ' 继续看《Ave Mujica》。' }, children: [] },
     ]);

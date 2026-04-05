@@ -19,15 +19,15 @@ import {
 import {
   buildOutboundMessagePlanFromReplyPlan,
   createBotMessageDispatchers,
+  createMentionMessageContent,
   createSessionMessageDispatchers,
   createQuotedMessageContent,
   createKeyedStrandRunner,
-    dispatchOutboundMessagePlan,
-    renderRichTextSegmentsMessageContent,
-    renderRichTextSegmentsVisibleText,
-    resolveReplyActorKey,
-    resolveReplyQueueKey,
-    sanitizeStructuredReplySegmentContent,
+  dispatchOutboundMessagePlan,
+  renderMentionVisibleText,
+  resolveReplyActorKey,
+  resolveReplyQueueKey,
+  sanitizeStructuredReplySegmentContent,
   sendBotMessageByNormalizedContent,
   type BotMessageContent,
   type OutboundMessagePlan,
@@ -52,7 +52,6 @@ import {
   resolveMainChatRuntimeProfileFromEnv,
 } from '../../shared/llm/index.js';
 import {
-  STRUCTURED_REPLY_V1_JSON_SCHEMA,
   type ReplyRoute,
   type ResolvedAction,
   type TurnContext,
@@ -711,10 +710,10 @@ export function buildReplyTransportPlanFromResolvedActions(actions: ResolvedActi
       });
       continue;
     }
-    if (action.kind === 'rich_text') {
+    if (action.kind === 'mention') {
       segments.push({
-        kind: 'rich_text' as const,
-        segments: action.segments,
+        kind: 'mention' as const,
+        mention: action.mention,
       });
       continue;
     }
@@ -739,8 +738,8 @@ function renderReplyPlanSegmentTextForFallback(segment: ReplyTransportPlan['segm
   if (segment.kind === 'image') {
     return sanitizeStructuredReplySegmentContent(segment.alt ?? '');
   }
-  if (segment.kind === 'rich_text') {
-    return renderRichTextSegmentsVisibleText(segment.segments);
+  if (segment.kind === 'mention') {
+    return renderMentionVisibleText(segment.mention);
   }
   return sanitizeStructuredReplySegmentContent(segment.content);
 }
@@ -776,8 +775,8 @@ function renderDeliveredReplyPlanHistoryText(
         return `（发送语音：${sanitizeStructuredReplySegmentContent(segment.content)}）`;
       }
 
-      if (segment.kind === 'rich_text') {
-        return renderRichTextSegmentsVisibleText(segment.segments);
+      if (segment.kind === 'mention') {
+        return renderMentionVisibleText(segment.mention);
       }
 
       if (segment.kind !== 'sticker') {
@@ -803,8 +802,8 @@ function buildPlannedUnitHistoryLines(args: {
     if (segment.kind === 'text-line' || segment.kind === 'multiline-block') {
       return segment.content;
     }
-    if (segment.kind === 'rich-text-block') {
-      return renderRichTextSegmentsVisibleText(segment.segments);
+    if (segment.kind === 'mention-block') {
+      return renderMentionVisibleText(segment.mention);
     }
     if (segment.kind === 'image-block') {
       return segment.alt ? `（发送图片：${segment.alt}）` : '（发送图片）';
@@ -932,11 +931,16 @@ function setReplyRouteState(session: SessionWithVoiceState, route: ReplyRoute): 
   getReplyV2State(session).route = route;
 }
 
+function canSessionUseMention(session: SessionWithVoiceState): boolean {
+  return !session.isDirect;
+}
+
 export function buildTurnCapabilitySnapshot(session: SessionWithVoiceState, snapshot: ReplyCapabilitySnapshot): NonNullable<TurnContext['capabilitySnapshot']> {
   const stickerState = session.state?.qqSticker;
   const stickerAvailableCount = stickerState?.availableCount ?? 0;
   return {
     canMultiline: snapshot.canMultiline,
+    canMention: canSessionUseMention(session),
     canVoice: snapshot.canVoice,
     canSticker: stickerAvailableCount > 0,
     stickerAvailableCount,
@@ -973,6 +977,7 @@ export function applyReplyStructuredOutputRequest(
   options: {
     replyMode?: 'agent' | 'automation';
     includeFinalResponseInstruction?: boolean;
+    capabilitySnapshot?: Pick<NonNullable<TurnContext['capabilitySnapshot']>, 'canMention'> | null;
   } = {},
 ): void {
   if (!inputMessage) return;
@@ -981,6 +986,7 @@ export function applyReplyStructuredOutputRequest(
   const structuredOutputSpec = buildStructuredReplyRequestSpec({
     profile,
     model: typeof room?.model === 'string' ? room.model.trim() : profile.defaultModel,
+    canMention: options.capabilitySnapshot?.canMention !== false,
   });
   const overrideRequestParams = mergeReplyOverrideRequestParams(inputMessage.additional_kwargs, structuredOutputSpec.overrideRequestParams);
   const replyMode = options.replyMode ?? 'agent';
@@ -989,7 +995,7 @@ export function applyReplyStructuredOutputRequest(
   inputMessage.additional_kwargs = {
     ...(inputMessage.additional_kwargs ?? {}),
     qqbot_reply_mode: replyMode,
-    qqbot_final_response_schema: structuredOutputSpec.finalResponseSchema ?? STRUCTURED_REPLY_V1_JSON_SCHEMA,
+    qqbot_final_response_schema: structuredOutputSpec.finalResponseSchema,
     ...(includeFinalResponseInstruction && structuredOutputSpec.finalResponseInstruction
       ? { qqbot_final_response_instruction: structuredOutputSpec.finalResponseInstruction }
       : {}),
@@ -1541,9 +1547,11 @@ async function deliverReplyPlanCore(args: {
         return;
       }
 
-      if (segment.kind === 'rich-text-block') {
+      if (segment.kind === 'mention-block') {
         beganSending = true;
-        const receipt = await sendWhole(createQuotedMessageContent(renderRichTextSegmentsMessageContent(segment.segments), quoteTargetMessageId));
+        const receipt = await sendWhole(
+          createQuotedMessageContent(createMentionMessageContent(segment.mention), quoteTargetMessageId),
+        );
         onDeliveryReceipt?.(receipt);
         if (historyLine) {
           committedHistoryLines.push(historyLine);
@@ -1941,6 +1949,10 @@ export function apply(ctx: Context, config: Config = {}): void {
         const capability = getAuthorizedReplyCapabilitySnapshot(session, replyCapabilitySnapshots);
         const turnInput = buildReplyTurnInput(session, room, context.options?.inputMessage);
         applyReplyTurnInputMetadata(context.options?.inputMessage, turnInput);
+        const turnCapabilitySnapshot = capability ? buildTurnCapabilitySnapshot(session, capability) : null;
+        const schemaCapabilitySnapshot = {
+          canMention: canSessionUseMention(session),
+        };
         injectReplyPromptEnvelope({
           chatluna: chatlunaService,
           conversationId,
@@ -1950,11 +1962,13 @@ export function apply(ctx: Context, config: Config = {}): void {
               route,
               toolRouteProfile: route,
             },
-            capabilitySnapshot: capability ? buildTurnCapabilitySnapshot(session, capability) : null,
+            capabilitySnapshot: turnCapabilitySnapshot,
             continuationContext: null,
           },
         });
-        applyReplyStructuredOutputRequest(room, context.options?.inputMessage);
+        applyReplyStructuredOutputRequest(room, context.options?.inputMessage, {
+          capabilitySnapshot: schemaCapabilitySnapshot,
+        });
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       }) as ChatLunaChainBuilderLike;
     promptCompilerBuilder.after('qqbot_reply_transport_policy');

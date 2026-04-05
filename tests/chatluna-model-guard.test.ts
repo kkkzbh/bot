@@ -169,29 +169,62 @@ describe('buildStructuredReplyRequestSpec', () => {
     });
   });
 
-  it('exposes rich_text mention output in the main chat schema and forbids plain-text @mentions semantically', () => {
+  it('exposes mention output only when mention capability is enabled', () => {
     const schema = buildStructuredReplyRequestSpec({
       model: 'openai/gpt-5.4-medium-thinking',
+      canMention: true,
     }).finalResponseSchema as {
       properties?: {
         messages?: {
           anyOf?: Array<{
             items?: {
-              anyOf?: Array<{ title?: string; description?: string; properties?: Record<string, { description?: string }> }>;
+              anyOf?: Array<{
+                title?: string;
+                description?: string;
+                anyOf?: Array<{ title?: string; description?: string; properties?: Record<string, { description?: string }> }>;
+                properties?: Record<string, { description?: string }>;
+              }>;
             };
           }>;
         };
       };
     };
 
-    const messageSchemas = schema.properties?.messages?.anyOf?.find((item) => item.items?.anyOf)?.items?.anyOf ?? [];
+    const rawMessageSchemas = schema.properties?.messages?.anyOf?.find((item) => item.items?.anyOf)?.items?.anyOf ?? [];
+    const messageSchemas = rawMessageSchemas.flatMap((item) => item.anyOf ?? [item]);
     const textMessage = messageSchemas.find((item) => item.title === 'TextMessage');
-    const richTextMessage = messageSchemas.find((item) => item.title === 'RichTextMessage');
+    const mentionMessage = messageSchemas.find((item) => item.title === 'MentionMessage');
+    const mentionOnlyMessage = messageSchemas.find((item) => item.title === 'MentionOnlyMessage');
 
-    expect(textMessage?.description).toContain('Do not use this modality when the message needs a real @mention');
-    expect(textMessage?.properties?.content?.description).toContain('Never represent a required @mention as plain text');
-    expect(richTextMessage?.description).toContain('Whenever the message needs to @ someone, you must use this modality');
-    expect(richTextMessage?.properties?.modality?.description).toContain('Use this whenever the message needs to @ someone');
+    expect(textMessage?.description).toContain('normal visible text reply');
+    expect(textMessage?.properties?.content?.description).toContain('exact plain text content');
+    expect(mentionMessage?.description).toContain('visible text in the same message');
+    expect(mentionMessage?.properties?.content?.description).toContain('Visible text in the same message after the @mention');
+    expect(mentionOnlyMessage?.description).toContain('no visible body text');
+
+    const privateSchema = buildStructuredReplyRequestSpec({
+      model: 'openai/gpt-5.4-medium-thinking',
+      canMention: false,
+    }).finalResponseSchema as {
+      properties?: {
+        messages?: {
+          anyOf?: Array<{
+            items?: {
+              anyOf?: Array<{
+                title?: string;
+                description?: string;
+                anyOf?: Array<{ title?: string }>;
+              }>;
+            };
+          }>;
+        };
+      };
+    };
+
+    const privateRawSchemas = privateSchema.properties?.messages?.anyOf?.find((item) => item.items?.anyOf)?.items?.anyOf ?? [];
+    const privateMessageSchemas = privateRawSchemas.flatMap((item) => item.anyOf ?? [item]);
+    expect(privateMessageSchemas.find((item) => item.title === 'MentionMessage')).toBeUndefined();
+    expect(privateMessageSchemas.find((item) => item.title === 'MentionOnlyMessage')).toBeUndefined();
   });
 });
 

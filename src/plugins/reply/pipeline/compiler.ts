@@ -1,7 +1,7 @@
 import {
-  normalizeStructuredReplyV1,
-  STRUCTURED_REPLY_V1_SCHEMA,
-  type StructuredReplyV1,
+  normalizeStructuredReply,
+  STRUCTURED_REPLY_SCHEMA,
+  type StructuredReply,
 } from './types.js';
 
 export function flattenModelOutputContent(content: unknown): string {
@@ -31,7 +31,7 @@ export function flattenModelOutputContent(content: unknown): string {
 export class StructuredReplyCompilerService {
   constructor(private readonly rawModelOutput: unknown) {}
 
-  compile(): StructuredReplyV1 {
+  compile(): StructuredReply {
     const rawText = flattenModelOutputContent(this.rawModelOutput);
     if (!rawText) {
       throw new Error('structured reply compiler received empty model output.');
@@ -44,18 +44,18 @@ export class StructuredReplyCompilerService {
       throw new Error(`structured reply compiler expected JSON: ${(error as Error).message}`);
     }
 
-    const parsedReply = STRUCTURED_REPLY_V1_SCHEMA.safeParse(parsedJson);
+    const parsedReply = STRUCTURED_REPLY_SCHEMA.safeParse(parsedJson);
     if (!parsedReply.success) {
       throw new Error(
-        `structured reply compiler received invalid StructuredReplyV1: ${parsedReply.error.issues
+        `structured reply compiler received invalid StructuredReply: ${parsedReply.error.issues
           .map((issue) => `${issue.path.join('.') || 'root'} ${issue.message}`)
           .join('; ')}`,
       );
     }
 
-    const normalized = normalizeStructuredReplyV1(parsedReply.data);
+    const normalized = normalizeStructuredReply(parsedReply.data);
     if (!normalized) {
-      throw new Error('structured reply compiler failed to normalize StructuredReplyV1.');
+      throw new Error('structured reply compiler failed to normalize StructuredReply.');
     }
 
     return normalized;
