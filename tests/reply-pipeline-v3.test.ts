@@ -229,13 +229,13 @@ describe('reply pipeline v3', () => {
         stickerAvailableCount: 0,
         source: 'test',
       },
-      responseMessage: createStructuredResponse({
-        decision: 'reply',
-        outbound_messages: [
-          { type: 'message', content: '- 牛奶\n- 面包' },
-        ],
-      }),
-    });
+        responseMessage: createStructuredResponse({
+          decision: 'reply',
+          outbound_messages: [
+            { type: 'message', content: '- 牛奶\n- 面包', mentions: [] },
+          ],
+        }),
+      });
 
     expect(ready.status).toBe('ready');
     if (ready.status !== 'ready') {
@@ -244,7 +244,7 @@ describe('reply pipeline v3', () => {
     expect(ready.reply).toEqual({
       decision: 'reply',
       outbound_messages: [
-        { type: 'message', content: '- 牛奶\n- 面包' },
+        { type: 'message', content: '- 牛奶\n- 面包', mentions: [] },
       ],
     });
     expect(ready.actions).toEqual([
@@ -273,14 +273,14 @@ describe('reply pipeline v3', () => {
         routeHint: 'agent',
         responseMessage: createStructuredResponse({
           decision: 'reply',
-          outbound_messages: [{ type: 'message', content: '' }],
+          outbound_messages: [{ type: 'message', content: '', mentions: [] }],
         }),
       }),
     ).resolves.toMatchObject({
       status: 'ready',
       reply: {
         decision: 'reply',
-        outbound_messages: [{ type: 'message', content: '' }],
+        outbound_messages: [{ type: 'message', content: '', mentions: [] }],
       },
       actions: [{ kind: 'no_reply' }],
     });
@@ -294,14 +294,14 @@ describe('reply pipeline v3', () => {
         routeHint: 'agent',
         responseMessage: createStructuredResponse({
           decision: 'reply',
-          outbound_messages: [{ type: 'message', content: '收到。' }],
+          outbound_messages: [{ type: 'message', content: '收到。', mentions: [] }],
         }),
       }),
     ).resolves.toMatchObject({
       status: 'ready',
       reply: {
         decision: 'reply',
-        outbound_messages: [{ type: 'message', content: '收到。' }],
+        outbound_messages: [{ type: 'message', content: '收到。', mentions: [] }],
       },
     });
 

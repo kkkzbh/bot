@@ -16,6 +16,28 @@ import {
 } from '../src/plugins/shared/llm/index.js';
 import { resolveSessionDisplayName } from '../src/plugins/shared/session/index.js';
 
+function assertStrictRequiredForAllObjects(schema: unknown): void {
+  const visit = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return;
+    const record = node as Record<string, unknown>;
+    const properties = record.properties;
+    if (properties && typeof properties === 'object' && !Array.isArray(properties)) {
+      const keys = Object.keys(properties as Record<string, unknown>);
+      expect(Array.isArray(record.required)).toBe(true);
+      expect([...(record.required as string[])].sort()).toEqual([...keys].sort());
+    }
+    for (const value of Object.values(record)) {
+      if (Array.isArray(value)) {
+        for (const item of value) visit(item);
+      } else {
+        visit(value);
+      }
+    }
+  };
+
+  visit(schema);
+}
+
 describe('resolvePlatform', () => {
   it('returns platform from provider/model format', () => {
     expect(resolvePlatform('deepseek/deepseek-chat')).toBe('deepseek');
@@ -192,11 +214,20 @@ describe('buildStructuredReplyRequestSpec', () => {
 
     const rawMessageSchemas = schema.properties?.outbound_messages?.anyOf?.find((item) => item.items?.anyOf)?.items?.anyOf ?? [];
     const messageSchemas = rawMessageSchemas.flatMap((item) => item.anyOf ?? [item]);
-    const textMessage = messageSchemas.find((item) => item.title === 'MessageItem');
+    const textMessage = messageSchemas.find((item) => item.title === 'MessageItem') as
+      | {
+          description?: string;
+          required?: string[];
+          properties?: Record<string, { description?: string }>;
+        }
+      | undefined;
 
     expect(textMessage?.description).toContain('final chat message');
     expect(textMessage?.properties?.content?.description).toContain('multiple message items');
     expect(textMessage?.properties?.mentions?.description).toContain('QQ group @mentions');
+    expect(textMessage?.properties?.mentions?.description).toContain('empty array []');
+    expect(textMessage?.required).toContain('mentions');
+    assertStrictRequiredForAllObjects(schema);
 
     const privateSchema = buildStructuredReplyRequestSpec({
       model: 'openai/gpt-5.4-medium-thinking',
@@ -223,6 +254,7 @@ describe('buildStructuredReplyRequestSpec', () => {
       | { properties?: Record<string, unknown> }
       | undefined;
     expect(privateTextMessage?.properties?.mentions).toBeUndefined();
+    assertStrictRequiredForAllObjects(privateSchema);
   });
 });
 

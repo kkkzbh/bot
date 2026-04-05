@@ -20,17 +20,19 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
       description: 'One final chat message. Send multiple messages by outputting multiple message items. Put code blocks, lists, and quotes inside one message item.',
     },
   };
+  const required = ['type', 'content'];
 
   if (options.canMention !== false) {
     properties.mentions = {
       title: 'Mentions',
       type: 'array',
-      description: 'QQ group @mentions. Use this to mention one or more QQ users in a group message.',
+      description: 'QQ group @mentions. Use this to mention one or more QQ users in a group message. If this message should not mention anyone, use an empty array [].',
       items: {
         type: 'string',
         pattern: QQ_USER_ID_PATTERN,
       },
     };
+    required.push('mentions');
   }
 
   return {
@@ -38,7 +40,7 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
     title: 'MessageItem',
     description: 'One final chat message. Send multiple messages by outputting multiple message items.',
     additionalProperties: false,
-    required: ['type', 'content'],
+    required,
     properties,
   } as const;
 }

@@ -328,7 +328,7 @@ function createHarness(overrides: {
           invoke: async () => ({
             content: JSON.stringify({
               decision: 'reply',
-              outbound_messages: [{ type: 'message', content: '默认回复' }],
+              outbound_messages: [{ type: 'message', content: '默认回复', mentions: [] }],
             }),
           }),
         })),
@@ -440,7 +440,7 @@ function createReplyV2Response(input: string | Record<string, unknown>) {
     typeof input === 'string'
       ? {
           decision: 'reply',
-          outbound_messages: [{ type: 'message', content: input }],
+          outbound_messages: [{ type: 'message', content: input, mentions: [] }],
         }
       : input;
   return {
@@ -1368,8 +1368,8 @@ describe('qq voice plugin', () => {
           responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
-              { type: 'message', content: '第一句' },
-              { type: 'message', content: '第二句' },
+              { type: 'message', content: '第一句', mentions: [] },
+              { type: 'message', content: '第二句', mentions: [] },
             ],
           }),
         },
@@ -1621,9 +1621,9 @@ describe('qq voice plugin', () => {
       options: {
         room: createPluginRoom('conv-sticker'),
         responseMessage: createReplyV2Response({
-          decision: 'reply',
-          outbound_messages: [
-            { type: 'message', content: '……随你' },
+            decision: 'reply',
+            outbound_messages: [
+            { type: 'message', content: '……随你', mentions: [] },
             { type: 'meme', content: '无语地看对方一眼' },
           ],
         }),
@@ -1720,9 +1720,9 @@ describe('qq voice plugin', () => {
       options: {
         room: createPluginRoom('conv-sticker-drop'),
         responseMessage: createReplyV2Response({
-          decision: 'reply',
-          outbound_messages: [
-            { type: 'message', content: '还是先说正事。' },
+            decision: 'reply',
+            outbound_messages: [
+            { type: 'message', content: '还是先说正事。', mentions: [] },
             { type: 'meme', content: '无语地看对方一眼' },
           ],
         }),
@@ -1801,9 +1801,9 @@ describe('qq voice plugin', () => {
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [
-            { type: 'message', content: '先看这个清单。' },
-            { type: 'message', content: '- 牛奶\n- 面包' },
-            { type: 'message', content: '照着买。' },
+            { type: 'message', content: '先看这个清单。', mentions: [] },
+            { type: 'message', content: '- 牛奶\n- 面包', mentions: [] },
+            { type: 'message', content: '照着买。', mentions: [] },
           ],
         }),
       },
