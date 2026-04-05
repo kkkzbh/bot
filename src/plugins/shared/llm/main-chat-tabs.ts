@@ -1,4 +1,4 @@
-import { buildStructuredReplyJsonSchema } from '../../reply/pipeline/schema.js';
+import { buildStructuredReplyJsonSchema } from './structured-reply-schema.js';
 
 export type MainChatBuiltinTabId = 'siliconflow' | 'openai' | 'copilot';
 export type MainChatProvider = 'siliconflow' | 'openai';

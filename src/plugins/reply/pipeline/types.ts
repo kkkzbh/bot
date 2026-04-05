@@ -8,7 +8,7 @@ import type { PromptFragment } from '../../shared/prompt-context/types.js';
 import {
   STRUCTURED_REPLY_JSON_SCHEMA,
   STRUCTURED_REPLY_MULTILINE_SEMANTICS,
-} from './schema.js';
+} from '../../shared/llm/structured-reply-schema.js';
 
 export const REPLY_ROUTES = [
   'no_reply',
