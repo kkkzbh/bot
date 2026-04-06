@@ -655,7 +655,7 @@ describe('task automation tools and execution', () => {
     expect(await harness.database.get('automation_job_run', { jobId: 1 })).toEqual([
       expect.objectContaining({
         status: 'succeeded',
-        outputText: '@3623807220 继续看《Ave Mujica》。',
+        outputText: '[assistant_message mentions=["3623807220"]] 继续看《Ave Mujica》。',
       }),
     ]);
   });
