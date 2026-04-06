@@ -78,6 +78,7 @@ plugins:
         - 小祥
       isNickNameWithContent: true
       sendThinkingMessage: false
+      defaultModel: ${{ env.CHATLUNA_DEFAULT_MODEL || '无' }}
       defaultPreset: sakiko
       isLog: true
     chatluna-openai-like-adapter:0o3zho:
