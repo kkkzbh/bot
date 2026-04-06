@@ -87,6 +87,7 @@ function createHarness(
     maxInjectCount?: number;
     realtimeEnabled?: boolean;
     voiceInputEnabled?: boolean;
+    bindSensitiveQueryInterfaceWrapper?: boolean;
   } = {},
 ) {
   const middlewares: Middleware[] = [];
@@ -141,6 +142,21 @@ function createHarness(
       return builder;
     }),
   };
+  const chatluna: Record<string, unknown> = {
+    platform: { registerTool },
+    chatChain,
+    messageTransformer,
+  };
+  if (options.bindSensitiveQueryInterfaceWrapper) {
+    chatluna.queryCount = 0;
+    chatluna.queryInterfaceWrapper = function () {
+      this.queryCount = Number(this.queryCount ?? 0) + 1;
+      return { query };
+    };
+  } else {
+    chatluna.queryInterfaceWrapper = queryInterfaceWrapper;
+  }
+
   const ctx: Record<string, unknown> = {
     middleware: vi.fn((handler: Middleware) => {
       middlewares.push(handler);
@@ -150,12 +166,7 @@ function createHarness(
       bucket.push(handler);
       listeners.set(name, bucket);
     }),
-    chatluna: {
-      platform: { registerTool },
-      chatChain,
-      queryInterfaceWrapper,
-      messageTransformer,
-    },
+    chatluna,
     featurePolicy,
   };
 
@@ -174,6 +185,7 @@ function createHarness(
     addMessages,
     messageTransformer,
     queryInterfaceWrapper,
+    chatluna,
     chatChainMiddlewares,
     tools,
     setRealtimeEnabled(value: boolean) {
@@ -379,6 +391,44 @@ describe('realtime message plugin', () => {
     expect(secondRoundMessages.map((message) => message.content)).toEqual([
       '[speaker_id=u5 speaker_name="u5"] 下一轮新消息',
     ]);
+  });
+
+  it('keeps chatluna queryInterfaceWrapper bound to the service instance during promotion', async () => {
+    const { middleware, runReady, chatChainMiddlewares, addMessages, chatluna } = createHarness({
+      bindSensitiveQueryInterfaceWrapper: true,
+    });
+    await runReady();
+
+    await middleware(
+      createSession({
+        userId: 'u1',
+        messageId: 'msg-bound-1',
+        content: '前置实时消息',
+      }),
+      async () => undefined,
+    );
+
+    const promotion = chatChainMiddlewares.get('qqbot_realtime_message_promotion');
+    const triggerSession = createSession({
+      userId: 'u2',
+      messageId: 'msg-bound-trigger',
+      content: '触发一下',
+    });
+
+    await expect(
+      promotion?.(triggerSession, {
+        options: {
+          room: {
+            roomId: 1,
+            conversationId: 'conv-bind-1',
+            model: 'gpt-5.4-mini',
+          },
+        },
+      }),
+    ).resolves.toBe(2);
+
+    expect(chatluna.queryCount).toBe(1);
+    expect(addMessages).toHaveBeenCalledTimes(1);
   });
 
   it('promotes image messages through the real multimodal transform path', async () => {

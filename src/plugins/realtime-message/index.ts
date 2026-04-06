@@ -214,7 +214,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (promotionRegistered) return;
 
     const chain = serviceCtx.chatluna.chatChain;
-    const queryInterfaceWrapper = serviceCtx.chatluna.queryInterfaceWrapper;
+    const queryInterfaceWrapper = serviceCtx.chatluna.queryInterfaceWrapper?.bind(serviceCtx.chatluna);
     if (!chain || typeof queryInterfaceWrapper !== 'function') {
       logger.warn('chatluna chat chain is unavailable, skip realtime message promotion middleware registration.');
       return;
