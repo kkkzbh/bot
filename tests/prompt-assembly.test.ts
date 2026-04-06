@@ -154,7 +154,10 @@ describe('prompt assembly', () => {
     const compiledContent = envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '';
     expect(envelope?.fragments.map((fragment) => fragment.source)).not.toContain('qqbot_agent_reply_contract');
     expect(envelope?.fragments.map((fragment) => fragment.source)).not.toContain('qqbot_reply_capability_snapshot');
+    expect(envelope?.fragments.map((fragment) => fragment.source)).toContain('qqbot_structured_reply_contract');
     expect(compiledContent).toContain('speaker_id=<id>');
+    expect(compiledContent).toContain('默认不要使用 `mentions`');
+    expect(compiledContent).toContain('"type": "structured_block"');
     expect(compiledContent).not.toContain('qqbot_reply_chat_style');
     expect(compiledContent).not.toContain('"displayName": "小祥"');
     expect(compiledContent).not.toContain('"userId": "u1"');

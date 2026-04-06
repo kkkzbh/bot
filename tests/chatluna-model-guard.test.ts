@@ -222,15 +222,10 @@ describe('buildStructuredReplyRequestSpec', () => {
         }
       | undefined;
 
-    expect(textMessage?.description).toContain('normal chat message');
-    expect(textMessage?.properties?.type?.description).toContain('normal chat message');
-    expect(textMessage?.properties?.content?.description).toContain('Plain chat message body only');
-    expect(textMessage?.properties?.content?.description).toContain('ordinary conversational text');
-    expect(textMessage?.properties?.content?.description).toContain('not for lists, code blocks, or quotes');
-    expect(textMessage?.properties?.content?.description).toContain('mentions field');
-    expect(textMessage?.properties?.mentions?.description).toContain('QQ group @mentions');
-    expect(textMessage?.properties?.mentions?.description).toContain('instead of inside content');
-    expect(textMessage?.properties?.mentions?.description).toContain('empty array []');
+    expect(textMessage?.description).toBe('Ordinary chat message.');
+    expect(textMessage?.properties?.type?.description).toBe('Ordinary chat message.');
+    expect(textMessage?.properties?.content?.description).toBe('Ordinary conversational plain text for this chat message.');
+    expect(textMessage?.properties?.mentions?.description).toBe('QQ user IDs to mention in this chat message. Use [] when no mention is needed.');
     expect(textMessage?.required).toContain('mentions');
     assertStrictRequiredForAllObjects(schema);
 
@@ -240,10 +235,9 @@ describe('buildStructuredReplyRequestSpec', () => {
           properties?: Record<string, { description?: string }>;
         }
       | undefined;
-    expect(structuredBlock?.description).toContain('structured plain-text block');
-    expect(structuredBlock?.properties?.content?.description).toContain('must stay together');
-    expect(structuredBlock?.properties?.type?.description).toContain('should stay together in one message');
-    expect(structuredBlock?.properties?.content?.description).toContain('Structured plain-text content');
+    expect(structuredBlock?.description).toBe('Structured text that should stay intact in one message.');
+    expect(structuredBlock?.properties?.type?.description).toBe('Structured text that should stay intact in one message.');
+    expect(structuredBlock?.properties?.content?.description).toBe('Structured text to keep intact, such as code, lists, or quotes.');
 
     const privateSchema = buildStructuredReplyRequestSpec({
       model: 'openai/gpt-5.4-medium-thinking',

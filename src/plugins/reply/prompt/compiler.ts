@@ -79,12 +79,44 @@ const CONTEXT_INTERPRETATION_FRAGMENT = createPromptTextFragment(
 );
 
 export function buildReplyStructuredReplyContractFragments(): PromptFragment[] {
-  return [];
+  const example = {
+    decision: 'reply',
+    outbound_messages: [
+      { type: 'message', content: '收到。', mentions: [] },
+      { type: 'message', content: '来群里看一下。', mentions: ['123456'] },
+      { type: 'structured_block', content: '1. 第一项\n2. 第二项' },
+      { type: 'meme', content: '无语地看对方一眼' },
+      { type: 'voice', content: '太好了，我现在真的很高兴。' },
+    ],
+  };
+
+  return [
+    createPromptTextFragment(
+      'qqbot_structured_reply_contract',
+      'Structured Reply Contract',
+      'runtime_contract',
+      'sticky',
+      [
+        '结构化回复输出规则：',
+        '- 普通聊天文本用 `message`。',
+        '- 默认不要使用 `mentions`。',
+        '- 只有需要呼叫当前未参与该群聊天的人时，才使用 `message.mentions`。',
+        '- 即使是在回应当前说话人，也不要默认 mention。',
+        '- 代码、列表、引用等需要保留结构的内容用 `structured_block`。',
+        '- 需要表达情绪时可使用 `meme`，并用自然意图描述。',
+        '- 只有在情绪明显非常强烈，且属于“非常生气”或“非常高兴”时，才使用 `voice`。',
+        '- `message.content` 不要手写 `@昵称`、`@QQ号`、`[CQ:at]`、`<at ...>`。',
+        '最小示例：',
+        JSON.stringify(example, null, 2),
+      ].join('\n'),
+    ),
+  ];
 }
 
 export function buildReplyRuntimeContractFragments(): PromptFragment[] {
   return [
     CONTEXT_INTERPRETATION_FRAGMENT,
+    ...buildReplyStructuredReplyContractFragments(),
   ];
 }
 

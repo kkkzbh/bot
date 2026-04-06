@@ -27,6 +27,10 @@ const HEADING_PREFIX_PATTERN = /^\s{0,3}#{1,6}\s+/;
 const BLOCKQUOTE_PREFIX_PATTERN = /^\s{0,3}>\s?/;
 const UNORDERED_LIST_PREFIX_PATTERN = /^(\s*)[-*+]\s+/;
 const ORDERED_LIST_PREFIX_PATTERN = /^\s*\d+[.)]\s+/;
+const XML_MENTION_TOKEN_PATTERN = /<at\b[\s\S]*?\/>/gi;
+const CQ_MENTION_TOKEN_PATTERN = /\[CQ:at,[^\]]+\]/gi;
+const MANUAL_MENTION_TOKEN_PATTERN =
+  /(^|[\s\u3000,，。.!！？?;；:：([{<《【“"'`])[@＠][\p{L}\p{N}_-]+/gu;
 
 type AsyncTask<T> = () => Promise<T>;
 
@@ -346,6 +350,18 @@ export function renderMessageVisibleText(message: { content: string; mentions?: 
   return parts.join(' ').trim();
 }
 
+export function renderModelFacingMessageText(message: { content: string; mentions?: string[] }): string {
+  const mentions = (message.mentions ?? [])
+    .map((userId) => userId.trim())
+    .filter(Boolean);
+  const content = sanitizeStructuredReplyText(message.content, 'message');
+  if (!mentions.length) {
+    return content;
+  }
+  const prefix = `[assistant_message mentions=${JSON.stringify(mentions)}]`;
+  return content ? `${prefix} ${content}` : prefix;
+}
+
 export function createMentionMessageContent(
   mention: ReplyMention,
   options: { separator?: 'space' | 'newline' | 'none' } = {},
@@ -488,7 +504,7 @@ function normalizeMessageBlockContent(rawContent: string): string {
     return next;
   });
 
-  return sanitizePromptLeakMessage(trimPreservedContent(lines.join('\n')));
+  return sanitizePromptLeakMessage(stripManualMentionTokens(trimPreservedContent(lines.join('\n'))));
 }
 
 function normalizeStructuredBlockContent(rawContent: string): string {
@@ -526,6 +542,17 @@ export function sanitizeStructuredReplyText(rawContent: string, kind: Structured
     default:
       return normalizePreservedBlockContent(rawContent);
   }
+}
+
+function stripManualMentionTokens(message: string): string {
+  return message
+    .replace(XML_MENTION_TOKEN_PATTERN, ' ')
+    .replace(CQ_MENTION_TOKEN_PATTERN, ' ')
+    .replace(MANUAL_MENTION_TOKEN_PATTERN, '$1')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 export function sanitizeStructuredReplySegmentContent(rawContent: string): string {

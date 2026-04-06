@@ -12,13 +12,12 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
       title: 'Type',
       type: 'string',
       enum: ['message'],
-      description: 'A normal chat message.',
+      description: 'Ordinary chat message.',
     },
     content: {
       title: 'Content',
       type: 'string',
-      description:
-        'Plain chat message body only. Use this for ordinary conversational text, not for lists, code blocks, or quotes. Mention targets belong in the mentions field, not in content.',
+      description: 'Ordinary conversational plain text for this chat message.',
     },
   };
   const required = ['type', 'content'];
@@ -27,8 +26,7 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
     properties.mentions = {
       title: 'Mentions',
       type: 'array',
-      description:
-        'QQ group @mentions for this message. Put mentioned QQ ids here instead of inside content. Use an empty array [] when no mention is needed.',
+      description: 'QQ user IDs to mention in this chat message. Use [] when no mention is needed.',
       items: {
         type: 'string',
         pattern: QQ_USER_ID_PATTERN,
@@ -40,7 +38,7 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
   return {
     type: 'object',
     title: 'MessageItem',
-    description: 'A normal chat message.',
+    description: 'Ordinary chat message.',
     additionalProperties: false,
     required,
     properties,
@@ -50,7 +48,7 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
 const STRUCTURED_BLOCK_SCHEMA = {
   type: 'object',
   title: 'StructuredBlockItem',
-  description: 'A structured plain-text block that should stay together in one message, such as a list, code block, or quote.',
+  description: 'Structured text that should stay intact in one message.',
   additionalProperties: false,
   required: ['type', 'content'],
   properties: {
@@ -58,12 +56,12 @@ const STRUCTURED_BLOCK_SCHEMA = {
       title: 'Type',
       type: 'string',
       enum: ['structured_block'],
-      description: 'A structured plain-text block that should stay together in one message.',
+      description: 'Structured text that should stay intact in one message.',
     },
     content: {
       title: 'Content',
       type: 'string',
-      description: 'Structured plain-text content that must stay together, for example a list, code snippet, or quote.',
+      description: 'Structured text to keep intact, such as code, lists, or quotes.',
     },
   },
 } as const;
@@ -71,7 +69,7 @@ const STRUCTURED_BLOCK_SCHEMA = {
 const VOICE_MESSAGE_SCHEMA = {
   type: 'object',
   title: 'VoiceItem',
-  description: 'Send a voice message.',
+  description: 'Voice message to send.',
   additionalProperties: false,
   required: ['type', 'content'],
   properties: {
@@ -79,12 +77,12 @@ const VOICE_MESSAGE_SCHEMA = {
       title: 'Type',
       type: 'string',
       enum: ['voice'],
-      description: 'Send a voice message.',
+      description: 'Voice message to send.',
     },
     content: {
       title: 'Content',
       type: 'string',
-      description: 'The final text that should be spoken in the voice message.',
+      description: 'Final text to speak in the voice message.',
     },
   },
 } as const;
@@ -92,7 +90,7 @@ const VOICE_MESSAGE_SCHEMA = {
 const MEME_MESSAGE_SCHEMA = {
   type: 'object',
   title: 'MemeItem',
-  description: 'Send a meme image.',
+  description: 'Meme intent to send.',
   additionalProperties: false,
   required: ['type', 'content'],
   properties: {
@@ -100,12 +98,12 @@ const MEME_MESSAGE_SCHEMA = {
       title: 'Type',
       type: 'string',
       enum: ['meme'],
-      description: 'Send a meme when it helps express mood, attitude, or emotional nuance better than plain text.',
+      description: 'Meme intent to send.',
     },
     content: {
       title: 'Content',
       type: 'string',
-      description: 'Natural-language meme meaning or intent, not a sticker id, filename, or tag.',
+      description: 'Natural-language meme intent for this turn.',
     },
   },
 } as const;

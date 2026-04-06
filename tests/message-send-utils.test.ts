@@ -39,6 +39,7 @@ import {
   dropLeadingLeakedReasoningLines,
   looksLikeLeakedReasoningLine,
   normalizeOutboundMessage,
+  renderModelFacingMessageText,
   resolveReplyActorKey,
   resolveReplyQueueKey,
   resolveSessionStrandKey,
@@ -112,6 +113,13 @@ describe('message send utils', () => {
     expect(
       sanitizeStructuredReplyText('# 标题\n> 引用\n- 第一项\n2. 第二项\n**加粗** 和 `命令`', 'message'),
     ).toBe('标题\n引用\n第一项\n第二项\n加粗 和 命令');
+  });
+
+  it('strips handwritten mention tokens from plain message content', () => {
+    expect(sanitizeStructuredReplyText('@123456 现在说正事', 'message')).toBe('现在说正事');
+    expect(sanitizeStructuredReplyText('麻烦 @小祥 看一下', 'message')).toBe('麻烦 看一下');
+    expect(sanitizeStructuredReplyText('[CQ:at,qq=123456] 现在说正事', 'message')).toBe('现在说正事');
+    expect(sanitizeStructuredReplyText('<at id="123456" /> 现在说正事', 'message')).toBe('现在说正事');
   });
 
   it('sanitizes structured block content into lightweight plain-text formatting', () => {
@@ -386,6 +394,13 @@ describe('message send utils', () => {
     ]);
   });
 
+  it('renders model-facing mention history as structured metadata instead of @ text', () => {
+    expect(renderModelFacingMessageText({ content: '现在有 4 条任务。', mentions: ['123456', '234567'] })).toBe(
+      '[assistant_message mentions=["123456","234567"]] 现在有 4 条任务。',
+    );
+    expect(renderModelFacingMessageText({ content: '今晚先这样吧', mentions: [] })).toBe('今晚先这样吧');
+  });
+
   it('builds outbound segments from ReplyPlan without relying on control tags', () => {
     expect(
       buildOutboundMessagePlanFromReplyPlan({
@@ -420,6 +435,25 @@ describe('message send utils', () => {
           assetRef: 'asset://image-1',
           alt: '夜空照片',
           raw: 'reply-plan:image:5:asset://image-1',
+        },
+      ],
+    });
+  });
+
+  it('keeps structured mentions while stripping handwritten @ text from message content', () => {
+    expect(
+      buildOutboundMessagePlanFromReplyPlan({
+        segments: [
+          { kind: 'message', content: '@123456 先问下这件事。', mentions: ['123456'] },
+        ],
+      }),
+    ).toEqual({
+      segments: [
+        {
+          kind: 'message-block',
+          content: '先问下这件事。',
+          mentions: ['123456'],
+          raw: 'reply-plan:message:0:@123456 先问下这件事。',
         },
       ],
     });

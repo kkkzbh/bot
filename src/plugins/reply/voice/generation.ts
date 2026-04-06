@@ -28,6 +28,7 @@ import {
   createQuotedMessageContent,
   createKeyedStrandRunner,
   dispatchOutboundMessagePlan,
+  renderModelFacingMessageText,
   renderMessageVisibleText,
   resolveReplyActorKey,
   resolveReplyQueueKey,
@@ -622,7 +623,7 @@ function renderDeliveredReplyPlanHistoryText(
       }
 
       if (segment.kind === 'message') {
-        return renderMessageVisibleText(segment);
+        return renderModelFacingMessageText(segment);
       }
 
       if (segment.kind === 'sticker') {
@@ -649,7 +650,7 @@ function buildPlannedUnitHistoryLines(args: {
       return segment.content;
     }
     if (segment.kind === 'message-block') {
-      return renderMessageVisibleText(segment);
+      return renderModelFacingMessageText(segment);
     }
     if (segment.kind === 'structured-block') {
       return sanitizeStructuredReplyText(segment.content, 'structured_block');

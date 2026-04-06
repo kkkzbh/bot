@@ -1000,6 +1000,10 @@ describe('qq voice plugin', () => {
             role: 'system',
             content: expect.stringContaining('qqbot_context_interpretation_protocol'),
           }),
+          expect.objectContaining({
+            role: 'system',
+            content: expect.stringContaining('qqbot_structured_reply_contract'),
+          }),
         ]),
       }),
     );
@@ -1102,6 +1106,8 @@ describe('qq voice plugin', () => {
     expect(envelopeText).toContain('speaker_id=<id>');
     expect(envelopeText).toContain('不同 speaker_id 的消息当成同一个人');
     expect(envelopeText).toContain('最新一条真实用户消息对应本轮直接回应对象');
+    expect(envelopeText).toContain('默认不要使用 `mentions`');
+    expect(envelopeText).toContain('"type": "voice"');
     expect(envelopeText).not.toContain('"displayName": "小祥"');
     expect(envelopeText).not.toContain('"userId": "u2"');
     expect(context.options.inputMessage.additional_kwargs).toEqual(
@@ -1301,7 +1307,7 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-mention' }),
-      '@123456 先问下这件事。',
+      '[assistant_message mentions=["123456"]] 先问下这件事。',
     );
   });
 
