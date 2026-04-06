@@ -43,6 +43,7 @@ import {
   resolveReplyQueueKey,
   resolveSessionStrandKey,
   sanitizeLeakedReasoningMessage,
+  sanitizeStructuredReplyText,
   sendBotMessageByNormalizedContent,
   sendByLinesWithSmartInterval,
   splitMessageByLines,
@@ -105,6 +106,22 @@ describe('message send utils', () => {
       mode: 'split',
       content: '标题\n引用\n第一项\n加粗 和 命令 官网 https://example.com',
     });
+  });
+
+  it('sanitizes message content into ordinary plain text without preserving list markup', () => {
+    expect(
+      sanitizeStructuredReplyText('# 标题\n> 引用\n- 第一项\n2. 第二项\n**加粗** 和 `命令`', 'message'),
+    ).toBe('标题\n引用\n第一项\n第二项\n加粗 和 命令');
+  });
+
+  it('sanitizes structured block content into lightweight plain-text formatting', () => {
+    expect(
+      sanitizeStructuredReplyText('* 第一项\n2) 第二项\n> 引用', 'structured_block'),
+    ).toBe('- 第一项\n1. 第二项\n引用');
+
+    expect(
+      sanitizeStructuredReplyText('```ts\nconst answer = 42;\nconsole.log(answer);\n```', 'structured_block'),
+    ).toBe('const answer = 42;\nconsole.log(answer);');
   });
 
   it('keeps unwrapped multiline code in split mode without explicit wrapper', () => {
@@ -403,6 +420,28 @@ describe('message send utils', () => {
           assetRef: 'asset://image-1',
           alt: '夜空照片',
           raw: 'reply-plan:image:5:asset://image-1',
+        },
+      ],
+    });
+  });
+
+  it('normalizes structured blocks but keeps message lines flat when building outbound segments', () => {
+    expect(
+      buildOutboundMessagePlanFromReplyPlan({
+        segments: [
+          { kind: 'message', content: '# 标题\n- 第一项\n2. 第二项', mentions: [] },
+          { kind: 'structured_block', content: '* 第一项\n2) 第二项' },
+        ],
+      }),
+    ).toEqual({
+      segments: [
+        { kind: 'text-line', content: '标题', raw: 'reply-plan:message:0:line:0:标题' },
+        { kind: 'text-line', content: '第一项', raw: 'reply-plan:message:0:line:1:第一项' },
+        { kind: 'text-line', content: '第二项', raw: 'reply-plan:message:0:line:2:第二项' },
+        {
+          kind: 'structured-block',
+          content: '- 第一项\n1. 第二项',
+          raw: 'reply-plan:structured_block:1:- 第一项\n1. 第二项',
         },
       ],
     });

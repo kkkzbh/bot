@@ -224,9 +224,12 @@ describe('buildStructuredReplyRequestSpec', () => {
 
     expect(textMessage?.description).toContain('normal chat message');
     expect(textMessage?.properties?.type?.description).toContain('normal chat message');
-    expect(textMessage?.properties?.content?.description).toContain('Flat plain-text content');
-    expect(textMessage?.properties?.mentions?.description).toContain('Mentions usually force a message notification');
-    expect(textMessage?.properties?.mentions?.description).toContain('not currently talking in the group');
+    expect(textMessage?.properties?.content?.description).toContain('Plain chat message body only');
+    expect(textMessage?.properties?.content?.description).toContain('ordinary conversational text');
+    expect(textMessage?.properties?.content?.description).toContain('not for lists, code blocks, or quotes');
+    expect(textMessage?.properties?.content?.description).toContain('mentions field');
+    expect(textMessage?.properties?.mentions?.description).toContain('QQ group @mentions');
+    expect(textMessage?.properties?.mentions?.description).toContain('instead of inside content');
     expect(textMessage?.properties?.mentions?.description).toContain('empty array []');
     expect(textMessage?.required).toContain('mentions');
     assertStrictRequiredForAllObjects(schema);
@@ -237,7 +240,8 @@ describe('buildStructuredReplyRequestSpec', () => {
           properties?: Record<string, { description?: string }>;
         }
       | undefined;
-    expect(structuredBlock?.description).toContain('should stay together in one message');
+    expect(structuredBlock?.description).toContain('structured plain-text block');
+    expect(structuredBlock?.properties?.content?.description).toContain('must stay together');
     expect(structuredBlock?.properties?.type?.description).toContain('should stay together in one message');
     expect(structuredBlock?.properties?.content?.description).toContain('Structured plain-text content');
 

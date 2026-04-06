@@ -17,7 +17,8 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
     content: {
       title: 'Content',
       type: 'string',
-      description: 'Flat plain-text content for this chat message.',
+      description:
+        'Plain chat message body only. Use this for ordinary conversational text, not for lists, code blocks, or quotes. Mention targets belong in the mentions field, not in content.',
     },
   };
   const required = ['type', 'content'];
@@ -27,7 +28,7 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
       title: 'Mentions',
       type: 'array',
       description:
-        'QQ group @mentions. Mentions usually force a message notification. Use them when you need to call someone who is not currently talking in the group. Otherwise, do not mention anyone. If no mention is needed, use an empty array [].',
+        'QQ group @mentions for this message. Put mentioned QQ ids here instead of inside content. Use an empty array [] when no mention is needed.',
       items: {
         type: 'string',
         pattern: QQ_USER_ID_PATTERN,
@@ -49,7 +50,7 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
 const STRUCTURED_BLOCK_SCHEMA = {
   type: 'object',
   title: 'StructuredBlockItem',
-  description: 'A structured content block that should stay together in one message, such as a code block, list, or quote.',
+  description: 'A structured plain-text block that should stay together in one message, such as a list, code block, or quote.',
   additionalProperties: false,
   required: ['type', 'content'],
   properties: {
@@ -57,12 +58,12 @@ const STRUCTURED_BLOCK_SCHEMA = {
       title: 'Type',
       type: 'string',
       enum: ['structured_block'],
-      description: 'A structured content block that should stay together in one message.',
+      description: 'A structured plain-text block that should stay together in one message.',
     },
     content: {
       title: 'Content',
       type: 'string',
-      description: 'Structured plain-text content, such as a code block, list, or quote.',
+      description: 'Structured plain-text content that must stay together, for example a list, code snippet, or quote.',
     },
   },
 } as const;

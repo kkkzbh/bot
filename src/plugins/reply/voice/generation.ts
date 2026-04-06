@@ -31,7 +31,7 @@ import {
   renderMessageVisibleText,
   resolveReplyActorKey,
   resolveReplyQueueKey,
-  sanitizeStructuredReplySegmentContent,
+  sanitizeStructuredReplyText,
   sendBotMessageByNormalizedContent,
   type BotMessageContent,
   type OutboundMessagePlan,
@@ -579,15 +579,15 @@ export function buildReplyTransportPlanFromResolvedActions(actions: ResolvedActi
 function renderReplyPlanSegmentTextForFallback(segment: ReplyTransportPlan['segments'][number]): string {
   if (segment.kind === 'sticker') return '';
   if (segment.kind === 'image') {
-    return sanitizeStructuredReplySegmentContent(segment.alt ?? '');
+    return sanitizeStructuredReplyText(segment.alt ?? '', 'image_alt');
   }
   if (segment.kind === 'message') {
     return renderMessageVisibleText(segment);
   }
   if (segment.kind === 'structured_block') {
-    return sanitizeStructuredReplySegmentContent(segment.content);
+    return sanitizeStructuredReplyText(segment.content, 'structured_block');
   }
-  return sanitizeStructuredReplySegmentContent(segment.content);
+  return sanitizeStructuredReplyText(segment.content, 'voice');
 }
 
 function renderReplyPlanFallbackText(plan: ReplyTransportPlan): string {
@@ -618,7 +618,7 @@ function renderDeliveredReplyPlanHistoryText(
       }
 
       if (segment.kind === 'voice') {
-        return `（发送语音：${sanitizeStructuredReplySegmentContent(segment.content)}）`;
+        return `（发送语音：${sanitizeStructuredReplyText(segment.content, 'voice')}）`;
       }
 
       if (segment.kind === 'message') {
@@ -631,7 +631,7 @@ function renderDeliveredReplyPlanHistoryText(
         return outboundSticker ? stickerHistoryByRaw.get(outboundSticker.raw) ?? '（发送表情包）' : '（发送表情包）';
       }
 
-      return sanitizeStructuredReplySegmentContent(segment.content);
+      return sanitizeStructuredReplyText(segment.content, 'structured_block');
     })
     .filter((segment) => segment.trim().length > 0)
     .join('\n')
@@ -652,7 +652,7 @@ function buildPlannedUnitHistoryLines(args: {
       return renderMessageVisibleText(segment);
     }
     if (segment.kind === 'structured-block') {
-      return sanitizeStructuredReplySegmentContent(segment.content);
+      return sanitizeStructuredReplyText(segment.content, 'structured_block');
     }
     if (segment.kind === 'image-block') {
       return segment.alt ? `（发送图片：${segment.alt}）` : '（发送图片）';

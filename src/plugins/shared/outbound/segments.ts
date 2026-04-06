@@ -26,6 +26,7 @@ const ALT_EMPHASIS_PATTERN = /(^|[^\w])_([^_\n]+)_(?=[^\w]|$)/g;
 const HEADING_PREFIX_PATTERN = /^\s{0,3}#{1,6}\s+/;
 const BLOCKQUOTE_PREFIX_PATTERN = /^\s{0,3}>\s?/;
 const UNORDERED_LIST_PREFIX_PATTERN = /^(\s*)[-*+]\s+/;
+const ORDERED_LIST_PREFIX_PATTERN = /^\s*\d+[.)]\s+/;
 
 type AsyncTask<T> = () => Promise<T>;
 
@@ -84,6 +85,14 @@ export interface OutboundMessagePlan {
 }
 
 export type ReplyTransportSegmentKind = 'message' | 'structured_block' | 'voice' | 'sticker' | 'image';
+export type StructuredReplyTextKind =
+  | 'message'
+  | 'mention'
+  | 'structured_block'
+  | 'voice'
+  | 'sticker'
+  | 'meme'
+  | 'image_alt';
 
 export type ReplyTransportSegment =
   | {
@@ -308,7 +317,7 @@ export function normalizeMention(mention: ReplyMention): ReplyMention | null {
 
   const normalizedContent =
     typeof mention.content === 'string'
-      ? sanitizeStructuredReplySegmentContent(sanitizeMentionText(mention.content))
+      ? sanitizeStructuredReplyText(sanitizeMentionText(mention.content), 'mention')
       : '';
 
   return normalizedContent
@@ -332,7 +341,7 @@ export function renderMessageVisibleText(message: { content: string; mentions?: 
     .map((userId) => userId.trim())
     .filter(Boolean)
     .map((userId) => `@${userId}`);
-  const content = sanitizeStructuredReplySegmentContent(message.content);
+  const content = sanitizeStructuredReplyText(message.content, 'message');
   const parts = [...mentions, content].filter((value) => value.trim().length > 0);
   return parts.join(' ').trim();
 }
@@ -354,7 +363,7 @@ export function createMessageMessageContent(message: { content: string; mentions
   const normalizedMentions = (message.mentions ?? [])
     .map((userId) => userId.trim())
     .filter(Boolean);
-  const content = sanitizeStructuredReplySegmentContent(message.content);
+  const content = sanitizeStructuredReplyText(message.content, 'message');
   if (!normalizedMentions.length) {
     return h.text(content);
   }
@@ -414,15 +423,19 @@ function unwrapFencedCodeBlock(message: string): string {
   return matched?.[1] ?? message;
 }
 
-function stripSplitModeMarkdown(message: string): string {
+function stripInlineMarkdownDecorations(message: string): string {
   let normalized = normalizeLineEndings(message);
-  normalized = unwrapFencedCodeBlock(normalized);
   normalized = normalized.replace(MARKDOWN_LINK_PATTERN, '$1 $2');
   normalized = normalized.replace(INLINE_CODE_PATTERN, '$1');
   normalized = normalized.replace(STRONG_EMPHASIS_PATTERN, '$1');
   normalized = normalized.replace(ALT_STRONG_EMPHASIS_PATTERN, '$1');
   normalized = normalized.replace(EMPHASIS_PATTERN, '$1$2');
   normalized = normalized.replace(ALT_EMPHASIS_PATTERN, '$1$2');
+  return normalized;
+}
+
+function stripSplitModeMarkdown(message: string): string {
+  const normalized = stripInlineMarkdownDecorations(unwrapFencedCodeBlock(message));
 
   const lines = normalized.split('\n').map((line) => {
     let next = line;
@@ -464,8 +477,59 @@ function normalizePreservedBlockContent(rawContent: string): string {
   return sanitizePromptLeakMessage(stripPreserveModeMarkdown(rawContent));
 }
 
+function normalizeMessageBlockContent(rawContent: string): string {
+  const normalized = stripInlineMarkdownDecorations(unwrapFencedCodeBlock(rawContent));
+  const lines = normalized.split('\n').map((line) => {
+    let next = line;
+    next = next.replace(HEADING_PREFIX_PATTERN, '');
+    next = next.replace(BLOCKQUOTE_PREFIX_PATTERN, '');
+    next = next.replace(UNORDERED_LIST_PREFIX_PATTERN, '$1');
+    next = next.replace(ORDERED_LIST_PREFIX_PATTERN, '');
+    return next;
+  });
+
+  return sanitizePromptLeakMessage(trimPreservedContent(lines.join('\n')));
+}
+
+function normalizeStructuredBlockContent(rawContent: string): string {
+  const normalized = normalizeLineEndings(rawContent).trim();
+  const fencedMatch = normalized.match(FENCED_CODE_BLOCK_PATTERN);
+  if (fencedMatch) {
+    return sanitizePromptLeakMessage(trimPreservedContent(fencedMatch[1] ?? ''));
+  }
+
+  const stripped = stripInlineMarkdownDecorations(normalized);
+  const lines = stripped.split('\n').map((line) => {
+    let next = line;
+    next = next.replace(HEADING_PREFIX_PATTERN, '');
+    next = next.replace(BLOCKQUOTE_PREFIX_PATTERN, '');
+    next = next.replace(UNORDERED_LIST_PREFIX_PATTERN, '- ');
+    next = next.replace(ORDERED_LIST_PREFIX_PATTERN, '1. ');
+    return next;
+  });
+
+  return sanitizePromptLeakMessage(trimPreservedContent(lines.join('\n')));
+}
+
+export function sanitizeStructuredReplyText(rawContent: string, kind: StructuredReplyTextKind = 'message'): string {
+  switch (kind) {
+    case 'message':
+    case 'mention':
+      return normalizeMessageBlockContent(rawContent);
+    case 'structured_block':
+      return normalizeStructuredBlockContent(rawContent);
+    case 'voice':
+    case 'sticker':
+    case 'meme':
+    case 'image_alt':
+      return normalizePreservedBlockContent(rawContent);
+    default:
+      return normalizePreservedBlockContent(rawContent);
+  }
+}
+
 export function sanitizeStructuredReplySegmentContent(rawContent: string): string {
-  return normalizePreservedBlockContent(rawContent);
+  return sanitizeStructuredReplyText(rawContent, 'message');
 }
 
 export function createTextOutboundSegments(message: string): OutboundMessageSegment[] {
@@ -486,7 +550,7 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
 
   for (const [index, segment] of plan.segments.entries()) {
     if (segment.kind === 'message') {
-      const content = sanitizeStructuredReplySegmentContent(segment.content);
+      const content = sanitizeStructuredReplyText(segment.content, 'message');
       const mentions = segment.mentions.map((value) => value.trim()).filter(Boolean);
       if (!content && !mentions.length) continue;
       const lines = splitMessageByLines(content);
@@ -521,7 +585,7 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
     }
 
     if (segment.kind === 'structured_block') {
-      const content = sanitizeStructuredReplySegmentContent(segment.content);
+      const content = sanitizeStructuredReplyText(segment.content, 'structured_block');
       if (!content.trim()) continue;
       segments.push({
         kind: 'structured-block',
@@ -544,7 +608,10 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
       continue;
     }
 
-    const content = sanitizeStructuredReplySegmentContent(segment.content);
+    const content = sanitizeStructuredReplyText(
+      segment.content,
+      segment.kind === 'sticker' ? 'sticker' : 'voice',
+    );
     if (!content.trim()) continue;
 
     if (segment.kind === 'sticker') {

@@ -232,7 +232,7 @@ describe('reply pipeline v3', () => {
       responseMessage: createStructuredResponse({
         decision: 'reply',
         outbound_messages: [
-          { type: 'structured_block', content: '- 牛奶\n- 面包' },
+          { type: 'structured_block', content: '* 牛奶\n2) 面包' },
         ],
       }),
     });
@@ -244,11 +244,45 @@ describe('reply pipeline v3', () => {
     expect(ready.reply).toEqual({
       decision: 'reply',
       outbound_messages: [
-        { type: 'structured_block', content: '- 牛奶\n- 面包' },
+        { type: 'structured_block', content: '- 牛奶\n1. 面包' },
       ],
     });
     expect(ready.actions).toEqual([
-      { kind: 'structured_block', content: '- 牛奶\n- 面包' },
+      { kind: 'structured_block', content: '- 牛奶\n1. 面包' },
+    ]);
+  });
+
+  it('sanitizes markdown-like message content into ordinary plain text', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+    const ready = await orchestrator.handle(createTurnInput('回一句'), {} as never, {
+      routeHint: 'agent',
+      capabilitySnapshot: {
+        canMultiline: true,
+        canVoice: false,
+        canSticker: false,
+        stickerAvailableCount: 0,
+        source: 'test',
+      },
+      responseMessage: createStructuredResponse({
+        decision: 'reply',
+        outbound_messages: [
+          { type: 'message', content: '# 标题\n- 第一项\n2. 第二项', mentions: [] },
+        ],
+      }),
+    });
+
+    expect(ready.status).toBe('ready');
+    if (ready.status !== 'ready') {
+      throw new Error('expected ready');
+    }
+    expect(ready.reply).toEqual({
+      decision: 'reply',
+      outbound_messages: [
+        { type: 'message', content: '标题\n第一项\n第二项', mentions: [] },
+      ],
+    });
+    expect(ready.actions).toEqual([
+      { kind: 'message', content: '标题\n第一项\n第二项', mentions: [] },
     ]);
   });
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { sanitizeStructuredReplySegmentContent } from '../../shared/outbound/index.js';
+import { sanitizeStructuredReplyText } from '../../shared/outbound/index.js';
 import type { PromptFragment } from '../../shared/prompt-context/types.js';
 import { STRUCTURED_REPLY_JSON_SCHEMA } from '../../shared/llm/structured-reply-schema.js';
 
@@ -153,22 +153,22 @@ export function normalizeStructuredReply(raw: unknown): StructuredReply | null {
       message.type === 'message'
         ? {
             type: 'message',
-            content: sanitizeStructuredReplySegmentContent(message.content),
+            content: sanitizeStructuredReplyText(message.content, 'message'),
             ...(message.mentions ? { mentions: normalizeMentionIds(message.mentions) } : {}),
           }
         : message.type === 'structured_block'
           ? {
               type: 'structured_block',
-              content: sanitizeStructuredReplySegmentContent(message.content),
+              content: sanitizeStructuredReplyText(message.content, 'structured_block'),
             }
         : message.type === 'voice'
           ? {
               type: 'voice',
-              content: sanitizeStructuredReplySegmentContent(message.content),
+              content: sanitizeStructuredReplyText(message.content, 'voice'),
             }
           : {
               type: 'meme',
-              content: sanitizeStructuredReplySegmentContent(message.content),
+              content: sanitizeStructuredReplyText(message.content, 'meme'),
             },
     ),
   };

@@ -1,4 +1,4 @@
-import { sanitizeStructuredReplySegmentContent } from '../../shared/outbound/index.js';
+import { sanitizeStructuredReplyText } from '../../shared/outbound/index.js';
 import type { ResolvedAction, StructuredReply, TurnContext } from './types.js';
 
 function normalizeMentionIds(mentions: string[] | undefined): string[] {
@@ -25,7 +25,7 @@ export class ActionResolverService {
 
     for (const message of messages) {
       if (message.type === 'voice') {
-        const content = sanitizeStructuredReplySegmentContent(message.content);
+        const content = sanitizeStructuredReplyText(message.content, 'voice');
         if (!content) continue;
         if (!canVoice) {
           throw new Error('structured reply requested voice output but voice capability is unavailable.');
@@ -35,7 +35,7 @@ export class ActionResolverService {
       }
 
       if (message.type === 'meme') {
-        const content = sanitizeStructuredReplySegmentContent(message.content);
+        const content = sanitizeStructuredReplyText(message.content, 'meme');
         if (!content) continue;
         if (!canSticker) {
           throw new Error('structured reply requested meme output but sticker capability is unavailable.');
@@ -45,7 +45,7 @@ export class ActionResolverService {
       }
 
       if (message.type === 'structured_block') {
-        const content = sanitizeStructuredReplySegmentContent(message.content);
+        const content = sanitizeStructuredReplyText(message.content, 'structured_block');
         if (!content) continue;
         resolved.push({
           kind: 'structured_block',
@@ -54,7 +54,7 @@ export class ActionResolverService {
         continue;
       }
 
-      const content = sanitizeStructuredReplySegmentContent(message.content);
+      const content = sanitizeStructuredReplyText(message.content, 'message');
       const mentions = normalizeMentionIds(message.mentions);
       if (!content && !mentions.length) {
         continue;
