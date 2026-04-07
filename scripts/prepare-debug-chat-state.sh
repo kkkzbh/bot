@@ -144,7 +144,20 @@ def resolve_runtime_room_config(env_values: dict[str, str]) -> tuple[str, str]:
     preset = env_values.get('CHATLUNA_DEFAULT_PRESET', '').strip() or 'sakiko'
     if not model:
         raise RuntimeError(f'no runtime main-chat model found in env file: {base_env_file}')
-    return preset, model
+    return preset, normalize_canonical_model(active_tab, model)
+
+def normalize_canonical_model(active_tab: str, model: str) -> str:
+    value = model.strip()
+    if not value:
+        return value
+    if active_tab in ('openai', 'copilot'):
+        if value.startswith('github-copilot/'):
+            value = value.split('/', 1)[1].strip()
+        if value.startswith('openai/'):
+            return value
+        if '/' not in value:
+            return f'openai/{value}'
+    return value
 
 env_values = parse_env_file(base_env_file)
 if override_env_file and Path(override_env_file).exists():

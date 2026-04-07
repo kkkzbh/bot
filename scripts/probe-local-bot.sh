@@ -401,19 +401,22 @@ async function main() {
             typeof probeRoomModel === 'string' && probeRoomModel.trim().length > 0
               ? probeRoomModel.trim()
               : null
+          const runtimeProfile = mainChatTabs.resolveMainChatRuntimeProfileFromEnv(process.env)
           const shouldUseIsolatedRoom =
             Boolean(probeIsolatedRoom) ||
             requestedProbeTab != null ||
-            requestedProbeRoomModel != null
+            requestedProbeRoomModel != null ||
+            runtimeProfile.requestMode === 'responses'
 
           let resolvedProbeTab = requestedProbeTab
           let resolvedProbeRoomModel = requestedProbeRoomModel
+          let resolvedProbeProfile = null
           if (resolvedProbeRoomModel == null && requestedProbeTab != null) {
             const normalizedTab = mainChatTabs.normalizeMainChatBuiltinTabId(requestedProbeTab)
             const tabState = mainChatTabs.resolveMainChatTabStateFromEnv(normalizedTab, process.env)
             resolvedProbeTab = normalizedTab
-            resolvedProbeRoomModel = tabState && typeof tabState.defaultModel === 'string'
-              ? tabState.defaultModel.trim()
+            resolvedProbeRoomModel = tabState && typeof tabState.canonicalModel === 'string'
+              ? tabState.canonicalModel.trim()
               : null
             if (!resolvedProbeRoomModel) {
               throw new Error('probe failed to resolve default model for tab: ' + normalizedTab)
@@ -425,11 +428,38 @@ async function main() {
             )
             resolvedProbeTab = inferredTab || null
           }
+          if (resolvedProbeTab != null) {
+            resolvedProbeProfile = mainChatTabs.resolveMainChatModelDescriptor({
+              tabId: resolvedProbeTab,
+              model: resolvedProbeRoomModel,
+            })
+            resolvedProbeRoomModel = resolvedProbeProfile.canonicalModel
+          } else {
+            resolvedProbeProfile = {
+              tabId: runtimeProfile.tabId,
+              provider: runtimeProfile.provider,
+              strategyId: runtimeProfile.strategyId,
+              requestMode: runtimeProfile.requestMode,
+              canonicalModel: runtimeProfile.canonicalModel || runtimeProfile.defaultModel,
+              transportModel: runtimeProfile.transportModel || runtimeProfile.defaultModel,
+            }
+            resolvedProbeTab = resolvedProbeProfile.tabId
+            resolvedProbeRoomModel = resolvedProbeProfile.canonicalModel
+          }
           const envRestoreEntries = []
           if (resolvedProbeTab != null) {
-            const runtimeTabs = mainChatTabs.MAIN_CHAT_BUILTIN_TAB_IDS.map((tabId) =>
-              mainChatTabs.resolveMainChatTabStateFromEnv(tabId, process.env)
-            )
+            const runtimeTabs = mainChatTabs.MAIN_CHAT_BUILTIN_TAB_IDS.map((tabId) => {
+              const tabState = mainChatTabs.resolveMainChatTabStateFromEnv(tabId, process.env)
+              if (tabId !== resolvedProbeTab || resolvedProbeProfile == null) {
+                return tabState
+              }
+              return {
+                ...tabState,
+                defaultModel: resolvedProbeProfile.canonicalModel,
+                canonicalModel: resolvedProbeProfile.canonicalModel,
+                transportModel: resolvedProbeProfile.transportModel,
+              }
+            })
             const runtimeEnvPatch = mainChatTabs.buildMainChatRuntimeEnvPatch(resolvedProbeTab, runtimeTabs)
             for (const [key, value] of Object.entries(runtimeEnvPatch)) {
               envRestoreEntries.push([
@@ -496,11 +526,8 @@ async function main() {
               roomRows.find((room) => room.chatMode === 'plugin' && typeof room.preset === 'string' && room.preset.length > 0) ||
               {
                 preset: 'sakiko',
-                chatMode: 'plugin',
                 password: '',
                 visibility: 'public',
-                autoUpdate: false,
-                model: resolvedProbeRoomModel ?? 'gpt-5.4-mini',
               }
             const roomId = Number(await getConversationRoomCount(this.app)) + 1
             const sessionLike = {
@@ -517,7 +544,8 @@ async function main() {
               visibility: 'private',
               autoUpdate: false,
               updatedTime: new Date(),
-              model: resolvedProbeRoomModel ?? templateRoom.model,
+              chatMode: 'plugin',
+              model: resolvedProbeProfile.canonicalModel,
             }
             await createConversationRoom(this.app, sessionLike, isolatedRoom)
           }
@@ -685,6 +713,7 @@ async function main() {
                 resolvedTab: resolvedProbeTab,
                 requestedModel: requestedProbeRoomModel,
                 resolvedModel: resolvedProbeRoomModel,
+                resolvedProfile: resolvedProbeProfile,
                 isolated: shouldUseIsolatedRoom,
                 roomId: isolatedRoom ? isolatedRoom.roomId : null,
                 roomName: isolatedRoom ? isolatedRoom.roomName : null,

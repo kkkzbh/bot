@@ -10,6 +10,7 @@ import {
   inferPlatformFromBaseUrl,
   isSupportedMainChatModelForTab,
   normalizeRawModelName,
+  resolveMainChatModelDescriptor,
   resolveMainChatRuntimeProfileFromEnv,
   resolvePlatform,
 } from '../shared/llm/index.js';
@@ -195,19 +196,27 @@ export function apply(ctx: Context, config: Config = {}): void {
           const originalRoomModel = trimOptionalText(room.model);
           const defaultModel = profile.defaultModel || resolveDefaultModelForGuard();
           const preferredPlatform = resolvePreferredPlatformForGuard(defaultModel);
-          const normalizedModel = normalizeRawModelName(room.model, {
+          const normalizedModelInput = normalizeRawModelName(room.model, {
             availableModels: listAllLlmModels(chatluna),
             preferredPlatform,
             defaultModel,
           });
+          const normalizedDescriptor = resolveMainChatModelDescriptor({
+            tabId: profile.tabId,
+            model: normalizedModelInput ?? defaultModel,
+          });
           let shouldPersistRoom = false;
-          if (normalizedModel && normalizedModel !== room.model?.trim()) {
-            room.model = normalizedModel;
+          if (
+            normalizedDescriptor.canonicalModel !== room.model?.trim()
+          ) {
+            room.model = normalizedDescriptor.canonicalModel;
             shouldPersistRoom = true;
             logger.info(
-              'normalized room model for guard (roomId=%s, model=%s).',
+              'normalized room model for guard (roomId=%s, model=%s, strategy=%s, requestMode=%s).',
               String(room.roomId ?? ''),
-              normalizedModel,
+              normalizedDescriptor.canonicalModel,
+              normalizedDescriptor.strategyId,
+              normalizedDescriptor.requestMode,
             );
           }
           const effectiveModel = trimOptionalText(room.model);
@@ -216,15 +225,23 @@ export function apply(ctx: Context, config: Config = {}): void {
             defaultModel &&
             !isSupportedMainChatModelForTab(profile.tabId, effectiveModel)
           ) {
-            room.model = defaultModel;
+            const fallbackDescriptor = resolveMainChatModelDescriptor({
+              tabId: profile.tabId,
+              model: defaultModel,
+            });
+            room.model = fallbackDescriptor.canonicalModel;
             shouldPersistRoom = true;
             logger.warn(
               'room model is unsupported for qqbot main chat (roomId=%s, model=%s), fallback to %s.',
               String(room.roomId ?? ''),
               effectiveModel,
-              defaultModel,
+              fallbackDescriptor.canonicalModel,
             );
           }
+          const effectiveDescriptor = resolveMainChatModelDescriptor({
+            tabId: profile.tabId,
+            model: trimOptionalText(room.model) ?? defaultModel,
+          });
           logger.info(
             '%s',
             formatStructuredLogBlock('reply-plan-debug', {
@@ -232,7 +249,10 @@ export function apply(ctx: Context, config: Config = {}): void {
               roomId: room.roomId ?? null,
               conversationId: trimOptionalText(room.conversationId) ?? null,
               originalRoomModel,
-              effectiveModel: trimOptionalText(room.model) ?? null,
+              effectiveModel: effectiveDescriptor.canonicalModel,
+              effectiveTransportModel: effectiveDescriptor.transportModel,
+              effectiveStrategyId: effectiveDescriptor.strategyId,
+              effectiveRequestMode: effectiveDescriptor.requestMode,
               preset: trimOptionalText(room.preset) ?? null,
             }),
           );

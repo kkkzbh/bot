@@ -318,7 +318,7 @@ describe('resolveMainChatRuntimeProfileFromEnv', () => {
         CHATLUNA_ACTIVE_TAB: 'copilot',
         CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
         CHATLUNA_COPILOT_API_KEY: 'bridge-secret',
-        CHATLUNA_COPILOT_DEFAULT_MODEL: 'gpt-5.4-mini',
+        CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/gpt-5.4-mini',
       }),
     ).toMatchObject({
       tabId: 'copilot',
@@ -327,7 +327,9 @@ describe('resolveMainChatRuntimeProfileFromEnv', () => {
       requestMode: 'responses',
       structuredOutputProtocol: 'responses_text_format',
       baseUrl: 'http://127.0.0.1:5140/api/internal/copilot/v1',
-      defaultModel: 'gpt-5.4-mini',
+      defaultModel: 'openai/gpt-5.4-mini',
+      canonicalModel: 'openai/gpt-5.4-mini',
+      transportModel: 'gpt-5.4-mini',
     });
   });
 });

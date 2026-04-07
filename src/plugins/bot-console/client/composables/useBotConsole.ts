@@ -171,7 +171,7 @@ function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltin
       requestMode: 'responses',
       structuredOutputProtocol: 'responses_text_format',
       description: '当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 交换 session token。',
-      modelHint: '推荐填写 gpt-5.4-mini。该 Tab 使用 GitHub device-flow OAuth，不再手填 PAT。',
+      modelHint: '推荐填写 openai/gpt-5.4-mini。该 Tab 使用 GitHub device-flow OAuth，不再手填 PAT。',
       authKind: 'oauth_device',
       authStatus: 'unauthenticated',
       accountLabel: null,
@@ -185,6 +185,8 @@ function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltin
     baseUrl: '',
     apiKey: '',
     defaultModel: '',
+    canonicalModel: '',
+    transportModel: '',
   }
 }
 
@@ -215,6 +217,8 @@ function serializeModelTabsState(state: BotConsoleModelTabsState): string {
         baseUrl: tab.baseUrl,
         apiKey: tab.apiKey,
         defaultModel: tab.defaultModel,
+        canonicalModel: tab.canonicalModel,
+        transportModel: tab.transportModel,
       }
     }),
   })

@@ -40,7 +40,17 @@ export interface MainChatProviderStrategy {
   buildRequestOverride: (model?: string | null) => Record<string, unknown> | null;
   buildStructuredOutputSpec: (model?: string | null) => MainChatStructuredOutputSpec;
   normalizeModel: (model?: string | null) => string | null;
+  transportModel: (model?: string | null) => string | null;
   describeForConsole: () => { description: string; modelHint: string };
+}
+
+export interface MainChatModelDescriptor {
+  tabId: MainChatBuiltinTabId;
+  provider: MainChatProvider;
+  strategyId: MainChatProviderStrategy['id'];
+  requestMode: MainChatRequestMode;
+  canonicalModel: string;
+  transportModel: string;
 }
 
 export interface MainChatRuntimeProfile {
@@ -57,6 +67,8 @@ export interface MainChatRuntimeProfile {
   baseUrl: string;
   apiKey: string;
   defaultModel: string;
+  canonicalModel: string;
+  transportModel: string;
   description: string;
   modelHint: string;
 }
@@ -71,7 +83,7 @@ export const OPENAI_DEFAULT_MODEL = 'openai/gpt-5.4-medium-thinking';
 export const SILICONFLOW_DEFAULT_BASE_URL = 'https://api.siliconflow.cn/v1';
 export const SILICONFLOW_DEFAULT_MODEL = 'siliconflow/Pro/moonshotai/Kimi-K2.5';
 export const COPILOT_BRIDGE_DEFAULT_BASE_URL = 'http://127.0.0.1:5140/api/internal/copilot/v1';
-export const COPILOT_DEFAULT_MODEL = 'gpt-5.4-mini';
+export const COPILOT_DEFAULT_MODEL = 'openai/gpt-5.4-mini';
 export const MAIN_CHAT_BUILTIN_TAB_IDS = ['siliconflow', 'openai', 'copilot'] as const satisfies readonly MainChatBuiltinTabId[];
 
 export const BUILTIN_MAIN_CHAT_TABS: readonly BuiltinTabDefinition[] = [
@@ -142,6 +154,9 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     normalizeModel(model) {
       return model?.trim() || null;
     },
+    transportModel(model) {
+      return model?.trim() || null;
+    },
     describeForConsole() {
       return {
         description: '当前主聊天固定走硅基流动 provider，默认保持现有 Kimi 主链路。',
@@ -174,7 +189,10 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       };
     },
     normalizeModel(model) {
-      return model?.trim() || null;
+      return normalizeOpenAICanonicalModelId(model);
+    },
+    transportModel(model) {
+      return normalizeProviderTransportModel(model);
     },
     describeForConsole() {
       return {
@@ -205,12 +223,15 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       };
     },
     normalizeModel(model) {
+      return normalizeCopilotCanonicalModelId(model);
+    },
+    transportModel(model) {
       return normalizeCopilotModelId(model);
     },
     describeForConsole() {
       return {
         description: '当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 交换 Copilot session token 并走 Responses API。',
-        modelHint: '推荐填写 gpt-5.4-mini。该 Tab 使用 GitHub device-flow OAuth，不再手填 PAT。',
+        modelHint: '推荐填写 openai/gpt-5.4-mini。该 Tab 使用 GitHub device-flow OAuth，不再手填 PAT。',
       };
     },
   },
@@ -277,6 +298,7 @@ export function resolveMainChatTabStateFromEnv(
     trimOptionalEnvValue(env[definition.envKeys.defaultModel]) ||
     (activeTab === id ? trimOptionalEnvValue(env.CHATLUNA_DEFAULT_MODEL) : null) ||
     definition.defaultModel;
+  const canonicalModel = strategy.normalizeModel(defaultModel) ?? definition.defaultModel;
   const { description, modelHint } = strategy.describeForConsole();
 
   return {
@@ -293,7 +315,9 @@ export function resolveMainChatTabStateFromEnv(
     authError: null,
     baseUrl,
     apiKey,
-    defaultModel: strategy.normalizeModel(defaultModel) ?? definition.defaultModel,
+    defaultModel: canonicalModel,
+    canonicalModel,
+    transportModel: strategy.transportModel(canonicalModel) ?? canonicalModel,
     description,
     modelHint,
   };
@@ -301,7 +325,8 @@ export function resolveMainChatTabStateFromEnv(
 
 export function resolveMainChatRuntimeProfileFromTabConfig(
   activeTab: MainChatBuiltinTabId,
-  tabs: readonly Pick<MainChatBuiltinTabState, 'id' | 'baseUrl' | 'apiKey' | 'defaultModel'>[],
+  tabs: readonly (Pick<MainChatBuiltinTabState, 'id' | 'baseUrl' | 'apiKey' | 'defaultModel'> &
+    Partial<Pick<MainChatBuiltinTabState, 'canonicalModel' | 'transportModel'>>)[],
 ): MainChatRuntimeProfile {
   const activeConfig = tabs.find((item) => item.id === activeTab);
   if (!activeConfig) {
@@ -311,6 +336,8 @@ export function resolveMainChatRuntimeProfileFromTabConfig(
   const definition = getBuiltinMainChatTabDefinition(activeTab);
   const strategy = getMainChatProviderStrategy(definition.strategyId);
   const { description, modelHint } = strategy.describeForConsole();
+  const canonicalModel =
+    strategy.normalizeModel(activeConfig.canonicalModel ?? activeConfig.defaultModel) ?? definition.defaultModel;
 
   return {
     tabId: activeTab,
@@ -325,7 +352,9 @@ export function resolveMainChatRuntimeProfileFromTabConfig(
     authError: null,
     baseUrl: activeConfig.baseUrl.trim(),
     apiKey: activeConfig.apiKey.trim(),
-    defaultModel: strategy.normalizeModel(activeConfig.defaultModel) ?? definition.defaultModel,
+    defaultModel: canonicalModel,
+    canonicalModel,
+    transportModel: strategy.transportModel(canonicalModel) ?? canonicalModel,
     description,
     modelHint,
   };
@@ -333,7 +362,8 @@ export function resolveMainChatRuntimeProfileFromTabConfig(
 
 export function buildMainChatRuntimeEnvPatch(
   activeTab: MainChatBuiltinTabId,
-  tabs: readonly Pick<MainChatBuiltinTabState, 'id' | 'baseUrl' | 'apiKey' | 'defaultModel'>[],
+  tabs: readonly (Pick<MainChatBuiltinTabState, 'id' | 'baseUrl' | 'apiKey' | 'defaultModel'> &
+    Partial<Pick<MainChatBuiltinTabState, 'canonicalModel' | 'transportModel'>>)[],
 ): Record<string, string> {
   const runtimeProfile = resolveMainChatRuntimeProfileFromTabConfig(activeTab, tabs);
   const siliconflowTab = requireMainChatTabConfig(tabs, 'siliconflow');
@@ -345,21 +375,23 @@ export function buildMainChatRuntimeEnvPatch(
     CHATLUNA_PLATFORM: runtimeProfile.provider,
     CHATLUNA_BASE_URL: runtimeProfile.baseUrl,
     CHATLUNA_API_KEY: runtimeProfile.apiKey,
-    CHATLUNA_DEFAULT_MODEL: runtimeProfile.defaultModel,
+    CHATLUNA_DEFAULT_MODEL: runtimeProfile.canonicalModel,
     CHATLUNA_SILICONFLOW_BASE_URL: siliconflowTab.baseUrl.trim(),
     CHATLUNA_SILICONFLOW_API_KEY: siliconflowTab.apiKey.trim(),
-    CHATLUNA_SILICONFLOW_DEFAULT_MODEL: siliconflowTab.defaultModel.trim(),
+    CHATLUNA_SILICONFLOW_DEFAULT_MODEL: (siliconflowTab.canonicalModel ?? siliconflowTab.defaultModel).trim(),
     CHATLUNA_OPENAI_BASE_URL: openaiTab.baseUrl.trim(),
     CHATLUNA_OPENAI_API_KEY: openaiTab.apiKey.trim(),
-    CHATLUNA_OPENAI_DEFAULT_MODEL: openaiTab.defaultModel.trim(),
+    CHATLUNA_OPENAI_DEFAULT_MODEL: (openaiTab.canonicalModel ?? openaiTab.defaultModel).trim(),
     CHATLUNA_COPILOT_BASE_URL: copilotTab.baseUrl.trim(),
     CHATLUNA_COPILOT_API_KEY: copilotTab.apiKey.trim(),
-    CHATLUNA_COPILOT_DEFAULT_MODEL: copilotTab.defaultModel.trim(),
+    CHATLUNA_COPILOT_DEFAULT_MODEL: (copilotTab.canonicalModel ?? copilotTab.defaultModel).trim(),
   };
 }
 
 export function isSupportedMainChatModelForTab(tabId: MainChatBuiltinTabId, model?: string | null): boolean {
-  return getMainChatProviderStrategyForTab(tabId).supportsModel(model);
+  const strategy = getMainChatProviderStrategyForTab(tabId);
+  const normalized = strategy.normalizeModel(model) ?? model ?? null;
+  return strategy.supportsModel(normalized);
 }
 
 export function supportsStructuredReplyJsonSchema(model?: string | null): boolean {
@@ -386,7 +418,7 @@ export function buildStructuredReplyRequestSpec(args: {
   const strategy = args.profile
     ? getMainChatProviderStrategy(args.profile.strategyId)
     : resolveMainChatProviderStrategyForModel(args.model) ?? getMainChatProviderStrategy('siliconflow-kimi-main-chat');
-  const model = args.model ?? args.profile?.defaultModel ?? null;
+  const model = strategy.normalizeModel(args.model ?? args.profile?.canonicalModel ?? args.profile?.defaultModel ?? null);
   const baseSpec = strategy.buildStructuredOutputSpec(model);
   return {
     ...baseSpec,
@@ -407,7 +439,9 @@ function requireMainChatTabConfig<T extends Pick<MainChatBuiltinTabState, 'id'>>
 }
 
 function resolveMainChatProviderStrategyForModel(model?: string | null): MainChatProviderStrategy | null {
-  const found = MAIN_CHAT_PROVIDER_STRATEGIES.find((strategy) => strategy.supportsModel(model));
+  const found = MAIN_CHAT_PROVIDER_STRATEGIES.find((strategy) =>
+    strategy.supportsModel(strategy.normalizeModel(model) ?? model ?? null),
+  );
   return found ?? null;
 }
 
@@ -418,10 +452,22 @@ function isSiliconFlowKimiK25Model(model?: string | null): boolean {
 }
 
 function isOpenAIGpt54ModelFamily(model?: string | null): boolean {
-  const value = model?.trim();
+  const value = normalizeOpenAICanonicalModelId(model);
   if (!value || !value.startsWith('openai/')) return false;
   const normalized = value.slice('openai/'.length);
   return /^gpt-5\.4(?:-(?:non|minimal|low|medium|high|xhigh)-thinking|-thinking)?$/i.test(normalized);
+}
+
+function normalizeOpenAICanonicalModelId(model?: string | null): string | null {
+  const value = model?.trim();
+  if (!value) return null;
+  if (value.startsWith('openai/')) return value;
+  if (value.startsWith('github-copilot/')) {
+    const normalized = value.slice('github-copilot/'.length).trim();
+    return normalized ? `openai/${normalized}` : null;
+  }
+  if (value.includes('/') && !value.startsWith('openai/')) return value;
+  return `openai/${value}`;
 }
 
 function normalizeCopilotModelId(model?: string | null): string | null {
@@ -436,9 +482,24 @@ function normalizeCopilotModelId(model?: string | null): string | null {
   return value;
 }
 
+function normalizeCopilotCanonicalModelId(model?: string | null): string | null {
+  const normalized = normalizeCopilotModelId(model);
+  if (!normalized) return null;
+  if (normalized.includes('/')) return normalized;
+  return `openai/${normalized}`;
+}
+
+function normalizeProviderTransportModel(model?: string | null): string | null {
+  const value = model?.trim();
+  if (!value) return null;
+  if (value.startsWith('openai/')) return value.slice('openai/'.length).trim() || null;
+  return value;
+}
+
 function isCopilotModelId(model?: string | null): boolean {
   const normalized = normalizeCopilotModelId(model);
   if (!normalized) return false;
+  if (normalized.includes('/')) return false;
   if (/\s/.test(normalized)) return false;
   if (normalized.includes('://')) return false;
   // Copilot bridge runs via Responses API. Some upstream Gemini 3.x preview ids
@@ -461,4 +522,22 @@ function trimOptionalEnvValue(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim();
   return normalized || null;
+}
+
+export function resolveMainChatModelDescriptor(args: {
+  tabId: MainChatBuiltinTabId;
+  model?: string | null;
+}): MainChatModelDescriptor {
+  const definition = getBuiltinMainChatTabDefinition(args.tabId);
+  const strategy = getMainChatProviderStrategy(definition.strategyId);
+  const canonicalModel = strategy.normalizeModel(args.model ?? definition.defaultModel) ?? definition.defaultModel;
+  const transportModel = strategy.transportModel(canonicalModel) ?? canonicalModel;
+  return {
+    tabId: args.tabId,
+    provider: definition.provider,
+    strategyId: definition.strategyId,
+    requestMode: strategy.requestMode,
+    canonicalModel,
+    transportModel,
+  };
 }

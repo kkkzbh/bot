@@ -84,6 +84,8 @@ export interface BotConsoleBuiltinModelTab {
   baseUrl: string;
   apiKey: string;
   defaultModel: string;
+  canonicalModel?: string;
+  transportModel?: string;
 }
 
 export interface BotConsoleModelTabsState {

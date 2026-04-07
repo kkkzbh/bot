@@ -351,7 +351,7 @@ describe('realtime message plugin', () => {
           room: {
             roomId: 1,
             conversationId: 'conv-1',
-            model: 'gpt-5.4-mini',
+            model: 'openai/gpt-5.4-mini',
           },
         },
       });
@@ -379,7 +379,7 @@ describe('realtime message plugin', () => {
           room: {
             roomId: 1,
             conversationId: 'conv-2',
-            model: 'gpt-5.4-mini',
+            model: 'openai/gpt-5.4-mini',
           },
         },
       });
@@ -421,7 +421,7 @@ describe('realtime message plugin', () => {
           room: {
             roomId: 1,
             conversationId: 'conv-bind-1',
-            model: 'gpt-5.4-mini',
+            model: 'openai/gpt-5.4-mini',
           },
         },
       }),
@@ -459,7 +459,7 @@ describe('realtime message plugin', () => {
           room: {
             roomId: 1,
             conversationId: 'conv-image-1',
-            model: 'gpt-5.4-mini',
+            model: 'openai/gpt-5.4-mini',
           },
         },
       });
@@ -504,7 +504,7 @@ describe('realtime message plugin', () => {
           room: {
             roomId: 1,
             conversationId: 'conv-image-fallback',
-            model: 'gpt-5.4-mini',
+            model: 'openai/gpt-5.4-mini',
           },
         },
       });
@@ -630,7 +630,7 @@ describe('realtime message plugin', () => {
           room: {
             roomId: 1,
             conversationId: 'conv-tool-1',
-            model: 'gpt-5.4-mini',
+            model: 'openai/gpt-5.4-mini',
           },
         },
       });

@@ -252,6 +252,8 @@ function normalizeModelTabInput(
     baseUrl: String(input?.baseUrl ?? defaultTab.baseUrl ?? '').trim(),
     apiKey: String(input?.apiKey ?? defaultTab.apiKey ?? '').trim(),
     defaultModel: normalizedModel,
+    canonicalModel: normalizedModel,
+    transportModel: strategy.transportModel(normalizedModel) ?? normalizedModel,
   };
 
   if (!isSupportedMainChatModelForTab(id, normalized.defaultModel)) {

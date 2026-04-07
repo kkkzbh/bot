@@ -56,6 +56,8 @@ describe('probe-local-bot.sh', () => {
     expect(content).toContain('Another group probe is already running');
     expect(content).toContain('originalInput');
     expect(content).toContain('dispatchedInput');
+    expect(content).toContain('resolvedProfile');
+    expect(content).toContain("runtimeProfile.requestMode === 'responses'");
     expect(content).toContain('(saki|祥)');
   });
 });

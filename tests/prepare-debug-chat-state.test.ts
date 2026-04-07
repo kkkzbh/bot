@@ -184,7 +184,7 @@ values ('template-conv', null, null, 1);
 CHATLUNA_ACTIVE_TAB=copilot
 CHATLUNA_DEFAULT_PRESET=sakiko
 CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5
-CHATLUNA_COPILOT_DEFAULT_MODEL=gpt-5.4-mini
+CHATLUNA_COPILOT_DEFAULT_MODEL=openai/gpt-5.4-mini
       `,
     );
 
@@ -199,13 +199,13 @@ CHATLUNA_COPILOT_DEFAULT_MODEL=gpt-5.4-mini
       },
     });
 
-    expect(output).toContain('model=gpt-5.4-mini');
+    expect(output).toContain('model=openai/gpt-5.4-mini');
     expect(
       sqlite(
         dbPath,
         "select roomName || '|' || preset || '|' || model || '|' || chatMode from chathub_room where roomMasterId = '91000999';",
       ),
-    ).toBe('codex-debug-91000999|sakiko|gpt-5.4-mini|plugin');
+    ).toBe('codex-debug-91000999|sakiko|openai/gpt-5.4-mini|plugin');
   });
 
   it('prefers layered runtime env overrides when resolving the probe room model', () => {
@@ -219,7 +219,7 @@ CHATLUNA_COPILOT_DEFAULT_MODEL=gpt-5.4-mini
       dbPath,
       `
 insert into chathub_room (roomId, roomName, conversationId, roomMasterId, visibility, preset, model, chatMode, password, autoUpdate, updatedTime)
-values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'gpt-5.4-mini', 'plugin', 'pw', 0, 1);
+values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'openai/gpt-5.4-mini', 'plugin', 'pw', 0, 1);
 insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
 values ('template-conv', null, null, 1);
       `,
@@ -230,7 +230,7 @@ values ('template-conv', null, null, 1);
       `
 CHATLUNA_ACTIVE_TAB=copilot
 CHATLUNA_DEFAULT_PRESET=sakiko
-CHATLUNA_COPILOT_DEFAULT_MODEL=gpt-5.4-mini
+CHATLUNA_COPILOT_DEFAULT_MODEL=openai/gpt-5.4-mini
 CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
       `,
     );
