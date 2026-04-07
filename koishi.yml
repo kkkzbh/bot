@@ -46,6 +46,11 @@ plugins:
       synthTimeoutMs: ${{ +env.QQ_VOICE_SYNTH_TIMEOUT_MS || 300000 }}
     ./dist/plugins/realtime-message:realtime-message:
       maxInjectCount: ${{ +env.QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT || 12 }}
+    ./dist/plugins/oj-tools:oj-tools:
+      cacheTtlMs: ${{ +env.QQBOT_OJ_TOOLS_CACHE_TTL_MS || 300000 }}
+      requestIntervalMs: ${{ +env.QQBOT_OJ_TOOLS_REQUEST_INTERVAL_MS || 2100 }}
+      ratingChartWidth: ${{ +env.QQBOT_OJ_TOOLS_RATING_CHART_WIDTH || 1789 }}
+      ratingChartHeight: ${{ +env.QQBOT_OJ_TOOLS_RATING_CHART_HEIGHT || 838 }}
     ./dist/plugins/triggers/group-natural:natural-trigger:
       enabled: ${{ env.CHAT_NATURAL_TRIGGER_ENABLED !== 'false' }}
       enabledGroups: ${{ env.CHAT_NATURAL_TRIGGER_GROUPS || '' }}

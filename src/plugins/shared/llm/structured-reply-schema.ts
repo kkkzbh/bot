@@ -87,6 +87,32 @@ const VOICE_MESSAGE_SCHEMA = {
   },
 } as const;
 
+const IMAGE_MESSAGE_SCHEMA = {
+  type: 'object',
+  title: 'ImageItem',
+  description: 'Image message to send.',
+  additionalProperties: false,
+  required: ['type', 'assetRef', 'alt'],
+  properties: {
+    type: {
+      title: 'Type',
+      type: 'string',
+      enum: ['image'],
+      description: 'Image message to send.',
+    },
+    assetRef: {
+      title: 'AssetRef',
+      type: 'string',
+      description: 'Resolvable image asset reference returned by a tool.',
+    },
+    alt: {
+      title: 'Alt',
+      type: 'string',
+      description: 'Short alt text for this image message.',
+    },
+  },
+} as const;
+
 const MEME_MESSAGE_SCHEMA = {
   type: 'object',
   title: 'MemeItem',
@@ -117,6 +143,8 @@ export function buildStructuredReplyJsonSchema(options: StructuredReplySchemaOpt
   if (options.canVoice !== false) {
     outboundSchemas.push(VOICE_MESSAGE_SCHEMA);
   }
+
+  outboundSchemas.push(IMAGE_MESSAGE_SCHEMA);
 
   if (options.canMeme !== false) {
     outboundSchemas.push(MEME_MESSAGE_SCHEMA);

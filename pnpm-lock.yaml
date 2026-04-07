@@ -50,6 +50,9 @@ importers:
       '@langchain/core':
         specifier: ^0.3.80
         version: 0.3.80(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
+      '@napi-rs/canvas':
+        specifier: ^0.1.97
+        version: 0.1.97
       cron-parser:
         specifier: ^4.9.0
         version: 4.9.0
@@ -64,10 +67,10 @@ importers:
         version: 0.2.2(koishi-plugin-downloads@0.1.3(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi-plugin-nix@0.0.3(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))
       koishi-plugin-chatluna:
         specifier: link:../chatluna/packages/core
-        version: link:../chatluna/packages/core
+        version: 1.3.36(koishi-plugin-chatluna-storage-service@1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
       koishi-plugin-chatluna-mcp-client:
         specifier: ^1.3.3
-        version: 1.3.3(@cfworker/json-schema@4.1.1)(koishi-plugin-chatluna-storage-service@1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi-plugin-chatluna@chatluna+packages+core)(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
+        version: 1.3.3(@cfworker/json-schema@4.1.1)(koishi-plugin-chatluna-storage-service@1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi-plugin-chatluna@1.3.36(koishi-plugin-chatluna-storage-service@1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
       koishi-plugin-chatluna-openai-like-adapter:
         specifier: link:../chatluna/packages/adapter-openai-like
         version: link:../chatluna/packages/adapter-openai-like
@@ -219,6 +222,10 @@ packages:
   '@cfworker/json-schema@4.1.1':
     resolution: {integrity: sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==}
 
+  '@chatluna/shared-prompt-renderer@1.0.5':
+    resolution: {integrity: sha512-e9T9yts+a3hUGx1h+Nbk3ryrBtjMPNOoS39gVzTnPZZKeg42Xj7rFSuEhZUP2DkIloxqPKgJl+dqkr+HSkaTNg==}
+    engines: {node: '>=18.0.0'}
+
   '@cordisjs/core@3.18.1':
     resolution: {integrity: sha512-yRuATOamFxeD1ztE2L3o1SaHuT2zw5DTXijQYxt9azVNeILbvtomfGG6sLZegrynJO9XZbNvXbOlQ7LBJDOlAg==}
 
@@ -257,6 +264,9 @@ packages:
     resolution: {integrity: sha512-frdIvc+1AqKVHMWnNacqqZ2Cm52FfoYKPpBQ+kZgr/cFs7HXDKqetL35CLy/EZAF22l/6VTvpQOYUwS6tvVJZA==}
     peerDependencies:
       '@cordisjs/core': ^3.12.0
+
+  '@dingyi222666/js-tiktoken@1.0.21':
+    resolution: {integrity: sha512-VqavW4xaqAMnfKw9jY+JXukit9eiE5164YTOLfNLBsxDC1Oi70KpveLXfZ2JiS9dbXphu345oAB1xPlhzc5+pA==}
 
   '@docsearch/css@3.8.2':
     resolution: {integrity: sha512-y05ayQFyUmCXze79+56v/4HpycYF3uFqB78pLPrSV5ZKAlDuIAAJNhaRi8tTdRNXh05yxX/TyNnzD6LwSM89vQ==}
@@ -753,6 +763,76 @@ packages:
       '@cfworker/json-schema':
         optional: true
 
+  '@napi-rs/canvas-android-arm64@0.1.97':
+    resolution: {integrity: sha512-V1c/WVw+NzH8vk7ZK/O8/nyBSCQimU8sfMsB/9qeSvdkGKNU7+mxy/bIF0gTgeBFmHpj30S4E9WHMSrxXGQuVQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [android]
+
+  '@napi-rs/canvas-darwin-arm64@0.1.97':
+    resolution: {integrity: sha512-ok+SCEF4YejcxuJ9Rm+WWunHHpf2HmiPxfz6z1a/NFQECGXtsY7A4B8XocK1LmT1D7P174MzwPF9Wy3AUAwEPw==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@napi-rs/canvas-darwin-x64@0.1.97':
+    resolution: {integrity: sha512-PUP6e6/UGlclUvAQNnuXCcnkpdUou6VYZfQOQxExLp86epOylmiwLkqXIvpFmjoTEDmPmXrI+coL/9EFU1gKPA==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.97':
+    resolution: {integrity: sha512-XyXH2L/cic8eTNtbrXCcvqHtMX/nEOxN18+7rMrAM2XtLYC/EB5s0wnO1FsLMWmK+04ZSLN9FBGipo7kpIkcOw==}
+    engines: {node: '>= 10'}
+    cpu: [arm]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-arm64-gnu@0.1.97':
+    resolution: {integrity: sha512-Kuq/M3djq0K8ktgz6nPlK7Ne5d4uWeDxPpyKWOjWDK2RIOhHVtLtyLiJw2fuldw7Vn4mhw05EZXCEr4Q76rs9w==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-arm64-musl@0.1.97':
+    resolution: {integrity: sha512-kKmSkQVnWeqg7qdsiXvYxKhAFuHz3tkBjW/zyQv5YKUPhotpaVhpBGv5LqCngzyuRV85SXoe+OFj+Tv0a0QXkQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-riscv64-gnu@0.1.97':
+    resolution: {integrity: sha512-Jc7I3A51jnEOIAXeLsN/M/+Z28LUeakcsXs07FLq9prXc0eYOtVwsDEv913Gr+06IRo34gJJVgT0TXvmz+N2VA==}
+    engines: {node: '>= 10'}
+    cpu: [riscv64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-x64-gnu@0.1.97':
+    resolution: {integrity: sha512-iDUBe7AilfuBSRbSa8/IGX38Mf+iCSBqoVKLSQ5XaY2JLOaqz1TVyPFEyIck7wT6mRQhQt5sN6ogfjIDfi74tg==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-x64-musl@0.1.97':
+    resolution: {integrity: sha512-AKLFd/v0Z5fvgqBDqhvqtAdx+fHMJ5t9JcUNKq4FIZ5WH+iegGm8HPdj00NFlCSnm83Fp3Ln8I2f7uq1aIiWaA==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+
+  '@napi-rs/canvas-win32-arm64-msvc@0.1.97':
+    resolution: {integrity: sha512-u883Yr6A6fO7Vpsy9YE4FVCIxzzo5sO+7pIUjjoDLjS3vQaNMkVzx5bdIpEL+ob+gU88WDK4VcxYMZ6nmnoX9A==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@napi-rs/canvas-win32-x64-msvc@0.1.97':
+    resolution: {integrity: sha512-sWtD2EE3fV0IzN+iiQUqr/Q1SwqWhs2O1FKItFlxtdDkikpEj5g7DKQpY3x55H/MAOnL8iomnlk3mcEeGiUMoQ==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [win32]
+
+  '@napi-rs/canvas@0.1.97':
+    resolution: {integrity: sha512-8cFniXvrIEnVwuNSRCW9wirRZbHvrD3JVujdS2P5n5xiJZNZMOZcfOvJ1pb66c7jXMKHHglJEDVJGbm8XWFcXQ==}
+    engines: {node: '>= 10'}
+
   '@napi-rs/wasm-runtime@1.1.1':
     resolution: {integrity: sha512-p64ah1M1ld8xjWv3qbvFwHiFVWrq1yFvV4f7w+mzaqiR4IlSgkqhcRdHwsGgomwzBH51sRY4NEowLxnaBjcW/A==}
 
@@ -1210,6 +1290,9 @@ packages:
   '@vue/reactivity@3.5.28':
     resolution: {integrity: sha512-gr5hEsxvn+RNyu9/9o1WtdYdwDjg5FgjUSBEkZWqgTKlo/fvwZ2+8W6AfKsc9YN2k/+iHYdS9vZYAhpi10kNaw==}
 
+  '@vue/reactivity@3.6.0-beta.9':
+    resolution: {integrity: sha512-Mo0GjZB/q7LUJplPjBdKqAAk4mawkzvnk2nNf9CEetp4RQJP5/e/DdmgjYBsr/+UVX5ShasCalwdyknuuIepdw==}
+
   '@vue/runtime-core@3.5.28':
     resolution: {integrity: sha512-POVHTdbgnrBBIpnbYU4y7pOMNlPn2QVxVzkvEA2pEgvzbelQq4ZOUxbp2oiyo+BOtiYlm8Q44wShHJoBvDPAjQ==}
 
@@ -1223,6 +1306,9 @@ packages:
 
   '@vue/shared@3.5.28':
     resolution: {integrity: sha512-cfWa1fCGBxrvaHRhvV3Is0MgmrbSCxYTXCSCau2I0a1Xw1N1pHAvkWCiXPRAqjvToILvguNyEwjevUqAuBQWvQ==}
+
+  '@vue/shared@3.6.0-beta.9':
+    resolution: {integrity: sha512-nY6DXeelJsmveeNk5YZYGd8q0ulWXACL8Qs/qvkPC4HQkyhPgf+Ja00AkG2hYsEI8Uixia2UpQl4CbObzw0hag==}
 
   '@vueuse/core@12.8.2':
     resolution: {integrity: sha512-HbvCmZdzAu3VGi/pWYm5Ut+Kd9mn1ZHnn4L5G8kOQTPs/IwIAmJoBrmYk2ckLArgMXZj0AW3n5CAejLUO+PhdQ==}
@@ -1563,6 +1649,9 @@ packages:
     resolution: {integrity: sha512-z2S+W9X73hAUUki+N+9Za2lBlun89zigOyGrsax+KUQ6wKW4ZoWpEYBkGhQjwAjjDCkWxhY0VKEhk8wzY7F5cA==}
     engines: {node: '>=0.10.0'}
 
+  decimal.js@10.6.0:
+    resolution: {integrity: sha512-YpgQiITW3JXGntzdUmyUR1V812Hn8T1YVXhCu+wO3OpS4eU9l4YdD3qjyiKdV6mvV29zapkMeD390UVEf2lkUg==}
+
   decompress-response@6.0.0:
     resolution: {integrity: sha512-aW35yZM6Bb/4oJlZncMH2LCoZtJXTRxES17vE3hoRiowU2kWHaJKFkSBDnDR+cm9J+9QhXmREyIfv0pji9ejCQ==}
     engines: {node: '>=10'}
@@ -1900,6 +1989,10 @@ packages:
   hast-util-whitespace@3.0.0:
     resolution: {integrity: sha512-88JUN06ipLwsnv+dVn+OIYOvAuvBMy/Qoi6O7mQHxdPXpjy+Cd6xRkWwux7DKO+4sYILtLBRIKgsdpS2gQc7qw==}
 
+  he@1.2.0:
+    resolution: {integrity: sha512-F/1DnUGPopORZi0ni+CvrCgHQ5FyEAHRLSApuYWMmrbSwoN2Mn/7k+Gl38gJnR7yyDZk6WLXwiGod1JOWNDKGw==}
+    hasBin: true
+
   hono@4.12.3:
     resolution: {integrity: sha512-SFsVSjp8sj5UumXOOFlkZOG6XS9SJDKw0TbwFeV+AJ8xlST8kxK5Z/5EYa111UY8732lK2S/xB653ceuaoGwpg==}
     engines: {node: '>=16.9.0'}
@@ -2081,6 +2174,16 @@ packages:
     peerDependencies:
       koishi: ^4.18.9
 
+  koishi-plugin-chatluna@1.3.36:
+    resolution: {integrity: sha512-ooVREd1O4IVHMK08bfDC20noSSY6lV5u/8LyxIcPV7WiSPM1XSwHQZaTPuo0DYnKQRFcD4kiBWJGaLC5OJmhfg==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      koishi: ^4.18.9
+      koishi-plugin-chatluna-storage-service: ^1.0.6
+    peerDependenciesMeta:
+      koishi-plugin-chatluna-storage-service:
+        optional: true
+
   koishi-plugin-cron@3.1.0:
     resolution: {integrity: sha512-otBrjpLnYXyWRr2PxPEuwyyoQvIqP6HbCa1Ql/dIM69cPApPMtJdVFqUf9EGnyijZtbDzM4NBpZcghcvbkpl1g==}
     peerDependencies:
@@ -2090,6 +2193,11 @@ packages:
     resolution: {integrity: sha512-TyNWwWPwpwB56x+p0XDmApOnHZRURUsNSSXD8SotF/EbFv7Nf1K9SLgU0+9HugykgnOUxiKvoUswx3DL5AOLFA==}
     peerDependencies:
       koishi: ^4.15.4
+
+  koishi-plugin-markdown@1.1.1:
+    resolution: {integrity: sha512-PM3WMFoiMjhHKQV1341wfGl/qsHB5wasqwS5Ga0g/yb1kC7k8gXM+DlKMS3E/tT3Vtc4yyS0DGS5BO2hdwLAbQ==}
+    peerDependencies:
+      koishi: ^4.10.5
 
   koishi-plugin-nix@0.0.3:
     resolution: {integrity: sha512-ksuGC58VFuI7Aupl0YMANs8+TaQ299w8M7SgBMwjKrKRxC2v+JwhRrAyp6pJwOmOQy1G784YGy6IaKAz/HZw1A==}
@@ -2198,6 +2306,10 @@ packages:
     resolution: {integrity: sha512-NXYBzinNrblfraPGyrbPoD19C1h9lfI/1mzgWYvXUTe414Gz/X1FD2XBZSZM7rRTrMA8JL3OtAaGifrIKhQ5yQ==}
     engines: {node: '>= 12.0.0'}
 
+  lru-cache@11.3.2:
+    resolution: {integrity: sha512-wgWa6FWQ3QRRJbIjbsldRJZxdxYngT/dO0I5Ynmlnin8qy7tC6xYzbcJjtN4wHLXtkbVwHzk0C+OejVw1XM+DQ==}
+    engines: {node: 20 || >=22}
+
   lru-cache@7.18.3:
     resolution: {integrity: sha512-jumlc0BIUrS3qJGgIkWZsyfAM7NCWiBcCDhnd+3NNM5KbBmLTgHVfWBcg6W+rLUsIpzpERPsvwUP7CckAQSOoA==}
     engines: {node: '>=12'}
@@ -2211,6 +2323,16 @@ packages:
 
   mark.js@8.11.1:
     resolution: {integrity: sha512-1I+1qpDt4idfgLQG+BNWmrqku+7/2bi5nLf4YwF8y8zXvmfiTBY3PV3ZibfrjBueCByROpuBjLLFCajqkgYoLQ==}
+
+  marked@15.0.12:
+    resolution: {integrity: sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA==}
+    engines: {node: '>= 18'}
+    hasBin: true
+
+  marked@4.3.0:
+    resolution: {integrity: sha512-PRsaiG84bK+AMvxziE/lCFss8juXjNaWzVbN5tXAm4XjeaS9NAHhop+PjQxz2A9h8Q4M/xGmzP8vqNwy6JeK0A==}
+    engines: {node: '>= 12'}
+    hasBin: true
 
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
@@ -3208,6 +3330,8 @@ snapshots:
 
   '@cfworker/json-schema@4.1.1': {}
 
+  '@chatluna/shared-prompt-renderer@1.0.5': {}
+
   '@cordisjs/core@3.18.1':
     dependencies:
       cosmokit: 1.8.1
@@ -3278,6 +3402,10 @@ snapshots:
     dependencies:
       '@cordisjs/core': 3.18.1
       cosmokit: 1.8.1
+
+  '@dingyi222666/js-tiktoken@1.0.21':
+    dependencies:
+      base64-js: 1.5.1
 
   '@docsearch/css@3.8.2': {}
 
@@ -3702,6 +3830,53 @@ snapshots:
       '@cfworker/json-schema': 4.1.1
     transitivePeerDependencies:
       - supports-color
+
+  '@napi-rs/canvas-android-arm64@0.1.97':
+    optional: true
+
+  '@napi-rs/canvas-darwin-arm64@0.1.97':
+    optional: true
+
+  '@napi-rs/canvas-darwin-x64@0.1.97':
+    optional: true
+
+  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.97':
+    optional: true
+
+  '@napi-rs/canvas-linux-arm64-gnu@0.1.97':
+    optional: true
+
+  '@napi-rs/canvas-linux-arm64-musl@0.1.97':
+    optional: true
+
+  '@napi-rs/canvas-linux-riscv64-gnu@0.1.97':
+    optional: true
+
+  '@napi-rs/canvas-linux-x64-gnu@0.1.97':
+    optional: true
+
+  '@napi-rs/canvas-linux-x64-musl@0.1.97':
+    optional: true
+
+  '@napi-rs/canvas-win32-arm64-msvc@0.1.97':
+    optional: true
+
+  '@napi-rs/canvas-win32-x64-msvc@0.1.97':
+    optional: true
+
+  '@napi-rs/canvas@0.1.97':
+    optionalDependencies:
+      '@napi-rs/canvas-android-arm64': 0.1.97
+      '@napi-rs/canvas-darwin-arm64': 0.1.97
+      '@napi-rs/canvas-darwin-x64': 0.1.97
+      '@napi-rs/canvas-linux-arm-gnueabihf': 0.1.97
+      '@napi-rs/canvas-linux-arm64-gnu': 0.1.97
+      '@napi-rs/canvas-linux-arm64-musl': 0.1.97
+      '@napi-rs/canvas-linux-riscv64-gnu': 0.1.97
+      '@napi-rs/canvas-linux-x64-gnu': 0.1.97
+      '@napi-rs/canvas-linux-x64-musl': 0.1.97
+      '@napi-rs/canvas-win32-arm64-msvc': 0.1.97
+      '@napi-rs/canvas-win32-x64-msvc': 0.1.97
 
   '@napi-rs/wasm-runtime@1.1.1':
     dependencies:
@@ -4165,6 +4340,10 @@ snapshots:
     dependencies:
       '@vue/shared': 3.5.28
 
+  '@vue/reactivity@3.6.0-beta.9':
+    dependencies:
+      '@vue/shared': 3.6.0-beta.9
+
   '@vue/runtime-core@3.5.28':
     dependencies:
       '@vue/reactivity': 3.5.28
@@ -4184,6 +4363,8 @@ snapshots:
       vue: 3.5.28(typescript@5.9.3)
 
   '@vue/shared@3.5.28': {}
+
+  '@vue/shared@3.6.0-beta.9': {}
 
   '@vueuse/core@12.8.2(typescript@5.9.3)':
     dependencies:
@@ -4497,6 +4678,8 @@ snapshots:
       ms: 2.1.3
 
   decamelize@1.2.0: {}
+
+  decimal.js@10.6.0: {}
 
   decompress-response@6.0.0:
     dependencies:
@@ -4893,6 +5076,8 @@ snapshots:
     dependencies:
       '@types/hast': 3.0.4
 
+  he@1.2.0: {}
+
   hono@4.12.3: {}
 
   hookable@5.5.3: {}
@@ -5079,12 +5264,12 @@ snapshots:
       simple-get: 4.0.1
       string-split-by: 1.0.0
 
-  koishi-plugin-chatluna-mcp-client@1.3.3(@cfworker/json-schema@4.1.1)(koishi-plugin-chatluna-storage-service@1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi-plugin-chatluna@chatluna+packages+core)(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76)):
+  koishi-plugin-chatluna-mcp-client@1.3.3(@cfworker/json-schema@4.1.1)(koishi-plugin-chatluna-storage-service@1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi-plugin-chatluna@1.3.36(koishi-plugin-chatluna-storage-service@1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76)):
     dependencies:
       '@langchain/core': 0.3.80(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
       '@modelcontextprotocol/sdk': 1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       koishi: 4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)
-      koishi-plugin-chatluna: link:../chatluna/packages/core
+      koishi-plugin-chatluna: 1.3.36(koishi-plugin-chatluna-storage-service@1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
       mime-types: 3.0.2
       zod: 3.25.76
     optionalDependencies:
@@ -5100,6 +5285,37 @@ snapshots:
   koishi-plugin-chatluna-storage-service@1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)):
     dependencies:
       koishi: 4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)
+
+  koishi-plugin-chatluna@1.3.36(koishi-plugin-chatluna-storage-service@1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76)):
+    dependencies:
+      '@chatluna/shared-prompt-renderer': 1.0.5
+      '@langchain/core': 0.3.80(openai@5.23.2(ws@8.19.0)(zod@3.25.76))
+      '@vue/reactivity': 3.6.0-beta.9
+      decimal.js: 10.6.0
+      he: 1.2.0
+      https-proxy-agent: 7.0.6
+      js-tiktoken: '@dingyi222666/js-tiktoken@1.0.21'
+      js-yaml: 4.1.1
+      koishi: 4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)
+      koishi-plugin-markdown: 1.1.1(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))
+      lru-cache: 11.3.2
+      marked: 15.0.12
+      socks: 2.8.7
+      socks-proxy-agent: 8.0.5
+      undici: 6.23.0
+      ws: 8.19.0
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
+    optionalDependencies:
+      koishi-plugin-chatluna-storage-service: 1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - '@opentelemetry/exporter-trace-otlp-proto'
+      - '@opentelemetry/sdk-trace-base'
+      - bufferutil
+      - openai
+      - supports-color
+      - utf-8-validate
 
   koishi-plugin-cron@3.1.0(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)):
     dependencies:
@@ -5117,6 +5333,11 @@ snapshots:
       - bare-buffer
       - debug
       - react-native-b4a
+
+  koishi-plugin-markdown@1.1.1(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)):
+    dependencies:
+      koishi: 4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)
+      marked: 4.3.0
 
   koishi-plugin-nix@0.0.3(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)):
     dependencies:
@@ -5222,6 +5443,8 @@ snapshots:
       lightningcss-win32-arm64-msvc: 1.32.0
       lightningcss-win32-x64-msvc: 1.32.0
 
+  lru-cache@11.3.2: {}
+
   lru-cache@7.18.3: {}
 
   luxon@3.7.2: {}
@@ -5231,6 +5454,10 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.5.5
 
   mark.js@8.11.1: {}
+
+  marked@15.0.12: {}
+
+  marked@4.3.0: {}
 
   math-intrinsics@1.1.0: {}
 

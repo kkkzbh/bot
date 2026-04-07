@@ -100,6 +100,25 @@ describe('message send utils', () => {
     });
   });
 
+  it('preserves image segments when building outbound plans from reply plans', () => {
+    expect(
+      buildOutboundMessagePlanFromReplyPlan({
+        segments: [
+          { kind: 'image', assetRef: 'https://example.com/cf.png', alt: 'Codeforces 分数卡' },
+        ],
+      }),
+    ).toEqual({
+      segments: [
+        {
+          kind: 'image-block',
+          assetRef: 'https://example.com/cf.png',
+          alt: 'Codeforces 分数卡',
+          raw: 'reply-plan:image:0:https://example.com/cf.png',
+        },
+      ],
+    });
+  });
+
   it('strips unsupported markdown in split mode but keeps plain text layout', () => {
     expect(
       normalizeOutboundMessage('# 标题\n> 引用\n- 第一项\n**加粗** 和 `命令` [官网](https://example.com)'),

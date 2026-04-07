@@ -252,6 +252,40 @@ describe('reply pipeline v3', () => {
     ]);
   });
 
+  it('resolves image outbound messages into image actions', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+    const ready = await orchestrator.handle(createTurnInput('给我图'), {} as never, {
+      routeHint: 'agent',
+      capabilitySnapshot: {
+        canMultiline: true,
+        canVoice: false,
+        canSticker: false,
+        stickerAvailableCount: 0,
+        source: 'test',
+      },
+      responseMessage: createStructuredResponse({
+        decision: 'reply',
+        outbound_messages: [
+          { type: 'image', assetRef: 'https://example.com/cf.png', alt: 'Codeforces 分数卡' },
+        ],
+      }),
+    });
+
+    expect(ready.status).toBe('ready');
+    if (ready.status !== 'ready') {
+      throw new Error('expected ready');
+    }
+    expect(ready.reply).toEqual({
+      decision: 'reply',
+      outbound_messages: [
+        { type: 'image', assetRef: 'https://example.com/cf.png', alt: 'Codeforces 分数卡' },
+      ],
+    });
+    expect(ready.actions).toEqual([
+      { kind: 'image', assetRef: 'https://example.com/cf.png', alt: 'Codeforces 分数卡' },
+    ]);
+  });
+
   it('sanitizes markdown-like message content into ordinary plain text', async () => {
     const orchestrator = new ReplyOrchestratorService();
     const ready = await orchestrator.handle(createTurnInput('回一句'), {} as never, {

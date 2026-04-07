@@ -572,6 +572,14 @@ export function buildReplyTransportPlanFromResolvedActions(actions: ResolvedActi
       });
       continue;
     }
+    if (action.kind === 'image') {
+      segments.push({
+        kind: 'image' as const,
+        assetRef: action.assetRef,
+        alt: action.alt,
+      });
+      continue;
+    }
   }
 
   return { segments };

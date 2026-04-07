@@ -1,0 +1,178 @@
+import { createHash } from 'node:crypto';
+import { createCanvas } from '@napi-rs/canvas';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderCodeforcesProfileCard, renderCodeforcesRatingChart } from '../src/plugins/oj-tools/render.js';
+
+const EXPECTED_PROFILE_HASH = '0cd7790128905b96ba50dccff6b336e7a905d1e010c18b6fea3dc041567ada94';
+const EXPECTED_CHART_HASH = '6f3c26ff3506040eecb96b97552859eda4b178460727d3decbb9f11b1cd13ca5';
+
+async function createAvatarBuffer(): Promise<Buffer> {
+  const canvas = createCanvas(64, 64);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, 64, 64);
+  ctx.fillStyle = '#2E5BFF';
+  ctx.fillRect(10, 10, 44, 44);
+  return canvas.encode('png');
+}
+
+function sha256(buffer: Buffer): string {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+describe('oj-tools renderer', () => {
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-07T17:13:07+08:00'));
+    const avatarBuffer = await createAvatarBuffer();
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      arrayBuffer: async () => avatarBuffer,
+    })));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the YingCir profile card on a stable visual snapshot hash', async () => {
+    const rendered = await renderCodeforcesProfileCard({
+      handle: 'YingCir',
+      displayName: 'YingCir',
+      rating: 1015,
+      rank: 'newbie',
+      maxRating: 1015,
+      maxRank: 'newbie',
+      avatarUrl: 'https://example.com/avatar.png',
+      organization: null,
+      contribution: null,
+      lastOnlineAt: null,
+      registeredAt: null,
+      stars: 1,
+      solvedTotal: 21,
+      solvedBuckets: [
+        { threshold: 800, label: '800+', solvedCount: 9, solvedPercent: 42.9 },
+        { threshold: 1400, label: '1400+', solvedCount: 1, solvedPercent: 4.8 },
+        { threshold: 2000, label: '2000+', solvedCount: 0, solvedPercent: 0 },
+        { threshold: 2600, label: '2600+', solvedCount: 0, solvedPercent: 0 },
+      ],
+    });
+
+    expect(rendered.alt).toContain('YingCir');
+    expect(rendered.buffer.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    expect(sha256(rendered.buffer)).toBe(EXPECTED_PROFILE_HASH);
+  });
+
+  it('keeps the YingCir rating chart on a stable visual snapshot hash', async () => {
+    const rendered = await renderCodeforcesRatingChart({
+      handle: 'YingCir',
+      displayName: 'YingCir',
+      currentRating: 1015,
+      maxRating: 1015,
+      points: [
+        { contestId: 1, contestName: 'Round 1', rank: 10, oldRating: 400, newRating: 422, timestamp: 1_769_385_600 },
+        { contestId: 2, contestName: 'Round 2', rank: 12, oldRating: 422, newRating: 701, timestamp: 1_771_200_000 },
+        { contestId: 3, contestName: 'Round 3', rank: 9, oldRating: 701, newRating: 1015, timestamp: 1_775_347_200 },
+      ],
+    }, {
+      width: 1789,
+      height: 838,
+    });
+
+    expect(rendered.alt).toContain('rating');
+    expect(rendered.buffer.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    expect(sha256(rendered.buffer)).toBe(EXPECTED_CHART_HASH);
+  });
+
+  it('renders a different profile card when the display name changes', async () => {
+    const [baseline, variant] = await Promise.all([
+      renderCodeforcesProfileCard({
+        handle: 'YingCir',
+        displayName: 'YingCir',
+        rating: 1015,
+        rank: 'newbie',
+        maxRating: 1015,
+        maxRank: 'newbie',
+        avatarUrl: 'https://example.com/avatar.png',
+        organization: null,
+        contribution: null,
+        lastOnlineAt: null,
+        registeredAt: null,
+        stars: 1,
+        solvedTotal: 21,
+        solvedBuckets: [
+          { threshold: 800, label: '800+', solvedCount: 9, solvedPercent: 42.9 },
+          { threshold: 1400, label: '1400+', solvedCount: 1, solvedPercent: 4.8 },
+          { threshold: 2000, label: '2000+', solvedCount: 0, solvedPercent: 0 },
+          { threshold: 2600, label: '2600+', solvedCount: 0, solvedPercent: 0 },
+        ],
+      }),
+      renderCodeforcesProfileCard({
+        handle: 'kkkzbh',
+        displayName: 'kkkzbh',
+        rating: 1015,
+        rank: 'newbie',
+        maxRating: 1015,
+        maxRank: 'newbie',
+        avatarUrl: 'https://example.com/avatar.png',
+        organization: null,
+        contribution: null,
+        lastOnlineAt: null,
+        registeredAt: null,
+        stars: 1,
+        solvedTotal: 21,
+        solvedBuckets: [
+          { threshold: 800, label: '800+', solvedCount: 9, solvedPercent: 42.9 },
+          { threshold: 1400, label: '1400+', solvedCount: 1, solvedPercent: 4.8 },
+          { threshold: 2000, label: '2000+', solvedCount: 0, solvedPercent: 0 },
+          { threshold: 2600, label: '2600+', solvedCount: 0, solvedPercent: 0 },
+        ],
+      }),
+    ]);
+
+    expect(sha256(variant.buffer)).not.toBe(sha256(baseline.buffer));
+  });
+
+  it('renders cards and charts for high-rating and long-name inputs without overflow failures', async () => {
+    const card = await renderCodeforcesProfileCard({
+      handle: 'tourist',
+      displayName: 'very_long_handle_for_snapshot_check',
+      rating: 3850,
+      rank: 'legendary grandmaster',
+      maxRating: 3850,
+      maxRank: 'legendary grandmaster',
+      avatarUrl: null,
+      organization: 'Codeforces',
+      contribution: 999,
+      lastOnlineAt: null,
+      registeredAt: null,
+      stars: 10,
+      solvedTotal: 3500,
+      solvedBuckets: [
+        { threshold: 800, label: '800+', solvedCount: 3400, solvedPercent: 97.1 },
+        { threshold: 1400, label: '1400+', solvedCount: 3100, solvedPercent: 88.6 },
+        { threshold: 2000, label: '2000+', solvedCount: 2200, solvedPercent: 62.9 },
+        { threshold: 2600, label: '2600+', solvedCount: 900, solvedPercent: 25.7 },
+      ],
+    });
+
+    const chart = await renderCodeforcesRatingChart({
+      handle: 'tourist',
+      displayName: 'tourist',
+      currentRating: 3850,
+      maxRating: 3850,
+      points: [
+        { contestId: 1, contestName: 'A', rank: 1, oldRating: 3300, newRating: 3400, timestamp: 1_700_000_000 },
+        { contestId: 2, contestName: 'B', rank: 1, oldRating: 3400, newRating: 3600, timestamp: 1_710_000_000 },
+        { contestId: 3, contestName: 'C', rank: 1, oldRating: 3600, newRating: 3850, timestamp: 1_720_000_000 },
+      ],
+    }, {
+      width: 1789,
+      height: 838,
+    });
+
+    expect(card.buffer.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    expect(chart.buffer.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+  });
+});

@@ -65,6 +65,11 @@ export type StructuredReplyMessage =
       content: string;
     }
   | {
+      type: 'image';
+      assetRef: string;
+      alt: string;
+    }
+  | {
       type: 'meme';
       content: string;
     };
@@ -87,6 +92,11 @@ export type ResolvedAction =
   | {
       kind: 'voice';
       content: string;
+    }
+  | {
+      kind: 'image';
+      assetRef: string;
+      alt: string;
     }
   | {
       kind: 'sticker';
@@ -114,6 +124,12 @@ const STRUCTURED_REPLY_VOICE_ITEM_SCHEMA = z.object({
   content: z.string(),
 });
 
+const STRUCTURED_REPLY_IMAGE_ITEM_SCHEMA = z.object({
+  type: z.literal('image'),
+  assetRef: z.string(),
+  alt: z.string(),
+});
+
 const STRUCTURED_REPLY_MEME_ITEM_SCHEMA = z.object({
   type: z.literal('meme'),
   content: z.string(),
@@ -123,6 +139,7 @@ const STRUCTURED_REPLY_OUTBOUND_ITEM_SCHEMA = z.discriminatedUnion('type', [
   STRUCTURED_REPLY_MESSAGE_ITEM_SCHEMA,
   STRUCTURED_REPLY_STRUCTURED_BLOCK_ITEM_SCHEMA,
   STRUCTURED_REPLY_VOICE_ITEM_SCHEMA,
+  STRUCTURED_REPLY_IMAGE_ITEM_SCHEMA,
   STRUCTURED_REPLY_MEME_ITEM_SCHEMA,
 ]);
 
@@ -166,10 +183,16 @@ export function normalizeStructuredReply(raw: unknown): StructuredReply | null {
               type: 'voice',
               content: sanitizeStructuredReplyText(message.content, 'voice'),
             }
-          : {
-              type: 'meme',
-              content: sanitizeStructuredReplyText(message.content, 'meme'),
-            },
+          : message.type === 'image'
+            ? {
+                type: 'image',
+                assetRef: message.assetRef.trim(),
+                alt: sanitizeStructuredReplyText(message.alt, 'image_alt'),
+              }
+            : {
+                type: 'meme',
+                content: sanitizeStructuredReplyText(message.content, 'meme'),
+              },
     ),
   };
 }

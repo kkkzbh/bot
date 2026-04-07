@@ -44,6 +44,18 @@ export class ActionResolverService {
         continue;
       }
 
+      if (message.type === 'image') {
+        const assetRef = message.assetRef.trim();
+        const alt = sanitizeStructuredReplyText(message.alt, 'image_alt');
+        if (!assetRef) continue;
+        resolved.push({
+          kind: 'image',
+          assetRef,
+          alt,
+        });
+        continue;
+      }
+
       if (message.type === 'structured_block') {
         const content = sanitizeStructuredReplyText(message.content, 'structured_block');
         if (!content) continue;
