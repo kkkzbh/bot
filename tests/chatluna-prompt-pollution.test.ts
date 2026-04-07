@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { buildReplyPromptCompilerInput, compileReplyPromptEnvelope } from '../src/plugins/reply/prompt/compiler.js';
 import {
   beginPromptAssemblyTurn,
@@ -8,6 +8,7 @@ import {
   compilePromptEnvelope,
   registerPromptFragment,
 } from '../src/plugins/shared/prompt-context/index.js';
+import { resolveChatlunaSiblingPackageRoot, resolveChatlunaSourceRoot } from './helpers/chatluna-paths.js';
 
 describe('chatluna prompt pollution regression', () => {
   afterEach(() => {
@@ -77,8 +78,7 @@ describe('chatluna prompt pollution regression', () => {
   });
 
   it('uses a chatluna build without pseudo natural-language after_user_message injection', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
+    const packageRoot = resolveChatlunaSourceRoot();
     const builtEntry = readFileSync(join(packageRoot, 'lib/index.cjs'), 'utf8');
 
     expect(builtEntry).toContain('requests["after_user_message"] = afterUserMessage');
@@ -88,8 +88,7 @@ describe('chatluna prompt pollution regression', () => {
   });
 
   it('keeps finishContract wired through plugin chat chain construction', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
+    const packageRoot = resolveChatlunaSourceRoot();
     const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
 
     expect(pluginChainSource).toContain('finishContract');
@@ -100,8 +99,7 @@ describe('chatluna prompt pollution regression', () => {
   });
 
   it('removes the legacy reply_plan module and switches executor to final json_schema responses', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
+    const packageRoot = resolveChatlunaSourceRoot();
     const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/executor.ts'), 'utf8');
 
     expect(existsSync(join(packageRoot, 'src/llm-core/agent/reply_plan.ts'))).toBe(false);
@@ -112,8 +110,7 @@ describe('chatluna prompt pollution regression', () => {
   });
 
   it('removes plugin chat chain whole-turn retry loop', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
+    const packageRoot = resolveChatlunaSourceRoot();
     const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
     const builtEntry = readFileSync(join(packageRoot, 'lib/index.cjs'), 'utf8');
 
@@ -124,8 +121,7 @@ describe('chatluna prompt pollution regression', () => {
   });
 
   it('wires structured reply schema through the plugin request path', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
+    const packageRoot = resolveChatlunaSourceRoot();
     const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
     const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/executor.ts'), 'utf8');
 
@@ -150,10 +146,10 @@ describe('chatluna prompt pollution regression', () => {
   });
 
   it('keeps the linked OpenAI-like adapter wired for responses mode when requested by qqbot', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
-    const sharedAdapterRequesterSource = readFileSync(join(packageRoot, '..', 'shared-adapter', 'src', 'requester.ts'), 'utf8');
-    const openAIRequesterSource = readFileSync(join(packageRoot, '..', 'adapter-openai-like', 'src', 'requester.ts'), 'utf8');
+    const sharedAdapterRoot = resolveChatlunaSiblingPackageRoot('shared-adapter');
+    const openAiAdapterRoot = resolveChatlunaSiblingPackageRoot('adapter-openai-like');
+    const sharedAdapterRequesterSource = readFileSync(join(sharedAdapterRoot, 'src', 'requester.ts'), 'utf8');
+    const openAIRequesterSource = readFileSync(join(openAiAdapterRoot, 'src', 'requester.ts'), 'utf8');
 
     expect(sharedAdapterRequesterSource).toContain("override['qqbot_request_mode'] === 'responses'");
     expect(sharedAdapterRequesterSource).toContain("completionUrl: string = 'responses'");
@@ -162,8 +158,7 @@ describe('chatluna prompt pollution regression', () => {
   });
 
   it('uses a chatluna context manager build that accepts plain prompt message objects', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
+    const packageRoot = resolveChatlunaSourceRoot();
     const contextManagerSource = readFileSync(join(packageRoot, 'src/llm-core/prompt/context_manager.ts'), 'utf8');
 
     expect(contextManagerSource).toContain('interface PlainPromptMessage');
@@ -172,8 +167,7 @@ describe('chatluna prompt pollution regression', () => {
   });
 
   it('suppresses tool call thought rendering in qqbot agent reply mode', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
+    const packageRoot = resolveChatlunaSourceRoot();
     const requestModelSource = readFileSync(join(packageRoot, 'src/middlewares/model/request_model.ts'), 'utf8');
 
     expect(requestModelSource).toContain("context.options.inputMessage?.additional_kwargs?.qqbot_reply_mode ===");
@@ -182,13 +176,13 @@ describe('chatluna prompt pollution regression', () => {
   });
 
   it('keeps multimodal content structured through request_model and shared-adapter boundaries', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
+    const packageRoot = resolveChatlunaSourceRoot();
+    const sharedAdapterRoot = resolveChatlunaSiblingPackageRoot('shared-adapter');
     const readChatMessageSource = readFileSync(join(packageRoot, 'src/middlewares/chat/read_chat_message.ts'), 'utf8');
     const requestModelSource = readFileSync(join(packageRoot, 'src/middlewares/model/request_model.ts'), 'utf8');
     const chatServiceSource = readFileSync(join(packageRoot, 'src/services/chat.ts'), 'utf8');
-    const sharedAdapterSource = readFileSync(join(packageRoot, '..', 'shared-adapter', 'src', 'utils.ts'), 'utf8');
-    const sharedAdapterRequesterSource = readFileSync(join(packageRoot, '..', 'shared-adapter', 'src', 'requester.ts'), 'utf8');
+    const sharedAdapterSource = readFileSync(join(sharedAdapterRoot, 'src', 'utils.ts'), 'utf8');
+    const sharedAdapterRequesterSource = readFileSync(join(sharedAdapterRoot, 'src', 'requester.ts'), 'utf8');
 
     expect(readChatMessageSource).toContain("url.startsWith('base64://')");
     expect(readChatMessageSource).toContain("data:${ext ?? 'image/jpeg'};base64,${base64}");
@@ -204,10 +198,9 @@ describe('chatluna prompt pollution regression', () => {
   });
 
   it('keeps tool-call history content as strings for OpenAI-compatible request payloads', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
-    const sharedAdapterSource = readFileSync(join(packageRoot, '..', 'shared-adapter', 'src', 'utils.ts'), 'utf8');
-    const sharedAdapterBundle = readFileSync(join(packageRoot, '..', 'shared-adapter', 'lib', 'index.mjs'), 'utf8');
+    const sharedAdapterRoot = resolveChatlunaSiblingPackageRoot('shared-adapter');
+    const sharedAdapterSource = readFileSync(join(sharedAdapterRoot, 'src', 'utils.ts'), 'utf8');
+    const sharedAdapterBundle = readFileSync(join(sharedAdapterRoot, 'lib', 'index.mjs'), 'utf8');
 
     expect(sharedAdapterSource).toContain("rawMessage.content == null ? '' : rawMessage.content");
     expect(sharedAdapterSource).not.toContain("rawMessage.content === '' ? null : rawMessage.content");
@@ -216,8 +209,7 @@ describe('chatluna prompt pollution regression', () => {
   });
 
   it('keeps research history normalization bundle aligned with AIMessage imports', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
+    const packageRoot = resolveChatlunaSourceRoot();
     const messageHistoryBundle = readFileSync(
       join(packageRoot, 'lib', 'llm-core', 'memory', 'message', 'index.cjs'),
       'utf8',

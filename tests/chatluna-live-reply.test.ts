@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { describe, expect, it, vi } from 'vitest';
+import { resolveChatlunaCoreImportUrl, resolveChatlunaSourceRoot } from './helpers/chatluna-paths.js';
 
 vi.mock('koishi-plugin-chatluna', () => ({
   logger: {
@@ -105,7 +106,7 @@ function createHistory(args: { conversationId: string; latestId: string; message
 
 async function createChatHistory(args: { conversationId: string; latestId: string; messages: Row[] }) {
   const { ctx, database } = createHistory(args);
-  const historyModule = (await import('koishi-plugin-chatluna/llm-core/memory/message')) as {
+  const historyModule = (await import(resolveChatlunaCoreImportUrl('lib/llm-core/memory/message/index.cjs'))) as {
     KoishiChatMessageHistory: new (ctx: unknown, conversationId: string, maxMessagesCount: number) => any;
   };
   const { KoishiChatMessageHistory } = historyModule;
@@ -432,8 +433,7 @@ describe('research reply history compatibility', () => {
 
 describe('chatluna room auto-update', () => {
   it('drops legacy reply-mode preservation helpers during template sync', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
+    const packageRoot = resolveChatlunaSourceRoot();
     const resolveRoomSource = readFileSync(join(packageRoot, 'src/middlewares/room/resolve_room.ts'), 'utf8');
 
     expect(resolveRoomSource).not.toContain('shouldPreserveExplicitReplyChatMode');
@@ -445,8 +445,7 @@ describe('chatluna room auto-update', () => {
   });
 
   it('passes qqbot research follow-up prompts through after_user_message', () => {
-    const packageJsonPath = require.resolve('koishi-plugin-chatluna/package.json');
-    const packageRoot = dirname(packageJsonPath);
+    const packageRoot = resolveChatlunaSourceRoot();
     const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
 
     expect(pluginChainSource).toContain('qqbot_after_user_message');
