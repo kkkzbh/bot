@@ -27,7 +27,7 @@ const ChatLunaPlatformTypes = require('koishi-plugin-chatluna/llm-core/platform/
 };
 
 export const name = 'chatluna-model-guard';
-export const inject = ['chatluna'];
+export const inject = ['chatluna', 'database'];
 
 export interface Config {}
 
