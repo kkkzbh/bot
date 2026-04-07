@@ -81,6 +81,14 @@ plugins:
       defaultModel: ${{ env.CHATLUNA_DEFAULT_MODEL || '无' }}
       defaultPreset: sakiko
       isLog: true
+    chatluna-storage-service:attachment-storage:
+      storageBackend: local
+      serverPath: ${{ env.CHATLUNA_STORAGE_SERVER_PATH || 'http://127.0.0.1:5140' }}
+      storagePath: ${{ env.CHATLUNA_STORAGE_PATH || './data/chatluna-storage' }}
+      backendPath: ${{ env.CHATLUNA_STORAGE_BACKEND_PATH || '/chatluna-storage' }}
+      tempCacheTime: ${{ +env.CHATLUNA_STORAGE_TEMP_CACHE_HOURS || 720 }}
+      maxStorageSize: ${{ +env.CHATLUNA_STORAGE_MAX_MB || 2048 }}
+      maxStorageCount: ${{ +env.CHATLUNA_STORAGE_MAX_FILES || 2000 }}
     chatluna-openai-like-adapter:0o3zho:
       platform: ${{ env.CHATLUNA_PLATFORM || 'siliconflow' }}
       nonStreaming: true
@@ -100,6 +108,14 @@ plugins:
       tavilyApiKey: ${{ env.CHATLUNA_SEARCH_SERVICE_TAVILY_API_KEY || '' }}
     ./dist/plugins/sticker:sticker:
       stickerDir: ${{ env.CHATLUNA_STICKER_DIR || './data/chathub/stickers' }}
+    ./dist/plugins/attachment:attachment:
+      maxInjectCount: ${{ +env.QQBOT_ATTACHMENT_MAX_INJECT_COUNT || 5 }}
+      maxInjectTotalBytes: ${{ +env.QQBOT_ATTACHMENT_MAX_INJECT_TOTAL_BYTES || 16777216 }}
+      maxInjectPerFileBytes: ${{ +env.QQBOT_ATTACHMENT_MAX_INJECT_PER_FILE_BYTES || 6291456 }}
+      maxPdfPreviewPagesPerFile: ${{ +env.QQBOT_ATTACHMENT_MAX_PDF_PREVIEW_PAGES_PER_FILE || 6 }}
+      maxPdfPreviewPagesTotal: ${{ +env.QQBOT_ATTACHMENT_MAX_PDF_PREVIEW_PAGES_TOTAL || 15 }}
+      maxTextCharsPerFile: ${{ +env.QQBOT_ATTACHMENT_MAX_TEXT_CHARS_PER_FILE || 24000 }}
+      recentCatalogSize: ${{ +env.QQBOT_ATTACHMENT_RECENT_CATALOG_SIZE || 12 }}
     chatluna-plugin-common:qf1a6x:
       think: ${{ env.CHATLUNA_COMMON_THINK === 'true' }}
       send: ${{ env.CHATLUNA_COMMON_SEND !== 'false' }}

@@ -21,6 +21,12 @@ Environment:
   FAKE_GROUP_ID         Optional override for the probe group id (default: 829573670)
   FAKE_GROUP_NAME       Optional synthetic group name (default: codex-probe-group)
   FAKE_GROUP_CARD       Optional synthetic sender group card (default: codex-probe)
+  PROBE_TAB             Optional built-in main-chat tab to resolve for this probe
+                       (copilot, openai, siliconflow). Forces isolated room mode.
+  PROBE_ROOM_MODEL      Optional exact room model for this probe. Forces isolated
+                       room mode and overrides PROBE_TAB-derived model.
+  PROBE_ISOLATED_ROOM   Set to 1 to create a temporary isolated room for this
+                       probe and delete it afterwards.
   PROBE_TRIGGER_PREFIX  Trigger prefix injected when the input lacks an obvious
                        group trigger keyword (default: saki )
   BOT_TIMEOUT_SECONDS   Max seconds to wait for reply stability (default: 40)
@@ -69,8 +75,20 @@ fi
 
 timeout_seconds="${BOT_TIMEOUT_SECONDS:-40}"
 keep_inspector="${KEEP_INSPECTOR:-0}"
+probe_tab="${PROBE_TAB:-}"
+probe_room_model="${PROBE_ROOM_MODEL:-}"
+probe_isolated_room="${PROBE_ISOLATED_ROOM:-0}"
 probe_trigger_prefix="${PROBE_TRIGGER_PREFIX:-saki }"
 ensure_positive_int "BOT_TIMEOUT_SECONDS" "$timeout_seconds"
+
+if [[ "$probe_isolated_room" != "0" && "$probe_isolated_room" != "1" ]]; then
+  echo "[error] PROBE_ISOLATED_ROOM must be 0 or 1." >&2
+  exit 2
+fi
+
+if [[ -n "$probe_tab" || -n "$probe_room_model" ]]; then
+  probe_isolated_room="1"
+fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -181,6 +199,9 @@ probe_json="$(
   QQBOT_FAKE_GROUP_ID="$fake_group_id" \
   QQBOT_FAKE_GROUP_NAME="$fake_group_name" \
   QQBOT_FAKE_GROUP_CARD="$fake_group_card" \
+  QQBOT_PROBE_TAB="$probe_tab" \
+  QQBOT_PROBE_ROOM_MODEL="$probe_room_model" \
+  QQBOT_PROBE_ISOLATED_ROOM="$probe_isolated_room" \
   QQBOT_TIMEOUT_SECONDS="$timeout_seconds" \
   QQBOT_KEEP_INSPECTOR="$keep_inspector" \
   QQBOT_OPENED_INSPECTOR="$opened_inspector" \
@@ -200,6 +221,9 @@ const fakeUserId = Number(process.env.QQBOT_FAKE_USER_ID || '0')
 const fakeGroupId = Number(process.env.QQBOT_FAKE_GROUP_ID || '0')
 const fakeGroupName = String(process.env.QQBOT_FAKE_GROUP_NAME || 'codex-probe-group')
 const fakeGroupCard = String(process.env.QQBOT_FAKE_GROUP_CARD || 'codex-probe')
+const probeTab = String(process.env.QQBOT_PROBE_TAB || '')
+const probeRoomModel = String(process.env.QQBOT_PROBE_ROOM_MODEL || '')
+const probeIsolatedRoom = process.env.QQBOT_PROBE_ISOLATED_ROOM === '1'
 const timeoutSeconds = Number(process.env.QQBOT_TIMEOUT_SECONDS || '40')
 const keepInspector = process.env.QQBOT_KEEP_INSPECTOR === '1'
 const openedInspector = process.env.QQBOT_OPENED_INSPECTOR === '1'
@@ -315,7 +339,7 @@ async function main() {
 
     const call = await send('Runtime.callFunctionOn', {
       objectId: loader,
-      functionDeclaration: `async function(input, originalInput, fakeUserId, fakeGroupId, fakeGroupName, fakeGroupCard, timeoutSeconds) {
+      functionDeclaration: `async function(input, originalInput, fakeUserId, fakeGroupId, fakeGroupName, fakeGroupCard, probeTab, probeRoomModel, probeIsolatedRoom, timeoutSeconds) {
         try {
           const normalizeVisibleContent = ${normalizeVisibleContentSource}
           const serializePayload = ${serializePayloadSource}
@@ -330,6 +354,11 @@ async function main() {
           }
 
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+          const path = process.mainModule.require('path')
+          const crypto = process.mainModule.require('crypto')
+          const mainChatTabs = process.mainModule.require(
+            path.resolve(process.cwd(), 'dist/plugins/shared/llm/main-chat-tabs.js')
+          )
           const waitForStableRuntime = async () => {
             const deadline = Date.now() + 15000
             const stableWindowMs = 2500
@@ -364,6 +393,53 @@ async function main() {
 
           await waitForStableRuntime()
 
+          const requestedProbeTab =
+            typeof probeTab === 'string' && probeTab.trim().length > 0
+              ? probeTab.trim()
+              : null
+          const requestedProbeRoomModel =
+            typeof probeRoomModel === 'string' && probeRoomModel.trim().length > 0
+              ? probeRoomModel.trim()
+              : null
+          const shouldUseIsolatedRoom =
+            Boolean(probeIsolatedRoom) ||
+            requestedProbeTab != null ||
+            requestedProbeRoomModel != null
+
+          let resolvedProbeTab = requestedProbeTab
+          let resolvedProbeRoomModel = requestedProbeRoomModel
+          if (resolvedProbeRoomModel == null && requestedProbeTab != null) {
+            const normalizedTab = mainChatTabs.normalizeMainChatBuiltinTabId(requestedProbeTab)
+            const tabState = mainChatTabs.resolveMainChatTabStateFromEnv(normalizedTab, process.env)
+            resolvedProbeTab = normalizedTab
+            resolvedProbeRoomModel = tabState && typeof tabState.defaultModel === 'string'
+              ? tabState.defaultModel.trim()
+              : null
+            if (!resolvedProbeRoomModel) {
+              throw new Error('probe failed to resolve default model for tab: ' + normalizedTab)
+            }
+          }
+          if (resolvedProbeRoomModel != null && resolvedProbeTab == null) {
+            const inferredTab = mainChatTabs.MAIN_CHAT_BUILTIN_TAB_IDS.find((tabId) =>
+              mainChatTabs.isSupportedMainChatModelForTab(tabId, resolvedProbeRoomModel)
+            )
+            resolvedProbeTab = inferredTab || null
+          }
+          const envRestoreEntries = []
+          if (resolvedProbeTab != null) {
+            const runtimeTabs = mainChatTabs.MAIN_CHAT_BUILTIN_TAB_IDS.map((tabId) =>
+              mainChatTabs.resolveMainChatTabStateFromEnv(tabId, process.env)
+            )
+            const runtimeEnvPatch = mainChatTabs.buildMainChatRuntimeEnvPatch(resolvedProbeTab, runtimeTabs)
+            for (const [key, value] of Object.entries(runtimeEnvPatch)) {
+              envRestoreEntries.push([
+                key,
+                Object.prototype.hasOwnProperty.call(process.env, key) ? process.env[key] : undefined,
+              ])
+              process.env[key] = String(value)
+            }
+          }
+
           const rawBots = this.app && this.app.bots
           const bots = Array.isArray(rawBots) ? rawBots : Object.values(rawBots || {})
           const bot = bots.find((item) => item.platform === 'onebot')
@@ -375,7 +451,9 @@ async function main() {
           const probeMessageId = Date.now()
           const captures = []
           const orchestrationCaptures = []
+          const cleanupWarnings = []
           let directGroupCaptureAllowed = false
+          let isolatedRoom = null
           const isProbeSend = (channelId, options) => {
             if (String(channelId) !== fakeChannelId) return false
             const session = options && typeof options === 'object' ? options.session : null
@@ -394,6 +472,54 @@ async function main() {
               at: Date.now(),
               ...extra,
             })
+          }
+
+          if (shouldUseIsolatedRoom) {
+            const {
+              createConversationRoom,
+              deleteConversationRoom,
+              getConversationRoomCount,
+            } = process.mainModule.require(
+              path.resolve(process.cwd(), '../chatluna/packages/core/lib/chains/index.cjs')
+            )
+            const roomRows = await this.app.database.get('chathub_room', {})
+            const roomGroupRows = await this.app.database.get('chathub_room_group_member', {
+              groupId: fakeChannelId,
+            })
+            const scopedRoomIds = new Set(
+              Array.isArray(roomGroupRows) ? roomGroupRows.map((row) => row.roomId) : []
+            )
+            const templateRoom =
+              roomRows.find((room) => scopedRoomIds.has(room.roomId) && room.visibility === 'template_clone') ||
+              roomRows.find((room) => scopedRoomIds.has(room.roomId) && room.visibility === 'public') ||
+              roomRows.find((room) => room.visibility === 'template_clone') ||
+              roomRows.find((room) => room.chatMode === 'plugin' && typeof room.preset === 'string' && room.preset.length > 0) ||
+              {
+                preset: 'sakiko',
+                chatMode: 'plugin',
+                password: '',
+                visibility: 'public',
+                autoUpdate: false,
+                model: resolvedProbeRoomModel ?? 'gpt-5.4-mini',
+              }
+            const roomId = Number(await getConversationRoomCount(this.app)) + 1
+            const sessionLike = {
+              userId: String(fakeUserId),
+              isDirect: false,
+              guildId: fakeChannelId,
+            }
+            isolatedRoom = {
+              ...templateRoom,
+              roomId,
+              roomName: 'probe-' + fakeGroupId + '-' + fakeUserId,
+              roomMasterId: String(fakeUserId),
+              conversationId: crypto.randomUUID(),
+              visibility: 'private',
+              autoUpdate: false,
+              updatedTime: new Date(),
+              model: resolvedProbeRoomModel ?? templateRoom.model,
+            }
+            await createConversationRoom(this.app, sessionLike, isolatedRoom)
           }
 
           const originalSendMessage = bot.sendMessage
@@ -532,6 +658,10 @@ async function main() {
               visibleText: item.visibleText,
               at: item.at,
             }))
+            const effectiveProbeRoom =
+              isolatedRoom
+                ? ((await this.app.database.get('chathub_room', { roomId: isolatedRoom.roomId }))[0] || null)
+                : null
             return JSON.stringify({
               ok: true,
               input,
@@ -550,6 +680,20 @@ async function main() {
               orchestrations: orchestrationCaptures,
               visibleMessages,
               payloadCaptures,
+              probeRoom: {
+                requestedTab: requestedProbeTab,
+                resolvedTab: resolvedProbeTab,
+                requestedModel: requestedProbeRoomModel,
+                resolvedModel: resolvedProbeRoomModel,
+                isolated: shouldUseIsolatedRoom,
+                roomId: isolatedRoom ? isolatedRoom.roomId : null,
+                roomName: isolatedRoom ? isolatedRoom.roomName : null,
+                effectiveModel:
+                  effectiveProbeRoom && typeof effectiveProbeRoom.model === 'string'
+                    ? effectiveProbeRoom.model
+                    : null,
+              },
+              warnings: cleanupWarnings,
               combined: visibleMessages.join('\\n'),
               timeout: captures.length === 0,
             })
@@ -568,6 +712,23 @@ async function main() {
             if (originalRequest) {
               bot.internal._request = originalRequest
             }
+            for (const [key, value] of envRestoreEntries.reverse()) {
+              if (value == null) {
+                delete process.env[key]
+              } else {
+                process.env[key] = value
+              }
+            }
+            if (isolatedRoom) {
+              try {
+                const { deleteConversationRoom } = process.mainModule.require(
+                  path.resolve(process.cwd(), '../chatluna/packages/core/lib/chains/index.cjs')
+                )
+                await deleteConversationRoom(this.app, isolatedRoom)
+              } catch (error) {
+                cleanupWarnings.push('isolated room cleanup failed: ' + String((error && error.message) || error))
+              }
+            }
           }
         } catch (error) {
           return JSON.stringify({
@@ -583,6 +744,9 @@ async function main() {
         { value: fakeGroupId },
         { value: fakeGroupName },
         { value: fakeGroupCard },
+        { value: probeTab },
+        { value: probeRoomModel },
+        { value: probeIsolatedRoom },
         { value: timeoutSeconds },
       ],
       awaitPromise: true,
