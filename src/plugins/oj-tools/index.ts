@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { StructuredTool } from '@langchain/core/tools';
-import { Context, Logger, Schema, type Session } from 'koishi';
+import { Context, Logger, Schema } from 'koishi';
 import type { ChatLunaTool, ChatLunaToolRunnable } from 'koishi-plugin-chatluna/llm-core/platform/types';
 import { z } from 'zod';
 import { CodeforcesProvider, type ContestQueryMode } from './provider.js';
@@ -69,6 +69,10 @@ interface ToolDeps {
   provider: CodeforcesProvider;
 }
 
+type ToolSessionLike = {
+  userId?: string | null;
+};
+
 function clampNatural(value: unknown, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) return fallback;
@@ -135,7 +139,7 @@ class CfUserProfileTool extends StructuredTool {
   }
 
   async _call(input: z.infer<CfUserProfileTool['schema']>, _runManager: unknown, config: ChatLunaToolRunnable): Promise<string> {
-    const session = config.configurable.session as Session | undefined;
+    const session = config.configurable.session as ToolSessionLike | undefined;
     if (!session?.userId) {
       throw new Error('cf_user_profile requires the current session.');
     }
@@ -187,7 +191,7 @@ class CfUserRatingTool extends StructuredTool {
   }
 
   async _call(input: z.infer<CfUserRatingTool['schema']>, _runManager: unknown, config: ChatLunaToolRunnable): Promise<string> {
-    const session = config.configurable.session as Session | undefined;
+    const session = config.configurable.session as ToolSessionLike | undefined;
     if (!session?.userId) {
       throw new Error('cf_user_rating requires the current session.');
     }
@@ -237,7 +241,7 @@ class CfUserSubmissionsTool extends StructuredTool {
   }
 
   async _call(input: z.infer<CfUserSubmissionsTool['schema']>, _runManager: unknown, config: ChatLunaToolRunnable): Promise<string> {
-    const session = config.configurable.session as Session | undefined;
+    const session = config.configurable.session as ToolSessionLike | undefined;
     if (!session?.userId) {
       throw new Error('cf_user_submissions requires the current session.');
     }
@@ -275,7 +279,7 @@ class CfContestsTool extends StructuredTool {
     _runManager: unknown,
     config: ChatLunaToolRunnable,
   ): Promise<string> {
-    const session = config.configurable.session as Session | undefined;
+    const session = config.configurable.session as ToolSessionLike | undefined;
     if (!session?.userId) {
       throw new Error('cf_contests requires the current session.');
     }

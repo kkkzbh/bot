@@ -43,6 +43,7 @@ describe('probe-local-bot.sh', () => {
     expect(output).toContain(`default: ${shared.DEFAULT_PROBE_GROUP_ID}`);
     expect(output).toContain('$qqbot-group-probe');
     expect(output).toContain('PROBE_TRIGGER_PREFIX');
+    expect(output).toContain('PROBE_ASSERT_FAILURES');
   });
 
   it('removes private and trace-preview probe paths from the script', () => {
@@ -57,7 +58,9 @@ describe('probe-local-bot.sh', () => {
     expect(content).toContain('originalInput');
     expect(content).toContain('dispatchedInput');
     expect(content).toContain('resolvedProfile');
+    expect(content).toContain('firstErrorSignature');
     expect(content).toContain("runtimeProfile.requestMode === 'responses'");
+    expect(content).toContain("PROBE_ASSERT_FAILURES");
     expect(content).toContain('(saki|祥)');
   });
 });

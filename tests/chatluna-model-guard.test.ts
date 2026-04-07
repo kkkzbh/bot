@@ -125,6 +125,8 @@ describe('buildStructuredReplyModelOverride', () => {
     });
     expect(buildStructuredReplyModelOverride('openai/gpt-5.4-medium-thinking')).toEqual({
       qqbot_request_mode: 'responses',
+      qqbot_canonical_model: 'openai/gpt-5.4-medium-thinking',
+      qqbot_transport_model: 'gpt-5.4-medium-thinking',
       qqbot_tool_profile: 'qqbot_openai_main_chat',
       reasoning: {
         effort: 'medium',
@@ -132,6 +134,8 @@ describe('buildStructuredReplyModelOverride', () => {
     });
     expect(buildStructuredReplyModelOverride('openai/gpt-4o')).toEqual({
       qqbot_request_mode: 'responses',
+      qqbot_canonical_model: 'openai/gpt-4o',
+      qqbot_transport_model: 'gpt-4o',
       qqbot_tool_profile: 'qqbot_openai_main_chat',
     });
   });
@@ -172,6 +176,8 @@ describe('buildStructuredReplyRequestSpec', () => {
       structuredOutputProtocol: 'responses_text_format',
       overrideRequestParams: {
         qqbot_request_mode: 'responses',
+        qqbot_canonical_model: 'openai/gpt-5.4-medium-thinking',
+        qqbot_transport_model: 'gpt-5.4-medium-thinking',
         reasoning: {
           effort: 'medium',
         },
@@ -187,6 +193,8 @@ describe('buildStructuredReplyRequestSpec', () => {
       structuredOutputProtocol: 'responses_text_format',
       overrideRequestParams: {
         qqbot_request_mode: 'responses',
+        qqbot_canonical_model: 'openai/gpt-4o',
+        qqbot_transport_model: 'gpt-4o',
       },
     });
   });

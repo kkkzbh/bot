@@ -172,8 +172,12 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     supportsModel: isOpenAIGpt54ModelFamily,
     buildRequestOverride(model) {
       if (!isOpenAIGpt54ModelFamily(model)) return null;
+      const canonicalModel = this.normalizeModel(model);
+      const transportModel = this.transportModel(canonicalModel);
       return {
         qqbot_request_mode: 'responses',
+        qqbot_canonical_model: canonicalModel,
+        qqbot_transport_model: transportModel,
         qqbot_tool_profile: 'qqbot_openai_main_chat',
         reasoning: {
           effort: resolveOpenAIGpt54ReasoningEffort(model),
@@ -209,8 +213,12 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     supportsModel: isCopilotModelId,
     buildRequestOverride(model) {
       if (!isCopilotModelId(model)) return null;
+      const canonicalModel = this.normalizeModel(model);
+      const transportModel = this.transportModel(canonicalModel);
       return {
         qqbot_request_mode: 'responses',
+        qqbot_canonical_model: canonicalModel,
+        qqbot_transport_model: transportModel,
         qqbot_tool_profile: 'qqbot_openai_main_chat',
       };
     },

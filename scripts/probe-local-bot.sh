@@ -29,6 +29,8 @@ Environment:
                        probe and delete it afterwards.
   PROBE_TRIGGER_PREFIX  Trigger prefix injected when the input lacks an obvious
                        group trigger keyword (default: saki )
+  PROBE_ASSERT_FAILURES Set to 0 to keep printing probe json without returning
+                       failure on detected model/runtime errors (default: 1)
   BOT_TIMEOUT_SECONDS   Max seconds to wait for reply stability (default: 40)
   KEEP_INSPECTOR        Set to 1 to keep inspector open after the probe
 EOF
@@ -79,10 +81,16 @@ probe_tab="${PROBE_TAB:-}"
 probe_room_model="${PROBE_ROOM_MODEL:-}"
 probe_isolated_room="${PROBE_ISOLATED_ROOM:-0}"
 probe_trigger_prefix="${PROBE_TRIGGER_PREFIX:-saki }"
+probe_assert_failures="${PROBE_ASSERT_FAILURES:-1}"
 ensure_positive_int "BOT_TIMEOUT_SECONDS" "$timeout_seconds"
 
 if [[ "$probe_isolated_room" != "0" && "$probe_isolated_room" != "1" ]]; then
   echo "[error] PROBE_ISOLATED_ROOM must be 0 or 1." >&2
+  exit 2
+fi
+
+if [[ "$probe_assert_failures" != "0" && "$probe_assert_failures" != "1" ]]; then
+  echo "[error] PROBE_ASSERT_FAILURES must be 0 or 1." >&2
   exit 2
 fi
 
@@ -354,9 +362,66 @@ async function main() {
           }
 
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+          const detectFirstErrorSignature = (result) => {
+            if (!result || typeof result !== 'object') {
+              return null
+            }
+
+            if (result.ok === false) {
+              return 'probe_execution_failed'
+            }
+
+            const visibleMessages = Array.isArray(result.visibleMessages)
+              ? result.visibleMessages.map((item) => String(item || ''))
+              : []
+            const visibleText = visibleMessages.join('\\n')
+
+            if (/ChatLunaError:?303|错误码为 303/i.test(visibleText)) {
+              return 'ChatLunaError:303'
+            }
+
+            if (/is not a chat model/i.test(visibleText)) {
+              return 'ModelIsNotChatModel'
+            }
+
+            const orchestrations = Array.isArray(result.orchestrations)
+              ? result.orchestrations
+              : []
+            if (
+              orchestrations.length > 0 &&
+              orchestrations.every((item) => item && item.result && item.result.status === 'await_model')
+            ) {
+              if (result.timeout === true) {
+                return 'ReplyAwaitModelTimeout'
+              }
+
+              if (visibleMessages.length > 0) {
+                return 'ReplyAwaitModelFailedBeforeModelCall'
+              }
+            }
+
+            return null
+          }
           const path = process.mainModule.require('path')
           const crypto = process.mainModule.require('crypto')
-          const mainChatTabs = process.mainModule.require(
+          const { createRequire } = process.mainModule.require('module')
+          const runtimeRequire = createRequire(path.resolve(process.cwd(), 'package.json'))
+          const requireRuntimeModule = (targetPath) => {
+            try {
+              const resolved = runtimeRequire.resolve(targetPath)
+              if (runtimeRequire.cache && runtimeRequire.cache[resolved]) {
+                delete runtimeRequire.cache[resolved]
+              }
+              return runtimeRequire(targetPath)
+            } catch (primaryError) {
+              try {
+                return process.mainModule.require(targetPath)
+              } catch {
+                throw primaryError
+              }
+            }
+          }
+          const mainChatTabs = requireRuntimeModule(
             path.resolve(process.cwd(), 'dist/plugins/shared/llm/main-chat-tabs.js')
           )
           const waitForStableRuntime = async () => {
@@ -414,10 +479,17 @@ async function main() {
           if (resolvedProbeRoomModel == null && requestedProbeTab != null) {
             const normalizedTab = mainChatTabs.normalizeMainChatBuiltinTabId(requestedProbeTab)
             const tabState = mainChatTabs.resolveMainChatTabStateFromEnv(normalizedTab, process.env)
+            const fallbackDescriptor = mainChatTabs.resolveMainChatModelDescriptor({
+              tabId: normalizedTab,
+              model: null,
+            })
             resolvedProbeTab = normalizedTab
-            resolvedProbeRoomModel = tabState && typeof tabState.canonicalModel === 'string'
-              ? tabState.canonicalModel.trim()
-              : null
+            resolvedProbeRoomModel =
+              tabState && typeof tabState.canonicalModel === 'string' && tabState.canonicalModel.trim().length > 0
+                ? tabState.canonicalModel.trim()
+                : (tabState && typeof tabState.defaultModel === 'string' && tabState.defaultModel.trim().length > 0
+                    ? tabState.defaultModel.trim()
+                    : fallbackDescriptor.canonicalModel)
             if (!resolvedProbeRoomModel) {
               throw new Error('probe failed to resolve default model for tab: ' + normalizedTab)
             }
@@ -509,7 +581,7 @@ async function main() {
               createConversationRoom,
               deleteConversationRoom,
               getConversationRoomCount,
-            } = process.mainModule.require(
+            } = requireRuntimeModule(
               path.resolve(process.cwd(), '../chatluna/packages/core/lib/chains/index.cjs')
             )
             const roomRows = await this.app.database.get('chathub_room', {})
@@ -690,7 +762,7 @@ async function main() {
               isolatedRoom
                 ? ((await this.app.database.get('chathub_room', { roomId: isolatedRoom.roomId }))[0] || null)
                 : null
-            return JSON.stringify({
+            const result = {
               ok: true,
               input,
               originalInput: originalInput || input,
@@ -725,7 +797,10 @@ async function main() {
               warnings: cleanupWarnings,
               combined: visibleMessages.join('\\n'),
               timeout: captures.length === 0,
-            })
+            }
+
+            result.firstErrorSignature = detectFirstErrorSignature(result)
+            return JSON.stringify(result)
           } finally {
             directGroupCaptureAllowed = false
             if (originalOrchestratorHandle) {
@@ -750,7 +825,7 @@ async function main() {
             }
             if (isolatedRoom) {
               try {
-                const { deleteConversationRoom } = process.mainModule.require(
+                const { deleteConversationRoom } = requireRuntimeModule(
                   path.resolve(process.cwd(), '../chatluna/packages/core/lib/chains/index.cjs')
                 )
                 await deleteConversationRoom(this.app, isolatedRoom)
@@ -760,10 +835,12 @@ async function main() {
             }
           }
         } catch (error) {
-          return JSON.stringify({
+          const result = {
             ok: false,
             error: String((error && error.stack) || error),
-          })
+          }
+          result.firstErrorSignature = 'probe_execution_failed'
+          return JSON.stringify(result)
         }
       }`,
       arguments: [
@@ -809,10 +886,10 @@ NODE
 )"
 
 printf '%s\n' "$probe_json"
-timeout_flag="$(
-  printf '%s' "$probe_json" | node -e "let data='';process.stdin.on('data',c=>data+=c);process.stdin.on('end',()=>{const parsed=JSON.parse(data);process.stdout.write(parsed.timeout ? 'true' : 'false');});"
+probe_status="$(
+  PROBE_ASSERT_FAILURES="$probe_assert_failures" printf '%s' "$probe_json" | node -e "let data='';process.stdin.on('data',c=>data+=c);process.stdin.on('end',()=>{const parsed=JSON.parse(data);const firstErrorSignature=typeof parsed.firstErrorSignature==='string'&&parsed.firstErrorSignature.length>0?parsed.firstErrorSignature:'';const visibleMessages=Array.isArray(parsed.visibleMessages)?parsed.visibleMessages.map(v=>String(v||'')):[];const visibleText=visibleMessages.join('\n');const assertFailures=process.env.PROBE_ASSERT_FAILURES!=='0';const hasFatalVisibleError=/ChatLunaError:?303|错误码为 303|is not a chat model/i.test(visibleText);const shouldFail=parsed.ok===false||parsed.timeout===true||(assertFailures&&(firstErrorSignature.length>0||hasFatalVisibleError));process.stdout.write(shouldFail?'fail':'pass');});"
 )"
-if [[ "$timeout_flag" == "true" ]]; then
+if [[ "$probe_status" == "fail" ]]; then
   exit 1
 fi
 exit 0
