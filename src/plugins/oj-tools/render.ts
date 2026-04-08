@@ -39,6 +39,38 @@ type ChartPoint = {
   contestName: string;
 };
 
+type TextFitOptions = {
+  startSize: number;
+  minSize: number;
+  font: 'ui' | 'display';
+  weight?: number;
+};
+
+type FittedText = {
+  font: string;
+  size: number;
+  width: number;
+  fits: boolean;
+};
+
+type LevelTextLine = {
+  text: string;
+  font: string;
+  size: number;
+  width: number;
+  y: number;
+};
+
+type LevelTextLayout = {
+  mode: 'single' | 'split';
+  lines: LevelTextLine[];
+};
+
+type Point = {
+  x: number;
+  y: number;
+};
+
 export interface RenderedArtifact {
   buffer: Buffer;
   alt: string;
@@ -91,9 +123,13 @@ const PROFILE_CARD_SPEC = {
     ratingValueSize: 82,
     ratingValueCorrectionY: 5,
     levelValueX: 48,
-    levelValueY: 708,
+    levelValueSingleY: 674,
+    levelValueMultiFirstY: 662,
+    levelValueLineGap: 36,
     levelValueStartSize: 76,
     levelValueMinSize: 44,
+    levelValueMultiStartSize: 40,
+    levelValueMultiMinSize: 30,
     levelValueMaxWidth: 228,
   },
   rightColumn: {
@@ -317,19 +353,42 @@ function fitText(
   ctx: SKRSContext2D,
   text: string,
   maxWidth: number,
-  options: { startSize: number; minSize: number; font: 'ui' | 'display'; weight?: number },
+  options: TextFitOptions,
 ): string {
+  return fitTextWithin(ctx, text, maxWidth, options).font;
+}
+
+function fitTextWithin(
+  ctx: SKRSContext2D,
+  text: string,
+  maxWidth: number,
+  options: TextFitOptions,
+): FittedText {
   let size = options.startSize;
-  while (size >= options.minSize) {
-    ctx.font = options.font === 'display'
-      ? displayFont(size, options.weight ?? 700)
-      : uiFont(size, options.weight ?? 700);
-    if (ctx.measureText(text).width <= maxWidth) return ctx.font;
-    size -= 2;
-  }
-  return options.font === 'display'
+  let lastFont = options.font === 'display'
     ? displayFont(options.minSize, options.weight ?? 700)
     : uiFont(options.minSize, options.weight ?? 700);
+  let lastWidth = Number.POSITIVE_INFINITY;
+
+  while (size >= options.minSize) {
+    const font = options.font === 'display'
+      ? displayFont(size, options.weight ?? 700)
+      : uiFont(size, options.weight ?? 700);
+    ctx.font = font;
+    const width = ctx.measureText(text).width;
+    if (width <= maxWidth) return { font, size, width, fits: true };
+    lastFont = font;
+    lastWidth = width;
+    size -= 2;
+  }
+
+  ctx.font = lastFont;
+  return {
+    font: lastFont,
+    size: options.minSize,
+    width: lastWidth,
+    fits: lastWidth <= maxWidth,
+  };
 }
 
 function measureTextCenterOffset(ctx: SKRSContext2D, text: string): number {
@@ -472,11 +531,85 @@ function drawRatingBadgeIcon(ctx: SKRSContext2D, x: number, y: number): void {
 }
 
 function drawStarBadgeIcon(ctx: SKRSContext2D, x: number, y: number, theme: Theme): void {
+  const square = PROFILE_CARD_SPEC.badges.iconSquare;
+  const centerX = x + square.x + square.size / 2;
+  const centerY = y + square.y + square.size / 2;
+  const points = createStarPolygonPoints(centerX, centerY, 10.5, 4.6);
+
   ctx.fillStyle = theme.star;
-  ctx.font = uiFont(24, 700);
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('★', x + 16, y + 24);
+  ctx.beginPath();
+  ctx.moveTo(points[0]!.x, points[0]!.y);
+  points.slice(1).forEach((point) => {
+    ctx.lineTo(point.x, point.y);
+  });
+  ctx.closePath();
+  ctx.fill();
+}
+
+function createStarPolygonPoints(
+  centerX: number,
+  centerY: number,
+  outerRadius: number,
+  innerRadius: number,
+  spikes = 5,
+): Point[] {
+  const points: Point[] = [];
+  const step = Math.PI / spikes;
+  let angle = -Math.PI / 2;
+
+  for (let index = 0; index < spikes * 2; index += 1) {
+    const radius = index % 2 === 0 ? outerRadius : innerRadius;
+    points.push({
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius,
+    });
+    angle += step;
+  }
+
+  return points;
+}
+
+function layoutLevelText(ctx: SKRSContext2D, rank: string): LevelTextLayout {
+  const level = formatRank(rank);
+  const words = level.split(/\s+/).filter(Boolean);
+  const singleLine = fitTextWithin(ctx, level, PROFILE_CARD_SPEC.leftColumn.levelValueMaxWidth, {
+    startSize: PROFILE_CARD_SPEC.leftColumn.levelValueStartSize,
+    minSize: PROFILE_CARD_SPEC.leftColumn.levelValueMinSize,
+    font: 'display',
+    weight: 700,
+  });
+
+  if (words.length !== 2 || singleLine.fits) {
+    return {
+      mode: 'single',
+      lines: [{
+        text: level,
+        font: singleLine.font,
+        size: singleLine.size,
+        width: singleLine.width,
+        y: PROFILE_CARD_SPEC.leftColumn.levelValueSingleY,
+      }],
+    };
+  }
+
+  return {
+    mode: 'split',
+    lines: words.map((word, index) => {
+      const fitted = fitTextWithin(ctx, word, PROFILE_CARD_SPEC.leftColumn.levelValueMaxWidth, {
+        startSize: PROFILE_CARD_SPEC.leftColumn.levelValueMultiStartSize,
+        minSize: PROFILE_CARD_SPEC.leftColumn.levelValueMultiMinSize,
+        font: 'display',
+        weight: 700,
+      });
+      return {
+        text: word,
+        font: fitted.font,
+        size: fitted.size,
+        width: fitted.width,
+        y: PROFILE_CARD_SPEC.leftColumn.levelValueMultiFirstY + PROFILE_CARD_SPEC.leftColumn.levelValueLineGap * index,
+      };
+    }),
+  };
 }
 
 function drawBadge(ctx: SKRSContext2D, rect: RectSpec, label: string, kind: 'rating' | 'star', theme: Theme): void {
@@ -508,8 +641,6 @@ function renderPanels(ctx: SKRSContext2D, theme: Theme): void {
 }
 
 function renderProfileCardText(ctx: SKRSContext2D, profile: CodeforcesUserProfile, theme: Theme): void {
-  const rank = formatRank(profile.rank);
-
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = theme.textPrimary;
@@ -542,13 +673,11 @@ function renderProfileCardText(ctx: SKRSContext2D, profile: CodeforcesUserProfil
     targetCenter - valueOffset + PROFILE_CARD_SPEC.leftColumn.ratingValueCorrectionY,
   );
 
-  ctx.font = fitText(ctx, rank, PROFILE_CARD_SPEC.leftColumn.levelValueMaxWidth, {
-    startSize: PROFILE_CARD_SPEC.leftColumn.levelValueStartSize,
-    minSize: PROFILE_CARD_SPEC.leftColumn.levelValueMinSize,
-    font: 'display',
-    weight: 700,
+  const levelLayout = layoutLevelText(ctx, profile.rank);
+  levelLayout.lines.forEach((line) => {
+    ctx.font = line.font;
+    ctx.fillText(line.text, PROFILE_CARD_SPEC.leftColumn.levelValueX, line.y);
   });
-  ctx.fillText(rank, PROFILE_CARD_SPEC.leftColumn.levelValueX, PROFILE_CARD_SPEC.leftColumn.levelValueY);
 
   ctx.textAlign = 'center';
   ctx.font = uiFont(PROFILE_CARD_SPEC.rightColumn.titleSize, 700);
@@ -809,3 +938,10 @@ export async function renderCodeforcesRatingChart(
     alt: `${history.handle} 的 Codeforces rating 历史图`,
   };
 }
+
+export const __testables = {
+  createStarPolygonPoints,
+  drawStarBadgeIcon,
+  layoutLevelText,
+  registerFonts,
+};

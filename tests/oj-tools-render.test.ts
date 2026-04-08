@@ -1,6 +1,6 @@
 import { createCanvas } from '@napi-rs/canvas';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderCodeforcesProfileCard, renderCodeforcesRatingChart } from '../src/plugins/oj-tools/render.js';
+import { __testables, renderCodeforcesProfileCard, renderCodeforcesRatingChart } from '../src/plugins/oj-tools/render.js';
 
 async function createAvatarBuffer(): Promise<Buffer> {
   const canvas = createCanvas(64, 64);
@@ -17,6 +17,11 @@ function readPngSize(buffer: Buffer): { width: number; height: number } {
     width: buffer.readUInt32BE(16),
     height: buffer.readUInt32BE(20),
   };
+}
+
+function createRenderContext() {
+  __testables.registerFonts();
+  return createCanvas(600, 800).getContext('2d');
 }
 
 describe('oj-tools renderer', () => {
@@ -132,6 +137,61 @@ describe('oj-tools renderer', () => {
 
     expect(variant.alt).toContain('kkkzbh');
     expect(variant.buffer.equals(baseline.buffer)).toBe(false);
+  });
+
+  it('keeps single-word levels on one line and splits long two-word levels into two lines', () => {
+    const ctx = createRenderContext();
+
+    const specialist = __testables.layoutLevelText(ctx, 'specialist');
+    expect(specialist.mode).toBe('single');
+    expect(specialist.lines).toHaveLength(1);
+    expect(specialist.lines[0]).toMatchObject({
+      text: 'Specialist',
+      y: 674,
+    });
+    expect(specialist.lines[0]!.width).toBeLessThanOrEqual(228);
+
+    const legendary = __testables.layoutLevelText(ctx, 'legendary grandmaster');
+    expect(legendary.mode).toBe('split');
+    expect(legendary.lines).toHaveLength(2);
+    expect(legendary.lines.map((line) => line.text)).toEqual(['Legendary', 'Grandmaster']);
+    expect(legendary.lines.map((line) => line.y)).toEqual([662, 698]);
+    legendary.lines.forEach((line) => {
+      expect(line.width).toBeLessThanOrEqual(228);
+    });
+
+    const international = __testables.layoutLevelText(ctx, 'international grandmaster');
+    expect(international.mode).toBe('split');
+    expect(international.lines).toHaveLength(2);
+    expect(international.lines.map((line) => line.text)).toEqual(['International', 'Grandmaster']);
+    expect(international.lines.map((line) => line.y)).toEqual([662, 698]);
+    international.lines.forEach((line) => {
+      expect(line.width).toBeLessThanOrEqual(228);
+    });
+  });
+
+  it('draws the star badge icon with a polygon path instead of a text glyph', () => {
+    const pathOps = {
+      fillStyle: '',
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      closePath: vi.fn(),
+      fill: vi.fn(),
+      fillText: vi.fn(() => {
+        throw new Error('star icon should not use fillText');
+      }),
+    };
+    const fakeCtx = pathOps as unknown as Parameters<typeof __testables.drawStarBadgeIcon>[0];
+
+    expect(() => {
+      __testables.drawStarBadgeIcon(fakeCtx, 314, 343, { star: '#FFC65A' } as any);
+    }).not.toThrow();
+    expect(pathOps.beginPath).toHaveBeenCalledTimes(1);
+    expect(pathOps.moveTo).toHaveBeenCalledTimes(1);
+    expect(pathOps.lineTo).toHaveBeenCalledTimes(9);
+    expect(pathOps.closePath).toHaveBeenCalledTimes(1);
+    expect(pathOps.fill).toHaveBeenCalledTimes(1);
   });
 
   it('renders cards and charts for high-rating and long-name inputs without overflow failures', async () => {
