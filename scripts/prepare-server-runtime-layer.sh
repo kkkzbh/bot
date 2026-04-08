@@ -15,6 +15,51 @@ SEED_MARKER_FILE="${SHARED_DIR}/.runtime-layer.seeded"
 mkdir -p "${SHARED_DIR}" "${RUNTIME_PRESET_DIR}" "${RUNTIME_LLBOT_DIR}" "${RUNTIME_LLBOT_RUNTIME_DIR}"
 chmod 700 "${SHARED_DIR}" "${RUNTIME_PRESET_DIR}" "${RUNTIME_LLBOT_DIR}" "${RUNTIME_LLBOT_RUNTIME_DIR}"
 
+upsert_env_value() {
+  local key="$1"
+  local value="$2"
+  local temp_file
+  temp_file="$(mktemp)"
+
+  node - "${RUNTIME_ENV_FILE}" "${temp_file}" "${key}" "${value}" <<'NODE'
+const fs = require('node:fs')
+
+const [, , sourcePath, targetPath, key, value] = process.argv
+const prefix = `${key}=`
+const lines = fs.existsSync(sourcePath)
+  ? fs.readFileSync(sourcePath, 'utf8').split(/\r?\n/)
+  : []
+
+let replaced = false
+const next = []
+
+for (const line of lines) {
+  if (!line && next.length === lines.length - 1) continue
+  if (line.startsWith(prefix)) {
+    if (!replaced) {
+      next.push(`${key}=${value}`)
+      replaced = true
+    }
+    continue
+  }
+  next.push(line)
+}
+
+if (!replaced) {
+  if (next.length && next[next.length - 1] !== '') {
+    next.push('')
+  }
+  next.push(`${key}=${value}`)
+}
+
+const output = `${next.filter((line, index, array) => !(index === array.length - 1 && line === '')).join('\n')}\n`
+fs.writeFileSync(targetPath, output, 'utf8')
+NODE
+
+  mv "${temp_file}" "${RUNTIME_ENV_FILE}"
+  chmod 600 "${RUNTIME_ENV_FILE}"
+}
+
 if [[ ! -f "${RUNTIME_ENV_FILE}" ]]; then
   if [[ -f "${BASE_ENV_FILE}" ]]; then
     node - "${BASE_ENV_FILE}" "${RUNTIME_ENV_FILE}" "${APP_DIR}/src/plugins/bot-console/server.ts" <<'NODE'
@@ -52,6 +97,9 @@ NODE
   fi
   chmod 600 "${RUNTIME_ENV_FILE}"
 fi
+
+upsert_env_value "LLONEBOT_DATA_DIR" "${RUNTIME_LLBOT_DIR}"
+upsert_env_value "LLBOT_RUNTIME_DIR" "${RUNTIME_LLBOT_RUNTIME_DIR}"
 
 if [[ ! -e "${SEED_MARKER_FILE}" ]]; then
   if [[ -d "${LEGACY_LLBOT_DIR}" ]] && [[ -z "$(find "${RUNTIME_LLBOT_DIR}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then

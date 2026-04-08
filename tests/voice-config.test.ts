@@ -226,6 +226,8 @@ describe('qq voice config wiring', () => {
     expect(content).toContain("keyMatches = [...sourceText.matchAll(/key:\\s*'([^']+)'/g)]");
     expect(content).toContain("find \"${BUNDLED_PRESET_DIR}\" -maxdepth 1 -type f");
     expect(content).toContain('mkdir -p "${SHARED_DIR}" "${RUNTIME_PRESET_DIR}" "${RUNTIME_LLBOT_DIR}" "${RUNTIME_LLBOT_RUNTIME_DIR}"');
+    expect(content).toContain('upsert_env_value "LLONEBOT_DATA_DIR" "${RUNTIME_LLBOT_DIR}"');
+    expect(content).toContain('upsert_env_value "LLBOT_RUNTIME_DIR" "${RUNTIME_LLBOT_RUNTIME_DIR}"');
   });
 
   it('ships a server voice env validator that rejects empty or loopback TTS settings', () => {
