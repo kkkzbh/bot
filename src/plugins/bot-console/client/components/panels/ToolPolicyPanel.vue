@@ -10,7 +10,6 @@ import {
 import {
   getToolCategoryLabel,
   getToolCompatibilityLabel,
-  getToolCompatibilityTone,
   getToolRiskLabel,
   getToolRouteLabel,
   getToolScopeLabel,
@@ -61,7 +60,12 @@ const selectedToolScopeSummary = computed(() => {
   const scope = activeScope.value
   if (!scope) return '当前没有可编辑的会话范围'
   const enabled = countEnabledToolsForScope(scope, toolRouteProfile.value)
-  return `${enabled} / ${toolPolicyCatalog.value.length} 已启用`
+  const registeredCount = toolPolicyCatalog.value.filter(tool => tool.registered !== false).length
+  const unregisteredCount = toolPolicyCatalog.value.length - registeredCount
+  if (unregisteredCount > 0) {
+    return `${enabled} / ${registeredCount} 已启用 · ${unregisteredCount} 未注册`
+  }
+  return `${enabled} / ${registeredCount} 已启用`
 })
 
 const validationErrors = computed(() => bc.validateToolPolicyDraft())
@@ -215,7 +219,40 @@ function toggleToolCard(toolName: string): void {
 }
 
 function summarizeTool(tool: ToolCatalogEntry): string {
+  if (tool.registered === false) return '当前运行时未注册，暂时不能下发给模型。'
   return tool.description || tool.compatibilityNote || tool.title
+}
+
+function isToolRegistered(tool: ToolCatalogEntry): boolean {
+  return tool.registered !== false
+}
+
+type ToolVisualState = 'inherit' | 'enabled' | 'disabled' | 'unregistered'
+
+function getToolVisualState(tool: ToolCatalogEntry): ToolVisualState {
+  if (!isToolRegistered(tool)) return 'unregistered'
+  return resolveSelectedMode(tool.toolName)
+}
+
+function getToolVisualStateLabel(tool: ToolCatalogEntry): string {
+  const state = getToolVisualState(tool)
+  if (state === 'enabled') return '启用'
+  if (state === 'disabled') return '禁用'
+  if (state === 'unregistered') return '未注册'
+  return '继承'
+}
+
+function getToolVisualStateBadgeClass(tool: ToolCatalogEntry): string {
+  return `bc-badge-tool-state-${getToolVisualState(tool)}`
+}
+
+function getToolCardStateClass(tool: ToolCatalogEntry): string {
+  return `is-state-${getToolVisualState(tool)}`
+}
+
+function getEffectiveStateBadgeClass(tool: ToolCatalogEntry): string {
+  if (!isToolRegistered(tool)) return 'bc-badge-tool-state-unregistered'
+  return resolveEffectiveStatus(tool.toolName) ? 'bc-badge-tool-state-enabled' : 'bc-badge-tool-state-disabled'
 }
 
 async function handleSaveAll(restartAfter: boolean) {
@@ -310,10 +347,10 @@ function effectiveStatusLabel(toolName: string): string {
           </div>
 
           <p class="bc-tool-card-desc">
-            控制是否向 ChatLuna 注入整组 file_* 文件系统能力，以及默认作用域目录。
+            控制是否向 ChatLuna 注入整组文件系统工具和 bash，并设置它们的默认工作目录。
           </p>
           <p class="bc-tool-card-note">
-            这张卡是进程级配置，不受左侧作用域切换影响；下方每个 file_* 工具卡片才决定不同链路和会话范围里“放不放给模型”。
+            这张卡是进程级配置，不受左侧作用域切换影响；当前模式下 bash 以宿主机高权限运行且允许联网，这里的目录只作为默认工作目录展示，不构成强隔离边界。
           </p>
 
           <ToggleCard
@@ -344,11 +381,11 @@ function effectiveStatusLabel(toolName: string): string {
               :value="envDraft.CHATLUNA_COMMON_FS_SCOPE_PATH ?? ''"
               type="text"
               spellcheck="false"
-              placeholder="/home/kkkzbh/code/qqbot"
+              placeholder="~/system"
               @input="(e) => { envDraft.CHATLUNA_COMMON_FS_SCOPE_PATH = (e.target as HTMLInputElement).value }"
             />
             <em class="bc-field-note">
-              留空时跟随 Koishi 启动目录；建议收紧到单个项目目录，而不是放大到整块磁盘。
+              留空时跟随 Koishi 启动目录；支持填写 ~/...。当前高权限模式下，该目录仅作为默认工作目录，不会阻止 bash 访问宿主机其他路径。
             </em>
           </label>
 
@@ -591,7 +628,7 @@ function effectiveStatusLabel(toolName: string): string {
               v-for="tool in group.tools"
               :key="tool.toolName"
               class="bc-tool-card"
-              :class="[`is-${getToolCompatibilityTone(tool.compatibility)}`, { 'is-expanded': isToolCardExpanded(tool.toolName) }]"
+              :class="[getToolCardStateClass(tool), { 'is-expanded': isToolCardExpanded(tool.toolName) }]"
             >
               <div class="bc-tool-card-head bc-tool-card-summary">
                 <button
@@ -602,6 +639,12 @@ function effectiveStatusLabel(toolName: string): string {
                   <span class="bc-tool-card-title">
                     <strong>{{ tool.title }}</strong>
                     <span class="bc-badge bc-badge-sm bc-badge-muted">{{ tool.toolName }}</span>
+                    <span
+                      class="bc-badge bc-badge-sm"
+                      :class="getToolVisualStateBadgeClass(tool)"
+                    >
+                      {{ getToolVisualStateLabel(tool) }}
+                    </span>
                   </span>
                   <span class="bc-tool-card-summary-text">{{ summarizeTool(tool) }}</span>
                 </button>
@@ -615,6 +658,7 @@ function effectiveStatusLabel(toolName: string): string {
                         'is-active': resolveSelectedMode(tool.toolName) === 'inherit',
                         'is-inherit': resolveSelectedMode(tool.toolName) === 'inherit',
                       }"
+                      :disabled="!isToolRegistered(tool)"
                       @click.stop="updateSelectedMode(tool.toolName, 'inherit')"
                     >
                       继承
@@ -626,6 +670,7 @@ function effectiveStatusLabel(toolName: string): string {
                         'is-active': resolveSelectedMode(tool.toolName) === 'enabled',
                         'is-enabled': resolveSelectedMode(tool.toolName) === 'enabled',
                       }"
+                      :disabled="!isToolRegistered(tool)"
                       @click.stop="updateSelectedMode(tool.toolName, 'enabled')"
                     >
                       启用
@@ -637,6 +682,7 @@ function effectiveStatusLabel(toolName: string): string {
                         'is-active': resolveSelectedMode(tool.toolName) === 'disabled',
                         'is-disabled': resolveSelectedMode(tool.toolName) === 'disabled',
                       }"
+                      :disabled="!isToolRegistered(tool)"
                       @click.stop="updateSelectedMode(tool.toolName, 'disabled')"
                     >
                       禁用
@@ -658,14 +704,26 @@ function effectiveStatusLabel(toolName: string): string {
                 class="bc-tool-card-detail"
               >
                 <div class="bc-tool-card-badges">
-                  <span :class="['bc-badge', 'bc-badge-sm', `bc-badge-${getToolCompatibilityTone(tool.compatibility)}`]">
+                  <span class="bc-badge bc-badge-sm bc-badge-muted">
                     {{ getToolCompatibilityLabel(tool.compatibility) }}
                   </span>
                   <span class="bc-badge bc-badge-sm bc-badge-muted">{{ getToolRiskLabel(tool.riskLevel) }}</span>
+                  <span
+                    class="bc-badge bc-badge-sm"
+                    :class="getToolVisualStateBadgeClass(tool)"
+                  >
+                    {{ getToolVisualStateLabel(tool) }}
+                  </span>
                 </div>
 
                 <p class="bc-tool-card-desc">{{ tool.description }}</p>
                 <p class="bc-tool-card-note">{{ tool.compatibilityNote }}</p>
+                <p
+                  v-if="!isToolRegistered(tool)"
+                  class="bc-tool-card-note"
+                >
+                  这个工具在目录里存在，但当前 Koishi 运行时没有注册它。`tool-policy` 只能控制已注册工具，不能把缺失的 runtime 工具凭空打开。
+                </p>
 
                 <div class="bc-tool-card-meta">
                   <span>适用链路</span>
@@ -716,16 +774,10 @@ function effectiveStatusLabel(toolName: string): string {
                   配置：{{ modeLabel(resolveSelectedMode(tool.toolName)) }} · 生效：{{ effectiveStatusLabel(tool.toolName) }}
                 </span>
                 <span
-                  v-if="resolveEffectiveStatus(tool.toolName)"
-                  class="bc-badge bc-badge-success bc-badge-sm"
+                  class="bc-badge bc-badge-sm"
+                  :class="getEffectiveStateBadgeClass(tool)"
                 >
-                  已启用
-                </span>
-                <span
-                  v-else
-                  class="bc-badge bc-badge-danger bc-badge-sm"
-                >
-                  已禁用
+                  {{ !isToolRegistered(tool) ? '未下发' : resolveEffectiveStatus(tool.toolName) ? '已启用' : '已禁用' }}
                 </span>
               </div>
             </article>

@@ -26,6 +26,7 @@ export interface ToolCatalogEntry {
   relatedTools: string[];
   riskLevel: ToolRiskLevel;
   source: ToolCatalogSource;
+  registered?: boolean;
   availableRoutes: ToolRouteProfile[];
   defaultEnabledByRoute: Record<ToolRouteProfile, boolean>;
 }

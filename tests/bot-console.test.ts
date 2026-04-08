@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -80,6 +80,34 @@ describe('bot-console plugin', () => {
     for (const call of addListener.mock.calls) {
       expect(call[2]).toEqual({ authority: 4 });
     }
+  });
+
+  it('syncs chatluna-agent config on plugin startup', async () => {
+    const dir = createTempDir();
+    mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
+    writeFileSync(
+      join(dir, '.env.local'),
+      'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\nCHATLUNA_COMMON_FS=true\nCHATLUNA_COMMON_FS_SCOPE_PATH=~/system\n',
+      'utf8',
+    );
+    writeFileSync(
+      join(dir, 'data/chathub/presets/sakiko.yml'),
+      'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
+      'utf8',
+    );
+
+    apply({
+      baseDir: dir,
+      console: {
+        addEntry: vi.fn(),
+        addListener: vi.fn(),
+      },
+    } as any);
+
+    const config = JSON.parse(readFileSync(join(dir, 'data/chatluna/agent/config.json'), 'utf8'));
+    expect(config.computer.local.enabled).toBe(true);
+    expect(config.computer.local.scopePath).toContain('/system');
+    expect(config.computer.local.approvalMode).toBe('never');
   });
 
   it('rejects unsupported env writes through the save-env listener', async () => {

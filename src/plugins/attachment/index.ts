@@ -4,6 +4,7 @@ import {
   type MessageContent,
   type MessageContentComplex,
 } from '@langchain/core/messages';
+import { StructuredTool } from '@langchain/core/tools';
 import { Context, Logger, Schema } from 'koishi';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -12,16 +13,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { getMessageContent, getMimeTypeFromSource } from 'koishi-plugin-chatluna/utils/string';
+import type { ChatLunaTool, ChatLunaToolRunnable } from 'koishi-plugin-chatluna/llm-core/platform/types';
 import { ModelCapabilities } from 'koishi-plugin-chatluna/llm-core/platform/types';
 import { registerPromptFragment } from '../shared/prompt-context/index.js';
 import { transcribeAudio } from '../shared/voice/input.js';
+import { z } from 'zod';
 import type {
+  QqbotAttachmentContextProjection,
   QqbotAttachmentDerivativeKind,
   QqbotAttachmentDerivativeRecord,
   QqbotAttachmentKind,
   QqbotAttachmentProviderCacheRecord,
+  QqbotAttachmentReplayItem,
+  QqbotAttachmentReplaySkip,
   QqbotAttachmentRecord,
   QqbotAttachmentRef,
+  QqbotRequestBudgetPolicy,
   QqbotAttachmentServiceLike,
   QqbotResolvedAttachmentSelection,
 } from '../../types/attachment.js';
@@ -38,6 +45,12 @@ const DEFAULT_MAX_PDF_PREVIEW_PAGES_TOTAL = 15;
 const DEFAULT_MAX_TEXT_CHARS_PER_FILE = 24_000;
 const DEFAULT_RECENT_CATALOG_SIZE = 12;
 const DEFAULT_IMAGE_DETAIL = 'high';
+const DEFAULT_HISTORY_WINDOW = 80;
+const DEFAULT_HISTORY_TRIGGER_COUNT = 120;
+const DEFAULT_HISTORY_TOKEN_RATIO = 0.7;
+const DEFAULT_PROJECTION_TEXT_CHARS = 1_200;
+const DEFAULT_REPLAY_TEXT_CHARS = 4_000;
+const DEFAULT_REPLAY_MAX_REFS = 5;
 const HIGH_DETAIL_IMAGE_KEYWORDS = [
   'ocr',
   '识别',
@@ -93,6 +106,12 @@ interface RuntimeConfig {
   maxPdfPreviewPagesTotal: number;
   maxTextCharsPerFile: number;
   recentCatalogSize: number;
+  historyWindow: number;
+  historyTriggerCount: number;
+  historyTokenRatio: number;
+  projectionTextChars: number;
+  replayTextChars: number;
+  replayMaxRefs: number;
 }
 
 type StorageTempFileLike = {
@@ -144,8 +163,13 @@ type ContextWithAttachment = Context & {
     };
     platform?: {
       findModel: (model?: string) => { value?: { capabilities?: ModelCapabilities[] } } | undefined;
+      registerTool?: (name: string, tool: ChatLunaTool) => () => void;
     };
   };
+};
+
+type ToolSessionLike = {
+  userId?: string | null;
 };
 
 type AttachmentSource = {
@@ -159,6 +183,12 @@ function clampNatural(value: unknown, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) return fallback;
   return Math.floor(parsed);
+}
+
+function clampRatio(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) return fallback;
+  return parsed;
 }
 
 function toRuntimeConfig(config: Config): RuntimeConfig {
@@ -188,6 +218,12 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
       config.recentCatalogSize ?? process.env.QQBOT_ATTACHMENT_RECENT_CATALOG_SIZE,
       DEFAULT_RECENT_CATALOG_SIZE,
     ),
+    historyWindow: clampNatural(process.env.QQBOT_ATTACHMENT_HISTORY_WINDOW, DEFAULT_HISTORY_WINDOW),
+    historyTriggerCount: clampNatural(process.env.QQBOT_ATTACHMENT_HISTORY_TRIGGER_COUNT, DEFAULT_HISTORY_TRIGGER_COUNT),
+    historyTokenRatio: clampRatio(process.env.QQBOT_ATTACHMENT_HISTORY_TOKEN_RATIO, DEFAULT_HISTORY_TOKEN_RATIO),
+    projectionTextChars: clampNatural(process.env.QQBOT_ATTACHMENT_PROJECTION_TEXT_CHARS, DEFAULT_PROJECTION_TEXT_CHARS),
+    replayTextChars: clampNatural(process.env.QQBOT_ATTACHMENT_REPLAY_TEXT_CHARS, DEFAULT_REPLAY_TEXT_CHARS),
+    replayMaxRefs: clampNatural(process.env.QQBOT_ATTACHMENT_REPLAY_MAX_REFS, DEFAULT_REPLAY_MAX_REFS),
   };
 }
 
@@ -404,7 +440,7 @@ function createResolutionText(resolution: QqbotResolvedAttachmentSelection): str
     return '';
   }
 
-  const lines = ['本轮已解析到以下历史附件并回灌到上下文：'];
+  const lines = ['本轮已解析到以下历史附件引用，可根据需要调用附件回放工具：'];
   for (const record of resolution.selected) {
     lines.push(`- ${record.refId} | ${record.kind} | ${record.filename ?? 'unnamed'}`);
   }
@@ -424,6 +460,119 @@ function createAmbiguousResolutionText(resolution: QqbotResolvedAttachmentSelect
     lines.push(`- ${record.refId} | ${record.kind} | ${record.filename ?? 'unnamed'} | ${formatAge(record.createdAt)}`);
   }
   return lines.join('\n');
+}
+
+function formatBytes(byteSize: number): string {
+  if (!Number.isFinite(byteSize) || byteSize < 1) {
+    return '0 B';
+  }
+
+  if (byteSize < 1024) {
+    return `${byteSize} B`;
+  }
+
+  if (byteSize < 1024 * 1024) {
+    return `${(byteSize / 1024).toFixed(1)} KiB`;
+  }
+
+  return `${(byteSize / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function formatProjection(record: QqbotAttachmentRecord, processedText: string | null): QqbotAttachmentContextProjection {
+  const providerRepresentations =
+    record.kind === 'image'
+      ? ['image_url']
+      : record.kind === 'pdf' || record.kind === 'file' || record.kind === 'video'
+        ? ['file_url']
+        : ['text'];
+
+  const summaryParts = [
+    `${record.refId}`,
+    formatAttachmentKind(record.kind),
+    record.filename ?? 'unnamed',
+    formatBytes(record.byteSize),
+  ];
+  if (record.senderName) {
+    summaryParts.push(`发送者=${record.senderName}`);
+  }
+
+  return {
+    refId: record.refId,
+    kind: record.kind,
+    filename: record.filename,
+    mimeType: record.mimeType,
+    byteSize: record.byteSize,
+    createdAt: record.createdAt,
+    senderName: record.senderName ?? null,
+    processedText,
+    summaryText: summaryParts.join(' | '),
+    replayable: true,
+    providerRepresentations,
+  };
+}
+
+function createProjectionText(
+  projections: QqbotAttachmentContextProjection[],
+  skipped: Array<{ refId: string; reason: string }>,
+): string {
+  const lines = [
+    '历史附件引用上下文：默认只保留引用、元数据和处理后文本；除非显式调用 qqbot_attachment_replay，否则不要假定已经看到原件。',
+  ];
+
+  for (const projection of projections) {
+    lines.push(
+      `- ${projection.summaryText}${projection.replayable ? ` | 可回放=${projection.providerRepresentations.join('/')}` : ''}`,
+    );
+    if (projection.processedText) {
+      lines.push(`  处理结果：${projection.processedText}`);
+    }
+  }
+
+  if (skipped.length > 0) {
+    lines.push(`已跳过 ${skipped.length} 个附件引用：${skipped.map((item) => `${item.refId}:${item.reason}`).join(', ')}`);
+  }
+
+  return lines.join('\n');
+}
+
+function createToolEntry(name: string, description: string, createTool: () => StructuredTool): ChatLunaTool {
+  return {
+    name,
+    description,
+    selector: (history) =>
+      history.some((message) => {
+        const text = getMessageContent(message.content);
+        return /\batt_[a-z0-9]+\b/i.test(text) || ATTACHMENT_REFERENCE_KEYWORDS.some((keyword) => text.includes(keyword));
+      }),
+    authorization: (session) => Boolean(session?.userId),
+    createTool,
+  };
+}
+
+function resolveBudgetPolicy(runtime: RuntimeConfig): QqbotRequestBudgetPolicy {
+  return {
+    historyWindow: runtime.historyWindow,
+    historyTriggerCount: runtime.historyTriggerCount,
+    historyTokenRatio: runtime.historyTokenRatio,
+  };
+}
+
+function resolveProviderName(config: ChatLunaToolRunnable): string {
+  const model = config.configurable.model;
+  const modelInfo = model?.modelInfo as Record<string, unknown> | undefined;
+  const platform = typeof modelInfo?.platform === 'string' ? modelInfo.platform : null;
+  if (platform) {
+    return platform;
+  }
+
+  const modelName = model?.modelName?.toLowerCase?.() ?? '';
+  if (modelName.includes('claude')) {
+    return 'anthropic';
+  }
+  if (modelName.includes('gpt') || modelName.includes('o1') || modelName.includes('o3') || modelName.includes('o4')) {
+    return 'openai';
+  }
+  return 'generic';
 }
 
 async function withTempFile<T>(buffer: Buffer, suffix: string, fn: (filePath: string) => Promise<T>): Promise<T> {
@@ -709,160 +858,148 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
     maxTextCharsPerFile: number;
   }): Promise<{
     messages: BaseMessage[];
+    projections: QqbotAttachmentContextProjection[];
     injected: QqbotAttachmentRecord[];
     skipped: Array<{ refId: string; reason: string }>;
   }> {
-    const capabilities = this.resolveModelCapabilities(args.model);
-    const supportsImage = capabilities.includes(ModelCapabilities.ImageInput);
-    const supportsFile = capabilities.includes(ModelCapabilities.FileInput);
-    const wantsOriginalImage = needsOriginalImageDetail(args.userText);
-    const wantsPdfVisual = needsPdfVisualContext(args.userText);
-
-    const content: MessageContentComplex[] = [];
+    const projections: QqbotAttachmentContextProjection[] = [];
     const injected: QqbotAttachmentRecord[] = [];
     const skipped: Array<{ refId: string; reason: string }> = [];
-    let totalBytes = 0;
-    let totalPdfPreviewPages = 0;
 
     for (const record of args.attachments) {
-      if (injected.length >= this.runtime.maxInjectCount) {
-        skipped.push({ refId: record.refId, reason: 'inject_count_limit' });
+      if (projections.length >= this.runtime.maxInjectCount) {
+        skipped.push({ refId: record.refId, reason: 'projection_count_limit' });
         continue;
       }
 
-      if (record.byteSize > args.maxInjectPerFileBytes && !['image', 'pdf'].includes(record.kind)) {
-        skipped.push({ refId: record.refId, reason: 'per_file_budget_exceeded' });
-        continue;
-      }
-
-      if (totalBytes + record.byteSize > args.maxInjectTotalBytes) {
-        skipped.push({ refId: record.refId, reason: 'total_budget_exceeded' });
-        continue;
-      }
-
-      const intro = `历史附件 ${record.refId} (${formatAttachmentKind(record.kind)}${record.filename ? `, ${record.filename}` : ''})`;
-      content.push({ type: 'text', text: intro });
-
-      if (record.kind === 'image') {
-        if (!supportsImage) {
-          skipped.push({ refId: record.refId, reason: 'model_missing_image_input' });
-          continue;
-        }
-
-        content.push({
-          type: 'image_url',
-          image_url: {
-            url: record.storageUrl,
-            detail: wantsOriginalImage ? 'original' : DEFAULT_IMAGE_DETAIL,
-          },
-        } as MessageContentComplex);
-        injected.push(record);
-        totalBytes += record.byteSize;
-        continue;
-      }
-
-      if (record.kind === 'pdf') {
-        const pdfText = await this.ensureTextLikeDerivative(record, 'pdf_text', args.maxTextCharsPerFile);
-        if (pdfText) {
-          content.push({
-            type: 'text',
-            text: `附件 ${record.refId} 的提取文本摘录：\n${truncateText(pdfText, args.maxTextCharsPerFile)}`,
-          });
-        }
-
-        if (supportsFile) {
-          content.push({
-            type: 'file_url',
-            file_url: { url: record.storageUrl, mimeType: record.mimeType ?? 'application/pdf' },
-          } as MessageContentComplex);
-        }
-
-        if (supportsImage && wantsPdfVisual && totalPdfPreviewPages < args.maxPdfPreviewPagesTotal) {
-          const previews = await this.ensurePdfPagePreviewDerivatives(
-            record,
-            Math.min(args.maxPdfPreviewPagesPerFile, args.maxPdfPreviewPagesTotal - totalPdfPreviewPages),
-          );
-          for (const preview of previews) {
-            if (!preview.storageUrl) {
-              continue;
-            }
-            content.push({
-              type: 'image_url',
-              image_url: {
-                url: preview.storageUrl,
-                detail: DEFAULT_IMAGE_DETAIL,
-              },
-            } as MessageContentComplex);
-            totalPdfPreviewPages += 1;
-          }
-        }
-
-        if (supportsFile || pdfText) {
-          injected.push(record);
-          totalBytes += record.byteSize;
-        } else {
-          skipped.push({ refId: record.refId, reason: 'no_pdf_representation' });
-        }
-        continue;
-      }
-
-      if (record.kind === 'text') {
-        const textContent = await this.ensureTextLikeDerivative(record, 'text_excerpt', args.maxTextCharsPerFile);
-        if (textContent) {
-          content.push({
-            type: 'text',
-            text: `附件 ${record.refId} 的文本内容摘录：\n${truncateText(textContent, args.maxTextCharsPerFile)}`,
-          });
-          injected.push(record);
-          totalBytes += record.byteSize;
-          continue;
-        }
-      }
-
-      if (record.kind === 'audio') {
-        const transcript = await this.ensureAudioTranscript(record);
-        if (transcript) {
-          content.push({
-            type: 'text',
-            text: `附件 ${record.refId} 的音频转写：\n${truncateText(transcript, args.maxTextCharsPerFile)}`,
-          });
-          injected.push(record);
-          totalBytes += record.byteSize;
-          continue;
-        }
-      }
-
-      if (supportsFile && (record.kind === 'file' || record.kind === 'video')) {
-        content.push({
-          type: 'file_url',
-          file_url: { url: record.storageUrl, mimeType: record.mimeType ?? 'application/octet-stream' },
-        } as MessageContentComplex);
-        injected.push(record);
-        totalBytes += record.byteSize;
-        continue;
-      }
-
-      skipped.push({ refId: record.refId, reason: 'unsupported_attachment_kind' });
+      const processedText = await this.loadProjectionText(record, Math.min(args.maxTextCharsPerFile, this.runtime.projectionTextChars));
+      projections.push(formatProjection(record, processedText));
+      injected.push(record);
     }
 
-    if (content.length < 1) {
-      return { messages: [], injected, skipped };
+    if (projections.length < 1) {
+      return { messages: [], projections, injected, skipped };
     }
 
+    const projectionText = createProjectionText(projections, skipped);
     return {
       messages: [
         new HumanMessage({
-          content,
+          content: projectionText,
         }),
       ],
+      projections,
       injected,
       skipped,
+    };
+  }
+
+  async replayAttachments(args: {
+    conversationId: string;
+    refs: string[];
+    purpose: string;
+    provider: string;
+    model?: string | null;
+  }): Promise<{
+    resolved: QqbotAttachmentReplayItem[];
+    skipped: QqbotAttachmentReplaySkip[];
+    cacheHits: number;
+  }> {
+    const uniqueRefs = Array.from(new Set(args.refs.map((item) => normalizeText(item)).filter(Boolean))).slice(0, this.runtime.replayMaxRefs);
+    const records = await this.findAttachmentsByRefs(args.conversationId, uniqueRefs);
+    const foundMap = new Map(records.map((record) => [record.refId, record] as const));
+    const resolved: QqbotAttachmentReplayItem[] = [];
+    const skipped: QqbotAttachmentReplaySkip[] = [];
+    let cacheHits = 0;
+
+    for (const refId of uniqueRefs) {
+      const record = foundMap.get(refId);
+      if (!record) {
+        skipped.push({ refId, reason: 'not_found' });
+        continue;
+      }
+
+      const processedText = await this.loadProjectionText(record, this.runtime.replayTextChars);
+      const representationKind: QqbotAttachmentReplayItem['representationKind'] =
+        record.kind === 'image'
+          ? 'image_url'
+          : record.kind === 'pdf' || record.kind === 'file' || record.kind === 'video'
+            ? 'file_url'
+            : 'text';
+      const representationKey = `${representationKind}:${record.hash ?? record.storageFileId}:${normalizeText(args.purpose).slice(0, 64) || 'default'}`;
+      const cached = await this.getProviderCache(record.refId, args.provider, representationKey);
+      const providerHandle = cached?.fileId ?? record.storageUrl;
+      if (cached) {
+        cacheHits += 1;
+      } else if (representationKind !== 'text') {
+        await this.upsertProviderCache({
+          attachmentRefId: record.refId,
+          provider: args.provider,
+          representationKey,
+          fileId: record.storageUrl,
+          mimeType: record.mimeType ?? null,
+          detail: JSON.stringify({
+            purpose: normalizeText(args.purpose) || null,
+            representationKind,
+            source: 'storage_url',
+          }),
+        });
+      }
+
+      resolved.push({
+        refId: record.refId,
+        kind: record.kind,
+        filename: record.filename,
+        representationKind,
+        provider: args.provider,
+        providerHandle,
+        fileId: representationKind === 'text' ? null : providerHandle,
+        url: representationKind === 'text' ? null : record.storageUrl,
+        mimeType: record.mimeType,
+        processedText,
+        summaryText: formatProjection(record, processedText).summaryText,
+        expiresAt: null,
+        cacheHit: Boolean(cached),
+      });
+    }
+
+    logger.debug(
+      'attachment replay resolved: %s',
+      JSON.stringify({
+        conversationId: args.conversationId,
+        refs: uniqueRefs,
+        attachmentReplayCount: resolved.length,
+        attachmentReplayCacheHits: cacheHits,
+        skipped,
+      }),
+    );
+
+    return {
+      resolved,
+      skipped,
+      cacheHits,
     };
   }
 
   private resolveModelCapabilities(model: string | null | undefined): ModelCapabilities[] {
     const capabilities = this.ctx.chatluna.platform?.findModel(model ?? undefined)?.value?.capabilities;
     return Array.isArray(capabilities) ? capabilities : [];
+  }
+
+  private async loadProjectionText(record: QqbotAttachmentRecord, maxChars: number): Promise<string | null> {
+    if (record.kind === 'pdf') {
+      return this.ensureTextLikeDerivative(record, 'pdf_text', maxChars);
+    }
+
+    if (record.kind === 'text') {
+      return this.ensureTextLikeDerivative(record, 'text_excerpt', maxChars);
+    }
+
+    if (record.kind === 'audio') {
+      return this.ensureAudioTranscript(record);
+    }
+
+    return null;
   }
 
   private async findAttachmentsByRefs(conversationId: string, refIds: string[]): Promise<QqbotAttachmentRecord[]> {
@@ -877,6 +1014,60 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
       }
     }
     return result;
+  }
+
+  async rewriteArchivedInputMessage(message: MessageWithAttachments, refs: QqbotAttachmentRef[]): Promise<void> {
+    const parts = toContentParts(message.content);
+    if (parts.length < 1 || refs.length < 1) {
+      return;
+    }
+
+    const nextContent: MessageContentComplex[] = [];
+    let attachmentIndex = 0;
+    for (const part of parts) {
+      if (part == null || typeof part !== 'object' || part.type === 'text') {
+        nextContent.push(part);
+        continue;
+      }
+
+      const urlInfo = resolveFileLikeUrl(part);
+      const mimeType = urlInfo?.mimeType ?? null;
+      const kind = urlInfo ? guessAttachmentKind(part, mimeType) : null;
+      if (!kind) {
+        nextContent.push(part);
+        continue;
+      }
+
+      const ref = refs[attachmentIndex];
+      attachmentIndex += 1;
+      if (!ref) {
+        nextContent.push(part);
+        continue;
+      }
+
+      if (kind === 'audio') {
+        const record = await this.getAttachmentByRefId(ref.refId);
+        const transcript = record ? await this.ensureAudioTranscript(record) : null;
+        nextContent.push({
+          type: 'text',
+          text: transcript
+            ? `音频附件 ${ref.refId} 转写：\n${truncateText(transcript, this.runtime.projectionTextChars)}`
+            : `[attachment ref=${ref.refId} kind=audio]`,
+        });
+        continue;
+      }
+
+      nextContent.push(part);
+    }
+
+    message.content = nextContent;
+  }
+
+  private async getAttachmentByRefId(refId: string): Promise<QqbotAttachmentRecord | null> {
+    const rows = (await this.ctx.database.get('qqbot_attachment', {
+      refId,
+    })) as QqbotAttachmentRecord[];
+    return rows[0] ?? null;
   }
 
   private toRef(record: QqbotAttachmentRecord): QqbotAttachmentRef {
@@ -1221,6 +1412,64 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
       updatedAt: now,
     });
   }
+
+  private async getProviderCache(
+    attachmentRefId: string,
+    provider: string,
+    representationKey: string,
+  ): Promise<QqbotAttachmentProviderCacheRecord | null> {
+    const rows = (await this.ctx.database.get('qqbot_attachment_provider_cache', {
+      attachmentRefId,
+      provider,
+      representationKey,
+    })) as QqbotAttachmentProviderCacheRecord[];
+    const record = rows[0] ?? null;
+    if (!record) {
+      return null;
+    }
+
+    await this.ctx.database.set(
+      'qqbot_attachment_provider_cache',
+      { id: record.id },
+      {
+        lastUsedAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    );
+    return {
+      ...record,
+      lastUsedAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  }
+
+  private async upsertProviderCache(
+    input: Omit<QqbotAttachmentProviderCacheRecord, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>,
+  ): Promise<void> {
+    const now = Date.now();
+    const existing = await this.getProviderCache(input.attachmentRefId, input.provider, input.representationKey);
+    if (existing) {
+      await this.ctx.database.set(
+        'qqbot_attachment_provider_cache',
+        { id: existing.id },
+        {
+          fileId: input.fileId,
+          mimeType: input.mimeType,
+          detail: input.detail,
+          updatedAt: now,
+          lastUsedAt: now,
+        },
+      );
+      return;
+    }
+
+    await this.ctx.database.create('qqbot_attachment_provider_cache', {
+      ...input,
+      createdAt: now,
+      updatedAt: now,
+      lastUsedAt: now,
+    });
+  }
 }
 
 function applyPromptFragments(conversationId: string, recent: QqbotAttachmentRecord[], resolution: QqbotResolvedAttachmentSelection): void {
@@ -1270,6 +1519,53 @@ function applyPromptFragments(conversationId: string, recent: QqbotAttachmentRec
   }
 }
 
+const AttachmentReplayToolSchema = z.object({
+  refs: z.array(z.string().trim().min(1)).min(1).max(DEFAULT_REPLAY_MAX_REFS).describe('Attachment ref ids, for example att_123abc.'),
+  purpose: z.string().trim().min(1).max(200).describe('Why the replay is needed, for example 对比这张图的按钮位置 or 重新查看这个 PDF 原件.'),
+});
+
+class AttachmentReplayTool extends StructuredTool {
+  name = 'qqbot_attachment_replay';
+
+  description =
+    'Replay archived qqbot attachments on demand. Use this only after the user or current task clearly refers to a stored attachment ref or recent attachment. Prefer normal reference context first; call this tool only when you need the original image/file handle or a longer processed extract.';
+
+  schema = AttachmentReplayToolSchema;
+
+  constructor(private readonly service: AttachmentService) {
+    super({});
+  }
+
+  async _call(input: z.infer<typeof AttachmentReplayToolSchema>, _runManager: unknown, config: ChatLunaToolRunnable): Promise<string> {
+    const session = config.configurable.session as ToolSessionLike | undefined;
+    if (!session?.userId) {
+      throw new Error('qqbot_attachment_replay requires the current session.');
+    }
+
+    const conversationId = normalizeText(config.configurable.conversationId);
+    if (!conversationId) {
+      throw new Error('qqbot_attachment_replay requires the current conversation.');
+    }
+
+    const result = await this.service.replayAttachments({
+      conversationId,
+      refs: input.refs,
+      purpose: input.purpose,
+      provider: resolveProviderName(config),
+      model: config.configurable.model?.modelName ?? null,
+    });
+
+    return JSON.stringify({
+      tool: this.name,
+      purpose: normalizeText(input.purpose),
+      resolved: result.resolved,
+      skipped: result.skipped,
+      attachmentReplayCount: result.resolved.length,
+      attachmentReplayCacheHits: result.cacheHits,
+    });
+  }
+}
+
 export function apply(ctx: Context, config: Config): void {
   const runtime = toRuntimeConfig(config);
   AttachmentService.ensureTables(ctx);
@@ -1286,9 +1582,21 @@ export function apply(ctx: Context, config: Config): void {
   ctx.on('ready', () => {
     const chain = serviceCtx.chatluna.chatChain;
     const contextManager = serviceCtx.chatluna.contextManager;
+    const registerTool = serviceCtx.chatluna.platform?.registerTool?.bind(serviceCtx.chatluna.platform);
     if (!chain || !contextManager) {
       logger.warn('chatluna service unavailable, skip attachment middleware registration.');
       return;
+    }
+
+    if (registerTool) {
+      registerTool(
+        'qqbot_attachment_replay',
+        createToolEntry(
+          'qqbot_attachment_replay',
+          'Replay archived qqbot attachments by ref id and return replayable handles plus processed text.',
+          () => new AttachmentReplayTool(service),
+        ),
+      );
     }
 
     chain
@@ -1319,6 +1627,13 @@ export function apply(ctx: Context, config: Config): void {
           inputMessage.additional_kwargs = {
             ...(inputMessage.additional_kwargs ?? {}),
             qqbot_attachment_refs: refs,
+            qqbot_request_budget_policy: resolveBudgetPolicy(runtime),
+          };
+          await service.rewriteArchivedInputMessage(inputMessage, refs);
+        } else {
+          inputMessage.additional_kwargs = {
+            ...(inputMessage.additional_kwargs ?? {}),
+            qqbot_request_budget_policy: resolveBudgetPolicy(runtime),
           };
         }
 
@@ -1379,6 +1694,14 @@ export function apply(ctx: Context, config: Config): void {
             once: true,
             stage: 'after_scratchpad',
           });
+          logger.debug(
+            'attachment projection injected: %s',
+            JSON.stringify({
+              conversationId,
+              attachmentProjectionCount: hydrated.projections.length,
+              skipped: hydrated.skipped,
+            }),
+          );
         }
 
         return CHAT_CHAIN_CONTINUE;
@@ -1388,9 +1711,11 @@ export function apply(ctx: Context, config: Config): void {
       .before('qqbot_prompt_envelope');
 
     logger.info(
-      'attachment context loaded: maxInjectCount=%d recentCatalogSize=%d',
+      'attachment context loaded: maxInjectCount=%d recentCatalogSize=%d historyWindow=%d historyTriggerCount=%d',
       runtime.maxInjectCount,
       runtime.recentCatalogSize,
+      runtime.historyWindow,
+      runtime.historyTriggerCount,
     );
   });
 }

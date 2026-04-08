@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyEnvPatchToContent,
@@ -398,6 +398,78 @@ describe('bot-console manager', () => {
       CHATLUNA_COMMON_FS: 'true',
       CHATLUNA_COMMON_FS_SCOPE_PATH: '/tmp/qqbot-scope',
     });
+  });
+
+  it('expands ~/ for file system scope paths when saving env', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    await expect(
+      manager.saveEnv({
+        CHATLUNA_COMMON_FS_SCOPE_PATH: '~/system',
+      }),
+    ).resolves.toMatchObject({
+      CHATLUNA_COMMON_FS_SCOPE_PATH: join(homedir(), 'system'),
+    });
+  });
+
+  it('syncs chatluna-agent local computer config from managed env saves', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    await manager.saveEnv({
+      CHATLUNA_COMMON_FS: 'true',
+      CHATLUNA_COMMON_FS_SCOPE_PATH: '~/system',
+    });
+
+    const config = JSON.parse(readFileSync(join(dir, 'data/chatluna/agent/config.json'), 'utf8'));
+    expect(config).toMatchObject({
+      version: 4,
+      computer: {
+        defaultProvider: 'local',
+        local: {
+          enabled: true,
+          approvalMode: 'never',
+          dangerouslySkipPermissions: true,
+          networkPolicy: 'allow',
+          scopePath: join(homedir(), 'system'),
+        },
+        e2b: {
+          enabled: false,
+        },
+        openTerminal: {
+          enabled: false,
+        },
+      },
+    });
+  });
+
+  it('preserves non-computer agent config fields when syncing managed computer config', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    const agentConfigPath = join(dir, 'data/chatluna/agent/config.json');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    mkdirSync(join(dir, 'data/chatluna/agent'), { recursive: true });
+    writeFileSync(agentConfigPath, JSON.stringify({
+      version: 4,
+      mcp: { mcpServers: { demo: { command: 'echo', args: ['1'] } }, tools: {} },
+    }, null, 2), 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    await manager.saveEnv({
+      CHATLUNA_COMMON_FS: 'true',
+    });
+
+    const config = JSON.parse(readFileSync(agentConfigPath, 'utf8'));
+    expect(config.mcp).toEqual({
+      mcpServers: { demo: { command: 'echo', args: ['1'] } },
+      tools: {},
+    });
+    expect(config.computer.local.enabled).toBe(true);
   });
 
   it('reads state from .env.server when that is the active runtime env file', async () => {

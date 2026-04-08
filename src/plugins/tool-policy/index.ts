@@ -156,10 +156,10 @@ export class ToolPolicyService implements ToolPolicyServiceLike {
 
   async getToolPolicyState(): Promise<BotConsoleToolPolicyState> {
     const conversationTargets = await this.listConversationTargets();
-    const catalog = this.getRuntimeCatalog();
+    const runtimeTools = new Set(this.getRuntimeToolNames());
     return {
       routeProfiles: TOOL_ROUTE_PROFILES.map((entry) => entry.id),
-      catalog: catalog.map((entry) => ({ ...entry })),
+      catalog: TOOL_CATALOG.map((entry) => ({ ...entry, registered: runtimeTools.has(entry.toolName) })),
       routeProfileInfo: TOOL_ROUTE_PROFILES.map((entry) => ({ ...entry })),
       defaultScopes: TOOL_DEFAULT_SCOPES.map((entry) => ({ ...entry })),
       scopes: this.buildScopes(conversationTargets),

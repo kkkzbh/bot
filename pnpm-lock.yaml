@@ -68,6 +68,9 @@ importers:
       koishi-plugin-chatluna:
         specifier: link:../chatluna/packages/core
         version: link:../chatluna/packages/core
+      koishi-plugin-chatluna-agent:
+        specifier: link:../chatluna/packages/extension-agent
+        version: link:../chatluna/packages/extension-agent
       koishi-plugin-chatluna-mcp-client:
         specifier: ^1.3.3
         version: 1.3.3(@cfworker/json-schema@4.1.1)(koishi-plugin-chatluna-storage-service@1.0.6(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1)))(koishi-plugin-chatluna@chatluna+packages+core)(koishi@4.18.10(@cordisjs/plugin-http@0.6.3(cordis@3.18.1))(cordis@3.18.1))(openai@5.23.2(ws@8.19.0)(zod@3.25.76))

@@ -119,6 +119,12 @@ export function apply(ctx: Context): void {
   const runtimeCtx = ctx as unknown as RuntimeServiceContext;
   const entryDir = join(ctx.baseDir, 'node_modules/.cache/qqbot-bot-console');
 
+  try {
+    manager.syncManagedChatLunaAgentConfig();
+  } catch (error) {
+    logger.warn('failed to sync chatluna-agent config: %s', error instanceof Error ? error.message : String(error));
+  }
+
   consoleService.addEntry(
     {
       dev: join(entryDir, 'index.js'),

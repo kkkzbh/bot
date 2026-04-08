@@ -39,9 +39,9 @@ export const FIELD_HINTS: Record<string, string> = {
   CHATLUNA_API_KEY:
     '普通聊天默认走这里配置的接口密钥。主聊天切换供应商时，优先改这里，不要直接改 OPENAI_*。',
   CHATLUNA_COMMON_FS:
-    '控制是否向 ChatLuna 注入整组 file_* 文件系统能力。关闭后，下方文件系统工具即使策略设为启用，也不会真正提供给模型。',
+    '控制是否向 ChatLuna 注入整组 file_* 与 bash 工具。当前模式下 bash 以宿主机高权限运行且允许联网，关闭后这些工具不会真正提供给模型。',
   CHATLUNA_COMMON_FS_SCOPE_PATH:
-    '限制文件系统工具默认可访问的根目录。留空时会跟随 Koishi 启动目录，也就是当前 bot 的工作目录。',
+    '作为文件工具与 bash 的默认工作目录。当前高权限模式下它不再是强隔离边界；支持填写 ~/...，保存时会展开成当前运行用户的 home 绝对路径。',
   CHATLUNA_DEFAULT_MODEL:
     '普通聊天默认走这里配置的模型。建议填写完整规范名，例如 siliconflow/Pro/moonshotai/Kimi-K2.5。',
   CHATLUNA_MAX_CONTEXT_RATIO:

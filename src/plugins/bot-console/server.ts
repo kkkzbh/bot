@@ -1,4 +1,4 @@
-import { constants as fsConstants, existsSync } from 'node:fs';
+import { constants as fsConstants, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import {
   access,
   copyFile,
@@ -13,6 +13,7 @@ import {
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
+import { homedir } from 'node:os';
 import YAML from 'yaml';
 import type {
   BotConsoleEnvFilesState,
@@ -135,6 +136,7 @@ const PRESET_ORDER_FILENAME = '.bot-console-preset-order.json';
 const PRESET_ROLE_SET = new Set(['system', 'user', 'assistant', 'tool']);
 const RUNTIME_ENV_FILE_BASENAME = '.env.runtime';
 const LOCAL_RUNTIME_ENV_RELATIVE = join('.runtime', RUNTIME_ENV_FILE_BASENAME);
+const CHATLUNA_AGENT_CONFIG_RELATIVE = join('data', 'chatluna', 'agent', 'config.json');
 
 export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
   { key: 'QQBOT_REALTIME_MESSAGE_ENABLED', label: '实时消息', type: 'toggle', section: 'features' },
@@ -205,6 +207,109 @@ function ensureManagedKey(key: string): void {
   if (!BOT_CONSOLE_ENV_KEYS.has(key)) {
     throw new Error(`不支持这个配置项：${key}`);
   }
+}
+
+function expandHomePath(value: string): string {
+  if (value === '~') return homedir();
+  if (value.startsWith('~/')) return join(homedir(), value.slice(2));
+  return value;
+}
+
+function normalizeManagedEnvValue(key: string, value: string | null | undefined): string | null | undefined {
+  if (value == null) return value;
+  if (key === 'CHATLUNA_COMMON_FS_SCOPE_PATH') {
+    return expandHomePath(value.trim());
+  }
+  return value;
+}
+
+function isExplicitTrue(value: string | undefined): boolean {
+  return String(value ?? '').trim().toLowerCase() === 'true';
+}
+
+function readManagedEnvPatchFromFileSync(filePath: string | null | undefined): Partial<Record<string, string>> {
+  if (!filePath || !existsSync(filePath)) return {};
+  return readManagedEnvPatchFromContent(readFileSync(filePath, 'utf8'));
+}
+
+function buildManagedAgentComputerConfig(env: Record<string, string>) {
+  return {
+    defaultProvider: 'local',
+    idleTimeoutMs: 600000,
+    local: {
+      enabled: isExplicitTrue(env.CHATLUNA_COMMON_FS),
+      sandboxMode: 'workspace-write',
+      approvalMode: 'never',
+      dangerouslySkipPermissions: true,
+      preferredShell: 'auto',
+      scopePath: String(normalizeManagedEnvValue('CHATLUNA_COMMON_FS_SCOPE_PATH', env.CHATLUNA_COMMON_FS_SCOPE_PATH) ?? ''),
+      writableRoots: [],
+      readOnlyRoots: [],
+      denyRoots: [],
+      ignores: [
+        '**/node_modules/**',
+        '**/.git/**',
+        '**/dist/**',
+        '**/build/**',
+        '**/.yarn/**',
+        '**/coverage/**',
+        '**/.next/**',
+        '**/.nuxt/**',
+        '**/out/**',
+        '**/.cache/**',
+        '**/.vscode/**',
+        '**/.idea/**',
+        '**/temp/**',
+        '**/tmp/**',
+      ],
+      allowedCommands: [],
+      blockedCommands: [],
+      commandTimeoutMs: 30000,
+      networkPolicy: 'allow',
+    },
+    e2b: {
+      enabled: false,
+      apiKey: '',
+      template: 'base',
+      desktopTemplate: '',
+      timeoutMs: 300000,
+      keepAlive: true,
+    },
+    openTerminal: {
+      enabled: false,
+      baseUrl: '',
+      apiKey: '',
+      deploymentMode: 'unknown',
+      userIsolation: false,
+    },
+  };
+}
+
+function readJsonRecordSync(filePath: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export function syncManagedChatLunaAgentConfig(rootDir: string, env: Record<string, string>): string {
+  const configPath = join(rootDir, CHATLUNA_AGENT_CONFIG_RELATIVE);
+  const existing = existsSync(configPath) ? readJsonRecordSync(configPath) : {};
+  const next = {
+    ...existing,
+    version: typeof existing.version === 'number' ? existing.version : 4,
+    computer: buildManagedAgentComputerConfig(env),
+  };
+  const nextContent = `${JSON.stringify(next, null, 2)}\n`;
+  const currentContent = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
+  if (currentContent === nextContent) return configPath;
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, nextContent, 'utf8');
+  return configPath;
 }
 
 export function buildModelTabsStateFromEnv(env: Record<string, string>): BotConsoleModelTabsState {
@@ -685,17 +790,30 @@ export class BotConsoleManager {
     return parsePresetDocument(normalized, summary.path, raw, summary.source);
   }
 
+  syncManagedChatLunaAgentConfig(env?: Record<string, string>): string {
+    const mergedEnv = env ?? mergeManagedEnvRecords(
+      readManagedEnvPatchFromFileSync(this.envFiles.baseFilePath),
+      readManagedEnvPatchFromFileSync(this.envFiles.overrideFilePath),
+    );
+    return syncManagedChatLunaAgentConfig(this.rootDir, mergedEnv);
+  }
+
   async saveEnv(patch: EnvPatch): Promise<Record<string, string>> {
+    const normalizedPatch = Object.fromEntries(
+      Object.entries(patch).map(([key, value]) => [key, normalizeManagedEnvValue(key, value)]),
+    ) as EnvPatch;
     const [baseContent, currentTargetContent] = await Promise.all([
       readFileIfExists(this.fs, this.envFiles.baseFilePath),
       readFileIfExists(this.fs, this.envFiles.editTarget),
     ]);
-    const nextTargetContent = applyEnvPatchToContent(currentTargetContent, patch);
+    const nextTargetContent = applyEnvPatchToContent(currentTargetContent, normalizedPatch);
     await writeFileAtomicWithBackup(this.envFiles.editTarget, nextTargetContent, this.fs);
-    return mergeManagedEnvRecords(
+    const env = mergeManagedEnvRecords(
       readManagedEnvPatchFromContent(baseContent),
       readManagedEnvPatchFromContent(nextTargetContent),
     );
+    this.syncManagedChatLunaAgentConfig(env);
+    return env;
   }
 
   async saveModelTabs(input: SaveModelTabsRequest): Promise<{ env: Record<string, string>; modelTabs: BotConsoleModelTabsState }> {

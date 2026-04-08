@@ -330,6 +330,9 @@ function toolScopeSortRank(scope: ToolPolicyScope): number {
 function buildToolCatalog(state: BotConsoleState | null): ToolCatalogEntry[] {
   const catalog = state?.toolPolicy?.catalog ?? TOOL_CATALOG
   return [...catalog].sort((left, right) => {
+    if ((left.registered ?? true) !== (right.registered ?? true)) {
+      return (left.registered ?? true) ? -1 : 1
+    }
     const categoryDelta = left.category.localeCompare(right.category, 'zh-CN')
     if (categoryDelta !== 0) return categoryDelta
     return left.title.localeCompare(right.title, 'zh-CN')
@@ -865,6 +868,7 @@ export function useBotConsole() {
     toolName: string,
   ): boolean {
     const tool = toolPolicyCatalog.value.find(item => item.toolName === toolName)
+    if (tool?.registered === false) return false
     let enabled = tool?.defaultEnabledByRoute?.[routeProfile] ?? true
 
     const resolveMode = (targetScopeKind: ToolPolicyScope['scopeKind'], targetScopeId: string): ToolOverrideMode =>
@@ -893,6 +897,8 @@ export function useBotConsole() {
     routeProfile: ToolRouteProfile,
     toolName: string,
   ): string {
+    const tool = toolPolicyCatalog.value.find(item => item.toolName === toolName)
+    if (tool?.registered === false) return '未注册'
     return resolveEffectiveToolEnabled(scope, routeProfile, toolName) ? '启用' : '禁用'
   }
 
@@ -902,6 +908,8 @@ export function useBotConsole() {
     toolName: string,
     mode: ToolOverrideMode,
   ): void {
+    const tool = toolPolicyCatalog.value.find(item => item.toolName === toolName)
+    if (tool?.registered === false) return
     toolOverrideDraft[resolveToolOverrideKey(scope, routeProfile, toolName)] = mode
   }
 
@@ -962,6 +970,7 @@ export function useBotConsole() {
     for (const scope of scopes) {
       for (const routeProfile of routes) {
         for (const tool of catalog) {
+          if (tool.registered === false) continue
           const key = resolveToolOverrideKey(scope, routeProfile, tool.toolName)
           const mode = toolOverrideDraft[key] ?? 'inherit'
           const enabled = denormalizeToolOverrideMode(mode)

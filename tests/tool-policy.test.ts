@@ -14,7 +14,8 @@ vi.mock('koishi', () => {
 });
 
 import { apply } from '../src/plugins/tool-policy/index.js';
-import { GLOBAL_DEFAULT_SCOPE_ID, PRIVATE_DEFAULT_SCOPE_ID } from '../src/plugins/tool-policy/catalog.js';
+import { GLOBAL_DEFAULT_SCOPE_ID, PRIVATE_DEFAULT_SCOPE_ID, TOOL_CATALOG } from '../src/plugins/tool-policy/catalog.js';
+import type { ToolCatalogEntry } from '../src/types/tool-policy.js';
 
 type Row = Record<string, any>;
 
@@ -80,6 +81,13 @@ function createHarness(
     registerToolMaskResolver,
       platform: {
         getToolRegistry: () => ({
+          file_read: { name: 'file_read' },
+          file_write: { name: 'file_write' },
+          file_edit: { name: 'file_edit' },
+          file_publish: { name: 'file_publish' },
+          grep: { name: 'grep' },
+          glob: { name: 'glob' },
+          bash: { name: 'bash' },
           web_search: { name: 'web_search' },
           web_fetch: { name: 'web_fetch' },
           web_post: { name: 'web_post' },
@@ -201,7 +209,16 @@ describe('tool policy service', () => {
     const service = ctx.toolPolicy!;
 
     const state = await service.getToolPolicyState();
-    expect(state.catalog.length).toBe(3);
+    expect(state.catalog.length).toBe(TOOL_CATALOG.length);
+    expect(state.catalog.find((tool: ToolCatalogEntry) => tool.toolName === 'web_search')).toEqual(
+      expect.objectContaining({ registered: true }),
+    );
+    expect(state.catalog.find((tool: ToolCatalogEntry) => tool.toolName === 'file_read')).toEqual(
+      expect.objectContaining({ registered: true }),
+    );
+    expect(state.catalog.find((tool: ToolCatalogEntry) => tool.toolName === 'qqbot_attachment_replay')).toEqual(
+      expect.objectContaining({ registered: false }),
+    );
     expect(state.routeProfiles).toEqual([
       'agent',
       'automation',
@@ -268,11 +285,11 @@ describe('tool policy service', () => {
       }),
     ).resolves.toEqual({
       mode: 'allow',
-      allow: ['web_fetch', 'web_search'],
+      allow: ['bash', 'file_edit', 'file_publish', 'file_read', 'file_write', 'glob', 'grep', 'web_fetch', 'web_search'],
       deny: [],
       toolCallMask: {
         mode: 'allow',
-        allow: ['web_fetch', 'web_search'],
+        allow: ['bash', 'file_edit', 'file_publish', 'file_read', 'file_write', 'glob', 'grep', 'web_fetch', 'web_search'],
         deny: [],
       },
     });
@@ -284,11 +301,11 @@ describe('tool policy service', () => {
       }),
     ).resolves.toEqual({
       mode: 'allow',
-      allow: ['web_fetch', 'web_search'],
+      allow: ['bash', 'file_edit', 'file_publish', 'file_read', 'file_write', 'glob', 'grep', 'web_fetch', 'web_search'],
       deny: [],
       toolCallMask: {
         mode: 'allow',
-        allow: ['web_fetch', 'web_search'],
+        allow: ['bash', 'file_edit', 'file_publish', 'file_read', 'file_write', 'glob', 'grep', 'web_fetch', 'web_search'],
         deny: [],
       },
     });
@@ -346,11 +363,20 @@ describe('tool policy service', () => {
           enabled: 1,
           updatedAt: 13,
         },
+        {
+          id: 5,
+          toolName: 'file_update',
+          routeProfile: 'agent',
+          scopeKind: 'group',
+          scopeId: '1003',
+          enabled: 1,
+          updatedAt: 14,
+        },
       ],
     });
     const service = ctx.toolPolicy!;
 
-    await expect(service.getToolOverrides()).resolves.toEqual([
+    await expect(service.getToolOverrides()).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 1,
         toolName: 'web_fetch',
@@ -367,7 +393,15 @@ describe('tool policy service', () => {
         scopeId: '1002',
         enabled: 1,
       }),
-    ]);
+      expect.objectContaining({
+        id: 5,
+        toolName: 'file_edit',
+        routeProfile: 'agent',
+        scopeKind: 'group',
+        scopeId: '1003',
+        enabled: 1,
+      }),
+    ]));
 
     await expect(database.get('tool_scope_override', {})).resolves.toEqual([
       expect.objectContaining({
@@ -383,6 +417,13 @@ describe('tool policy service', () => {
         routeProfile: 'agent',
         scopeKind: 'group',
         scopeId: '1002',
+      }),
+      expect.objectContaining({
+        id: 5,
+        toolName: 'file_edit',
+        routeProfile: 'agent',
+        scopeKind: 'group',
+        scopeId: '1003',
       }),
     ]);
   });

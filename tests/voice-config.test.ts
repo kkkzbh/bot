@@ -8,10 +8,14 @@ describe('qq voice config wiring', () => {
     const voiceIndex = content.indexOf('./dist/plugins/reply:voice:');
     const triggerIndex = content.indexOf('./dist/plugins/triggers/group-natural:natural-trigger:');
     const chatlunaIndex = content.indexOf('chatluna:0qm1bk:');
+    const agentIndex = content.indexOf('chatluna-agent:computer-agent:');
+    const commonIndex = content.indexOf('chatluna-plugin-common:qf1a6x:');
 
     expect(voiceIndex).toBeGreaterThanOrEqual(0);
     expect(triggerIndex).toBeGreaterThan(voiceIndex);
     expect(chatlunaIndex).toBeGreaterThan(triggerIndex);
+    expect(commonIndex).toBeGreaterThan(chatlunaIndex);
+    expect(agentIndex).toBeGreaterThan(commonIndex);
 
     expect(content).toContain("asrBaseUrl: ${{ env.QQ_VOICE_ASR_BASE_URL || '' }}");
     expect(content).toContain("ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || '' }}");
@@ -19,6 +23,7 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('maxTasksPerUser:');
     expect(content).toContain("platform: ${{ env.CHATLUNA_PLATFORM || 'siliconflow' }}");
     expect(content).toContain("maxContextRatio: ${{ +env.CHATLUNA_MAX_CONTEXT_RATIO || 0.35 }}");
+    expect(content).toContain('chatluna-agent:computer-agent: {}');
   });
 
   it('declares loopback voice services and persisted voice data paths in compose', () => {

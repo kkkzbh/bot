@@ -237,6 +237,7 @@ plugins:
                       description: OK
       draw: false
       music: false
+    chatluna-agent:computer-agent: {}
     chatluna-mcp-client:aq3m2y:
       servers: '{"mcpServers":{}}'
       tools: {}

@@ -234,6 +234,7 @@ export interface ToolCatalogEntry {
   relatedTools: string[];
   riskLevel: ToolRiskLevel;
   source?: "project" | "chatluna_runtime";
+  registered?: boolean;
   availableRoutes: ToolRouteProfile[];
   defaultEnabledByRoute?: Record<ToolRouteProfile, boolean>;
 }

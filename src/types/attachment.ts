@@ -79,6 +79,47 @@ export interface QqbotResolvedAttachmentSelection {
   reason: 'explicit_ref' | 'filename' | 'relative_latest' | 'relative_batch' | 'none';
 }
 
+export interface QqbotAttachmentContextProjection {
+  refId: string;
+  kind: QqbotAttachmentKind;
+  filename: string | null;
+  mimeType: string | null;
+  byteSize: number;
+  createdAt: number;
+  senderName: string | null;
+  processedText: string | null;
+  summaryText: string | null;
+  replayable: boolean;
+  providerRepresentations: string[];
+}
+
+export interface QqbotAttachmentReplayItem {
+  refId: string;
+  kind: QqbotAttachmentKind;
+  filename: string | null;
+  representationKind: 'text' | 'image_url' | 'file_url';
+  provider: string;
+  providerHandle: string;
+  fileId: string | null;
+  url: string | null;
+  mimeType: string | null;
+  processedText: string | null;
+  summaryText: string | null;
+  expiresAt?: number | null;
+  cacheHit: boolean;
+}
+
+export interface QqbotAttachmentReplaySkip {
+  refId: string;
+  reason: string;
+}
+
+export interface QqbotRequestBudgetPolicy {
+  historyWindow: number;
+  historyTriggerCount: number;
+  historyTokenRatio: number;
+}
+
 export interface QqbotAttachmentServiceLike {
   archiveMessageAttachments(args: {
     conversationId: string;
@@ -102,8 +143,20 @@ export interface QqbotAttachmentServiceLike {
     maxTextCharsPerFile: number;
   }): Promise<{
     messages: BaseMessage[];
+    projections: QqbotAttachmentContextProjection[];
     injected: QqbotAttachmentRecord[];
     skipped: Array<{ refId: string; reason: string }>;
+  }>;
+  replayAttachments(args: {
+    conversationId: string;
+    refs: string[];
+    purpose: string;
+    provider: string;
+    model?: string | null;
+  }): Promise<{
+    resolved: QqbotAttachmentReplayItem[];
+    skipped: QqbotAttachmentReplaySkip[];
+    cacheHits: number;
   }>;
 }
 

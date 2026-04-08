@@ -2168,15 +2168,21 @@
 }
 
 .bc-tool-card {
+    --bc-tool-accent: color-mix(in srgb, var(--k-card-border) 78%, transparent);
+    --bc-tool-accent-soft: color-mix(in srgb, var(--k-card-bg) 86%, white);
+    --bc-tool-accent-fade: color-mix(in srgb, var(--k-page-bg) 16%, var(--k-card-bg));
+    --bc-tool-accent-text: var(--bc-text-secondary);
     display: grid;
     gap: 0.55rem;
     padding: 0.8rem 0.85rem;
-    border: 1px solid var(--k-card-border);
+    border: 1px solid var(--bc-tool-accent);
     border-radius: 16px;
     background: linear-gradient(180deg,
-        color-mix(in srgb, var(--k-card-bg) 95%, #fff),
-        color-mix(in srgb, var(--k-page-bg) 18%, var(--k-card-bg)));
-    box-shadow: 0 10px 22px color-mix(in srgb, var(--k-text-dark) 4%, transparent);
+        var(--bc-tool-accent-soft),
+        var(--bc-tool-accent-fade));
+    box-shadow:
+        inset 0 1px 0 color-mix(in srgb, white 72%, transparent),
+        0 10px 22px color-mix(in srgb, var(--bc-tool-accent) 10%, transparent);
 }
 
 .bc-tool-card.is-expanded {
@@ -2232,29 +2238,37 @@
     justify-items: end;
 }
 
-.bc-tool-card.is-success {
-    border-color: color-mix(in srgb, var(--k-color-success) 22%, var(--k-card-border));
-    background: linear-gradient(180deg,
-        color-mix(in srgb, var(--k-color-success) 8%, var(--k-card-bg)),
-        color-mix(in srgb, var(--k-color-success-fade) 82%, var(--k-card-bg)));
+.bc-tool-card.is-state-enabled {
+    --bc-tool-accent: color-mix(in srgb, #e53935 42%, var(--k-card-border));
+    --bc-tool-accent-soft: color-mix(in srgb, #fff4f3 92%, white);
+    --bc-tool-accent-fade: color-mix(in srgb, #ffd9d5 55%, var(--k-card-bg));
+    --bc-tool-accent-text: #8b1e1a;
 }
 
-.bc-tool-card.is-warning {
-    border-color: color-mix(in srgb, var(--k-color-warning) 22%, var(--k-card-border));
-    background: linear-gradient(180deg,
-        color-mix(in srgb, var(--k-color-warning) 8%, var(--k-card-bg)),
-        color-mix(in srgb, var(--k-color-warning-fade) 82%, var(--k-card-bg)));
+.bc-tool-card.is-state-inherit {
+    --bc-tool-accent: color-mix(in srgb, #4f46e5 36%, var(--k-card-border));
+    --bc-tool-accent-soft: color-mix(in srgb, #f3f2ff 94%, white);
+    --bc-tool-accent-fade: color-mix(in srgb, #d9d6ff 48%, var(--k-card-bg));
+    --bc-tool-accent-text: #4338ca;
 }
 
-.bc-tool-card.is-danger {
-    border-color: color-mix(in srgb, var(--k-color-danger) 22%, var(--k-card-border));
-    background: linear-gradient(180deg,
-        color-mix(in srgb, var(--k-color-danger) 8%, var(--k-card-bg)),
-        color-mix(in srgb, var(--k-color-danger-fade) 82%, var(--k-card-bg)));
+.bc-tool-card.is-state-disabled {
+    --bc-tool-accent: color-mix(in srgb, #64748b 34%, var(--k-card-border));
+    --bc-tool-accent-soft: color-mix(in srgb, #f7f8fa 96%, white);
+    --bc-tool-accent-fade: color-mix(in srgb, #e2e8f0 42%, var(--k-card-bg));
+    --bc-tool-accent-text: #475569;
+}
+
+.bc-tool-card.is-state-unregistered {
+    --bc-tool-accent: color-mix(in srgb, #f59e0b 42%, var(--k-card-border));
+    --bc-tool-accent-soft: color-mix(in srgb, #fff8eb 94%, white);
+    --bc-tool-accent-fade: color-mix(in srgb, #ffe1a6 48%, var(--k-card-bg));
+    --bc-tool-accent-text: #b45309;
 }
 
 .bc-tool-card-title strong {
     font-size: 0.95rem;
+    color: var(--bc-tool-accent-text);
 }
 
 .bc-tool-card-badges {
@@ -2347,6 +2361,11 @@
         transform 120ms ease;
 }
 
+.bc-tool-mode-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
 .bc-tool-mode-row-compact .bc-tool-mode-button {
     min-height: 1.9rem;
     padding: 0.35rem 0.4rem;
@@ -2357,33 +2376,32 @@
     background: var(--k-hover-bg);
 }
 
-.bc-tool-mode-button.is-active {
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--k-color-primary) 20%, transparent);
-}
-
-.bc-tool-mode-button.is-enabled.is-active {
-    border-color: color-mix(in srgb, var(--k-color-success) 34%, var(--k-card-border));
-    background: var(--k-color-success-fade);
-    color: color-mix(in srgb, var(--k-color-success) 90%, var(--k-text-dark));
-}
-
-.bc-tool-mode-button.is-disabled.is-active {
-    border-color: color-mix(in srgb, var(--k-color-danger) 34%, var(--k-card-border));
-    background: var(--k-color-danger-fade);
-    color: color-mix(in srgb, var(--k-color-danger) 90%, var(--k-text-dark));
-}
-
 .bc-tool-mode-button.is-inherit {
     border-style: dashed;
-    border-color: color-mix(in srgb, var(--k-color-primary) 16%, var(--k-card-border));
-    background: color-mix(in srgb, var(--k-fill-normal) 78%, white);
-    color: #111111;
+    border-color: color-mix(in srgb, #4f46e5 26%, var(--k-card-border));
+    background: color-mix(in srgb, #eef2ff 82%, white);
+    color: #4338ca;
 }
 
 .bc-tool-mode-button.is-inherit.is-active {
-    border-color: color-mix(in srgb, var(--k-color-primary) 30%, var(--k-card-border));
-    background: var(--k-fill-normal);
-    color: #111111;
+    border-color: color-mix(in srgb, #4f46e5 44%, var(--k-card-border));
+    background: color-mix(in srgb, #c7d2fe 78%, white);
+    color: #312e81;
+    box-shadow: 0 0 0 1px color-mix(in srgb, #4f46e5 18%, transparent);
+}
+
+.bc-tool-mode-button.is-enabled.is-active {
+    border-color: color-mix(in srgb, #e53935 46%, var(--k-card-border));
+    background: color-mix(in srgb, #fecaca 84%, white);
+    color: #991b1b;
+    box-shadow: 0 0 0 1px color-mix(in srgb, #e53935 18%, transparent);
+}
+
+.bc-tool-mode-button.is-disabled.is-active {
+    border-color: color-mix(in srgb, #64748b 42%, var(--k-card-border));
+    background: color-mix(in srgb, #e2e8f0 88%, white);
+    color: #334155;
+    box-shadow: 0 0 0 1px color-mix(in srgb, #64748b 16%, transparent);
 }
 
 .bc-tool-card-foot {
@@ -2398,6 +2416,30 @@
 .bc-tool-card-current {
     font-size: 0.8rem;
     color: var(--bc-text-soft);
+}
+
+.bc-badge-tool-state-enabled {
+    border-color: color-mix(in srgb, #e53935 36%, transparent);
+    background: color-mix(in srgb, #fee2e2 92%, white);
+    color: #991b1b;
+}
+
+.bc-badge-tool-state-inherit {
+    border-color: color-mix(in srgb, #4f46e5 30%, transparent);
+    background: color-mix(in srgb, #e0e7ff 92%, white);
+    color: #4338ca;
+}
+
+.bc-badge-tool-state-disabled {
+    border-color: color-mix(in srgb, #64748b 28%, transparent);
+    background: color-mix(in srgb, #e2e8f0 92%, white);
+    color: #475569;
+}
+
+.bc-badge-tool-state-unregistered {
+    border-color: color-mix(in srgb, #f59e0b 34%, transparent);
+    background: color-mix(in srgb, #fef3c7 92%, white);
+    color: #b45309;
 }
 
 .bc-tool-card-toggle {
