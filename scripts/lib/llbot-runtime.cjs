@@ -12,6 +12,7 @@ const VERSION_MARKER = '.qqbot-llbot-version';
 const ENTRYPOINT_FILE = 'llbot.js';
 const DEFAULT_CONFIG_FILE = 'default_config.json';
 const PMHQ_QQ_CONFIG_DESTINATION = '/root/.config/QQ';
+const PMHQ_MEDIA_PATH_PATCH_MARKER = 'qqbot-managed-pmhq-media-path-rewrite';
 
 function normalizeTruthy(value) {
   return /^(1|true|yes|on)$/i.test(String(value ?? '').trim());
@@ -70,6 +71,77 @@ function applyManagedConfig(config, env = process.env) {
 function rewriteJsonConfig(filePath, env = process.env) {
   const config = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   fs.writeFileSync(filePath, `${JSON.stringify(applyManagedConfig(config, env), null, 2)}\n`, 'utf8');
+}
+
+function rewritePmhqMediaPath(mediaPath, qqConfigMountSource) {
+  const sourceDir = String(qqConfigMountSource || '').trim();
+  if (!sourceDir || typeof mediaPath !== 'string') {
+    return mediaPath;
+  }
+  if (!mediaPath.startsWith(PMHQ_QQ_CONFIG_DESTINATION)) {
+    return mediaPath;
+  }
+
+  const suffix = mediaPath.slice(PMHQ_QQ_CONFIG_DESTINATION.length).replace(/^[/\\]+/, '');
+  return suffix ? path.join(sourceDir, suffix) : sourceDir;
+}
+
+function patchLlbotMediaPathResolution({ runtimeDir, qqConfigMountSource }) {
+  const sourceDir = String(qqConfigMountSource || '').trim();
+  if (!sourceDir) {
+    return false;
+  }
+
+  const entrypointPath = path.join(runtimeDir, ENTRYPOINT_FILE);
+  const source = fs.readFileSync(entrypointPath, 'utf8');
+  if (source.includes(PMHQ_MEDIA_PATH_PATCH_MARKER)) {
+    return false;
+  }
+
+  const startMarker = 'async getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {';
+  const endMarker = '\n  }\n  /** 上传文件到 QQ 的文件夹 */';
+  const start = source.indexOf(startMarker);
+  if (start === -1) {
+    throw new Error('Failed to locate llbot getRichMediaFilePath for managed media path rewrite');
+  }
+
+  const end = source.indexOf(endMarker, start);
+  if (end === -1) {
+    throw new Error('Failed to locate llbot getRichMediaFilePath terminator for managed media path rewrite');
+  }
+
+  const replacement = [
+    startMarker,
+    `    const mediaPath = await invoke(NTMethod.MEDIA_FILE_PATH, [`,
+    `      {`,
+    `        md5HexStr,`,
+    `        fileName,`,
+    `        elementType,`,
+    `        elementSubType,`,
+    `        thumbSize: 0,`,
+    `        needCreate: true,`,
+    `        downloadType: 1,`,
+    `        file_uuid: ""`,
+    `      }`,
+    `    ]);`,
+    `    const qqbotManagedPmhqMediaRoot = ${JSON.stringify(sourceDir)};`,
+    `    const qqbotManagedPmhqMediaPath = ${JSON.stringify(PMHQ_QQ_CONFIG_DESTINATION)};`,
+    `    return typeof mediaPath === "string" && mediaPath.startsWith(qqbotManagedPmhqMediaPath)`,
+    `      ? require("node:path").join(`,
+    `        qqbotManagedPmhqMediaRoot,`,
+    `        mediaPath.slice(qqbotManagedPmhqMediaPath.length).replace(/^[/\\\\]+/, "")`,
+    `      )`,
+    `      : mediaPath;`,
+    `  }`,
+    `  /* ${PMHQ_MEDIA_PATH_PATCH_MARKER} */`,
+  ].join('\n');
+
+  fs.writeFileSync(
+    entrypointPath,
+    `${source.slice(0, start)}${replacement}${source.slice(end)}`,
+    'utf8',
+  );
+  return true;
 }
 
 function disableWebUIAuthMiddleware({ runtimeDir, dataDir, disableAuth }) {
@@ -276,10 +348,17 @@ async function prepareManagedRuntime(env = process.env) {
 
   await prepareRuntimeVersion({ runtimeDir, version });
   await ensureRuntimeDataLink(runtimeDir, dataDir);
+  const qqConfigMountSource = String(
+    env.QQBOT_QQ_CONFIG_MOUNT_SOURCE || resolvePmhqQqConfigMountSource(),
+  ).trim();
+  patchLlbotMediaPathResolution({
+    runtimeDir,
+    qqConfigMountSource,
+  });
   await ensureQqConfigBridge({
     runtimeDir,
     homeDir: env.HOME || path.join(runtimeDir, '.host-home'),
-    qqConfigMountSource: env.QQBOT_QQ_CONFIG_MOUNT_SOURCE || '',
+    qqConfigMountSource,
   });
 
   rewriteJsonConfig(path.join(runtimeDir, DEFAULT_CONFIG_FILE), env);
@@ -328,9 +407,11 @@ module.exports = {
   ensureRuntimeDataLink,
   extractReleaseZip,
   fetchReleaseZip,
+  patchLlbotMediaPathResolution,
   resolvePmhqQqConfigMountSource,
   normalizeTruthy,
   prepareManagedRuntime,
   prepareRuntimeVersion,
+  rewritePmhqMediaPath,
   rewriteJsonConfig,
 };
