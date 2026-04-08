@@ -206,7 +206,9 @@ describe('llbot host runtime helpers', () => {
     expect(patched).toContain('qqbot-managed-pmhq-media-path-rewrite');
     expect(patched).toContain('const mediaPath = await invoke(NTMethod.MEDIA_FILE_PATH');
     expect(patched).toContain('qqbotManagedPmhqMediaRoot');
+    expect(patched).toContain('const qqbotManagedRelativeMediaPath = typeof mediaPath === "string"');
     expect(patched).toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  /** 上传文件到 QQ 的文件夹 */');
+    expect(patched).not.toContain('require("node:path")');
     expect(patched).not.toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  }\n  /** 上传文件到 QQ 的文件夹 */');
   });
 
@@ -287,6 +289,7 @@ describe('llbot host runtime helpers', () => {
 
     const patched = readFileSync(join(runtimeDir, 'llbot.js'), 'utf8');
     expect(patched).toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  /** 上传文件到 QQ 的文件夹 */');
+    expect(patched).not.toContain('require("node:path")');
     expect(patched).not.toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  }\n  /** 上传文件到 QQ 的文件夹 */');
   });
 
