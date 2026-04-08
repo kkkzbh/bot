@@ -206,6 +206,8 @@ describe('llbot host runtime helpers', () => {
     expect(patched).toContain('qqbot-managed-pmhq-media-path-rewrite');
     expect(patched).toContain('const mediaPath = await invoke(NTMethod.MEDIA_FILE_PATH');
     expect(patched).toContain('qqbotManagedPmhqMediaRoot');
+    expect(patched).toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  /** 上传文件到 QQ 的文件夹 */');
+    expect(patched).not.toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  }\n  /** 上传文件到 QQ 的文件夹 */');
   });
 
   it('keeps the llbot media path patch idempotent across repeated prepare passes', () => {
@@ -324,6 +326,7 @@ describe('llbot host runtime helpers', () => {
 
     const entrypoint = readFileSync(join(runtimeDir, 'llbot.js'), 'utf8');
     expect(entrypoint).toContain('qqbot-managed-pmhq-media-path-rewrite');
+    expect(entrypoint).toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  /** 上传文件到 QQ 的文件夹 */');
     expect(lstatSync(join(homeDir, '.config', 'QQ')).isSymbolicLink()).toBe(true);
     expect(existsSync(join(qqMountSource, 'nt_qq_test', 'nt_data', 'Pic'))).toBe(true);
   });

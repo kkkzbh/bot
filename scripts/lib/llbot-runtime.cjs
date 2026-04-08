@@ -99,7 +99,7 @@ function patchLlbotMediaPathResolution({ runtimeDir, qqConfigMountSource }) {
   }
 
   const startMarker = 'async getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {';
-  const endMarker = '\n  }\n  /** 上传文件到 QQ 的文件夹 */';
+  const endMarker = '\n  /** 上传文件到 QQ 的文件夹 */';
   const start = source.indexOf(startMarker);
   if (start === -1) {
     throw new Error('Failed to locate llbot getRichMediaFilePath for managed media path rewrite');
