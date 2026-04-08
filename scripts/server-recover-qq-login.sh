@@ -24,6 +24,31 @@ load_env() {
   set +a
 }
 
+set_auto_login_value() {
+  local next_value="$1"
+
+  node - "${ENV_FILE}" "${next_value}" <<'NODE'
+const fs = require('node:fs');
+
+const [, , envPath, nextValue] = process.argv;
+const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+let replaced = false;
+const output = lines.map((line) => {
+  if (!line.startsWith('AUTO_LOGIN_QQ=')) {
+    return line;
+  }
+  replaced = true;
+  return `AUTO_LOGIN_QQ=${nextValue}`;
+});
+
+if (!replaced) {
+  output.push(`AUTO_LOGIN_QQ=${nextValue}`);
+}
+
+fs.writeFileSync(envPath, `${output.join('\n').replace(/\n+$/g, '')}\n`, 'utf8');
+NODE
+}
+
 restart_server_target() {
   export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
   systemctl --user daemon-reload
@@ -37,20 +62,21 @@ prepare_manual_login() {
 AUTO_LOGIN_QQ_ORIG=${AUTO_LOGIN_QQ:-}
 EOF
 
-  export AUTO_LOGIN_QQ=
-  export QQBOT_PODMAN_NETWORK_NAME="${QQBOT_PODMAN_NETWORK_NAME:-qqbot-stack_app_network}"
+  set_auto_login_value ""
 
   if command -v systemctl >/dev/null 2>&1; then
     systemctl --user stop qqbot.target >/dev/null 2>&1 || true
   fi
 
-  cd "${ROOT_DIR}"
-  ./scripts/podman-stack-up.sh pmhq llbot
-  ./scripts/verify-pmhq-network.sh
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  systemctl --user daemon-reload
+  systemctl --user start qqbot-pmhq.service
+  systemctl --user start qqbot-llbot.service
+  "${ROOT_DIR}/scripts/verify-qqbot-host-runtime.sh"
 
   cat <<EOF
 Manual login recovery mode is ready.
-- AUTO_LOGIN_QQ is temporarily cleared for this stack run only.
+- AUTO_LOGIN_QQ is temporarily cleared in ${ENV_FILE}.
 - Open the server LLBot WebUI and complete QR/manual login.
 - After login succeeds, run: ${ROOT_DIR}/scripts/server-recover-qq-login.sh restore
 EOF
@@ -66,8 +92,7 @@ restore_auto_login() {
   . "${STATE_FILE}"
   rm -f "${STATE_FILE}"
 
-  load_env
-  export AUTO_LOGIN_QQ="${AUTO_LOGIN_QQ_ORIG:-${AUTO_LOGIN_QQ:-}}"
+  set_auto_login_value "${AUTO_LOGIN_QQ_ORIG:-}"
 
   restart_server_target
   echo "qqbot.target restarted with AUTO_LOGIN_QQ restored."

@@ -425,19 +425,18 @@ jobs:
             fi
 
             PODMAN_COMPOSE_BIN="$(command -v podman-compose)"
-            PODMAN_NETWORK_NAME="qqbot-stack_app_network"
             mkdir -p "${USER_SYSTEMD_DIR}"
 
-            cat > "${USER_SYSTEMD_DIR}/qqbot-stack.service" <<UNIT
+            cat > "${USER_SYSTEMD_DIR}/qqbot-pmhq.service" <<UNIT
           [Unit]
-          Description=QQBot Podman Compose Stack
+          Description=QQBot PMHQ Service
           After=network-online.target
           Wants=network-online.target
           PartOf=qqbot.target
 
           [Service]
           Type=oneshot
-          KillMode=none
+          RemainAfterExit=yes
           WorkingDirectory=${APP_DIR}
           EnvironmentFile=${APP_DIR}/.env.server
           EnvironmentFile=-${SHARED_DIR}/.env.runtime
@@ -445,13 +444,29 @@ jobs:
           Environment=QQBOT_ENV_BASE_FILE=${APP_DIR}/.env.server
           Environment=QQBOT_ENV_OVERRIDE_FILE=${SHARED_DIR}/.env.runtime
           Environment=QQBOT_PODMAN_COMPOSE_BIN=${PODMAN_COMPOSE_BIN}
-          Environment=QQBOT_PODMAN_NETWORK_NAME=${PODMAN_NETWORK_NAME}
-          Environment=CHATLUNA_PRESET_DIRS=${SHARED_DIR}/presets:${APP_DIR}/data/chathub/presets
-          Environment=CHATLUNA_RUNTIME_PRESET_DIR=${SHARED_DIR}/presets
           ExecStartPre=/usr/bin/env bash -lc "podman rm -f qqbot-voice-asr >/dev/null 2>&1 || true"
-          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && ./scripts/podman-stack-up.sh pmhq llbot && ./scripts/verify-pmhq-network.sh'
-          ExecStop=${PODMAN_COMPOSE_BIN} -f ${APP_DIR}/compose.yaml stop pmhq llbot
-          RemainAfterExit=yes
+          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && ./scripts/podman-pmhq-service.sh up'
+          ExecStop=/usr/bin/env bash -lc 'cd ${APP_DIR} && ./scripts/podman-pmhq-service.sh stop'
+
+          [Install]
+          WantedBy=qqbot.target
+          UNIT
+
+            cat > "${USER_SYSTEMD_DIR}/qqbot-llbot.service" <<UNIT
+          [Unit]
+          Description=QQBot LLBot Service
+          After=network-online.target qqbot-pmhq.service
+          Wants=network-online.target qqbot-pmhq.service
+          PartOf=qqbot.target
+
+          [Service]
+          Type=simple
+          WorkingDirectory=${APP_DIR}
+          EnvironmentFile=${APP_DIR}/.env.server
+          EnvironmentFile=-${SHARED_DIR}/.env.runtime
+          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && exec ./scripts/run-llbot-host.sh'
+          Restart=always
+          RestartSec=5
 
           [Install]
           WantedBy=qqbot.target
@@ -460,8 +475,8 @@ jobs:
             cat > "${USER_SYSTEMD_DIR}/qqbot-koishi.service" <<UNIT
           [Unit]
           Description=QQBot Koishi Service
-          After=network-online.target qqbot-stack.service
-          Wants=network-online.target qqbot-stack.service
+          After=network-online.target qqbot-llbot.service
+          Wants=network-online.target qqbot-llbot.service
           PartOf=qqbot.target
 
           [Service]
@@ -484,8 +499,8 @@ jobs:
             cat > "${USER_SYSTEMD_DIR}/qqbot.target" <<'UNIT'
           [Unit]
           Description=QQBot Full Stack Target
-          Wants=qqbot-stack.service qqbot-koishi.service
-          After=qqbot-stack.service
+          Wants=qqbot-pmhq.service qqbot-llbot.service qqbot-koishi.service
+          After=qqbot-pmhq.service qqbot-llbot.service
 
           [Install]
           WantedBy=default.target
@@ -520,7 +535,7 @@ jobs:
           systemctl --user is-active --quiet "${SYSTEMD_TARGET}"
 
           if [ "${SYSTEMD_TARGET}" = "qqbot.target" ]; then
-            for unit in qqbot-stack.service qqbot-koishi.service; do
+            for unit in qqbot-pmhq.service qqbot-llbot.service qqbot-koishi.service; do
               for _ in $(seq 1 150); do
                 if systemctl --user is-active --quiet "${unit}"; then
                   break
@@ -537,18 +552,6 @@ jobs:
               fi
             done
 
-            stack_status="$(systemctl --user show qqbot-stack.service -p Result -p ExecMainStatus --no-pager || true)"
-            if ! printf "%s\n" "${stack_status}" | grep -Fqx 'Result=success'; then
-              systemctl --user status qqbot-stack.service --no-pager >&2 || true
-              echo "${stack_status}" >&2
-              exit 1
-            fi
-            if ! printf "%s\n" "${stack_status}" | grep -Fqx 'ExecMainStatus=0'; then
-              systemctl --user status qqbot-stack.service --no-pager >&2 || true
-              echo "${stack_status}" >&2
-              exit 1
-            fi
-
-            bash "${APP_DIR}/scripts/verify-pmhq-network.sh"
+            bash "${APP_DIR}/scripts/verify-qqbot-host-runtime.sh"
           fi
           EOF

@@ -1,14 +1,14 @@
 [Unit]
-Description=QQBot Koishi Service
-After=network-online.target qqbot-llbot.service
-Wants=network-online.target qqbot-llbot.service
+Description=QQBot LLBot Service
+After=network-online.target qqbot-pmhq.service
+Wants=network-online.target qqbot-pmhq.service
 PartOf=qqbot.target
 
 [Service]
 Type=simple
 WorkingDirectory=/home/kkkzbh/code/qqbot
 Environment=QQBOT_ENV_FILE=/home/kkkzbh/code/qqbot/.env.local
-ExecStart=/home/kkkzbh/.local/bin/pnpm start:local
+ExecStart=/home/kkkzbh/code/qqbot/scripts/run-llbot-host.sh
 Restart=always
 RestartSec=5
 

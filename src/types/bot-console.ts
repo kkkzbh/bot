@@ -18,8 +18,9 @@ export type ServiceAction = 'start' | 'stop' | 'restart' | 'enable';
 
 export type BotServiceUnit =
   | 'qqbot.target'
+  | 'qqbot-pmhq.service'
+  | 'qqbot-llbot.service'
   | 'qqbot-koishi.service'
-  | 'qqbot-stack.service'
   | 'qqbot-voice-tts.service'
   | 'qqbot-voice-tts-tailnet.service';
 

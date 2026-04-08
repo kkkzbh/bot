@@ -3,8 +3,9 @@
 - 服务器入口固定用 `ssh -o ClearAllForwardings=yes bot`。
 - 线上目录固定为 `/opt/qqbot/current`，联动 `chatluna` 目录为 `/opt/qqbot/chatluna`。
 - 线上 env 以 `/opt/qqbot/current/.env.server` 和 `/opt/qqbot/shared/.env.runtime` 为准。
-- 线上 systemd 只认 `root` 的 user-level unit：`qqbot.target`、`qqbot-stack.service`、`qqbot-koishi.service`。
-- 线上最小运行面固定为 `pmhq + llonebot + koishi`，不要恢复旧容器、旧 unit 或 voice 服务。
+- 线上 systemd 只认 `root` 的 user-level unit：`qqbot.target`、`qqbot-pmhq.service`、`qqbot-llbot.service`、`qqbot-koishi.service`。
+- 线上最小运行面固定为 `pmhq + llbot + koishi`，不要恢复旧容器、旧 unit 或 voice 服务。
 - `chatluna` 固定使用你的 fork，服务器发布分支固定为 `v1-dev`。
 - `qqbot` 依赖的 `chatluna` linked packages 在本地和服务器启动前都必须先构建好 `lib/`。
 - 复杂远程排查优先本地写临时脚本，再用 `ssh ... 'bash -s' < /tmp/script.sh` 执行，避免多层引号出错。
+- git提交禁用单文件 partial staging

@@ -110,15 +110,37 @@ async function handleAction(unit: string, action: string) {
 
             <p class="bc-service-summary">{{ getServiceHint(service.unit) }}</p>
 
-            <!-- Inline koishi / stack status only for qqbot.target -->
+            <!-- Inline pmhq / llbot / koishi status only for qqbot.target -->
             <template v-if="service.unit === 'qqbot.target'">
               <p
-                v-if="getSubService('qqbot-koishi.service') || getSubService('qqbot-stack.service')"
+                v-if="getSubService('qqbot-pmhq.service') || getSubService('qqbot-llbot.service') || getSubService('qqbot-koishi.service')"
                 class="bc-service-stack"
               >
                 已包含：
+                <template v-if="getSubService('qqbot-pmhq.service')">
+                  PMHQ&nbsp;
+                  <span
+                    :class="[
+                      'bc-status-badge',
+                      `is-${getActiveStateTone(getSubService('qqbot-pmhq.service')!.activeState)}`,
+                    ]"
+                  >
+                    {{ getActiveStateLabel(getSubService('qqbot-pmhq.service')!.activeState) }}
+                  </span>
+                </template>
+                <template v-if="getSubService('qqbot-llbot.service')">
+                  &nbsp;/ LLBot&nbsp;
+                  <span
+                    :class="[
+                      'bc-status-badge',
+                      `is-${getActiveStateTone(getSubService('qqbot-llbot.service')!.activeState)}`,
+                    ]"
+                  >
+                    {{ getActiveStateLabel(getSubService('qqbot-llbot.service')!.activeState) }}
+                  </span>
+                </template>
                 <template v-if="getSubService('qqbot-koishi.service')">
-                  主机器人&nbsp;
+                  &nbsp;/ 主机器人&nbsp;
                   <span
                     :class="[
                       'bc-status-badge',
@@ -126,17 +148,6 @@ async function handleAction(unit: string, action: string) {
                     ]"
                   >
                     {{ getActiveStateLabel(getSubService('qqbot-koishi.service')!.activeState) }}
-                  </span>
-                </template>
-                <template v-if="getSubService('qqbot-stack.service')">
-                  &nbsp;/ 依赖服务&nbsp;
-                  <span
-                    :class="[
-                      'bc-status-badge',
-                      `is-${getActiveStateTone(getSubService('qqbot-stack.service')!.activeState)}`,
-                    ]"
-                  >
-                    {{ getActiveStateLabel(getSubService('qqbot-stack.service')!.activeState) }}
                   </span>
                 </template>
               </p>

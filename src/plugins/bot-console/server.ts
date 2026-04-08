@@ -174,8 +174,9 @@ export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
 export const BOT_CONSOLE_ENV_KEYS = new Set(BOT_CONSOLE_ENV_FIELDS.map((field) => field.key));
 export const BOT_CONSOLE_SERVICE_UNITS: readonly BotServiceUnit[] = [
   'qqbot.target',
+  'qqbot-pmhq.service',
+  'qqbot-llbot.service',
   'qqbot-koishi.service',
-  'qqbot-stack.service',
   'qqbot-voice-tts.service',
   'qqbot-voice-tts-tailnet.service',
 ] as const;

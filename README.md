@@ -106,21 +106,21 @@ Koishi uses **OneBot WebSocket 正向连接** to LLBot:
 Long-memory v2 stores only extracted long-term facts and episode summaries in local SQLite.
 Embeddings are only used for long-memory recall/writeback and are expected to come from SiliconFlow (`Qwen/Qwen3-Embedding-8B` by default).
 
-## 4. Start LLBot stack (Podman)
+## 4. Start PMHQ + host LLBot
 
 ```bash
-podman compose pull pmhq llbot
-podman compose up -d pmhq llbot
+podman compose pull pmhq
+podman compose up -d pmhq
+bash ./scripts/run-llbot-host.sh
 ```
 
-Official compose mode uses three services:
+Official runtime mode uses:
 
 - `pmhq`: QQ client runtime and login session
-- `llbot`: OneBot + WebUI
+- `llbot`: host-native OneBot + WebUI
 - `voice-asr`: `faster-whisper small/int8 + ffmpeg` HTTP service for QQ voice transcription
-- Compose defaults to fully-qualified images (`docker.io/linyuchen/...`) to avoid Fedora short-name prompt issues.
-- `pmhq` and `llbot` must land on the same named Podman network `qqbot-stack_app_network`.
-- `llbot` must talk to `pmhq` over the stack network using `pmhq:13000`.
+- `compose.yaml` now keeps only `pmhq` and `voice-asr`; LLBot is downloaded from upstream release zips and started on host by `scripts/run-llbot-host.sh`.
+- `llbot` must talk to `pmhq` through `127.0.0.1:${PMHQ_PORT}`.
 - LLBot host ports are pinned to loopback (`127.0.0.1:3001` and `127.0.0.1:3080`) so Koishi and SSH local-forwards use the same endpoint on both laptop and server.
 
 Watch login logs (QR code / login progress):
@@ -137,7 +137,7 @@ Then in LLBot WebUI enable **WebSocket正向** (server mode) on port `3001`.
 
 If token is set, keep LLBot token consistent with `ONEBOT_TOKEN`.
 
-`qqbot-stack.service` also exports a dedicated Podman `containers.conf` with
+`qqbot-pmhq.service` also exports a dedicated Podman `containers.conf` with
 `keyring = false` to avoid rootless `runc` startup failures caused by exhausted
 session key quotas on the host.
 
@@ -377,10 +377,11 @@ pnpm build
 
 - This project is built for Podman (not Docker Desktop).
 - `compose.yaml` uses `:Z` on bind mount for SELinux Enforcing.
-- `compose.yaml` pins the shared network name to `qqbot-stack_app_network`, so both local and server runtime must place `pmhq` and `llbot` on that exact network.
-- `llonebot` must call `pmhq` through the service name `pmhq:13000`, never `127.0.0.1`, bridge gateways, or `host.containers.internal`.
+- `pmhq` stays containerized, but LLBot and Koishi both run on host.
+- `llbot` must call `pmhq` through `127.0.0.1:${PMHQ_PORT}`, never container DNS names.
 - `llonebot` runtime data must live in an environment-specific directory (`LLONEBOT_DATA_DIR`), not in the deploy payload. Local default is `./.runtime/llonebot`; server default is `/opt/qqbot/shared/llonebot`.
-- On every boot, `docker/llonebot-startup.sh` rewrites the managed transport fields in both `default_config.json` and each `config_*.json`, so WebUI / forward-WS / token stay repo-controlled while account login state remains environment-local.
+- Extracted LLBot program files must live in `LLBOT_RUNTIME_DIR`. Local default is `./.runtime/llbot`; server default is `/opt/qqbot/shared/llbot-runtime`.
+- On every boot, `scripts/run-llbot-host.sh` prepares the upstream release, rewrites the managed transport fields in both `default_config.json` and each `config_*.json`, and keeps WebUI / forward-WS / token repo-controlled while account login state remains environment-local.
 - `PMHQ_BIND_HOST` only controls how `pmhq` is exposed to the host; it does not participate in container-to-container addressing.
 - Server runtime may keep `AUTO_LOGIN_QQ` enabled for normal quick-login boot.
 - One QQ account should have exactly one active quick-login edge at a time. If laptop-local and server both set the same `AUTO_LOGIN_QQ`, expect one side to wedge into `登录系统连接异常`, stale QR state, or broken quick-login.
@@ -398,11 +399,10 @@ pnpm build
 - OneBot WS cannot connect:
   - Confirm Koishi process is running.
   - Confirm LLBot `WebSocket正向` is enabled at `3001`.
-  - LLBot `7.11.0` only starts `3001` after QQ login succeeds; if `pmhq` logs `quick login failed` / `登录系统连接异常`, treat a missing `3001` listener as a login-state problem instead of a container-network bootstrap problem.
-  - If QQ has not finished login yet, do not treat a missing `3001` listener as a stack bootstrap failure; verify `llonebot` WebUI and `PMHQ WebSocket 连接成功` first.
+  - LLBot `7.11.0` only starts `3001` after QQ login succeeds; if `pmhq` logs `quick login failed` / `登录系统连接异常`, treat a missing `3001` listener as a login-state problem instead of a network/bootstrap problem.
+  - If QQ has not finished login yet, do not treat a missing `3001` listener as a stack bootstrap failure; verify LLBot WebUI and `PMHQ WebSocket 连接成功` first.
   - Confirm `ONEBOT_WS_ENDPOINT` points to LLBot OneBot WS endpoint.
-  - Confirm `pmhq` and `llonebot` are both attached to `qqbot-stack_app_network`; if `podman inspect --format '{{json .NetworkSettings.Networks}}' llonebot` does not include that network, treat the deployment as failed.
-  - Confirm `llonebot` itself serves WebUI inside the container: `podman exec llonebot node -e "require('node:http').get('http://127.0.0.1:3080/', (res) => { console.log(res.statusCode); process.exit(0) }).on('error', (error) => { console.error(error.message); process.exit(1) })"`.
+  - Confirm `scripts/verify-qqbot-host-runtime.sh` passes on host.
 - No QR/login prompt:
   - Check `podman compose logs -f pmhq` instead of only checking `llbot` logs.
   - Confirm `pmhq` container is `Up` and healthy.
@@ -430,17 +430,19 @@ This project can be managed as a user-level systemd stack so you do not need to 
 
 Installed unit files:
 
-- `/home/kkkzbh/.config/systemd/user/qqbot-stack.service`
+- `/home/kkkzbh/.config/systemd/user/qqbot-pmhq.service`
+- `/home/kkkzbh/.config/systemd/user/qqbot-llbot.service`
 - `/home/kkkzbh/.config/systemd/user/qqbot-koishi.service`
 - `/home/kkkzbh/.config/systemd/user/qqbot.target`
 
-`qqbot-stack.service` starts/stops the full Podman compose stack defined in `compose.yaml`.
+`qqbot-pmhq.service` starts/stops the PMHQ Podman service defined in `compose.yaml`.
+`qqbot-llbot.service` runs LLBot on host with release files under `LLBOT_RUNTIME_DIR`.
 `qqbot-koishi.service` runs Koishi on host with `/home/kkkzbh/code/qqbot/.env.local` as the canonical local env file.
 Server-side startup should explicitly use `/home/kkkzbh/code/qqbot/.env.server`.
 It sets `NODE_USE_ENV_PROXY=1` and proxy variables to match `~/.zshrc`:
 `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy`
 and uppercase variants.
-`qqbot.target` groups both units for one-command start/stop.
+`qqbot.target` groups all three units for one-command start/stop.
 
 Reload units after changes:
 
@@ -472,7 +474,8 @@ loginctl enable-linger kkkzbh
 Check unit status:
 
 ```bash
-systemctl --user status qqbot-stack.service
+systemctl --user status qqbot-pmhq.service
+systemctl --user status qqbot-llbot.service
 systemctl --user status qqbot-koishi.service
 systemctl --user status qqbot.target
 ```
@@ -498,7 +501,8 @@ podman compose -f /home/kkkzbh/code/qqbot/compose.yaml logs -f pmhq
 Common issues:
 
 - `qqbot-koishi.service` fails with `ExecStart`: confirm configured pnpm path exists (current file uses `/home/kkkzbh/.local/bin/pnpm`; check with `which pnpm`).
-- `qqbot-stack.service` fails: confirm Podman compose plugin is installed and `compose.yaml` exists.
+- `qqbot-pmhq.service` fails: confirm Podman compose plugin is installed and `compose.yaml` exists.
+- `qqbot-llbot.service` fails: confirm host `node` exists and `LLBOT_RUNTIME_DIR` is writable.
 - Service not started after reboot: confirm `systemctl --user is-enabled qqbot.target` and `loginctl show-user kkkzbh | grep Linger`.
 - Host logs grow too quickly:
   - deploy installs `/etc/systemd/journald.conf.d/qqbot.conf` plus a root timer `qqbot-log-maintenance.timer` when `sudo -n` is available
@@ -517,8 +521,8 @@ Behavior:
 - `CI` runs on every `push` / `pull_request` (`pnpm typecheck`, `pnpm test`, `pnpm build`).
 - `Deploy` runs on `push` to `main` (or manual `workflow_dispatch`).
 - `Deploy` SSHes to your server, `rsync`s project files, then runs `pnpm install`, `pnpm build`, and restarts `qqbot.target`.
-- The generated `qqbot-stack.service` now runs `scripts/podman-stack-up.sh pmhq llbot` and `scripts/verify-pmhq-network.sh`, and fails fast when LLBot never serves WebUI inside the container or never finishes the `PMHQ WebSocket` handshake.
-- The generated `qqbot-stack.service` uses `KillMode=none` so a failed verifier does not leave Podman containers with a killed `conmon` and broken host port forwarding.
+- The generated deploy units are `qqbot-pmhq.service`, `qqbot-llbot.service`, `qqbot-koishi.service`, and `qqbot.target`.
+- Deploy verifies `pmhq` health, LLBot WebUI, the `PMHQ WebSocket 连接成功` log, and Koishi-to-LLBot websocket reachability through `scripts/verify-qqbot-host-runtime.sh`.
 - Laptop-local `qqbot-voice-tts.service` is not managed by GitHub Actions and must be updated separately on your own machine.
 
 ### 18.1 GitHub Actions secrets (required)
@@ -579,7 +583,7 @@ sudo -i systemctl --user daemon-reload
 sudo -i systemctl --user status
 ```
 
-6. `Deploy` will auto-provision user units (`qqbot-stack.service`, `qqbot-koishi.service`, `qqbot.target`)
+6. `Deploy` will auto-provision user units (`qqbot-pmhq.service`, `qqbot-llbot.service`, `qqbot-koishi.service`, `qqbot.target`)
 when `QQBOT_SYSTEMD_TARGET=qqbot.target`.
 
 7. If you use a custom target (not `qqbot.target`), manage that unit yourself and keep
