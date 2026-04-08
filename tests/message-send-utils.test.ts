@@ -31,6 +31,7 @@ import {
   buildOutboundMessagePlanFromReplyPlan,
   calculateSmartSendDelayMs,
   createBotMessageDispatchers,
+  createMessageMessageContent,
   createQuotedMessageContent,
   createTextOnlyOutboundMessagePlan,
   createKeyedStrandRunner,
@@ -418,6 +419,16 @@ describe('message send utils', () => {
       '[assistant_message mentions=["123456","234567"]] 现在有 4 条任务。',
     );
     expect(renderModelFacingMessageText({ content: '今晚先这样吧', mentions: [] })).toBe('今晚先这样吧');
+  });
+
+  it('dedupes structured mentions when rendering message payloads and history text', () => {
+    expect(createMessageMessageContent({ content: '先问下这件事。', mentions: ['123456', '123456'] })).toEqual([
+      expect.objectContaining({ type: 'at', attrs: expect.objectContaining({ id: '123456' }) }),
+      expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: ' 先问下这件事。' }) }),
+    ]);
+    expect(renderModelFacingMessageText({ content: '先问下这件事。', mentions: ['123456', '123456'] })).toBe(
+      '[assistant_message mentions=["123456"]] 先问下这件事。',
+    );
   });
 
   it('builds outbound segments from ReplyPlan without relying on control tags', () => {

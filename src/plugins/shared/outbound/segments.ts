@@ -315,6 +315,20 @@ function sanitizeMentionText(text: string): string {
   return text.replace(/\r\n?/g, '\n');
 }
 
+function normalizeMessageMentionIds(mentions: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const value of mentions ?? []) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+
+  return normalized;
+}
+
 export function normalizeMention(mention: ReplyMention): ReplyMention | null {
   const userId = mention.userId.trim();
   if (!userId) return null;
@@ -341,9 +355,7 @@ export function renderMentionVisibleText(mention: ReplyMention): string {
 }
 
 export function renderMessageVisibleText(message: { content: string; mentions?: string[] }): string {
-  const mentions = (message.mentions ?? [])
-    .map((userId) => userId.trim())
-    .filter(Boolean)
+  const mentions = normalizeMessageMentionIds(message.mentions)
     .map((userId) => `@${userId}`);
   const content = sanitizeStructuredReplyText(message.content, 'message');
   const parts = [...mentions, content].filter((value) => value.trim().length > 0);
@@ -351,9 +363,7 @@ export function renderMessageVisibleText(message: { content: string; mentions?: 
 }
 
 export function renderModelFacingMessageText(message: { content: string; mentions?: string[] }): string {
-  const mentions = (message.mentions ?? [])
-    .map((userId) => userId.trim())
-    .filter(Boolean);
+  const mentions = normalizeMessageMentionIds(message.mentions);
   const content = sanitizeStructuredReplyText(message.content, 'message');
   if (!mentions.length) {
     return content;
@@ -376,9 +386,7 @@ export function createMentionMessageContent(
 }
 
 export function createMessageMessageContent(message: { content: string; mentions?: string[] }): BotMessageContent {
-  const normalizedMentions = (message.mentions ?? [])
-    .map((userId) => userId.trim())
-    .filter(Boolean);
+  const normalizedMentions = normalizeMessageMentionIds(message.mentions);
   const content = sanitizeStructuredReplyText(message.content, 'message');
   if (!normalizedMentions.length) {
     return h.text(content);
@@ -578,7 +586,7 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
   for (const [index, segment] of plan.segments.entries()) {
     if (segment.kind === 'message') {
       const content = sanitizeStructuredReplyText(segment.content, 'message');
-      const mentions = segment.mentions.map((value) => value.trim()).filter(Boolean);
+      const mentions = normalizeMessageMentionIds(segment.mentions);
       if (!content && !mentions.length) continue;
       const lines = splitMessageByLines(content);
       if (!lines.length) {

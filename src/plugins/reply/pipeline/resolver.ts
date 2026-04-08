@@ -2,9 +2,17 @@ import { sanitizeStructuredReplyText } from '../../shared/outbound/index.js';
 import type { ResolvedAction, StructuredReply, TurnContext } from './types.js';
 
 function normalizeMentionIds(mentions: string[] | undefined): string[] {
-  return (mentions ?? [])
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const value of mentions ?? []) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+
+  return normalized;
 }
 
 export class ActionResolverService {

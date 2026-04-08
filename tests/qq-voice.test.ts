@@ -1311,6 +1311,109 @@ describe('qq voice plugin', () => {
     );
   });
 
+  it('dedupes handwritten leading mention tokens against structured mentions before executor send', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '普通聊聊',
+      strippedContent: '普通聊聊',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-handwritten-mention'),
+        responseMessage: createReplyV2Response({
+          decision: 'reply',
+          outbound_messages: [
+            {
+              type: 'message',
+              content: '[mention:123456] [mention:123456] 先问下这件事。',
+              mentions: ['123456'],
+            },
+          ],
+        }),
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+    const calls = bot.sendMessage.mock.calls as any[][];
+    expect(calls[0]?.[1]).toEqual([
+      expect.objectContaining({ type: 'at', attrs: expect.objectContaining({ id: '123456' }) }),
+      expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: ' 先问下这件事。' }) }),
+    ]);
+    expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-handwritten-mention' }),
+      '[assistant_message mentions=["123456"]] 先问下这件事。',
+    );
+  });
+
+  it('keeps mention-only handwritten leading mention replies as real mention messages', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '普通聊聊',
+      strippedContent: '普通聊聊',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-mention-only'),
+        responseMessage: createReplyV2Response({
+          decision: 'reply',
+          outbound_messages: [
+            {
+              type: 'message',
+              content: '[mention:123456]',
+              mentions: [],
+            },
+          ],
+        }),
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+    const calls = bot.sendMessage.mock.calls as any[][];
+    expect(calls[0]?.[1]).toEqual([
+      expect.objectContaining({ type: 'at', attrs: expect.objectContaining({ id: '123456' }) }),
+    ]);
+    expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-mention-only' }),
+      '[assistant_message mentions=["123456"]]',
+    );
+  });
+
   it('treats empty text structured replies as no_reply and dispatches nothing', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));

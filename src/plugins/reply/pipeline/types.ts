@@ -107,6 +107,7 @@ export type ResolvedAction =
     };
 
 const STRUCTURED_REPLY_MESSAGE_USER_IDS_SCHEMA = z.array(z.string().regex(/^\s*\d+\s*$/));
+const LEADING_MANUAL_MENTION_TOKEN_PATTERN = /^\[mention:(\d+)\]\s*/i;
 
 const STRUCTURED_REPLY_MESSAGE_ITEM_SCHEMA = z.object({
   type: z.literal('message'),
@@ -149,9 +150,37 @@ export const STRUCTURED_REPLY_SCHEMA = z.object({
 }).strict();
 
 function normalizeMentionIds(mentions: string[] | undefined): string[] {
-  return (mentions ?? [])
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const value of mentions ?? []) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+
+  return normalized;
+}
+
+function extractLeadingManualMentionTokens(content: string): { content: string; mentions: string[] } {
+  const leadingWhitespaceMatch = content.match(/^\s*/);
+  const leadingWhitespace = leadingWhitespaceMatch?.[0] ?? '';
+  let remaining = content.slice(leadingWhitespace.length);
+  const mentions: string[] = [];
+
+  while (remaining) {
+    const matched = remaining.match(LEADING_MANUAL_MENTION_TOKEN_PATTERN);
+    if (!matched) break;
+    mentions.push(matched[1]!);
+    remaining = remaining.slice(matched[0].length);
+  }
+
+  if (!mentions.length) {
+    return { content, mentions: [] };
+  }
+
+  return { content: remaining, mentions };
 }
 
 export function normalizeStructuredReply(raw: unknown): StructuredReply | null {
@@ -168,11 +197,18 @@ export function normalizeStructuredReply(raw: unknown): StructuredReply | null {
     decision: 'reply',
     outbound_messages: parsed.data.outbound_messages?.map((message) =>
       message.type === 'message'
-        ? {
-            type: 'message',
-            content: sanitizeStructuredReplyText(message.content, 'message'),
-            ...(message.mentions ? { mentions: normalizeMentionIds(message.mentions) } : {}),
-          }
+        ? (() => {
+            const explicitMentions = message.mentions ? normalizeMentionIds(message.mentions) : [];
+            const extracted = extractLeadingManualMentionTokens(message.content);
+            const mentions = normalizeMentionIds([...explicitMentions, ...extracted.mentions]);
+            const content = sanitizeStructuredReplyText(extracted.content, 'message');
+
+            return {
+              type: 'message' as const,
+              content,
+              ...(message.mentions !== undefined || mentions.length > 0 ? { mentions } : {}),
+            };
+          })()
         : message.type === 'structured_block'
           ? {
               type: 'structured_block',

@@ -218,6 +218,115 @@ describe('reply pipeline v3', () => {
     ]);
   });
 
+  it('lifts leading handwritten mention tokens into structured mentions and dedupes them', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+    const ready = await orchestrator.handle(createTurnInput('提醒一下对方'), {} as never, {
+      routeHint: 'agent',
+      capabilitySnapshot: {
+        canMultiline: true,
+        canMention: true,
+        canVoice: false,
+        canSticker: false,
+        stickerAvailableCount: 0,
+        source: 'test',
+      },
+      responseMessage: createStructuredResponse({
+        decision: 'reply',
+        outbound_messages: [
+          {
+            type: 'message',
+            content: '[mention:123456] [mention:123456] 先问下这件事。',
+            mentions: ['123456'],
+          },
+        ],
+      }),
+    });
+
+    expect(ready.status).toBe('ready');
+    if (ready.status !== 'ready') {
+      throw new Error('expected ready');
+    }
+    expect(ready.reply).toEqual({
+      decision: 'reply',
+      outbound_messages: [
+        {
+          type: 'message',
+          content: '先问下这件事。',
+          mentions: ['123456'],
+        },
+      ],
+    });
+    expect(ready.actions).toEqual([
+      {
+        kind: 'message',
+        content: '先问下这件事。',
+        mentions: ['123456'],
+      },
+    ]);
+  });
+
+  it('appends handwritten leading mention tokens after explicit mentions and keeps mention-only replies', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+    const ready = await orchestrator.handle(createTurnInput('提醒两个人'), {} as never, {
+      routeHint: 'agent',
+      capabilitySnapshot: {
+        canMultiline: true,
+        canMention: true,
+        canVoice: false,
+        canSticker: false,
+        stickerAvailableCount: 0,
+        source: 'test',
+      },
+      responseMessage: createStructuredResponse({
+        decision: 'reply',
+        outbound_messages: [
+          {
+            type: 'message',
+            content: '[mention:456789] 继续跟进。',
+            mentions: ['123456'],
+          },
+          {
+            type: 'message',
+            content: '[mention:789012]',
+            mentions: [],
+          },
+        ],
+      }),
+    });
+
+    expect(ready.status).toBe('ready');
+    if (ready.status !== 'ready') {
+      throw new Error('expected ready');
+    }
+    expect(ready.reply).toEqual({
+      decision: 'reply',
+      outbound_messages: [
+        {
+          type: 'message',
+          content: '继续跟进。',
+          mentions: ['123456', '456789'],
+        },
+        {
+          type: 'message',
+          content: '',
+          mentions: ['789012'],
+        },
+      ],
+    });
+    expect(ready.actions).toEqual([
+      {
+        kind: 'message',
+        content: '继续跟进。',
+        mentions: ['123456', '456789'],
+      },
+      {
+        kind: 'message',
+        content: '',
+        mentions: ['789012'],
+      },
+    ]);
+  });
+
   it('resolves structured block content as a dedicated action', async () => {
     const orchestrator = new ReplyOrchestratorService();
     const ready = await orchestrator.handle(createTurnInput('列个清单'), {} as never, {
