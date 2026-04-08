@@ -94,9 +94,6 @@ function patchLlbotMediaPathResolution({ runtimeDir, qqConfigMountSource }) {
 
   const entrypointPath = path.join(runtimeDir, ENTRYPOINT_FILE);
   const source = fs.readFileSync(entrypointPath, 'utf8');
-  if (source.includes(PMHQ_MEDIA_PATH_PATCH_MARKER)) {
-    return false;
-  }
 
   const startMarker = 'async getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {';
   const endMarker = '\n  /** 上传文件到 QQ 的文件夹 */';
@@ -135,6 +132,10 @@ function patchLlbotMediaPathResolution({ runtimeDir, qqConfigMountSource }) {
     `  }`,
     `  /* ${PMHQ_MEDIA_PATH_PATCH_MARKER} */`,
   ].join('\n');
+
+  if (source.slice(start, end) === replacement) {
+    return false;
+  }
 
   fs.writeFileSync(
     entrypointPath,

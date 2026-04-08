@@ -255,6 +255,41 @@ describe('llbot host runtime helpers', () => {
     ).toHaveLength(1);
   });
 
+  it('repairs a malformed previously-patched llbot media path block', () => {
+    const dir = createTempDir();
+    const runtimeDir = join(dir, 'runtime');
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(
+      join(runtimeDir, 'llbot.js'),
+      [
+        'class NTFileApi {',
+        '  async getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {',
+        '    const mediaPath = await invoke(NTMethod.MEDIA_FILE_PATH, []);',
+        '    return mediaPath;',
+        '  }',
+        '  /* qqbot-managed-pmhq-media-path-rewrite */',
+        '  }',
+        '  /** 上传文件到 QQ 的文件夹 */',
+        '  async uploadFile(filePath) {',
+        '    return filePath;',
+        '  }',
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+
+    expect(
+      patchLlbotMediaPathResolution({
+        runtimeDir,
+        qqConfigMountSource: '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
+      }),
+    ).toBe(true);
+
+    const patched = readFileSync(join(runtimeDir, 'llbot.js'), 'utf8');
+    expect(patched).toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  /** 上传文件到 QQ 的文件夹 */');
+    expect(patched).not.toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  }\n  /** 上传文件到 QQ 的文件夹 */');
+  });
+
   it('fails fast when the llbot media path signature changes upstream', () => {
     const dir = createTempDir();
     const runtimeDir = join(dir, 'runtime');
