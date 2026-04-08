@@ -38,6 +38,11 @@ remove_legacy_llbot_container() {
   podman rm -f "${LEGACY_LLBOT_CONTAINER}" >/dev/null 2>&1 || true
 }
 
+remove_legacy_cni_artifacts() {
+  podman network rm qqbot-stack_default qqbot-stack_app_network >/dev/null 2>&1 || true
+  rm -f /etc/cni/net.d/qqbot-stack_default.conflist /etc/cni/net.d/qqbot-stack_app_network.conflist >/dev/null 2>&1 || true
+}
+
 if [ "$#" -ne 1 ]; then
   echo "Usage: $0 up|stop|restart" >&2
   exit 1
@@ -46,6 +51,7 @@ fi
 case "$1" in
   up)
     remove_legacy_llbot_container
+    remove_legacy_cni_artifacts
     compose up -d pmhq
     ;;
   stop)
@@ -53,6 +59,7 @@ case "$1" in
     ;;
   restart)
     remove_legacy_llbot_container
+    remove_legacy_cni_artifacts
     compose stop pmhq || true
     compose up -d pmhq
     ;;

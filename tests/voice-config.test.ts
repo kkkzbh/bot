@@ -95,6 +95,16 @@ describe('qq voice config wiring', () => {
     expect(koishiService).toContain('Wants=network-online.target qqbot-llbot.service');
   });
 
+  it('bridges llbot home to the pmhq qq mount and removes legacy cni artifacts before pmhq startup', () => {
+    const llbotScript = readFileSync(resolve(process.cwd(), 'scripts/run-llbot-host.sh'), 'utf8');
+    const pmhqScript = readFileSync(resolve(process.cwd(), 'scripts/podman-pmhq-service.sh'), 'utf8');
+
+    expect(llbotScript).toContain('export HOME="${LLBOT_RUNTIME_DIR}/.host-home"');
+    expect(pmhqScript).toContain('remove_legacy_cni_artifacts');
+    expect(pmhqScript).toContain('podman network rm qqbot-stack_default qqbot-stack_app_network');
+    expect(pmhqScript).toContain('rm -f /etc/cni/net.d/qqbot-stack_default.conflist /etc/cni/net.d/qqbot-stack_app_network.conflist');
+  });
+
   it('ships a laptop-local TTS env template and user service example', () => {
     const envTemplate = readFileSync(resolve(process.cwd(), 'config/voice-tts.local.example'), 'utf8');
     const serviceTemplate = readFileSync(

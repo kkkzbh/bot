@@ -11,6 +11,7 @@ const { spawnSync } = require('node:child_process');
 const VERSION_MARKER = '.qqbot-llbot-version';
 const ENTRYPOINT_FILE = 'llbot.js';
 const DEFAULT_CONFIG_FILE = 'default_config.json';
+const PMHQ_QQ_CONFIG_DESTINATION = '/root/.config/QQ';
 
 function normalizeTruthy(value) {
   return /^(1|true|yes|on)$/i.test(String(value ?? '').trim());
@@ -107,6 +108,71 @@ function disableWebUIAuthMiddleware({ runtimeDir, dataDir, disableAuth }) {
   if (fs.existsSync(tokenPath)) {
     fs.rmSync(tokenPath, { force: true });
   }
+}
+
+function resolvePmhqQqConfigMountSource({
+  containerName = process.env.QQBOT_PMHQ_CONTAINER_NAME || 'pmhq',
+  spawnImpl = spawnSync,
+} = {}) {
+  const inspect = spawnImpl(
+    'podman',
+    ['inspect', containerName, '--format', '{{json .Mounts}}'],
+    { encoding: 'utf8' },
+  );
+
+  if (inspect.status !== 0 || !inspect.stdout.trim()) {
+    return '';
+  }
+
+  try {
+    const mounts = JSON.parse(inspect.stdout);
+    const qqMount = mounts.find((mount) => mount?.Destination === PMHQ_QQ_CONFIG_DESTINATION);
+    return typeof qqMount?.Source === 'string' ? qqMount.Source : '';
+  } catch {
+    return '';
+  }
+}
+
+async function ensureQqConfigBridge({
+  runtimeDir,
+  homeDir = path.join(runtimeDir, '.host-home'),
+  qqConfigMountSource = '',
+  now = new Date(),
+} = {}) {
+  const sourceInput = String(qqConfigMountSource || '').trim() || resolvePmhqQqConfigMountSource();
+  const sourceDir = sourceInput ? path.resolve(sourceInput) : '';
+  const bridgeHomeDir = path.resolve(homeDir);
+
+  if (!sourceDir || !fs.existsSync(sourceDir)) {
+    return { bridgeHomeDir, qqConfigMountSource: '', linked: false };
+  }
+
+  const configDir = path.join(bridgeHomeDir, '.config');
+  const qqLinkPath = path.join(configDir, 'QQ');
+  await fsp.mkdir(configDir, { recursive: true });
+
+  const currentLinkStats = await fsp.lstat(qqLinkPath).catch(() => null);
+  if (currentLinkStats) {
+    const currentRealPath = await fsp.realpath(qqLinkPath).catch(() => '');
+    if (currentRealPath !== sourceDir) {
+      await fsp.rm(qqLinkPath, { recursive: true, force: true });
+    }
+  }
+  if (!fs.existsSync(qqLinkPath)) {
+    await fsp.symlink(sourceDir, qqLinkPath, 'dir');
+  }
+
+  const monthDir = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const entries = await fsp.readdir(sourceDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('nt_qq_')) {
+      continue;
+    }
+    await fsp.mkdir(path.join(sourceDir, entry.name, 'nt_data', 'Pic', monthDir, 'Ori'), { recursive: true });
+    await fsp.mkdir(path.join(sourceDir, entry.name, 'nt_data', 'Pic', monthDir, 'Thumb'), { recursive: true });
+  }
+
+  return { bridgeHomeDir, qqConfigMountSource: sourceDir, linked: true };
 }
 
 async function fetchReleaseZip(url, destinationPath, fetchImpl = fetch) {
@@ -210,6 +276,11 @@ async function prepareManagedRuntime(env = process.env) {
 
   await prepareRuntimeVersion({ runtimeDir, version });
   await ensureRuntimeDataLink(runtimeDir, dataDir);
+  await ensureQqConfigBridge({
+    runtimeDir,
+    homeDir: env.HOME || path.join(runtimeDir, '.host-home'),
+    qqConfigMountSource: env.QQBOT_QQ_CONFIG_MOUNT_SOURCE || '',
+  });
 
   rewriteJsonConfig(path.join(runtimeDir, DEFAULT_CONFIG_FILE), env);
 
@@ -253,9 +324,11 @@ module.exports = {
   applyManagedConfig,
   buildLlbotReleaseUrl,
   disableWebUIAuthMiddleware,
+  ensureQqConfigBridge,
   ensureRuntimeDataLink,
   extractReleaseZip,
   fetchReleaseZip,
+  resolvePmhqQqConfigMountSource,
   normalizeTruthy,
   prepareManagedRuntime,
   prepareRuntimeVersion,

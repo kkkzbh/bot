@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ const {
   VERSION_MARKER,
   applyManagedConfig,
   disableWebUIAuthMiddleware,
+  ensureQqConfigBridge,
   prepareRuntimeVersion,
 } = require('../scripts/lib/llbot-runtime.cjs');
 
@@ -118,5 +119,31 @@ describe('llbot host runtime helpers', () => {
 
     expect(readFileSync(join(runtimeDir, 'llbot.js'), 'utf8')).toContain('\tnext();');
     expect(() => readFileSync(join(dataDir, 'webui_token.txt'), 'utf8')).toThrow();
+  });
+
+  it('bridges the host qq config path into the pmhq volume and prepares the monthly pic directories', async () => {
+    const dir = createTempDir();
+    const runtimeDir = join(dir, 'runtime');
+    const bridgeHomeDir = join(dir, 'bridge-home');
+    const qqMountSource = join(dir, 'pmhq-qq');
+    const qqNtDir = join(qqMountSource, 'nt_qq_test');
+    mkdirSync(join(qqNtDir, 'nt_data', 'Pic'), { recursive: true });
+
+    const result = await ensureQqConfigBridge({
+      runtimeDir,
+      homeDir: bridgeHomeDir,
+      qqConfigMountSource: qqMountSource,
+      now: new Date('2026-04-08T09:00:00Z'),
+    });
+
+    const qqLinkPath = join(bridgeHomeDir, '.config', 'QQ');
+    expect(result).toMatchObject({
+      bridgeHomeDir,
+      qqConfigMountSource: qqMountSource,
+      linked: true,
+    });
+    expect(lstatSync(qqLinkPath).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(qqMountSource, 'nt_qq_test', 'nt_data', 'Pic', '2026-04', 'Ori'))).toBe(true);
+    expect(existsSync(join(qqMountSource, 'nt_qq_test', 'nt_data', 'Pic', '2026-04', 'Thumb'))).toBe(true);
   });
 });

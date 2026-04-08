@@ -23,6 +23,7 @@ export LLONEBOT_WEBUI_PORT="${LLONEBOT_WEBUI_PORT:-3080}"
 export LLONEBOT_WS_PORT="${LLONEBOT_WS_PORT:-3001}"
 export LLONEBOT_DISABLE_WEBUI_AUTH="${LLONEBOT_DISABLE_WEBUI_AUTH:-true}"
 export PMHQ_PORT="${PMHQ_PORT:-13000}"
+export HOME="${LLBOT_RUNTIME_DIR}/.host-home"
 
 node "${ROOT_DIR}/scripts/lib/llbot-runtime.cjs" prepare
 
