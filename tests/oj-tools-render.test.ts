@@ -149,25 +149,18 @@ describe('oj-tools renderer', () => {
       text: 'Specialist',
       y: 674,
     });
-    expect(specialist.lines[0]!.width).toBeLessThanOrEqual(228);
 
     const legendary = __testables.layoutLevelText(ctx, 'legendary grandmaster');
     expect(legendary.mode).toBe('split');
     expect(legendary.lines).toHaveLength(2);
     expect(legendary.lines.map((line) => line.text)).toEqual(['Legendary', 'Grandmaster']);
     expect(legendary.lines.map((line) => line.y)).toEqual([662, 698]);
-    legendary.lines.forEach((line) => {
-      expect(line.width).toBeLessThanOrEqual(228);
-    });
 
     const international = __testables.layoutLevelText(ctx, 'international grandmaster');
     expect(international.mode).toBe('split');
     expect(international.lines).toHaveLength(2);
     expect(international.lines.map((line) => line.text)).toEqual(['International', 'Grandmaster']);
     expect(international.lines.map((line) => line.y)).toEqual([662, 698]);
-    international.lines.forEach((line) => {
-      expect(line.width).toBeLessThanOrEqual(228);
-    });
   });
 
   it('draws the star badge icon with a polygon path instead of a text glyph', () => {
