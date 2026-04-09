@@ -49,6 +49,7 @@ import {
   registerReplyToolMemoryFragment,
 } from '../pipeline/protocol.js';
 import { normalizeReplyChatMode } from '../compat.js';
+import { StructuredReplyEmptyModelOutputError } from '../pipeline/compiler.js';
 import { ReplyOrchestratorService } from '../pipeline/orchestrator.js';
 import { buildReplyTurnInput, normalizeReplyRouteHint } from '../pipeline/context-builder.js';
 import {
@@ -2000,13 +2001,30 @@ export function apply(ctx: Context, config: Config = {}): void {
             }));
           rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
           const turnCapabilitySnapshot = buildTurnCapabilitySnapshot(session, snapshot);
-          const orchestration = await replyOrchestrator.handle(turnInput, session, {
-            responseMessage,
-            promptFragments: [],
-            capabilitySnapshot: turnCapabilitySnapshot,
-            continuationContext: null,
-            routeHint,
-          });
+          let orchestration;
+          try {
+            orchestration = await replyOrchestrator.handle(turnInput, session, {
+              responseMessage,
+              promptFragments: [],
+              capabilitySnapshot: turnCapabilitySnapshot,
+              continuationContext: null,
+              routeHint,
+            });
+          } catch (error) {
+            if (!(error instanceof StructuredReplyEmptyModelOutputError)) {
+              throw error;
+            }
+            logger.error(
+              'reply plan executor received empty structured model output: runId=%s roomId=%s conversationId=%s',
+              runId,
+              String(room?.roomId ?? '<unknown>'),
+              conversationId ?? '<unknown>',
+            );
+            if (context.options) {
+              context.options.responseMessage = null;
+            }
+            return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
+          }
 
           if (orchestration.status === 'no_reply') {
             if (context.options) {

@@ -4,6 +4,13 @@ import {
   type StructuredReply,
 } from './types.js';
 
+export class StructuredReplyEmptyModelOutputError extends Error {
+  constructor() {
+    super('structured reply compiler received empty model output.');
+    this.name = 'StructuredReplyEmptyModelOutputError';
+  }
+}
+
 export function flattenModelOutputContent(content: unknown): string {
   if (typeof content === 'string') return content.trim();
   if (Array.isArray(content)) {
@@ -34,7 +41,7 @@ export class StructuredReplyCompilerService {
   compile(): StructuredReply {
     const rawText = flattenModelOutputContent(this.rawModelOutput);
     if (!rawText) {
-      throw new Error('structured reply compiler received empty model output.');
+      throw new StructuredReplyEmptyModelOutputError();
     }
 
     let parsedJson: unknown;

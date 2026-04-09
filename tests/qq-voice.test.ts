@@ -2155,6 +2155,47 @@ describe('qq voice plugin', () => {
     expect(loggerMocks.warn.mock.calls.some(([message]) => String(message).includes('reply-plan-debug'))).toBe(false);
   });
 
+  it('silently stops when the model output is empty and only logs to koishi', async () => {
+    const { ready, getExecutor, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '发个表情包',
+      strippedContent: '发个表情包',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-empty-model-output'),
+        responseMessage: createRawReplyResponse('   '),
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(context.options.responseMessage).toBeNull();
+    expect(loggerMocks.error).toHaveBeenCalledWith(
+      expect.stringContaining('reply plan executor received empty structured model output: runId=%s roomId=%s conversationId=%s'),
+      expect.any(String),
+      '7',
+      'conv-empty-model-output',
+    );
+  });
+
   it('rejects fenced json outputs instead of trying to recover them', async () => {
     const { ready, getExecutor, bot } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));

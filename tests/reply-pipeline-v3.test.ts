@@ -8,6 +8,10 @@ vi.mock('koishi', () => ({
 
 import { normalizeReplyChatMode } from '../src/plugins/reply/compat.js';
 import { buildReplyTurnContext, buildReplyTurnInput, normalizeReplyRouteHint } from '../src/plugins/reply/pipeline/context-builder.js';
+import {
+  StructuredReplyCompilerService,
+  StructuredReplyEmptyModelOutputError,
+} from '../src/plugins/reply/pipeline/compiler.js';
 import { ReplyOrchestratorService } from '../src/plugins/reply/pipeline/orchestrator.js';
 
 function createStructuredResponse(content: unknown) {
@@ -490,6 +494,12 @@ describe('reply pipeline v3', () => {
         },
       }),
     ).rejects.toThrow('structured reply compiler expected JSON');
+  });
+
+  it('throws a dedicated error when the model output is empty', () => {
+    const compiler = new StructuredReplyCompilerService('   ');
+
+    expect(() => compiler.compile()).toThrow(StructuredReplyEmptyModelOutputError);
   });
 
   it('rejects fenced json and requires the raw model output itself to be JSON', async () => {
