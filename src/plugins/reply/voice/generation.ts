@@ -160,6 +160,7 @@ interface ReplyTransportState {
   capabilitySnapshot?: ReplyCapabilitySnapshot;
   runId?: string;
   suppressErrorNotice?: boolean;
+  handleRequestModelError?: (error: unknown) => Promise<void> | void;
 }
 
 interface ReplyV2State {
@@ -757,6 +758,53 @@ function getReplyRunId(session: SessionWithVoiceState): string | undefined {
 
 function setReplyRunId(session: SessionWithVoiceState, runId: string): void {
   getReplyTransportState(session).runId = runId;
+}
+
+function clearReplyRunId(session: SessionWithVoiceState): void {
+  const transportState = session.state?.qqReplyTransport;
+  if (!transportState) return;
+  delete transportState.runId;
+}
+
+function suppressReplyErrorNotice(session: SessionWithVoiceState): void {
+  getReplyTransportState(session).suppressErrorNotice = true;
+}
+
+function setReplyRequestModelErrorHandler(
+  session: SessionWithVoiceState,
+  handler: ReplyTransportState['handleRequestModelError'],
+): void {
+  const transportState = getReplyTransportState(session);
+  if (handler) {
+    transportState.handleRequestModelError = handler;
+    return;
+  }
+  delete transportState.handleRequestModelError;
+}
+
+function registerReplyRunRequestModelGuard(args: {
+  session: SessionWithVoiceState;
+  replyRuntime: ReplyRuntime;
+  runId: string;
+  conversationId?: string;
+}): void {
+  const { session, replyRuntime, runId, conversationId } = args;
+  setReplyRequestModelErrorHandler(session, async (error) => {
+    const finished = replyRuntime.finishRun(runId);
+    if (!finished) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error ?? 'unknown error');
+    logger.error(
+      'reply request_model failed before executor cleanup: runId=%s conversationId=%s error=%s',
+      runId,
+      conversationId ?? '<unknown>',
+      message,
+    );
+    if (error instanceof Error && error.stack) {
+      logger.debug(error.stack);
+    }
+  });
 }
 
 function getReplyV2State(session: SessionWithVoiceState): ReplyV2State {
@@ -1669,6 +1717,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (!session.userId || session.userId === session.bot?.selfId) {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
+        suppressReplyErrorNotice(session);
 
         const room = context.options?.room as ReplyRuntimeRoomLike | undefined;
         const conversationId = room?.conversationId?.trim();
@@ -1707,6 +1756,12 @@ export function apply(ctx: Context, config: Config = {}): void {
         applyPreparedInputText(session, context, prepared.inputText, prepared.inputTextSpeakerTagged);
         registerReplyTurnStateFragment(conversationId, prepared.continuationContext);
         setReplyRunId(session, runId);
+        registerReplyRunRequestModelGuard({
+          session,
+          replyRuntime,
+          runId,
+          conversationId,
+        });
         if (context.options) {
           context.options.messageId = runId;
         }
@@ -1749,7 +1804,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (getReplyRouteState(session) !== 'agent') {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
-        getReplyTransportState(session).suppressErrorNotice = true;
+        suppressReplyErrorNotice(session);
         const voiceFeatureState = await resolveVoiceFeatureState(session);
 
         const snapshot =
@@ -1832,6 +1887,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (!session.userId || session.userId === session.bot?.selfId) {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
+        suppressReplyErrorNotice(session);
 
         const responseMessage = context.options?.responseMessage;
         if (!responseMessage) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
@@ -1869,6 +1925,12 @@ export function apply(ctx: Context, config: Config = {}): void {
           applyPreparedInputText(session, context, prepared.inputText, prepared.inputTextSpeakerTagged);
           registerReplyTurnStateFragment(conversationId, prepared.continuationContext);
           setReplyRunId(session, runId);
+          registerReplyRunRequestModelGuard({
+            session,
+            replyRuntime,
+            runId,
+            conversationId,
+          });
         }
         if (!replyRuntime.isCurrentRun(runId)) {
           if (context.options) {
@@ -1956,6 +2018,8 @@ export function apply(ctx: Context, config: Config = {}): void {
             ? ChatLunaChains.ChainMiddlewareRunStatus.STOP
             : ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         } finally {
+          setReplyRequestModelErrorHandler(session, undefined);
+          clearReplyRunId(session);
           replyRuntime.finishRun(runId);
         }
       }) as ChatLunaChainBuilderLike;

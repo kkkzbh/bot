@@ -175,6 +175,18 @@ describe('chatluna prompt pollution regression', () => {
     expect(requestModelSource).toContain('return');
   });
 
+  it('keeps reply request_model cleanup hooks wired through the request path', () => {
+    const packageRoot = resolveChatlunaSourceRoot();
+    const requestModelSource = readFileSync(join(packageRoot, 'src/middlewares/model/request_model.ts'), 'utf8');
+    const generationSource = readFileSync(join(process.cwd(), 'src/plugins/reply/voice/generation.ts'), 'utf8');
+
+    expect(requestModelSource).toContain('maybeHandleReplyRequestModelError');
+    expect(requestModelSource).toContain('handleRequestModelError');
+    expect(generationSource).toContain('registerReplyRunRequestModelGuard');
+    expect(generationSource).toContain('suppressReplyErrorNotice(session);');
+    expect(generationSource).toContain('setReplyRequestModelErrorHandler(session, undefined);');
+  });
+
   it('keeps multimodal content structured through request_model and shared-adapter boundaries', () => {
     const packageRoot = resolveChatlunaSourceRoot();
     const sharedAdapterRoot = resolveChatlunaSiblingPackageRoot('shared-adapter');

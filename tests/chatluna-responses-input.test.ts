@@ -1,9 +1,155 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import { resolveChatlunaSiblingPackageRoot } from './helpers/chatluna-paths.js';
 
+vi.mock('koishi', () => ({
+  Context: class {},
+  Session: class {},
+  Time: {},
+  Logger: class {
+    warn(...args: unknown[]) {
+      console.warn(...args);
+    }
+  },
+  Schema: {
+    object: () => ({}),
+    boolean: () => ({}),
+    string: () => ({}),
+    natural: () => ({}),
+    number: () => ({}),
+    array: () => ({}),
+    union: () => ({}),
+    const: () => ({}),
+  },
+  h: {
+    parse: () => [],
+    text: (content: string) => content,
+  },
+}));
+
+vi.mock('koishi-plugin-chatluna/utils/string', () => ({
+  getImageMimeType: () => 'image/jpeg',
+  getMimeTypeFromSource: () => 'image/jpeg',
+  isMessageContentImageUrl: (value: unknown) =>
+    typeof value === 'object' && value !== null && (value as { type?: unknown }).type === 'image_url',
+}));
+
+vi.mock('koishi-plugin-chatluna', () => ({
+  Config: class {},
+  ConversationRoom: class {},
+}));
+
+vi.mock('koishi-plugin-chatluna/llm-core/utils/count_tokens', () => ({
+  resolveModelContextSize: () => 128_000,
+}));
+
+vi.mock('koishi-plugin-chatluna/services/chat', () => ({
+  ChatLunaPlugin: class {},
+}));
+
+async function loadResponsesUtils() {
+  return import('../../chatluna/packages/shared-adapter/src/utils.js');
+}
+
 describe('chatluna responses input regression', () => {
+  it('keeps only valid function call and tool output pairs in responses mode', async () => {
+    const { langchainMessageToResponsesInput } = await loadResponsesUtils();
+    const paired = await langchainMessageToResponsesInput(
+      [
+        new AIMessage({
+          content: '',
+          tool_calls: [{ id: 'tool-1', name: 'search', args: { q: 'liquid glass' }, type: 'tool_call' }],
+        }),
+        new ToolMessage({ content: '搜索结果', name: 'search', tool_call_id: 'tool-1' }),
+      ],
+      {} as never,
+    );
+
+    expect(paired).toEqual([
+      {
+        type: 'function_call',
+        call_id: 'tool-1',
+        name: 'search',
+        arguments: '{"q":"liquid glass"}',
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'tool-1',
+        output: '搜索结果',
+      },
+    ]);
+  });
+
+  it('uses the single real assistant tool call as the only fallback for missing tool_call_id', async () => {
+    const { langchainMessageToResponsesInput } = await loadResponsesUtils();
+    const recovered = await langchainMessageToResponsesInput(
+      [
+        new AIMessage({
+          content: '',
+          tool_calls: [{ id: 'tool-1', name: 'search', args: { q: 'sakiko' }, type: 'tool_call' }],
+        }),
+        new ToolMessage({ content: '唯一候选', name: 'search', tool_call_id: undefined as never }),
+      ],
+      {} as never,
+    );
+
+    const dropped = await langchainMessageToResponsesInput(
+      [
+        new AIMessage({
+          content: '',
+          tool_calls: [
+            { id: 'tool-1', name: 'search', args: { q: 'a' }, type: 'tool_call' },
+            { id: 'tool-2', name: 'search', args: { q: 'b' }, type: 'tool_call' },
+          ],
+        }),
+        new ToolMessage({ content: '不应猜测', name: 'search', tool_call_id: undefined as never }),
+      ],
+      {} as never,
+    );
+
+    expect(recovered).toEqual([
+      {
+        type: 'function_call',
+        call_id: 'tool-1',
+        name: 'search',
+        arguments: '{"q":"sakiko"}',
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'tool-1',
+        output: '唯一候选',
+      },
+    ]);
+    expect(dropped).toEqual([
+      {
+        type: 'function_call',
+        call_id: 'tool-1',
+        name: 'search',
+        arguments: '{"q":"a"}',
+      },
+      {
+        type: 'function_call',
+        call_id: 'tool-2',
+        name: 'search',
+        arguments: '{"q":"b"}',
+      },
+    ]);
+  });
+
+  it('drops orphan tool outputs whose call ids were not emitted in the request', async () => {
+    const { langchainMessageToResponsesInput } = await loadResponsesUtils();
+    const input = await langchainMessageToResponsesInput(
+      [
+        new ToolMessage({ content: '孤儿结果', name: 'search', tool_call_id: 'tool-orphan' }),
+      ],
+      {} as never,
+    );
+
+    expect(input).toEqual([]);
+  });
+
   it('keeps responses-mode multimodal content mapped to input_* item types', () => {
     const sharedAdapterRoot = resolveChatlunaSiblingPackageRoot('shared-adapter');
     const sharedAdapterSource = readFileSync(join(sharedAdapterRoot, 'src', 'utils.ts'), 'utf8');
@@ -19,5 +165,7 @@ describe('chatluna responses input regression', () => {
     expect(sharedAdapterBundle).toContain('type: "input_text"');
     expect(sharedAdapterBundle).toContain('type: "input_image"');
     expect(sharedAdapterBundle).toContain('type === "image_url" || type === "input_image"');
+    expect(sharedAdapterSource).toContain('dropping orphan responses tool output');
+    expect(sharedAdapterBundle).toContain('dropping orphan responses tool output');
   });
 });

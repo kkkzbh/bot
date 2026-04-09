@@ -764,6 +764,67 @@ describe('qq voice plugin', () => {
     expect(contextA2.options.inputMessage.content).toBe('A1\nA2');
   });
 
+  it('releases a blocked interrupt queue when request_model fails and keeps the failure in koishi logs only', async () => {
+    const { ready, getPrepare, bot } = createHarness({ replyInterruptEnabled: true });
+
+    await ready();
+    await flushMicrotasks();
+
+    const prepare = getPrepare();
+    const room = createPluginRoom('conv-request-error');
+    const sessionA = createSession(bot, {
+      userId: 'u1',
+      content: 'A1',
+      strippedContent: 'A1',
+      author: { nick: '甲', name: '甲' },
+    });
+    const sessionB = createSession(bot, {
+      userId: 'u2',
+      content: 'B1',
+      strippedContent: 'B1',
+      author: { nick: '乙', name: '乙' },
+    });
+    const contextA = {
+      options: {
+        room: { ...room },
+        inputMessage: { content: 'A1', additional_kwargs: {} },
+      },
+    };
+    const contextB = {
+      options: {
+        room: { ...room },
+        inputMessage: { content: 'B1', additional_kwargs: {} },
+      },
+    };
+
+    await prepare?.(sessionA, contextA);
+    expect(sessionA.state.qqReplyTransport.suppressErrorNotice).toBe(true);
+    expect(typeof sessionA.state.qqReplyTransport.handleRequestModelError).toBe('function');
+
+    let secondPrepared = false;
+    const prepareBPromise = prepare?.(sessionB, contextB).then((result) => {
+      secondPrepared = true;
+      return result;
+    });
+
+    await flushMicrotasks();
+    expect(secondPrepared).toBe(false);
+
+    await sessionA.state.qqReplyTransport.handleRequestModelError(new Error('400 invalid_request_body'));
+
+    await expect(prepareBPromise).resolves.toBeTypeOf('number');
+    expect(secondPrepared).toBe(true);
+    expect(contextB.options.inputMessage.content).toBe('B1');
+    expect(typeof sessionB.state.qqReplyTransport.runId).toBe('string');
+    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(loggerMocks.error).toHaveBeenCalledWith(
+      expect.stringContaining('reply request_model failed before executor cleanup: runId=%s conversationId=%s error=%s'),
+      expect.any(String),
+      'conv-request-error',
+      '400 invalid_request_body',
+    );
+  });
+
   it('preserves image_url content when prepare rewrites aggregated input text', async () => {
     vi.useFakeTimers();
     const { ready, getPrepare, getExecutor, bot } = createHarness({ replyInterruptEnabled: true });

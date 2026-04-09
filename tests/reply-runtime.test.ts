@@ -503,4 +503,36 @@ describe('ReplyRuntime', () => {
       },
     });
   });
+
+  it('allows forced cleanup to release a blocked queue and stays safe on repeated finishRun calls', async () => {
+    const runtime = new ReplyRuntime({
+      stopChat: vi.fn(async () => undefined),
+      collectWindowMs: 50,
+    });
+
+    await runtime.prepareRun({
+      ...createArgs({
+        input: { text: 'A1', hasImageInput: false, imageCount: 0, displayName: '甲', userId: 'u1', isDirect: false },
+      }),
+      mode: 'interrupt',
+    });
+
+    const speakerBPromise = runtime.prepareRun({
+      ...createArgs({
+        runId: 'run-2',
+        actorKey: 'queue:group-1:user:u2',
+        input: { text: 'B1', hasImageInput: false, imageCount: 0, displayName: '乙', userId: 'u2', isDirect: false },
+      }),
+      mode: 'interrupt',
+    });
+
+    expect(runtime.finishRun('run-1')).toMatchObject({ id: 'run-1' });
+    expect(runtime.finishRun('run-1')).toBeNull();
+
+    await expect(speakerBPromise).resolves.toMatchObject({
+      action: 'continue',
+      run: expect.objectContaining({ id: 'run-2' }),
+      inputText: 'B1',
+    });
+  });
 });
