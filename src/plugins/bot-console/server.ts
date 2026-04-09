@@ -181,6 +181,13 @@ export const BOT_CONSOLE_SERVICE_UNITS: readonly BotServiceUnit[] = [
   'qqbot-voice-tts-tailnet.service',
 ] as const;
 
+const BOT_CONSOLE_SERVER_SERVICE_UNITS: readonly BotServiceUnit[] = [
+  'qqbot.target',
+  'qqbot-pmhq.service',
+  'qqbot-llbot.service',
+  'qqbot-koishi.service',
+] as const;
+
 const ASYNC_RESTART_UNITS = new Set<BotServiceUnit>([
   'qqbot.target',
   'qqbot-koishi.service',
@@ -629,6 +636,18 @@ export function validateServiceAction(unit: string, action: string): asserts uni
   }
 }
 
+function isServerEnvFilePath(filePath: string | null | undefined): boolean {
+  if (!filePath) return false;
+  return filePath.endsWith(`/${SERVER_ENV_FILE_BASENAME}`) || filePath.endsWith(`\\${SERVER_ENV_FILE_BASENAME}`);
+}
+
+export function resolveManagedServiceUnits(baseFilePath: string | null | undefined): readonly BotServiceUnit[] {
+  if (isServerEnvFilePath(baseFilePath)) {
+    return BOT_CONSOLE_SERVER_SERVICE_UNITS;
+  }
+  return BOT_CONSOLE_SERVICE_UNITS;
+}
+
 export function normalizePresetDocument(input: PresetDocument): PresetDocument {
   const name = input.name.trim();
   if (!name) throw new Error('预设名不能为空。');
@@ -751,6 +770,10 @@ export class BotConsoleManager {
     this.fs = options.fs ?? defaultFs();
     this.execFile = options.execFile ?? defaultExec;
     this.copilotBridge = options.copilotBridge;
+  }
+
+  get managedServiceUnits(): readonly BotServiceUnit[] {
+    return resolveManagedServiceUnits(this.envFiles.baseFilePath);
   }
 
   async getState(): Promise<BotConsoleStaticState> {
@@ -934,6 +957,9 @@ export class BotConsoleManager {
 
   async runServiceAction(unit: BotServiceUnit, action: ServiceAction): Promise<BotServiceStatus> {
     validateServiceAction(unit, action);
+    if (!this.managedServiceUnits.includes(unit)) {
+      throw new Error(`当前运行角色不支持这个服务：${unit}`);
+    }
     if (action === 'restart' && ASYNC_RESTART_UNITS.has(unit)) {
       // Hand restarts that can terminate the current request off to a transient
       // user unit so the console response can return before systemd stops Koishi.
@@ -945,11 +971,14 @@ export class BotConsoleManager {
   }
 
   async getServiceStatuses(): Promise<BotServiceStatus[]> {
-    return Promise.all(BOT_CONSOLE_SERVICE_UNITS.map((unit) => this.getServiceStatus(unit)));
+    return Promise.all(this.managedServiceUnits.map((unit) => this.getServiceStatus(unit)));
   }
 
   async getServiceStatus(unit: BotServiceUnit): Promise<BotServiceStatus> {
     validateServiceAction(unit, 'start');
+    if (!this.managedServiceUnits.includes(unit)) {
+      throw new Error(`当前运行角色不支持这个服务：${unit}`);
+    }
     const { stdout } = await this.execFile(
       'systemctl',
       [

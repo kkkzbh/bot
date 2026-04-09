@@ -12,6 +12,7 @@ import {
   parseSystemdShowOutput,
   resolveBotEnvFilePath,
   resolveBotEnvFiles,
+  resolveManagedServiceUnits,
   resolveBotPresetPaths,
   readManagedEnvPatchFromContent,
   serializePresetDocument,
@@ -342,6 +343,11 @@ describe('bot-console systemd helpers', () => {
     expect(status.canStart).toBe(false);
     expect(status.canStop).toBe(true);
     expect(status.canEnable).toBe(false);
+  });
+
+  it('keeps TTS service units only for local env files', () => {
+    expect(resolveManagedServiceUnits('/tmp/qqbot/.env.local')).toContain('qqbot-voice-tts.service');
+    expect(resolveManagedServiceUnits('/tmp/qqbot/.env.server')).not.toContain('qqbot-voice-tts.service');
   });
 });
 
@@ -819,6 +825,47 @@ describe('bot-console manager', () => {
       expect.objectContaining({ cwd: dir, timeout: 15_000 }),
     );
     expect(status.activeState).toBe('active');
+  });
+
+  it('filters local-only TTS units from server-mode service status queries', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.server');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    const execFile = vi.fn().mockResolvedValue({
+      stdout: [
+        'Description=QQBot Service',
+        'LoadState=loaded',
+        'ActiveState=active',
+        'SubState=running',
+        'UnitFileState=enabled',
+      ].join('\n'),
+      stderr: '',
+    });
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath, execFile });
+    const statuses = await manager.getServiceStatuses();
+
+    expect(statuses.map((status) => status.unit)).toEqual([
+      'qqbot.target',
+      'qqbot-pmhq.service',
+      'qqbot-llbot.service',
+      'qqbot-koishi.service',
+    ]);
+    expect(execFile).toHaveBeenCalledTimes(4);
+  });
+
+  it('rejects local-only TTS service actions in server mode', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.server');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    const execFile = vi.fn();
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath, execFile });
+
+    await expect(manager.runServiceAction('qqbot-voice-tts.service', 'start')).rejects.toThrow(
+      '当前运行角色不支持这个服务',
+    );
+    expect(execFile).not.toHaveBeenCalled();
   });
 
   it('persists custom preset order and removes deleted presets from it', async () => {
