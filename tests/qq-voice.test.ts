@@ -1050,6 +1050,16 @@ describe('qq voice plugin', () => {
       'conv-1',
       expect.objectContaining({ source: 'qqbot_reply_transport_execution_rules' }),
     );
+    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
+      'conv-1',
+      expect.objectContaining({
+        source: 'qqbot_reply_delivery_safety',
+        payload: expect.objectContaining({
+          kind: 'text',
+          value: expect.stringContaining('群聊平台发送安全规则'),
+        }),
+      }),
+    );
     expect(promptAssemblyMocks.clearPromptAssemblyTurn).toHaveBeenCalledWith('conv-1');
     expect(inject).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1117,6 +1127,10 @@ describe('qq voice plugin', () => {
     await policy?.(session, context);
     await promptCompiler?.(session, context);
 
+    expect(promptAssemblyMocks.registerPromptFragment).not.toHaveBeenCalledWith(
+      'conv-private',
+      expect.objectContaining({ source: 'qqbot_reply_delivery_safety' }),
+    );
     const schema = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_schema as Record<string, any> | undefined;
     const messageSchema = (schema?.properties?.outbound_messages?.anyOf?.find((item: any) => item.items?.anyOf)?.items?.anyOf ?? [])
       .flatMap((item: any) => (Array.isArray(item.anyOf) ? item.anyOf : [item]))
@@ -1604,6 +1618,40 @@ describe('qq voice plugin', () => {
     } finally {
       quoteSpy.mockRestore();
     }
+  });
+
+  it('falls back to a safe refusal when onebot rejects the first group send with retcode 1200', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    bot.sendMessage.mockRejectedValueOnce(Object.assign(
+      new Error('Error with request send_group_msg, args: {"group_id":100}, retcode: 1200'),
+      { code: 1200 },
+    ));
+
+    const context = {
+      options: {
+        room: createPluginRoom('conv-sensitive'),
+        responseMessage: createReplyV2Response('如果您问的是中国大陆近年公开报道里、规模较大且最有代表性的群众性抗议，我会先提 2022 年 11 月的“白纸运动”。'),
+      },
+    };
+    const session = createSession(bot, {
+      content: '中国的',
+      strippedContent: '中国的',
+    });
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+    expect(context.options.responseMessage.content).toBe('这个话题我不方便在群里展开，换个别的吧。');
+    expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-sensitive' }),
+      '这个话题我不方便在群里展开，换个别的吧。',
+    );
   });
 
   it('executes a voice structured reply through the executor', async () => {

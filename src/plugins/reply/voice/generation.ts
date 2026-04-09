@@ -83,6 +83,7 @@ const TTS_PROBE_TIME_INTERVAL_MS = 45_000;
 const TTS_PROBE_FAILURE_BACKOFF_MS = 10_000;
 const TTS_PROBE_TIMEOUT_MS = 5_000;
 const INITIAL_TTS_PROBE_DELAY_MS = 15_000;
+const ONEBOT_CONTENT_BLOCKED_RETCODE = 1200;
 const VOICE_WORD_SEGMENTER =
   typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
     ? new Intl.Segmenter('zh', { granularity: 'word' })
@@ -505,6 +506,25 @@ function updateVoiceState(session: SessionWithVoiceState, state: QqVoiceState): 
   const current = session.state ?? {};
   current.qqVoice = state;
   session.state = current;
+}
+
+function isOneBotContentBlockedError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+
+  const code = Number((error as { code?: unknown }).code);
+  if (Number.isFinite(code) && code === ONEBOT_CONTENT_BLOCKED_RETCODE) {
+    return true;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return /\bretcode:\s*1200\b/.test(message);
+}
+
+function buildContentBlockedFallbackText(session: SessionWithVoiceState): string {
+  const fallback = session.isDirect
+    ? '这个话题我不方便展开，换个别的吧。'
+    : '这个话题我不方便在群里展开，换个别的吧。';
+  return sanitizeStructuredReplyText(fallback, 'message');
 }
 
 async function sendFailureReply(session: SessionWithVoiceState, message: string): Promise<void> {
@@ -1036,6 +1056,27 @@ function registerReplyTurnStateFragment(
   });
 }
 
+function registerReplyDeliverySafetyFragment(conversationId: string, session: SessionWithVoiceState): void {
+  if (session.isDirect) return;
+
+  registerPromptFragment(conversationId, {
+    source: 'qqbot_reply_delivery_safety',
+    title: 'Reply Delivery Safety',
+    authority: 'runtime_contract',
+    trust: 'trusted',
+    ttl: 'turn',
+    payload: {
+      kind: 'text',
+      value: [
+        '群聊平台发送安全规则：',
+        '- 涉及中国大陆现实政治、群体性事件、示威抗议、维权运动、敏感公共事件等话题时，不要展开事实细节、案例、时间线、评价或外链。',
+        '- 这类话题统一改为一句简短婉拒，例如：这个话题我不方便在群里展开，换个别的吧。',
+        '- 不要把敏感内容拆成多条消息、列表、引用或“仅供参考”的转述继续发送。',
+      ].join('\n'),
+    },
+  });
+}
+
 function injectReplyPromptEnvelope(args: {
   chatluna: ChatLunaLike;
   conversationId: string;
@@ -1421,8 +1462,8 @@ async function deliverReplyPlanCore(args: {
       const historyLine = plannedUnitHistoryLines[outboundPlan.segments.indexOf(segment)] ?? '';
       const quoteTargetMessageId = resolveQuoteTargetMessageId?.(segment.kind !== 'voice-block') ?? null;
       if (segment.kind === 'text-line') {
-        beganSending = true;
         const receipt = await sendLine(createQuotedMessageContent(segment.content, quoteTargetMessageId));
+        beganSending = true;
         onDeliveryReceipt?.(receipt);
         if (historyLine) {
           committedHistoryLines.push(historyLine);
@@ -1432,8 +1473,8 @@ async function deliverReplyPlanCore(args: {
       }
 
       if (segment.kind === 'message-block') {
-        beganSending = true;
         const receipt = await sendWhole(createQuotedMessageContent(createMessageMessageContent(segment), quoteTargetMessageId));
+        beganSending = true;
         onDeliveryReceipt?.(receipt);
         if (historyLine) {
           committedHistoryLines.push(historyLine);
@@ -1443,8 +1484,8 @@ async function deliverReplyPlanCore(args: {
       }
 
       if (segment.kind === 'structured-block') {
-        beganSending = true;
         const receipt = await sendWhole(createQuotedMessageContent(h.text(segment.content), quoteTargetMessageId));
+        beganSending = true;
         onDeliveryReceipt?.(receipt);
         if (historyLine) {
           committedHistoryLines.push(historyLine);
@@ -1459,8 +1500,8 @@ async function deliverReplyPlanCore(args: {
           throw new Error('missing_prepared_sticker');
         }
 
-        beganSending = true;
         const receipt = await sendWhole(createQuotedMessageContent(h.image(prepared.buffer, prepared.mime), quoteTargetMessageId));
+        beganSending = true;
         onDeliveryReceipt?.(receipt);
         if (historyLine) {
           committedHistoryLines.push(historyLine);
@@ -1470,8 +1511,8 @@ async function deliverReplyPlanCore(args: {
       }
 
       if (segment.kind === 'image-block') {
-        beganSending = true;
         const receipt = await sendWhole(createQuotedMessageContent(h.image(segment.assetRef), quoteTargetMessageId));
+        beganSending = true;
         onDeliveryReceipt?.(receipt);
         if (historyLine) {
           committedHistoryLines.push(historyLine);
@@ -1485,8 +1526,8 @@ async function deliverReplyPlanCore(args: {
         throw new Error('missing_prepared_voice');
       }
 
-      beganSending = true;
       const receipt = await sendWhole(h.audio(createAudioDataUri(prepared.wav)));
+      beganSending = true;
       onDeliveryReceipt?.(receipt);
       if (historyLine) {
         committedHistoryLines.push(historyLine);
@@ -1512,7 +1553,10 @@ async function deliverReplyPlanCore(args: {
     if (beganSending) {
       return { status: 'failed_after_partial_send', historyText: committedHistoryText };
     }
-    return { status: 'failed_before_send', fallbackText: effectiveFallbackText, historyText: effectiveFallbackText };
+    const failedFallbackText = isOneBotContentBlockedError(error)
+      ? buildContentBlockedFallbackText(session)
+      : effectiveFallbackText;
+    return { status: 'failed_before_send', fallbackText: failedFallbackText, historyText: failedFallbackText };
   }
 
   if ((beginSend && !sendAbortSignal) || wasSendAborted() || wasInterrupted?.()) {
@@ -1815,6 +1859,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             voiceOutputEnabled: voiceFeatureState.outputEnabled,
           }));
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
+        registerReplyDeliverySafetyFragment(conversationId, session);
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       }) as ChatLunaChainBuilderLike;
     policyBuilder.after('qqbot_reply_tool_memory_state');
