@@ -55,7 +55,7 @@ Each built-in tab now maps to a provider strategy bundle rather than only an
 endpoint preset:
 
 - `siliconflow` uses the existing `chat/completions` main-chat path and Kimi-specific non-thinking override
-- `openai` uses the OpenAI-compatible GPT-5.4 strategy, including `responses` mode and provider-specific structured-output wiring
+- `openai` uses the OpenAI-compatible GPT-5.4 strategy, currently pinned to `chat/completions` + `response_format` structured output for provider compatibility
 - `copilot` uses GitHub device-flow OAuth, exchanges GitHub token into a short-lived Copilot session token at runtime, and serves ChatLuna through a local Responses bridge
 
 ## Developer docs (web)

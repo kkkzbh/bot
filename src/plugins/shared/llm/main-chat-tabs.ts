@@ -167,15 +167,14 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
   {
     id: 'openai-gpt54-main-chat',
     platform: 'openai',
-    requestMode: 'responses',
-    structuredOutputProtocol: 'responses_text_format',
+    requestMode: 'chat_completions',
+    structuredOutputProtocol: 'chat_completions_json_schema',
     supportsModel: isOpenAIGpt54ModelFamily,
     buildRequestOverride(model) {
       if (!isOpenAIGpt54ModelFamily(model)) return null;
       const canonicalModel = this.normalizeModel(model);
       const transportModel = this.transportModel(canonicalModel);
       return {
-        qqbot_request_mode: 'responses',
         qqbot_canonical_model: canonicalModel,
         qqbot_transport_model: transportModel,
         qqbot_tool_profile: 'qqbot_openai_main_chat',
@@ -186,8 +185,8 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     },
     buildStructuredOutputSpec(model) {
       return {
-        requestMode: 'responses',
-        structuredOutputProtocol: 'responses_text_format',
+        requestMode: 'chat_completions',
+        structuredOutputProtocol: 'chat_completions_json_schema',
         finalResponseSchema: buildStructuredReplyJsonSchema(),
         overrideRequestParams: this.buildRequestOverride(model),
       };
@@ -200,7 +199,7 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     },
     describeForConsole() {
       return {
-        description: '当前按 OpenAI 兼容 provider 处理，默认预填 wyzai + gpt-5.4-medium-thinking。',
+        description: '当前按 OpenAI 兼容 provider 处理，默认预填 wyzai + gpt-5.4-medium-thinking，并走 chat/completions 结构化输出。',
         modelHint: '推荐填写 openai/gpt-5.4-medium-thinking。当前 OpenAI Tab 默认接入 wyzai。',
       };
     },

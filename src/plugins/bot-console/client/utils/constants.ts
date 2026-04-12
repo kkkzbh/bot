@@ -47,7 +47,7 @@ export const FIELD_HINTS: Record<string, string> = {
   CHATLUNA_MAX_CONTEXT_RATIO:
     '控制主聊天可使用的模型上下文窗口比例。会跟随当前实际 room model 动态计算 token limit，不按 tab 名硬编码。',
   CHATLUNA_OPENAI_DEFAULT_MODEL:
-    'OpenAI Tab 当前按 OpenAI 兼容 provider 处理，默认推荐 openai/gpt-5.4-medium-thinking。',
+    'OpenAI Tab 当前按 OpenAI 兼容 provider 处理，并通过 chat/completions + response_format 输出结构化结果，默认推荐 openai/gpt-5.4-medium-thinking。',
   CHATLUNA_COPILOT_DEFAULT_MODEL:
     'GitHub Copilot Tab 当前按 OAuth + 本地 bridge 处理，默认推荐 openai/gpt-5.4-mini。',
   CHAT_NATURAL_TRIGGER_GROUPS:

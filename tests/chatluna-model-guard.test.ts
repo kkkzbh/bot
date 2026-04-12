@@ -117,14 +117,13 @@ describe('buildSiliconFlowKimiK25NonThinkingOverride', () => {
 });
 
 describe('buildStructuredReplyModelOverride', () => {
-  it('keeps the Kimi non-thinking override and switches OpenAI to responses mode', () => {
+  it('keeps the Kimi non-thinking override and keeps OpenAI on chat completions mode', () => {
     expect(buildStructuredReplyModelOverride('siliconflow/Pro/moonshotai/Kimi-K2.5')).toEqual({
       thinking: {
         type: 'disabled',
       },
     });
     expect(buildStructuredReplyModelOverride('openai/gpt-5.4-medium-thinking')).toEqual({
-      qqbot_request_mode: 'responses',
       qqbot_canonical_model: 'openai/gpt-5.4-medium-thinking',
       qqbot_transport_model: 'gpt-5.4-medium-thinking',
       qqbot_tool_profile: 'qqbot_openai_main_chat',
@@ -152,7 +151,7 @@ describe('supportsStructuredReplyJsonSchema', () => {
 });
 
 describe('buildStructuredReplyRequestSpec', () => {
-  it('uses chat completions json_schema for siliconflow and responses text.format for openai', () => {
+  it('uses chat completions json_schema for siliconflow and OpenAI gpt-5.4', () => {
     expect(
       buildStructuredReplyRequestSpec({
         model: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
@@ -172,10 +171,9 @@ describe('buildStructuredReplyRequestSpec', () => {
         model: 'openai/gpt-5.4-medium-thinking',
       }),
     ).toMatchObject({
-      requestMode: 'responses',
-      structuredOutputProtocol: 'responses_text_format',
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'chat_completions_json_schema',
       overrideRequestParams: {
-        qqbot_request_mode: 'responses',
         qqbot_canonical_model: 'openai/gpt-5.4-medium-thinking',
         qqbot_transport_model: 'gpt-5.4-medium-thinking',
         reasoning: {
@@ -313,8 +311,8 @@ describe('resolveMainChatRuntimeProfileFromEnv', () => {
       tabId: 'openai',
       provider: 'openai',
       strategyId: 'openai-gpt54-main-chat',
-      requestMode: 'responses',
-      structuredOutputProtocol: 'responses_text_format',
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'chat_completions_json_schema',
       baseUrl: 'https://shell.wyzai.top/v1',
       defaultModel: 'openai/gpt-5.4-medium-thinking',
     });
