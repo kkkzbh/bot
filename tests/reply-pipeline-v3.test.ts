@@ -9,6 +9,7 @@ vi.mock('koishi', () => ({
 import { normalizeReplyChatMode } from '../src/plugins/reply/compat.js';
 import { buildReplyTurnContext, buildReplyTurnInput, normalizeReplyRouteHint } from '../src/plugins/reply/pipeline/context-builder.js';
 import {
+  StructuredReplyCompilerError,
   StructuredReplyCompilerService,
   StructuredReplyEmptyModelOutputError,
 } from '../src/plugins/reply/pipeline/compiler.js';
@@ -493,13 +494,27 @@ describe('reply pipeline v3', () => {
           content: '收到，这就去查。',
         },
       }),
-    ).rejects.toThrow('structured reply compiler expected JSON');
+    ).rejects.toMatchObject({
+      name: 'StructuredReplyCompilerError',
+      diagnostic: expect.objectContaining({
+        failureKind: 'invalid_structured_json',
+      }),
+    });
   });
 
   it('throws a dedicated error when the model output is empty', () => {
     const compiler = new StructuredReplyCompilerService('   ');
 
     expect(() => compiler.compile()).toThrow(StructuredReplyEmptyModelOutputError);
+    try {
+      compiler.compile();
+    } catch (error) {
+      expect(error).toBeInstanceOf(StructuredReplyEmptyModelOutputError);
+      expect((error as StructuredReplyEmptyModelOutputError).diagnostic).toMatchObject({
+        failureKind: 'provider_empty_finish',
+        rawTextLength: 0,
+      });
+    }
   });
 
   it('rejects fenced json and requires the raw model output itself to be JSON', async () => {
@@ -514,7 +529,54 @@ describe('reply pipeline v3', () => {
           ),
         },
       }),
-    ).rejects.toThrow('structured reply compiler expected JSON');
+    ).rejects.toMatchObject({
+      name: 'StructuredReplyCompilerError',
+      diagnostic: expect.objectContaining({
+        failureKind: 'invalid_structured_json',
+      }),
+    });
+  });
+
+  it('classifies schema-invalid JSON separately from non-JSON text', () => {
+    const compiler = new StructuredReplyCompilerService(
+      JSON.stringify({
+        decision: 'reply',
+      }),
+    );
+
+    try {
+      compiler.compile();
+    } catch (error) {
+      expect(error).toBeInstanceOf(StructuredReplyCompilerError);
+      expect((error as StructuredReplyCompilerError).diagnostic).toMatchObject({
+        failureKind: 'invalid_structured_schema',
+      });
+    }
+  });
+
+  it('classifies lost provider tool calls when the diagnostic says they vanished before compilation', () => {
+    const compiler = new StructuredReplyCompilerService({
+      content: '',
+      additional_kwargs: {
+        __chatluna_provider_response_diagnostic_v1: {
+          requestMode: 'chat_completions',
+          providerToolCallCount: 1,
+          messageToolCallCount: 0,
+          toolCallChunkCount: 0,
+          functionCallPresent: false,
+        },
+      },
+    });
+
+    try {
+      compiler.compile();
+    } catch (error) {
+      expect(error).toBeInstanceOf(StructuredReplyEmptyModelOutputError);
+      expect((error as StructuredReplyEmptyModelOutputError).diagnostic).toMatchObject({
+        failureKind: 'provider_tool_calls_lost',
+        requestMode: 'chat_completions',
+      });
+    }
   });
 
   it('rejects unavailable voice and meme outputs instead of downgrading them', async () => {

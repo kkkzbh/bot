@@ -49,7 +49,10 @@ import {
   registerReplyToolMemoryFragment,
 } from '../pipeline/protocol.js';
 import { normalizeReplyChatMode } from '../compat.js';
-import { StructuredReplyEmptyModelOutputError } from '../pipeline/compiler.js';
+import {
+  StructuredReplyCompilerError,
+  StructuredReplyEmptyModelOutputError,
+} from '../pipeline/compiler.js';
 import { ReplyOrchestratorService } from '../pipeline/orchestrator.js';
 import { buildReplyTurnInput, normalizeReplyRouteHint } from '../pipeline/context-builder.js';
 import {
@@ -1991,6 +1994,8 @@ export function apply(ctx: Context, config: Config = {}): void {
           applyReplyTurnInputMetadata(context.options?.inputMessage, turnInput);
           const routeHint = normalizeReplyRouteHint(normalizeReplyChatMode((room as { chatMode?: unknown }).chatMode));
           const voiceFeatureState = await resolveVoiceFeatureState(session);
+          const queueKey = resolveReplyQueueKey(session);
+          const actorKey = resolveReplyActorKey(session);
 
           const snapshot =
             getAuthorizedReplyCapabilitySnapshot(session, replyCapabilitySnapshots) ??
@@ -2011,14 +2016,26 @@ export function apply(ctx: Context, config: Config = {}): void {
               routeHint,
             });
           } catch (error) {
-            if (!(error instanceof StructuredReplyEmptyModelOutputError)) {
+            if (!(error instanceof StructuredReplyCompilerError || error instanceof StructuredReplyEmptyModelOutputError)) {
               throw error;
             }
+            const diagnostic = error.diagnostic;
             logger.error(
-              'reply plan executor received empty structured model output: runId=%s roomId=%s conversationId=%s',
+              'reply plan executor suppressed structured model failure: runId=%s roomId=%s conversationId=%s messageId=%s queueKey=%s actorKey=%s failureKind=%s requestMode=%s providerOutputTokens=%s toolCallCount=%s toolCallChunkCount=%s functionCallPresent=%s rawOutputKind=%s rawTextLength=%s',
               runId,
               String(room?.roomId ?? '<unknown>'),
               conversationId ?? '<unknown>',
+              String(session.messageId ?? '<unknown>'),
+              queueKey ?? '<unknown>',
+              actorKey ?? '<unknown>',
+              diagnostic.failureKind,
+              diagnostic.requestMode ?? '<unknown>',
+              diagnostic.providerOutputTokens == null ? '<unknown>' : String(diagnostic.providerOutputTokens),
+              String(diagnostic.messageToolCallCount),
+              String(diagnostic.toolCallChunkCount),
+              diagnostic.functionCallPresent ? 'true' : 'false',
+              diagnostic.rawOutputKind,
+              String(diagnostic.rawTextLength),
             );
             if (context.options) {
               context.options.responseMessage = null;

@@ -80,7 +80,7 @@ export class ReplyOrchestratorService {
       };
     }
 
-    const compiler = new StructuredReplyCompilerService(context.responseMessage.content);
+    const compiler = new StructuredReplyCompilerService(context.responseMessage);
     const reply = compiler.compile();
     const actions = this.actionResolver.resolve(reply, turnContext);
     return {

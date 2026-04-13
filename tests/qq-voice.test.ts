@@ -454,11 +454,55 @@ function extractSchemaMessageTitles(schema: Record<string, any> | undefined): st
   return rawMessageSchemas.flatMap((item: any) => (Array.isArray(item.anyOf) ? item.anyOf : [item])).map((item: any) => item.title).filter(Boolean);
 }
 
-function createRawReplyResponse(content: unknown) {
+function createRawReplyResponse(
+  content: unknown,
+  providerDiagnostic: Record<string, unknown> | null = null,
+) {
   return {
     content,
-    additional_kwargs: {},
+    additional_kwargs:
+      providerDiagnostic == null
+        ? {}
+        : {
+            __chatluna_provider_response_diagnostic_v1: providerDiagnostic,
+          },
   };
+}
+
+function hasStructuredFailureLog(args: {
+  conversationId: string;
+  messageId: string;
+  failureKind: string;
+  requestMode?: string;
+  providerOutputTokens?: string;
+}): boolean {
+  return loggerMocks.error.mock.calls.some((call) => {
+    const [
+      message,
+      runId,
+      roomId,
+      conversationId,
+      messageId,
+      queueKey,
+      actorKey,
+      failureKind,
+      requestMode,
+      providerOutputTokens,
+    ] = call;
+
+    return (
+      String(message).includes('reply plan executor suppressed structured model failure') &&
+      typeof runId === 'string' &&
+      roomId === '7' &&
+      conversationId === args.conversationId &&
+      messageId === args.messageId &&
+      String(queueKey).includes('group:group-100') &&
+      String(actorKey).includes('group:group-100:user:u1') &&
+      failureKind === args.failureKind &&
+      (args.requestMode == null || requestMode === args.requestMode) &&
+      (args.providerOutputTokens == null || providerOutputTokens === args.providerOutputTokens)
+    );
+  });
 }
 
 function createStickerState(availableCount = 1) {
@@ -2121,7 +2165,7 @@ describe('qq voice plugin', () => {
     expect(chatluna.createChatModel).not.toHaveBeenCalled();
   });
 
-  it('rejects plain-text outputs unless the raw model output itself is JSON', async () => {
+  it('silently suppresses plain-text outputs and logs the invalid JSON classification', async () => {
     const { ready, getExecutor, bot } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -2132,6 +2176,7 @@ describe('qq voice plugin', () => {
     const session = createSession(bot, {
       content: '发个表情包',
       strippedContent: '发个表情包',
+      messageId: 'msg-invalid-json',
       state: {
         qqReplyTransport: {
           capabilitySnapshot: {
@@ -2150,9 +2195,18 @@ describe('qq voice plugin', () => {
       },
     };
 
-    await expect(executor?.(session, context)).rejects.toThrow('structured reply compiler expected JSON');
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
     expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(context.options.responseMessage).toBeNull();
     expect(loggerMocks.warn.mock.calls.some(([message]) => String(message).includes('reply-plan-debug'))).toBe(false);
+    expect(
+      hasStructuredFailureLog({
+        conversationId: 'conv-rerun',
+        messageId: 'msg-invalid-json',
+        failureKind: 'invalid_structured_json',
+      }),
+    ).toBe(true);
   });
 
   it('silently stops when the model output is empty and only logs to koishi', async () => {
@@ -2166,6 +2220,7 @@ describe('qq voice plugin', () => {
     const session = createSession(bot, {
       content: '发个表情包',
       strippedContent: '发个表情包',
+      messageId: 'msg-empty-output',
       state: {
         qqReplyTransport: {
           capabilitySnapshot: {
@@ -2180,7 +2235,10 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         room: createPluginRoom('conv-empty-model-output'),
-        responseMessage: createRawReplyResponse('   '),
+        responseMessage: createRawReplyResponse('   ', {
+          requestMode: 'chat_completions',
+          providerOutputTokens: 46,
+        }),
       },
     };
 
@@ -2188,15 +2246,18 @@ describe('qq voice plugin', () => {
     expect(typeof result).toBe('number');
     expect(bot.sendMessage).not.toHaveBeenCalled();
     expect(context.options.responseMessage).toBeNull();
-    expect(loggerMocks.error).toHaveBeenCalledWith(
-      expect.stringContaining('reply plan executor received empty structured model output: runId=%s roomId=%s conversationId=%s'),
-      expect.any(String),
-      '7',
-      'conv-empty-model-output',
-    );
+    expect(
+      hasStructuredFailureLog({
+        conversationId: 'conv-empty-model-output',
+        messageId: 'msg-empty-output',
+        failureKind: 'provider_empty_finish',
+        requestMode: 'chat_completions',
+        providerOutputTokens: '46',
+      }),
+    ).toBe(true);
   });
 
-  it('rejects fenced json outputs instead of trying to recover them', async () => {
+  it('silently suppresses fenced json outputs and logs the invalid JSON classification', async () => {
     const { ready, getExecutor, bot } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -2207,6 +2268,7 @@ describe('qq voice plugin', () => {
     const session = createSession(bot, {
       content: '发个表情包',
       strippedContent: '发个表情包',
+      messageId: 'msg-fenced-json',
       state: {
         qqReplyTransport: {
           capabilitySnapshot: {
@@ -2227,7 +2289,64 @@ describe('qq voice plugin', () => {
       },
     };
 
-    await expect(executor?.(session, context)).rejects.toThrow('structured reply compiler expected JSON');
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
     expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(context.options.responseMessage).toBeNull();
+    expect(
+      hasStructuredFailureLog({
+        conversationId: 'conv-fenced-json',
+        messageId: 'msg-fenced-json',
+        failureKind: 'invalid_structured_json',
+      }),
+    ).toBe(true);
+  });
+
+  it('silently suppresses schema-invalid JSON outputs and logs the schema classification', async () => {
+    const { ready, getExecutor, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '发个表情包',
+      strippedContent: '发个表情包',
+      messageId: 'msg-invalid-schema',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-invalid-schema'),
+        responseMessage: createRawReplyResponse(
+          JSON.stringify({
+            decision: 'reply',
+            outbound_messages: [{ type: 'message', content: '收到', mentions: ['u1'] }],
+          }),
+        ),
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(context.options.responseMessage).toBeNull();
+    expect(
+      hasStructuredFailureLog({
+        conversationId: 'conv-invalid-schema',
+        messageId: 'msg-invalid-schema',
+        failureKind: 'invalid_structured_schema',
+      }),
+    ).toBe(true);
   });
 });
