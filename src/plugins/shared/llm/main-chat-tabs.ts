@@ -31,17 +31,31 @@ export interface MainChatStructuredOutputSpec {
   finalResponseInstruction?: string;
 }
 
+export interface MainChatConsoleDescription {
+  description: string;
+  modelHint: string;
+}
+
+export interface CopilotModelOption {
+  modelId: string;
+  label: string;
+  rateLabel: string;
+  requestMode: MainChatRequestMode;
+  structuredOutputProtocol: StructuredOutputProtocol;
+  deprecated?: boolean;
+}
+
 export interface MainChatProviderStrategy {
   id: 'siliconflow-kimi-main-chat' | 'openai-gpt54-main-chat' | 'copilot-github-oauth-main-chat';
   platform: MainChatProvider;
-  requestMode: MainChatRequestMode;
-  structuredOutputProtocol: StructuredOutputProtocol;
   supportsModel: (model?: string | null) => boolean;
   buildRequestOverride: (model?: string | null) => Record<string, unknown> | null;
   buildStructuredOutputSpec: (model?: string | null) => MainChatStructuredOutputSpec;
   normalizeModel: (model?: string | null) => string | null;
   transportModel: (model?: string | null) => string | null;
-  describeForConsole: () => { description: string; modelHint: string };
+  resolveRequestMode: (model?: string | null) => MainChatRequestMode;
+  resolveStructuredOutputProtocol: (model?: string | null) => StructuredOutputProtocol;
+  describeForConsole: (model?: string | null) => MainChatConsoleDescription;
 }
 
 export interface MainChatModelDescriptor {
@@ -85,6 +99,84 @@ export const SILICONFLOW_DEFAULT_MODEL = 'Pro/moonshotai/Kimi-K2.5';
 export const COPILOT_BRIDGE_DEFAULT_BASE_URL = 'http://127.0.0.1:5140/api/internal/copilot/v1';
 export const COPILOT_DEFAULT_MODEL = 'openai/gpt-5.4-mini';
 export const MAIN_CHAT_BUILTIN_TAB_IDS = ['siliconflow', 'openai', 'copilot'] as const satisfies readonly MainChatBuiltinTabId[];
+export const COPILOT_MODEL_OPTIONS = [
+  {
+    modelId: 'gpt-5.4',
+    label: 'GPT-5.4',
+    rateLabel: '1x',
+    requestMode: 'responses',
+    structuredOutputProtocol: 'responses_text_format',
+  },
+  {
+    modelId: 'gpt-5.4-mini',
+    label: 'GPT-5.4 mini',
+    rateLabel: '0.33x',
+    requestMode: 'responses',
+    structuredOutputProtocol: 'responses_text_format',
+  },
+  {
+    modelId: 'gpt-5-mini',
+    label: 'GPT-5 mini',
+    rateLabel: '0x',
+    requestMode: 'chat_completions',
+    structuredOutputProtocol: 'chat_completions_json_schema',
+  },
+  {
+    modelId: 'gpt-4.1',
+    label: 'GPT-4.1',
+    rateLabel: '0x',
+    requestMode: 'chat_completions',
+    structuredOutputProtocol: 'chat_completions_json_schema',
+  },
+  {
+    modelId: 'gpt-4o',
+    label: 'GPT-4o',
+    rateLabel: '0x',
+    requestMode: 'chat_completions',
+    structuredOutputProtocol: 'chat_completions_json_schema',
+    deprecated: true,
+  },
+  {
+    modelId: 'claude-haiku-4.5',
+    label: 'Claude Haiku 4.5',
+    rateLabel: '0.33x',
+    requestMode: 'chat_completions',
+    structuredOutputProtocol: 'chat_completions_json_schema',
+  },
+  {
+    modelId: 'claude-sonnet-4.5',
+    label: 'Claude Sonnet 4.5',
+    rateLabel: '1x',
+    requestMode: 'chat_completions',
+    structuredOutputProtocol: 'chat_completions_json_schema',
+  },
+  {
+    modelId: 'gemini-3-flash-preview',
+    label: 'Gemini 3 Flash',
+    rateLabel: '0.33x',
+    requestMode: 'chat_completions',
+    structuredOutputProtocol: 'chat_completions_json_schema',
+  },
+  {
+    modelId: 'gemini-3.1-pro-preview',
+    label: 'Gemini 3.1 Pro',
+    rateLabel: '1x',
+    requestMode: 'chat_completions',
+    structuredOutputProtocol: 'chat_completions_json_schema',
+  },
+] as const satisfies readonly CopilotModelOption[];
+
+export function formatCopilotModelOptionLabel(option: CopilotModelOption): string {
+  return option.deprecated
+    ? `${option.label} (${option.rateLabel}, 可能弃用)`
+    : `${option.label} (${option.rateLabel})`;
+}
+
+export function getCopilotModelOption(model?: string | null): CopilotModelOption | null {
+  const normalized = normalizeCopilotModelId(model);
+  if (!normalized) return null;
+  return COPILOT_MODEL_OPTIONS.find((option) => option.modelId === normalized) ?? null;
+}
 
 export const BUILTIN_MAIN_CHAT_TABS: readonly BuiltinTabDefinition[] = [
   {
@@ -132,8 +224,6 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
   {
     id: 'siliconflow-kimi-main-chat',
     platform: 'siliconflow',
-    requestMode: 'chat_completions',
-    structuredOutputProtocol: 'chat_completions_json_schema',
     supportsModel: isSiliconFlowKimiK25Model,
     buildRequestOverride(model) {
       if (!isSiliconFlowKimiK25Model(model)) return null;
@@ -145,8 +235,8 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     },
     buildStructuredOutputSpec(model) {
       return {
-        requestMode: 'chat_completions',
-        structuredOutputProtocol: 'chat_completions_json_schema',
+        requestMode: this.resolveRequestMode(model),
+        structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
         finalResponseSchema: buildStructuredReplyJsonSchema(),
         overrideRequestParams: this.buildRequestOverride(model),
       };
@@ -156,6 +246,12 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     },
     transportModel(model) {
       return normalizeSiliconFlowKimiK25ModelId(model);
+    },
+    resolveRequestMode() {
+      return 'chat_completions';
+    },
+    resolveStructuredOutputProtocol() {
+      return 'chat_completions_json_schema';
     },
     describeForConsole() {
       return {
@@ -167,8 +263,6 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
   {
     id: 'openai-gpt54-main-chat',
     platform: 'openai',
-    requestMode: 'chat_completions',
-    structuredOutputProtocol: 'chat_completions_json_schema',
     supportsModel: isOpenAIGpt54ModelFamily,
     buildRequestOverride(model) {
       if (!isOpenAIGpt54ModelFamily(model)) return null;
@@ -185,8 +279,8 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     },
     buildStructuredOutputSpec(model) {
       return {
-        requestMode: 'chat_completions',
-        structuredOutputProtocol: 'chat_completions_json_schema',
+        requestMode: this.resolveRequestMode(model),
+        structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
         finalResponseSchema: buildStructuredReplyJsonSchema(),
         overrideRequestParams: this.buildRequestOverride(model),
       };
@@ -196,6 +290,12 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     },
     transportModel(model) {
       return normalizeProviderTransportModel(model);
+    },
+    resolveRequestMode() {
+      return 'chat_completions';
+    },
+    resolveStructuredOutputProtocol() {
+      return 'chat_completions_json_schema';
     },
     describeForConsole() {
       return {
@@ -207,15 +307,14 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
   {
     id: 'copilot-github-oauth-main-chat',
     platform: 'openai',
-    requestMode: 'responses',
-    structuredOutputProtocol: 'responses_text_format',
     supportsModel: isCopilotModelId,
     buildRequestOverride(model) {
       if (!isCopilotModelId(model)) return null;
       const canonicalModel = this.normalizeModel(model);
       const transportModel = this.transportModel(canonicalModel);
+      const requestMode = this.resolveRequestMode(canonicalModel);
       return {
-        qqbot_request_mode: 'responses',
+        ...(requestMode === 'responses' ? { qqbot_request_mode: 'responses' } : {}),
         qqbot_canonical_model: canonicalModel,
         qqbot_transport_model: transportModel,
         qqbot_tool_profile: 'qqbot_openai_main_chat',
@@ -223,8 +322,8 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     },
     buildStructuredOutputSpec(model) {
       return {
-        requestMode: 'responses',
-        structuredOutputProtocol: 'responses_text_format',
+        requestMode: this.resolveRequestMode(model),
+        structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
         finalResponseSchema: buildStructuredReplyJsonSchema(),
         overrideRequestParams: this.buildRequestOverride(model),
       };
@@ -235,10 +334,20 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     transportModel(model) {
       return normalizeCopilotModelId(model);
     },
-    describeForConsole() {
+    resolveRequestMode(model) {
+      return getCopilotRequestMode(model);
+    },
+    resolveStructuredOutputProtocol(model) {
+      return getCopilotStructuredOutputProtocol(model);
+    },
+    describeForConsole(model) {
+      const option = getCopilotModelOption(model);
+      const mode = this.resolveRequestMode(model) === 'responses' ? 'Responses API' : 'chat/completions';
       return {
-        description: '当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 交换 Copilot session token 并走 Responses API。',
-        modelHint: '推荐填写 openai/gpt-5.4-mini。该 Tab 使用 GitHub device-flow OAuth，不再手填 PAT。',
+        description: `当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 使用 ${option ? formatCopilotModelOptionLabel(option) : '固定模型目录'}，并走 ${mode}。`,
+        modelHint: option
+          ? `当前固定从下拉选择，已选 ${formatCopilotModelOptionLabel(option)}。`
+          : '当前固定从下拉选择 Copilot 模型，并按模型静态路由到 responses 或 chat/completions。',
       };
     },
   },
@@ -310,7 +419,7 @@ export function resolveMainChatTabStateFromEnv(
     (activeTab === id ? trimOptionalEnvValue(env.CHATLUNA_DEFAULT_MODEL) : null) ||
     definition.defaultModel;
   const canonicalModel = strategy.normalizeModel(defaultModel) ?? definition.defaultModel;
-  const { description, modelHint } = strategy.describeForConsole();
+  const { description, modelHint } = strategy.describeForConsole(canonicalModel);
 
   return {
     id,
@@ -318,8 +427,8 @@ export function resolveMainChatTabStateFromEnv(
     title: definition.title,
     provider: definition.provider,
     strategyId: strategy.id,
-    requestMode: strategy.requestMode,
-    structuredOutputProtocol: strategy.structuredOutputProtocol,
+    requestMode: strategy.resolveRequestMode(canonicalModel),
+    structuredOutputProtocol: strategy.resolveStructuredOutputProtocol(canonicalModel),
     authKind: id === 'copilot' ? 'oauth_device' : 'manual',
     authStatus: apiKey ? 'ready' : id === 'copilot' ? 'unauthenticated' : 'ready',
     accountLabel: null,
@@ -346,17 +455,17 @@ export function resolveMainChatRuntimeProfileFromTabConfig(
 
   const definition = getBuiltinMainChatTabDefinition(activeTab);
   const strategy = getMainChatProviderStrategy(definition.strategyId);
-  const { description, modelHint } = strategy.describeForConsole();
   const canonicalModel =
     strategy.normalizeModel(activeConfig.canonicalModel ?? activeConfig.defaultModel) ?? definition.defaultModel;
+  const { description, modelHint } = strategy.describeForConsole(canonicalModel);
 
   return {
     tabId: activeTab,
     title: definition.title,
     provider: definition.provider,
     strategyId: strategy.id,
-    requestMode: strategy.requestMode,
-    structuredOutputProtocol: strategy.structuredOutputProtocol,
+    requestMode: strategy.resolveRequestMode(canonicalModel),
+    structuredOutputProtocol: strategy.resolveStructuredOutputProtocol(canonicalModel),
     authKind: activeTab === 'copilot' ? 'oauth_device' : 'manual',
     authStatus: activeConfig.apiKey.trim() ? 'ready' : activeTab === 'copilot' ? 'unauthenticated' : 'ready',
     accountLabel: null,
@@ -516,15 +625,15 @@ function normalizeProviderTransportModel(model?: string | null): string | null {
 }
 
 function isCopilotModelId(model?: string | null): boolean {
-  const normalized = normalizeCopilotModelId(model);
-  if (!normalized) return false;
-  if (normalized.includes('/')) return false;
-  if (/\s/.test(normalized)) return false;
-  if (normalized.includes('://')) return false;
-  // Copilot bridge runs via Responses API. Some upstream Gemini 3.x preview ids
-  // are advertised but fail hard on /responses with unsupported_api_for_model.
-  if (/^gemini-3\./i.test(normalized)) return false;
-  return true;
+  return getCopilotModelOption(model) != null;
+}
+
+function getCopilotRequestMode(model?: string | null): MainChatRequestMode {
+  return getCopilotModelOption(model)?.requestMode ?? 'responses';
+}
+
+function getCopilotStructuredOutputProtocol(model?: string | null): StructuredOutputProtocol {
+  return getCopilotModelOption(model)?.structuredOutputProtocol ?? 'responses_text_format';
 }
 
 function resolveOpenAIGpt54ReasoningEffort(model?: string | null): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' {
@@ -555,7 +664,7 @@ export function resolveMainChatModelDescriptor(args: {
     tabId: args.tabId,
     provider: definition.provider,
     strategyId: definition.strategyId,
-    requestMode: strategy.requestMode,
+    requestMode: strategy.resolveRequestMode(canonicalModel),
     canonicalModel,
     transportModel,
   };

@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useToast } from '../../composables/useToast'
-import { MODEL_SHARED_KEYS, MODEL_TAB_IDS, SILICONFLOW_FIXED_MODEL } from '../../composables/useBotConsole'
+import {
+  COPILOT_MODEL_OPTIONS,
+  MODEL_SHARED_KEYS,
+  MODEL_TAB_IDS,
+  SILICONFLOW_FIXED_MODEL,
+  formatCopilotModelOptionLabel,
+} from '../../composables/useBotConsole'
 import { getFieldHint, getFieldLabel } from '../../utils/constants'
 import type { BotConsoleModelTabId } from '../../types'
 import type { useBotConsole } from '../../composables/useBotConsole'
@@ -35,6 +41,13 @@ const tabTitles: Record<BotConsoleModelTabId, string> = {
 
 const currentTabModelHint = computed(() => currentModelTabDraft.value.modelHint)
 const siliconflowModelOptions = [SILICONFLOW_FIXED_MODEL] as const
+const copilotModelOptions = COPILOT_MODEL_OPTIONS
+const currentCopilotModelId = computed(() => {
+  const value = currentModelTabDraft.value.defaultModel.trim()
+  if (value.startsWith('openai/')) return value.slice('openai/'.length)
+  if (value.startsWith('github-copilot/')) return value.slice('github-copilot/'.length)
+  return value
+})
 
 function inputType(key: string): string {
   return key.includes('API_KEY') ? 'password' : 'text'
@@ -303,7 +316,7 @@ onBeforeUnmount(() => {
             <div class="bc-model-auth-head">
               <div>
                 <strong>GitHub OAuth 状态</strong>
-                <p class="bc-muted">本地与服务器登录状态独立保存。完成授权后，主聊天会通过本地 Copilot bridge 走 Responses API。</p>
+                <p class="bc-muted">本地与服务器登录状态独立保存。完成授权后，主聊天会按所选 Copilot 模型经由本地 bridge 走 Responses API 或 chat/completions。</p>
               </div>
               <span :class="['bc-status-badge', copilotStatusTone]">{{ copilotStatusLabel }}</span>
             </div>
@@ -372,13 +385,18 @@ onBeforeUnmount(() => {
                   <span class="bc-field-tooltip" role="tooltip">{{ currentTabModelHint }}</span>
                 </span>
               </span>
-              <input
-                type="text"
-                :value="currentModelTabDraft.defaultModel"
-                spellcheck="false"
-                autocomplete="off"
-                @input="(e) => setTabField('defaultModel', (e.target as HTMLInputElement).value)"
+              <select
+                :value="currentCopilotModelId"
+                @change="(e) => setTabField('defaultModel', (e.target as HTMLSelectElement).value)"
               >
+                <option
+                  v-for="option in copilotModelOptions"
+                  :key="option.modelId"
+                  :value="option.modelId"
+                >
+                  {{ formatCopilotModelOptionLabel(option) }}
+                </option>
+              </select>
             </label>
           </div>
         </div>

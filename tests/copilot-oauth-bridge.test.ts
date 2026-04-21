@@ -14,8 +14,12 @@ function createTempDir() {
   return mkdtempSync(join(tmpdir(), 'qqbot-copilot-oauth-'));
 }
 
+const originalFetch = globalThis.fetch;
+
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  globalThis.fetch = originalFetch;
 });
 
 describe('copilot oauth bridge helpers', () => {
@@ -80,6 +84,60 @@ describe('copilot oauth bridge helpers', () => {
 
     expect((await readFile(join(dir, '.runtime/github-copilot.bridge-secret'), 'utf8')).trim()).toBe(
       'copilot-bridge-test-secret',
+    );
+  });
+
+  it('proxies chat completions through the Copilot bridge and normalizes model ids', async () => {
+    const dir = createTempDir();
+    const service = new CopilotOAuthBridgeService({
+      rootDir: dir,
+      envFiles: {
+        mode: 'single',
+        baseFilePath: join(dir, '.env.local'),
+        overrideFilePath: null,
+        editTarget: join(dir, '.env.local'),
+      },
+    });
+
+    vi.spyOn(service, 'resolveCopilotSession').mockResolvedValue({
+      token: 'copilot-session-token',
+      baseUrl: 'https://api.individual.githubcopilot.com',
+      expiresAt: Date.now() + 60_000,
+      updatedAt: Date.now(),
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      status: 200,
+      headers: {
+        get(name: string) {
+          return name.toLowerCase() === 'content-type' ? 'application/json; charset=utf-8' : null;
+        },
+      },
+      text: async () => '{"ok":true}',
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const result = await service.proxyChatCompletions({
+      model: 'openai/gpt-4o',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(result).toMatchObject({
+      status: 200,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+      },
+      body: '{"ok":true}',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.individual.githubcopilot.com/chat/completions',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          messages: [{ role: 'user', content: 'hello' }],
+        }),
+      }),
     );
   });
 });

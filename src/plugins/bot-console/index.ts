@@ -402,6 +402,16 @@ export function apply(ctx: Context): void {
       koaCtx.body = result.body;
     });
 
+    ctx.server.post('/api/internal/copilot/v1/chat/completions', async (koaCtx: any) => {
+      if (!(await validateCopilotBridgeAuth(koaCtx, copilotBridge))) return;
+      const result = await copilotBridge.proxyChatCompletions(koaCtx.request.body);
+      koaCtx.status = result.status;
+      for (const [key, value] of Object.entries(result.headers)) {
+        koaCtx.set(key, value);
+      }
+      koaCtx.body = result.body;
+    });
+
     ctx.server.options('/api/internal/qq-voice/v1/send', async (koaCtx: any) => {
       setQqVoiceBridgeCorsHeaders(koaCtx);
       koaCtx.status = 204;

@@ -6,6 +6,7 @@ import type {
   CopilotAuthAttempt,
   CopilotAuthState,
 } from '../../types/bot-console.js';
+import { COPILOT_MODEL_OPTIONS } from '../shared/llm/main-chat-tabs.js';
 
 const DEFAULT_KOISHI_PORT = '5140';
 const DEFAULT_CLIENT_ID = 'Iv1.b507a08c87ecfe98';
@@ -15,19 +16,7 @@ const COPILOT_TOKEN_URL = 'https://api.github.com/copilot_internal/v2/token';
 const GITHUB_USER_URL = 'https://api.github.com/user';
 const DEFAULT_COPILOT_API_BASE_URL = 'https://api.individual.githubcopilot.com';
 const SESSION_EXPIRY_SKEW_MS = 5 * 60 * 1000;
-const FALLBACK_COPILOT_MODELS = [
-  'gpt-4o',
-  'gpt-4o-mini',
-  'gpt-4.1',
-  'gpt-4.1-mini',
-  'gpt-5',
-  'gpt-5-mini',
-  'gpt-5-nano',
-  'claude-haiku-4.5',
-  'claude-sonnet-4.5',
-  'gemini-2.5-pro',
-  'gemini-2.5-flash',
-] as const;
+const FALLBACK_COPILOT_MODELS = COPILOT_MODEL_OPTIONS.map((option) => option.modelId);
 
 type ResolvedEnvFiles = {
   mode: 'single' | 'layered';
@@ -450,6 +439,15 @@ export class CopilotOAuthBridgeService implements CopilotBridgeStateProvider {
     });
   }
 
+  async proxyChatCompletions(body: unknown): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+    const normalizedBody = normalizeCopilotRequestBody(body);
+    return this.proxyUpstream({
+      method: 'POST',
+      path: '/chat/completions',
+      body: normalizedBody,
+    });
+  }
+
   private async ensureBridgeSecret(): Promise<string> {
     const persisted = trimOptionalText(await readTextIfExists(this.secretFilePath));
     if (persisted) return persisted;
@@ -609,7 +607,7 @@ export class CopilotOAuthBridgeService implements CopilotBridgeStateProvider {
 
   private async proxyUpstream(args: {
     method: 'GET' | 'POST';
-    path: '/models' | '/v1/responses';
+    path: '/models' | '/chat/completions' | '/v1/responses';
     body?: unknown;
   }): Promise<{ status: number; headers: Record<string, string>; body: string }> {
     try {
@@ -626,7 +624,7 @@ export class CopilotOAuthBridgeService implements CopilotBridgeStateProvider {
   private async doProxyUpstream(
     args: {
       method: 'GET' | 'POST';
-      path: '/models' | '/v1/responses';
+      path: '/models' | '/chat/completions' | '/v1/responses';
       body?: unknown;
     },
     retried: boolean,

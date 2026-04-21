@@ -56,7 +56,7 @@ endpoint preset:
 
 - `siliconflow` uses the existing `chat/completions` main-chat path, locks the official SiliconFlow endpoint, and applies the Kimi-specific non-thinking override
 - `openai` uses the OpenAI-compatible GPT-5.4 strategy, currently pinned to `chat/completions` + `response_format` structured output for provider compatibility
-- `copilot` uses GitHub device-flow OAuth, exchanges GitHub token into a short-lived Copilot session token at runtime, and serves ChatLuna through a local Responses bridge
+- `copilot` uses GitHub device-flow OAuth, exchanges GitHub token into a short-lived Copilot session token at runtime, and routes ChatLuna through the local bridge to either `responses` or `chat/completions` based on the selected Copilot model
 
 ## Developer docs (web)
 

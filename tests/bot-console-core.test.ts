@@ -699,6 +699,85 @@ describe('bot-console manager', () => {
     ).rejects.toThrow('OpenAI Tab 只支持当前允许的模型族');
   });
 
+  it('derives Copilot chat-completions metadata from the selected Copilot model', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    const result = await manager.saveModelTabs({
+      activeTab: 'copilot',
+      tabs: [
+        {
+          id: 'siliconflow',
+          title: '硅基流动',
+          provider: 'siliconflow',
+          strategyId: 'siliconflow-kimi-main-chat',
+          requestMode: 'chat_completions',
+          structuredOutputProtocol: 'chat_completions_json_schema',
+          description: 'siliconflow',
+          modelHint: 'kimi',
+          authKind: 'manual',
+          authStatus: 'ready',
+          accountLabel: null,
+          authError: null,
+          baseUrl: 'https://api.siliconflow.cn/v1',
+          apiKey: 'sk-kimi',
+          defaultModel: 'Pro/moonshotai/Kimi-K2.5',
+        },
+        {
+          id: 'openai',
+          title: 'OpenAI',
+          provider: 'openai',
+          strategyId: 'openai-gpt54-main-chat',
+          requestMode: 'chat_completions',
+          structuredOutputProtocol: 'chat_completions_json_schema',
+          description: 'openai',
+          modelHint: 'gpt-5.4',
+          authKind: 'manual',
+          authStatus: 'ready',
+          accountLabel: null,
+          authError: null,
+          baseUrl: 'https://shell.wyzai.top/v1',
+          apiKey: 'sk-openai',
+          defaultModel: 'openai/gpt-5.4-medium-thinking',
+        },
+        {
+          id: 'copilot',
+          title: 'GitHub Copilot',
+          provider: 'openai',
+          strategyId: 'copilot-github-oauth-main-chat',
+          requestMode: 'responses',
+          structuredOutputProtocol: 'responses_text_format',
+          description: 'copilot',
+          modelHint: 'openai/gpt-4o',
+          authKind: 'oauth_device',
+          authStatus: 'ready',
+          accountLabel: null,
+          authError: null,
+          baseUrl: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+          apiKey: 'github_pat_123',
+          defaultModel: 'openai/gpt-4o',
+        },
+      ],
+    });
+
+    expect(result.modelTabs.activeTab).toBe('copilot');
+    expect(result.modelTabs.tabs).toContainEqual(expect.objectContaining({
+      id: 'copilot',
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'chat_completions_json_schema',
+      defaultModel: 'openai/gpt-4o',
+      canonicalModel: 'openai/gpt-4o',
+      transportModel: 'gpt-4o',
+    }));
+    expect(result.env).toMatchObject({
+      CHATLUNA_ACTIVE_TAB: 'copilot',
+      CHATLUNA_DEFAULT_MODEL: 'openai/gpt-4o',
+      CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/gpt-4o',
+    });
+  });
+
   it('rejects unsupported Copilot tab models', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');

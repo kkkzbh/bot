@@ -49,6 +49,11 @@ import {
   TOOL_PRIVATE_DEFAULT_SCOPE_ID,
   TOOL_ROUTE_PROFILES,
 } from './toolPolicy'
+import {
+  COPILOT_MODEL_OPTIONS as SHARED_COPILOT_MODEL_OPTIONS,
+  formatCopilotModelOptionLabel as formatSharedCopilotModelOptionLabel,
+  getCopilotModelOption,
+} from '../../../shared/llm/main-chat-tabs'
 
 // ─── Env key groups ───────────────────────────────────────────────────────────
 
@@ -87,6 +92,8 @@ export const MODEL_SHARED_KEYS = [
 export const MODEL_TAB_IDS = ['siliconflow', 'openai', 'copilot'] as const satisfies readonly BotConsoleModelTabId[]
 export const SILICONFLOW_FIXED_BASE_URL = 'https://api.siliconflow.cn/v1'
 export const SILICONFLOW_FIXED_MODEL = 'Pro/moonshotai/Kimi-K2.5'
+export const COPILOT_MODEL_OPTIONS = SHARED_COPILOT_MODEL_OPTIONS
+export const formatCopilotModelOptionLabel = formatSharedCopilotModelOptionLabel
 
 export const BASIC_KEYS = [
   'CHAT_NATURAL_TRIGGER_ALIASES',
@@ -139,6 +146,7 @@ function clonePreset(p: PresetDocument): PresetDocument {
 }
 
 function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltinModelTab {
+  const copilotDefaultOption = getCopilotModelOption('openai/gpt-5.4-mini')
   const tabMeta: Record<BotConsoleModelTabId, Omit<BotConsoleBuiltinModelTab, 'id' | 'baseUrl' | 'apiKey' | 'defaultModel'>> = {
     siliconflow: {
       title: '硅基流动',
@@ -170,10 +178,12 @@ function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltin
       title: 'GitHub Copilot',
       provider: 'openai',
       strategyId: 'copilot-github-oauth-main-chat',
-      requestMode: 'responses',
-      structuredOutputProtocol: 'responses_text_format',
-      description: '当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 交换 session token。',
-      modelHint: '推荐填写 openai/gpt-5.4-mini。该 Tab 使用 GitHub device-flow OAuth，不再手填 PAT。',
+      requestMode: copilotDefaultOption?.requestMode ?? 'responses',
+      structuredOutputProtocol: copilotDefaultOption?.structuredOutputProtocol ?? 'responses_text_format',
+      description: `当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 使用 ${copilotDefaultOption ? formatSharedCopilotModelOptionLabel(copilotDefaultOption) : '固定模型目录'}，并按所选模型静态路由到 Responses API 或 chat/completions。`,
+      modelHint: copilotDefaultOption
+        ? `当前固定从下拉选择，已选 ${formatSharedCopilotModelOptionLabel(copilotDefaultOption)}。`
+        : '当前固定从下拉选择 Copilot 模型，并按模型静态路由到 responses 或 chat/completions。',
       authKind: 'oauth_device',
       authStatus: 'unauthenticated',
       accountLabel: null,

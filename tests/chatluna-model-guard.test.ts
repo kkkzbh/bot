@@ -137,7 +137,6 @@ describe('buildStructuredReplyModelOverride', () => {
       },
     });
     expect(buildStructuredReplyModelOverride('openai/gpt-4o')).toEqual({
-      qqbot_request_mode: 'responses',
       qqbot_canonical_model: 'openai/gpt-4o',
       qqbot_transport_model: 'gpt-4o',
       qqbot_tool_profile: 'qqbot_openai_main_chat',
@@ -152,12 +151,13 @@ describe('supportsStructuredReplyJsonSchema', () => {
     expect(supportsStructuredReplyJsonSchema('openai/gpt-5.4')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-5.4-medium-thinking')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-4o')).toBe(true);
-    expect(supportsStructuredReplyJsonSchema('openai/gpt-5.3-codex')).toBe(true);
+    expect(supportsStructuredReplyJsonSchema('openai/gpt-5-mini')).toBe(true);
+    expect(supportsStructuredReplyJsonSchema('openai/gemini-3.1-pro-preview')).toBe(true);
   });
 });
 
 describe('buildStructuredReplyRequestSpec', () => {
-  it('uses chat completions json_schema for siliconflow and OpenAI gpt-5.4', () => {
+  it('routes siliconflow and non-responses Copilot models to chat completions json_schema', () => {
     expect(
       buildStructuredReplyRequestSpec({
         model: 'Pro/moonshotai/Kimi-K2.5',
@@ -193,12 +193,40 @@ describe('buildStructuredReplyRequestSpec', () => {
         model: 'gpt-4o',
       }),
     ).toMatchObject({
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'chat_completions_json_schema',
+      overrideRequestParams: {
+        qqbot_canonical_model: 'openai/gpt-4o',
+        qqbot_transport_model: 'gpt-4o',
+      },
+    });
+
+    expect(
+      buildStructuredReplyRequestSpec({
+        model: 'openai/gemini-3.1-pro-preview',
+      }),
+    ).toMatchObject({
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'chat_completions_json_schema',
+      overrideRequestParams: {
+        qqbot_canonical_model: 'openai/gemini-3.1-pro-preview',
+        qqbot_transport_model: 'gemini-3.1-pro-preview',
+      },
+    });
+  });
+
+  it('keeps Copilot gpt-5.4 family on responses mode', () => {
+    expect(
+      buildStructuredReplyRequestSpec({
+        model: 'openai/gpt-5.4-mini',
+      }),
+    ).toMatchObject({
       requestMode: 'responses',
       structuredOutputProtocol: 'responses_text_format',
       overrideRequestParams: {
         qqbot_request_mode: 'responses',
-        qqbot_canonical_model: 'openai/gpt-4o',
-        qqbot_transport_model: 'gpt-4o',
+        qqbot_canonical_model: 'openai/gpt-5.4-mini',
+        qqbot_transport_model: 'gpt-5.4-mini',
       },
     });
   });
@@ -287,10 +315,13 @@ describe('isSupportedMainChatModelForTab', () => {
     expect(isSupportedMainChatModelForTab('siliconflow', 'openai/gpt-5.4-medium-thinking')).toBe(false);
     expect(isSupportedMainChatModelForTab('openai', 'openai/gpt-5.4-medium-thinking')).toBe(true);
     expect(isSupportedMainChatModelForTab('openai', 'openai/gpt-5.2')).toBe(false);
+    expect(isSupportedMainChatModelForTab('copilot', 'gpt-5-mini')).toBe(true);
+    expect(isSupportedMainChatModelForTab('copilot', 'gpt-4.1')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'gpt-4o')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'openai/gpt-4o')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'github-copilot/claude-haiku-4.5')).toBe(true);
-    expect(isSupportedMainChatModelForTab('copilot', 'openai/gemini-3.1-pro-preview')).toBe(false);
+    expect(isSupportedMainChatModelForTab('copilot', 'openai/gemini-3.1-pro-preview')).toBe(true);
+    expect(isSupportedMainChatModelForTab('copilot', 'gemini-3-flash-preview')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'bad model')).toBe(false);
   });
 });
@@ -365,6 +396,26 @@ describe('resolveMainChatRuntimeProfileFromEnv', () => {
       defaultModel: 'openai/gpt-5.4-mini',
       canonicalModel: 'openai/gpt-5.4-mini',
       transportModel: 'gpt-5.4-mini',
+    });
+  });
+
+  it('switches the Copilot runtime profile to chat completions for non-responses models', () => {
+    expect(
+      resolveMainChatRuntimeProfileFromEnv({
+        CHATLUNA_ACTIVE_TAB: 'copilot',
+        CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+        CHATLUNA_COPILOT_API_KEY: 'bridge-secret',
+        CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/gemini-3.1-pro-preview',
+      }),
+    ).toMatchObject({
+      tabId: 'copilot',
+      provider: 'openai',
+      strategyId: 'copilot-github-oauth-main-chat',
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'chat_completions_json_schema',
+      defaultModel: 'openai/gemini-3.1-pro-preview',
+      canonicalModel: 'openai/gemini-3.1-pro-preview',
+      transportModel: 'gemini-3.1-pro-preview',
     });
   });
 });
