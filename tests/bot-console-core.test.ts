@@ -56,12 +56,12 @@ describe('bot-console env helpers', () => {
   it('keeps the original file when atomic write fails', async () => {
     const dir = createTempDir();
     const filePath = join(dir, '.env.local');
-    writeFileSync(filePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(filePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     await expect(
       writeFileAtomicWithBackup(
         filePath,
-        'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5-preview\n',
+        'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5-preview\n',
         {
           access: async () => undefined,
           copyFile: async (...args) => writeFile(args[1] as string, readFileSync(args[0] as string, 'utf8'), 'utf8'),
@@ -79,7 +79,7 @@ describe('bot-console env helpers', () => {
       ),
     ).rejects.toThrow('disk full');
 
-    expect(readFileSync(filePath, 'utf8')).toBe('CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n');
+    expect(readFileSync(filePath, 'utf8')).toBe('CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n');
   });
 
   it('falls back to .env.server when .env.local is absent', () => {
@@ -149,7 +149,7 @@ describe('bot-console env helpers', () => {
       CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
       CHATLUNA_COPILOT_API_KEY: 'github_pat_123',
       CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/gpt-5.4-mini',
-      CHATLUNA_SILICONFLOW_BASE_URL: 'https://api.siliconflow.cn/v1',
+      CHATLUNA_SILICONFLOW_BASE_URL: 'https://custom.invalid/v1',
       CHATLUNA_SILICONFLOW_API_KEY: 'sk-kimi',
       CHATLUNA_SILICONFLOW_DEFAULT_MODEL: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
     } as Record<string, string>);
@@ -160,7 +160,9 @@ describe('bot-console env helpers', () => {
         id: 'siliconflow',
         strategyId: 'siliconflow-kimi-main-chat',
         baseUrl: 'https://api.siliconflow.cn/v1',
-        defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+        defaultModel: 'Pro/moonshotai/Kimi-K2.5',
+        canonicalModel: 'Pro/moonshotai/Kimi-K2.5',
+        transportModel: 'Pro/moonshotai/Kimi-K2.5',
       }),
       expect.objectContaining({
         id: 'openai',
@@ -355,7 +357,7 @@ describe('bot-console manager', () => {
   it('rejects unsupported env keys when saving env', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await expect(manager.saveEnv({ HACKED: '1' } as any)).rejects.toThrow('不支持这个配置项');
@@ -364,7 +366,7 @@ describe('bot-console manager', () => {
   it('accepts QQBOT_REPLY_INTERRUPT_ENABLED through managed env saves', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await expect(manager.saveEnv({ QQBOT_REPLY_INTERRUPT_ENABLED: 'false' })).resolves.toMatchObject({
@@ -375,7 +377,7 @@ describe('bot-console manager', () => {
   it('accepts realtime-message env settings through managed env saves', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await expect(
@@ -392,7 +394,7 @@ describe('bot-console manager', () => {
   it('accepts file system env controls through managed env saves', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await expect(
@@ -409,7 +411,7 @@ describe('bot-console manager', () => {
   it('expands ~/ for file system scope paths when saving env', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await expect(
@@ -424,7 +426,7 @@ describe('bot-console manager', () => {
   it('syncs chatluna-agent local computer config from managed env saves', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await manager.saveEnv({
@@ -458,7 +460,7 @@ describe('bot-console manager', () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
     const agentConfigPath = join(dir, 'data/chatluna/agent/config.json');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     mkdirSync(join(dir, 'data/chatluna/agent'), { recursive: true });
     writeFileSync(agentConfigPath, JSON.stringify({
       version: 4,
@@ -544,7 +546,7 @@ describe('bot-console manager', () => {
       [
         'CHATLUNA_BASE_URL=https://api.siliconflow.cn/v1',
         'CHATLUNA_API_KEY=sk-old',
-        'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5',
+        'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5',
         '',
       ].join('\n'),
       'utf8',
@@ -567,7 +569,7 @@ describe('bot-console manager', () => {
           authStatus: 'ready',
           accountLabel: null,
           authError: null,
-          baseUrl: 'https://api.siliconflow.cn/v1',
+          baseUrl: 'https://custom.invalid/v1',
           apiKey: 'sk-kimi',
           defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
         },
@@ -609,13 +611,21 @@ describe('bot-console manager', () => {
     });
 
     expect(result.modelTabs.activeTab).toBe('openai');
+    expect(result.modelTabs.tabs).toContainEqual(expect.objectContaining({
+      id: 'siliconflow',
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      defaultModel: 'Pro/moonshotai/Kimi-K2.5',
+      canonicalModel: 'Pro/moonshotai/Kimi-K2.5',
+      transportModel: 'Pro/moonshotai/Kimi-K2.5',
+    }));
     expect(result.env).toMatchObject({
       CHATLUNA_ACTIVE_TAB: 'openai',
       CHATLUNA_PLATFORM: 'openai',
       CHATLUNA_BASE_URL: 'https://shell.wyzai.top/v1',
       CHATLUNA_API_KEY: 'sk-openai',
       CHATLUNA_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
-      CHATLUNA_SILICONFLOW_DEFAULT_MODEL: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+      CHATLUNA_SILICONFLOW_BASE_URL: 'https://api.siliconflow.cn/v1',
+      CHATLUNA_SILICONFLOW_DEFAULT_MODEL: 'Pro/moonshotai/Kimi-K2.5',
       CHATLUNA_OPENAI_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
       CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
       CHATLUNA_COPILOT_API_KEY: 'github_pat_123',
@@ -626,7 +636,7 @@ describe('bot-console manager', () => {
   it('rejects unsupported OpenAI tab models', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await expect(
@@ -648,7 +658,7 @@ describe('bot-console manager', () => {
           authError: null,
           baseUrl: 'https://api.siliconflow.cn/v1',
           apiKey: 'sk-kimi',
-          defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+          defaultModel: 'Pro/moonshotai/Kimi-K2.5',
         },
           {
             id: 'openai',
@@ -692,7 +702,7 @@ describe('bot-console manager', () => {
   it('rejects unsupported Copilot tab models', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     await expect(
@@ -714,7 +724,7 @@ describe('bot-console manager', () => {
           authError: null,
           baseUrl: 'https://api.siliconflow.cn/v1',
           apiKey: 'sk-kimi',
-          defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+          defaultModel: 'Pro/moonshotai/Kimi-K2.5',
         },
           {
             id: 'openai',
@@ -758,7 +768,7 @@ describe('bot-console manager', () => {
   it('schedules qqbot.target restart through a transient user unit', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     const execFile = vi
       .fn()
       .mockResolvedValueOnce({ stdout: '', stderr: '' })
@@ -794,7 +804,7 @@ describe('bot-console manager', () => {
   it('schedules qqbot-koishi.service restart through a transient user unit', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     const execFile = vi
       .fn()
       .mockResolvedValueOnce({ stdout: '', stderr: '' })
@@ -830,7 +840,7 @@ describe('bot-console manager', () => {
   it('filters local-only TTS units from server-mode service status queries', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.server');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     const execFile = vi.fn().mockResolvedValue({
       stdout: [
         'Description=QQBot Service',
@@ -857,7 +867,7 @@ describe('bot-console manager', () => {
   it('rejects local-only TTS service actions in server mode', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.server');
-    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     const execFile = vi.fn();
 
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath, execFile });

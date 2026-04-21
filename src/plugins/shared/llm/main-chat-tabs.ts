@@ -81,7 +81,7 @@ export const WYZAI_DEFAULT_BASE_URL = 'https://shell.wyzai.top/v1';
 export const WYZAI_DEFAULT_API_KEY = 'sk-AU2PaFWvQImSIbTtXkx9t286QyCgUUh8Ith5R0mBa9yOsr43';
 export const OPENAI_DEFAULT_MODEL = 'openai/gpt-5.4-medium-thinking';
 export const SILICONFLOW_DEFAULT_BASE_URL = 'https://api.siliconflow.cn/v1';
-export const SILICONFLOW_DEFAULT_MODEL = 'siliconflow/Pro/moonshotai/Kimi-K2.5';
+export const SILICONFLOW_DEFAULT_MODEL = 'Pro/moonshotai/Kimi-K2.5';
 export const COPILOT_BRIDGE_DEFAULT_BASE_URL = 'http://127.0.0.1:5140/api/internal/copilot/v1';
 export const COPILOT_DEFAULT_MODEL = 'openai/gpt-5.4-mini';
 export const MAIN_CHAT_BUILTIN_TAB_IDS = ['siliconflow', 'openai', 'copilot'] as const satisfies readonly MainChatBuiltinTabId[];
@@ -152,15 +152,15 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       };
     },
     normalizeModel(model) {
-      return model?.trim() || null;
+      return normalizeSiliconFlowKimiK25ModelId(model);
     },
     transportModel(model) {
-      return model?.trim() || null;
+      return normalizeSiliconFlowKimiK25ModelId(model);
     },
     describeForConsole() {
       return {
-        description: '当前主聊天固定走硅基流动 provider，默认保持现有 Kimi 主链路。',
-        modelHint: '当前仅支持 SiliconFlow Kimi-K2.5 主聊天模型族。',
+        description: '当前主聊天固定走硅基流动 provider，接口地址锁定为官方 API，默认使用 Kimi-K2.5。',
+        modelHint: '当前仅支持 Pro/moonshotai/Kimi-K2.5。',
       };
     },
   },
@@ -294,9 +294,13 @@ export function resolveMainChatTabStateFromEnv(
   const strategy = getMainChatProviderStrategy(definition.strategyId);
   const activeTab = resolveMainChatActiveTabFromEnv(env);
   const baseUrl =
-    trimOptionalEnvValue(env[definition.envKeys.baseUrl]) ||
-    (activeTab === id ? trimOptionalEnvValue(env.CHATLUNA_BASE_URL) : null) ||
-    definition.defaultBaseUrl;
+    id === 'siliconflow'
+      ? definition.defaultBaseUrl
+      : (
+        trimOptionalEnvValue(env[definition.envKeys.baseUrl]) ||
+        (activeTab === id ? trimOptionalEnvValue(env.CHATLUNA_BASE_URL) : null) ||
+        definition.defaultBaseUrl
+      );
   const apiKey =
     trimOptionalEnvValue(env[definition.envKeys.apiKey]) ||
     (activeTab === id ? trimOptionalEnvValue(env.CHATLUNA_API_KEY) : null) ||
@@ -357,7 +361,7 @@ export function resolveMainChatRuntimeProfileFromTabConfig(
     authStatus: activeConfig.apiKey.trim() ? 'ready' : activeTab === 'copilot' ? 'unauthenticated' : 'ready',
     accountLabel: null,
     authError: null,
-    baseUrl: activeConfig.baseUrl.trim(),
+    baseUrl: activeTab === 'siliconflow' ? definition.defaultBaseUrl : activeConfig.baseUrl.trim(),
     apiKey: activeConfig.apiKey.trim(),
     defaultModel: canonicalModel,
     canonicalModel,
@@ -383,7 +387,7 @@ export function buildMainChatRuntimeEnvPatch(
     CHATLUNA_BASE_URL: runtimeProfile.baseUrl,
     CHATLUNA_API_KEY: runtimeProfile.apiKey,
     CHATLUNA_DEFAULT_MODEL: runtimeProfile.canonicalModel,
-    CHATLUNA_SILICONFLOW_BASE_URL: siliconflowTab.baseUrl.trim(),
+    CHATLUNA_SILICONFLOW_BASE_URL: SILICONFLOW_DEFAULT_BASE_URL,
     CHATLUNA_SILICONFLOW_API_KEY: siliconflowTab.apiKey.trim(),
     CHATLUNA_SILICONFLOW_DEFAULT_MODEL: (siliconflowTab.canonicalModel ?? siliconflowTab.defaultModel).trim(),
     CHATLUNA_OPENAI_BASE_URL: openaiTab.baseUrl.trim(),
@@ -453,9 +457,17 @@ function resolveMainChatProviderStrategyForModel(model?: string | null): MainCha
 }
 
 function isSiliconFlowKimiK25Model(model?: string | null): boolean {
-  const value = model?.trim();
+  const value = normalizeSiliconFlowKimiK25ModelId(model);
   if (!value) return false;
-  return value.startsWith('siliconflow/') && /kimi-k2\.5/i.test(value);
+  return value === SILICONFLOW_DEFAULT_MODEL;
+}
+
+function normalizeSiliconFlowKimiK25ModelId(model?: string | null): string | null {
+  const value = model?.trim();
+  if (!value) return null;
+  if (/^siliconflow\/pro\/moonshotai\/kimi-k2\.5$/iu.test(value)) return SILICONFLOW_DEFAULT_MODEL;
+  if (/^pro\/moonshotai\/kimi-k2\.5$/iu.test(value)) return SILICONFLOW_DEFAULT_MODEL;
+  return value;
 }
 
 function isOpenAIGpt54ModelFamily(model?: string | null): boolean {

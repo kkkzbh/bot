@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useToast } from '../../composables/useToast'
-import { MODEL_SHARED_KEYS, MODEL_TAB_IDS } from '../../composables/useBotConsole'
+import { MODEL_SHARED_KEYS, MODEL_TAB_IDS, SILICONFLOW_FIXED_MODEL } from '../../composables/useBotConsole'
 import { getFieldHint, getFieldLabel } from '../../utils/constants'
 import type { BotConsoleModelTabId } from '../../types'
 import type { useBotConsole } from '../../composables/useBotConsole'
@@ -34,6 +34,7 @@ const tabTitles: Record<BotConsoleModelTabId, string> = {
 }
 
 const currentTabModelHint = computed(() => currentModelTabDraft.value.modelHint)
+const siliconflowModelOptions = [SILICONFLOW_FIXED_MODEL] as const
 
 function inputType(key: string): string {
   return key.includes('API_KEY') ? 'password' : 'text'
@@ -44,6 +45,7 @@ function setTabField(key: 'baseUrl' | 'apiKey' | 'defaultModel', value: string) 
 }
 
 const isCopilotTab = computed(() => activeModelTab.value === 'copilot')
+const isSiliconflowTab = computed(() => activeModelTab.value === 'siliconflow')
 const copilotStatusTone = computed(() => {
   switch (currentModelTabDraft.value.authStatus) {
     case 'ready':
@@ -237,7 +239,10 @@ onBeforeUnmount(() => {
               :value="currentModelTabDraft.baseUrl"
               spellcheck="false"
               autocomplete="off"
-              @input="(e) => setTabField('baseUrl', (e.target as HTMLInputElement).value)"
+              :readonly="isSiliconflowTab"
+              @input="(e) => {
+                if (!isSiliconflowTab) setTabField('baseUrl', (e.target as HTMLInputElement).value)
+              }"
             >
           </label>
 
@@ -266,7 +271,21 @@ onBeforeUnmount(() => {
                 <span class="bc-field-tooltip" role="tooltip">{{ currentTabModelHint }}</span>
               </span>
             </span>
+            <select
+              v-if="isSiliconflowTab"
+              :value="currentModelTabDraft.defaultModel"
+              @change="(e) => setTabField('defaultModel', (e.target as HTMLSelectElement).value)"
+            >
+              <option
+                v-for="model in siliconflowModelOptions"
+                :key="model"
+                :value="model"
+              >
+                {{ model }}
+              </option>
+            </select>
             <input
+              v-else
               type="text"
               :value="currentModelTabDraft.defaultModel"
               spellcheck="false"

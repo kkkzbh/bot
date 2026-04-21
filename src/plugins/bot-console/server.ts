@@ -362,7 +362,7 @@ function normalizeModelTabInput(
     authStatus: defaultTab.authStatus,
     accountLabel: defaultTab.accountLabel,
     authError: defaultTab.authError,
-    baseUrl: String(input?.baseUrl ?? defaultTab.baseUrl ?? '').trim(),
+    baseUrl: id === 'siliconflow' ? definition.defaultBaseUrl : String(input?.baseUrl ?? defaultTab.baseUrl ?? '').trim(),
     apiKey: String(input?.apiKey ?? defaultTab.apiKey ?? '').trim(),
     defaultModel: normalizedModel,
     canonicalModel: normalizedModel,

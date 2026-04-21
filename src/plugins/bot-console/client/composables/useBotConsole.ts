@@ -85,6 +85,8 @@ export const MODEL_SHARED_KEYS = [
 ] as const
 
 export const MODEL_TAB_IDS = ['siliconflow', 'openai', 'copilot'] as const satisfies readonly BotConsoleModelTabId[]
+export const SILICONFLOW_FIXED_BASE_URL = 'https://api.siliconflow.cn/v1'
+export const SILICONFLOW_FIXED_MODEL = 'Pro/moonshotai/Kimi-K2.5'
 
 export const BASIC_KEYS = [
   'CHAT_NATURAL_TRIGGER_ALIASES',
@@ -144,8 +146,8 @@ function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltin
       strategyId: 'siliconflow-kimi-main-chat',
       requestMode: 'chat_completions',
       structuredOutputProtocol: 'chat_completions_json_schema',
-      description: '当前主聊天固定走硅基流动 provider，默认保持现有 Kimi 主链路。',
-      modelHint: '当前仅支持 SiliconFlow Kimi-K2.5 主聊天模型族。',
+      description: '当前主聊天固定走硅基流动 provider，接口地址锁定为官方 API，默认使用 Kimi-K2.5。',
+      modelHint: '当前仅支持 Pro/moonshotai/Kimi-K2.5。',
       authKind: 'manual',
       authStatus: 'ready',
       accountLabel: null,
@@ -182,11 +184,11 @@ function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltin
   return {
     id,
     ...tabMeta[id],
-    baseUrl: '',
+    baseUrl: id === 'siliconflow' ? SILICONFLOW_FIXED_BASE_URL : '',
     apiKey: '',
-    defaultModel: '',
-    canonicalModel: '',
-    transportModel: '',
+    defaultModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : '',
+    canonicalModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : '',
+    transportModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : '',
   }
 }
 

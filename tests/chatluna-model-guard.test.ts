@@ -41,7 +41,7 @@ function assertStrictRequiredForAllObjects(schema: unknown): void {
 describe('resolvePlatform', () => {
   it('returns platform from provider/model format', () => {
     expect(resolvePlatform('deepseek/deepseek-chat')).toBe('deepseek');
-    expect(resolvePlatform('siliconflow/Pro/moonshotai/Kimi-K2.5')).toBe('siliconflow');
+    expect(resolvePlatform('Pro/moonshotai/Kimi-K2.5')).toBe('siliconflow');
   });
 
   it('returns null for invalid model values', () => {
@@ -64,7 +64,7 @@ describe('normalizeRawModelName', () => {
         availableModels: ['siliconflow/Pro/moonshotai/Kimi-K2.5'],
         preferredPlatform: 'siliconflow',
       }),
-    ).toBe('siliconflow/Pro/moonshotai/Kimi-K2.5');
+    ).toBe('Pro/moonshotai/Kimi-K2.5');
   });
 
   it('resolves plain model by available model suffix', () => {
@@ -95,14 +95,19 @@ describe('normalizeRawModelName', () => {
   it('treats the chatluna none sentinel as missing model', () => {
     expect(
       normalizeRawModelName('无', {
-        defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+        defaultModel: 'Pro/moonshotai/Kimi-K2.5',
       }),
-    ).toBe('siliconflow/Pro/moonshotai/Kimi-K2.5');
+    ).toBe('Pro/moonshotai/Kimi-K2.5');
   });
 });
 
 describe('buildSiliconFlowKimiK25NonThinkingOverride', () => {
   it('returns a non-thinking override for SiliconFlow Kimi K2.5', () => {
+    expect(buildSiliconFlowKimiK25NonThinkingOverride('Pro/moonshotai/Kimi-K2.5')).toEqual({
+      thinking: {
+        type: 'disabled',
+      },
+    });
     expect(buildSiliconFlowKimiK25NonThinkingOverride('siliconflow/Pro/moonshotai/Kimi-K2.5')).toEqual({
       thinking: {
         type: 'disabled',
@@ -118,7 +123,7 @@ describe('buildSiliconFlowKimiK25NonThinkingOverride', () => {
 
 describe('buildStructuredReplyModelOverride', () => {
   it('keeps the Kimi non-thinking override and keeps OpenAI on chat completions mode', () => {
-    expect(buildStructuredReplyModelOverride('siliconflow/Pro/moonshotai/Kimi-K2.5')).toEqual({
+    expect(buildStructuredReplyModelOverride('Pro/moonshotai/Kimi-K2.5')).toEqual({
       thinking: {
         type: 'disabled',
       },
@@ -142,6 +147,7 @@ describe('buildStructuredReplyModelOverride', () => {
 
 describe('supportsStructuredReplyJsonSchema', () => {
   it('supports both the Kimi and OpenAI gpt-5.4 main-chat families', () => {
+    expect(supportsStructuredReplyJsonSchema('Pro/moonshotai/Kimi-K2.5')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('siliconflow/Pro/moonshotai/Kimi-K2.5')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-5.4')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-5.4-medium-thinking')).toBe(true);
@@ -154,7 +160,7 @@ describe('buildStructuredReplyRequestSpec', () => {
   it('uses chat completions json_schema for siliconflow and OpenAI gpt-5.4', () => {
     expect(
       buildStructuredReplyRequestSpec({
-        model: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+        model: 'Pro/moonshotai/Kimi-K2.5',
       }),
     ).toMatchObject({
       requestMode: 'chat_completions',
@@ -276,6 +282,7 @@ describe('buildStructuredReplyRequestSpec', () => {
 
 describe('isSupportedMainChatModelForTab', () => {
   it('enforces the fixed model whitelist for built-in tabs', () => {
+    expect(isSupportedMainChatModelForTab('siliconflow', 'Pro/moonshotai/Kimi-K2.5')).toBe(true);
     expect(isSupportedMainChatModelForTab('siliconflow', 'siliconflow/Pro/moonshotai/Kimi-K2.5')).toBe(true);
     expect(isSupportedMainChatModelForTab('siliconflow', 'openai/gpt-5.4-medium-thinking')).toBe(false);
     expect(isSupportedMainChatModelForTab('openai', 'openai/gpt-5.4-medium-thinking')).toBe(true);
@@ -315,6 +322,28 @@ describe('resolveMainChatRuntimeProfileFromEnv', () => {
       structuredOutputProtocol: 'chat_completions_json_schema',
       baseUrl: 'https://shell.wyzai.top/v1',
       defaultModel: 'openai/gpt-5.4-medium-thinking',
+    });
+  });
+
+  it('normalizes legacy siliconflow model ids and locks the siliconflow base url', () => {
+    expect(
+      resolveMainChatRuntimeProfileFromEnv({
+        CHATLUNA_ACTIVE_TAB: 'siliconflow',
+        CHATLUNA_BASE_URL: 'https://custom.invalid/v1',
+        CHATLUNA_API_KEY: 'sk-siliconflow',
+        CHATLUNA_DEFAULT_MODEL: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+        CHATLUNA_SILICONFLOW_BASE_URL: 'https://custom.invalid/v1',
+        CHATLUNA_SILICONFLOW_API_KEY: 'sk-siliconflow',
+        CHATLUNA_SILICONFLOW_DEFAULT_MODEL: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+      }),
+    ).toMatchObject({
+      tabId: 'siliconflow',
+      provider: 'siliconflow',
+      requestMode: 'chat_completions',
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      defaultModel: 'Pro/moonshotai/Kimi-K2.5',
+      canonicalModel: 'Pro/moonshotai/Kimi-K2.5',
+      transportModel: 'Pro/moonshotai/Kimi-K2.5',
     });
   });
 

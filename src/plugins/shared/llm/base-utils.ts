@@ -8,6 +8,7 @@ export function resolvePlatform(model?: string): string | null {
   if (!model) return null;
   const value = model.trim();
   if (!value) return null;
+  if (value.startsWith('Pro/')) return 'siliconflow';
   const index = value.indexOf('/');
   if (index <= 0) return null;
   return value.slice(0, index);
@@ -33,6 +34,18 @@ export function normalizeRawModelName(input: string | null | undefined, options:
 
   const available = (options.availableModels ?? []).map((item) => item.trim()).filter(Boolean);
   if (value.includes('/')) {
+    if (
+      value.startsWith('Pro/') &&
+      (
+        options.preferredPlatform?.trim() === 'siliconflow' ||
+        resolvePlatform(options.defaultModel ?? undefined) === 'siliconflow' ||
+        available.includes(value) ||
+        available.includes(`siliconflow/${value}`)
+      )
+    ) {
+      return value;
+    }
+
     if (available.includes(value)) return value;
 
     const nestedMatches = available.filter((item) => item.endsWith(`/${value}`));

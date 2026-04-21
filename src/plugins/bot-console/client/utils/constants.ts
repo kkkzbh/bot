@@ -43,7 +43,7 @@ export const FIELD_HINTS: Record<string, string> = {
   CHATLUNA_COMMON_FS_SCOPE_PATH:
     '作为文件工具与 bash 的默认工作目录。当前高权限模式下它不再是强隔离边界；支持填写 ~/...，保存时会展开成当前运行用户的 home 绝对路径。',
   CHATLUNA_DEFAULT_MODEL:
-    '普通聊天默认走这里配置的模型。建议填写完整规范名，例如 siliconflow/Pro/moonshotai/Kimi-K2.5。',
+    '普通聊天默认走这里配置的模型。硅基流动当前固定使用 Pro/moonshotai/Kimi-K2.5。',
   CHATLUNA_MAX_CONTEXT_RATIO:
     '控制主聊天可使用的模型上下文窗口比例。会跟随当前实际 room model 动态计算 token limit，不按 tab 名硬编码。',
   CHATLUNA_OPENAI_DEFAULT_MODEL:

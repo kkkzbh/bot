@@ -79,7 +79,7 @@ describe('prepare-debug-chat-state.sh', () => {
       dbPath,
       `
 insert into chathub_room (roomId, roomName, conversationId, roomMasterId, visibility, preset, model, chatMode, password, autoUpdate, updatedTime)
-values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'siliconflow/Pro/moonshotai/Kimi-K2.5', 'plugin', 'pw', 0, 1);
+values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'Pro/moonshotai/Kimi-K2.5', 'plugin', 'pw', 0, 1);
 insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
 values ('template-conv', null, null, 1);
       `,
@@ -90,7 +90,7 @@ values ('template-conv', null, null, 1);
       `
 CHATLUNA_ACTIVE_TAB=openai
 CHATLUNA_DEFAULT_PRESET=sakiko
-CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5
+CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5
 CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
       `,
     );
@@ -125,7 +125,7 @@ CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
       dbPath,
       `
 insert into chathub_room (roomId, roomName, conversationId, roomMasterId, visibility, preset, model, chatMode, password, autoUpdate, updatedTime)
-values (125, 'codex-debug-91000999', 'codex-debug:91000999', '91000999', 'private', 'sakiko', 'siliconflow/Pro/moonshotai/Kimi-K2.5', 'tool_research_then_reply', 'pw', 1, 1);
+values (125, 'codex-debug-91000999', 'codex-debug:91000999', '91000999', 'private', 'sakiko', 'Pro/moonshotai/Kimi-K2.5', 'tool_research_then_reply', 'pw', 1, 1);
 insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
 values ('codex-debug:91000999', null, null, 1);
 insert into chathub_user (userId, defaultRoomId, groupId)
@@ -138,7 +138,7 @@ values ('91000999', 125, null);
       `
 CHATLUNA_ACTIVE_TAB=openai
 CHATLUNA_DEFAULT_PRESET=sakiko
-CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5
+CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5
 CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
       `,
     );
@@ -172,7 +172,7 @@ CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
       dbPath,
       `
 insert into chathub_room (roomId, roomName, conversationId, roomMasterId, visibility, preset, model, chatMode, password, autoUpdate, updatedTime)
-values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'siliconflow/Pro/moonshotai/Kimi-K2.5', 'plugin', 'pw', 0, 1);
+values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'Pro/moonshotai/Kimi-K2.5', 'plugin', 'pw', 0, 1);
 insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
 values ('template-conv', null, null, 1);
       `,
@@ -183,7 +183,7 @@ values ('template-conv', null, null, 1);
       `
 CHATLUNA_ACTIVE_TAB=copilot
 CHATLUNA_DEFAULT_PRESET=sakiko
-CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5
+CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5
 CHATLUNA_COPILOT_DEFAULT_MODEL=openai/gpt-5.4-mini
       `,
     );

@@ -56,7 +56,7 @@ describe('bot-console plugin', () => {
   it('registers console entry and protected listeners', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -87,7 +87,7 @@ describe('bot-console plugin', () => {
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
     writeFileSync(
       join(dir, '.env.local'),
-      'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\nCHATLUNA_COMMON_FS=true\nCHATLUNA_COMMON_FS_SCOPE_PATH=~/system\n',
+      'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\nCHATLUNA_COMMON_FS=true\nCHATLUNA_COMMON_FS_SCOPE_PATH=~/system\n',
       'utf8',
     );
     writeFileSync(
@@ -113,7 +113,7 @@ describe('bot-console plugin', () => {
   it('rejects unsupported env writes through the save-env listener', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -137,7 +137,7 @@ describe('bot-console plugin', () => {
   it('routes built-in model tab saves to the bot console manager', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -163,7 +163,7 @@ describe('bot-console plugin', () => {
           id: 'siliconflow',
           title: '硅基流动',
           provider: 'siliconflow',
-          baseUrl: 'https://api.siliconflow.cn/v1',
+          baseUrl: 'https://custom.invalid/v1',
           apiKey: 'sk-kimi',
           defaultModel: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
         },
@@ -194,6 +194,8 @@ describe('bot-console plugin', () => {
       env: expect.objectContaining({
         CHATLUNA_PLATFORM: 'openai',
         CHATLUNA_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+        CHATLUNA_SILICONFLOW_BASE_URL: 'https://api.siliconflow.cn/v1',
+        CHATLUNA_SILICONFLOW_DEFAULT_MODEL: 'Pro/moonshotai/Kimi-K2.5',
       }),
     });
   });
@@ -201,7 +203,7 @@ describe('bot-console plugin', () => {
   it('includes runtime memory status in get-state payload when the service is available', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -309,7 +311,7 @@ describe('bot-console plugin', () => {
   it('routes manual probe requests to memory-v2 status service', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -380,7 +382,7 @@ describe('bot-console plugin', () => {
   it('exposes memory explorer data through a protected listener', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -492,7 +494,7 @@ describe('bot-console plugin', () => {
   it('routes scoped override and conversation clear listeners to feature policy service', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
@@ -624,7 +626,7 @@ describe('bot-console plugin', () => {
   it('routes preset reorder listener to bot console manager', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
-    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=siliconflow/Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
     writeFileSync(
       join(dir, 'data/chathub/presets/sakiko.yml'),
       'keywords: []\nprompts:\n  - role: system\n    content: hi\n',

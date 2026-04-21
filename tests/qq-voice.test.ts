@@ -422,7 +422,7 @@ function createPluginRoom(conversationId: string, overrides: Record<string, unkn
   return {
     conversationId,
     roomId: 7,
-    model: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+    model: 'Pro/moonshotai/Kimi-K2.5',
     preset: 'sakiko',
     chatMode: 'plugin',
     ...overrides,
@@ -1269,7 +1269,7 @@ describe('qq voice plugin', () => {
         room: {
           conversationId: 'conv-chat',
           roomId: 8,
-          model: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
+          model: 'Pro/moonshotai/Kimi-K2.5',
           preset: 'sakiko',
           chatMode: 'chat',
         },

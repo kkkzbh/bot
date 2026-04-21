@@ -43,7 +43,7 @@ Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime.
 
 Main chat provider selection is fixed to three built-in tabs:
 
-- `siliconflow`: current Kimi main-chat chain
+- `siliconflow`: current Kimi main-chat chain, fixed to `https://api.siliconflow.cn/v1` with `Pro/moonshotai/Kimi-K2.5`
 - `openai`: OpenAI-compatible provider tab, defaulting to `wyzai` with `openai/gpt-5.4-medium-thinking`
 - `copilot`: GitHub Copilot OAuth tab, defaulting to the local bridge `http://127.0.0.1:5140/api/internal/copilot/v1` with `gpt-5.4-mini`
 
@@ -54,7 +54,7 @@ keys `CHATLUNA_PLATFORM` / `CHATLUNA_BASE_URL` / `CHATLUNA_API_KEY` /
 Each built-in tab now maps to a provider strategy bundle rather than only an
 endpoint preset:
 
-- `siliconflow` uses the existing `chat/completions` main-chat path and Kimi-specific non-thinking override
+- `siliconflow` uses the existing `chat/completions` main-chat path, locks the official SiliconFlow endpoint, and applies the Kimi-specific non-thinking override
 - `openai` uses the OpenAI-compatible GPT-5.4 strategy, currently pinned to `chat/completions` + `response_format` structured output for provider compatibility
 - `copilot` uses GitHub device-flow OAuth, exchanges GitHub token into a short-lived Copilot session token at runtime, and serves ChatLuna through a local Responses bridge
 
