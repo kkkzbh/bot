@@ -19,6 +19,11 @@ zpix.ttf
 __pycache__/
 *.pyc
 data/llonebot
+data/llonebot.bak.*/
+data/chatluna/
+data/chatluna-storage/
+data/chatluna.local-backup-*/
+data/chathub/vector_store/
 data/chathub.local-backup-*/
 data/chathub/stickers/index.yml
 data/chathub/stickers/images/bored.png
@@ -30,6 +35,7 @@ data/koishi.db
 data/koishi.db.*.bak
 data/koishi.db.local-backup-*
 downloads/
+test.png
 data/chathub/presets/*.yml
 !data/chathub/presets/sakiko.yml
 config/voice-tts.local.env
