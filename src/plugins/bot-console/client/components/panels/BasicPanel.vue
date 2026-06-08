@@ -97,13 +97,15 @@ async function handleSaveAndRestart() {
         />
         <input
           v-else
-          :type="key === 'CHATLUNA_COMMAND_AUTHORITY' ? 'number' : 'text'"
+          :type="key === 'CHATLUNA_COMMAND_AUTHORITY' || key === 'CHATLUNA_MAX_CONTEXT_RATIO' ? 'number' : 'text'"
           :value="envDraft[key] ?? ''"
-          :min="key === 'CHATLUNA_COMMAND_AUTHORITY' ? 0 : undefined"
-          :max="key === 'CHATLUNA_COMMAND_AUTHORITY' ? 5 : undefined"
+          :min="key === 'CHATLUNA_COMMAND_AUTHORITY' ? 0 : key === 'CHATLUNA_MAX_CONTEXT_RATIO' ? 0.05 : undefined"
+          :max="key === 'CHATLUNA_COMMAND_AUTHORITY' ? 5 : key === 'CHATLUNA_MAX_CONTEXT_RATIO' ? 1 : undefined"
+          :step="key === 'CHATLUNA_MAX_CONTEXT_RATIO' ? 0.05 : undefined"
           spellcheck="false"
           :placeholder="
             key === 'CHATLUNA_COMMAND_AUTHORITY' ? '0–5，默认 1'
+            : key === 'CHATLUNA_MAX_CONTEXT_RATIO' ? '0.05–1.0，默认 0.6'
             : ''
           "
           @input="(e) => { envDraft[key] = (e.target as HTMLInputElement).value }"
@@ -113,6 +115,10 @@ async function handleSaveAndRestart() {
           v-if="key === 'CHATLUNA_COMMAND_AUTHORITY'"
           class="bc-field-note"
         >Koishi 权限等级（0–5），低于此级别的用户无法执行 /chatluna 命令。</em>
+        <em
+          v-else-if="key === 'CHATLUNA_MAX_CONTEXT_RATIO'"
+          class="bc-field-note"
+        >主聊天可使用模型上下文窗口的比例（0.05–1.0）。会跟随当前激活模型动态计算 token 上限。</em>
       </label>
     </div>
   </article>

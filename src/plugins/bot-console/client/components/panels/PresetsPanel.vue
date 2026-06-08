@@ -11,7 +11,8 @@ const bc = inject<ReturnType<typeof useBotConsole>>('bc')!
 const { add: toastAdd } = useToast()
 
 // Destructure reactive refs for template auto-unwrapping
-const { currentPreset, botState, canSavePreset, defaultPreset } = bc
+const { currentPreset, botState, canSavePreset, defaultPreset, envDraft } = bc
+const settingDefaultPreset = ref(false)
 const presetItems = computed(() => botState.value?.presets ?? [])
 const canDeleteCurrentPreset = computed(() => (currentPreset.value.source ?? 'runtime') === 'runtime' && Boolean(currentPreset.value.name))
 const currentPresetSourceLabel = computed(() => (currentPreset.value.source ?? 'runtime') === 'bundled' ? '仓库内置' : '运行时')
@@ -188,6 +189,22 @@ async function handlePresetDrop(event: DragEvent, targetName: string) {
 function handlePresetDragEnd() {
   resetDragState()
 }
+
+async function handleSetDefault(name: string) {
+  if (!name || settingDefaultPreset.value) return
+  if (envDraft.CHATLUNA_DEFAULT_PRESET === name && defaultPreset.value === name) return
+  settingDefaultPreset.value = true
+  suppressPresetOpen()
+  try {
+    envDraft.CHATLUNA_DEFAULT_PRESET = name
+    await bc.saveEnvPatch(['CHATLUNA_DEFAULT_PRESET'], false)
+    toastAdd(`默认预设已切换为「${name}」`, 'success')
+  } catch (err: unknown) {
+    toastAdd(err instanceof Error ? err.message : '设为默认预设失败', 'error')
+  } finally {
+    settingDefaultPreset.value = false
+  }
+}
 </script>
 
 <template>
@@ -279,6 +296,17 @@ function handlePresetDragEnd() {
             class="bc-default-tag"
             title="当前默认预设"
           >默认</span>
+          <span
+            v-else
+            class="bc-preset-set-default"
+            role="button"
+            tabindex="0"
+            :aria-disabled="settingDefaultPreset"
+            title="设为默认预设"
+            @click.stop="handleSetDefault(item.name)"
+            @keydown.enter.stop.prevent="handleSetDefault(item.name)"
+            @keydown.space.stop.prevent="handleSetDefault(item.name)"
+          >设为默认</span>
         </button>
       </aside>
 
