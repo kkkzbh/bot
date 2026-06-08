@@ -54,9 +54,10 @@ export interface PresetDocument {
   raw?: string;
 }
 
-export type BotConsoleModelTabId = "siliconflow" | "openai" | "copilot";
+export type BotConsoleModelTabId = "siliconflow" | "openai" | "copilot" | "deepseek" | "mimo";
 export type BotConsoleAuthKind = "manual" | "oauth_device";
 export type BotConsoleAuthStatus = "unauthenticated" | "pending" | "ready" | "expired" | "error";
+export type BotConsoleModelListSource = "dynamic" | "static";
 
 export interface CopilotAuthAttempt {
   attemptId: string;
@@ -72,10 +73,10 @@ export interface CopilotAuthAttempt {
 export interface BotConsoleBuiltinModelTab {
   id: BotConsoleModelTabId;
   title: string;
-  provider: "siliconflow" | "openai";
-  strategyId: "siliconflow-kimi-main-chat" | "openai-gpt54-main-chat" | "copilot-github-oauth-main-chat";
+  provider: "siliconflow" | "openai" | "deepseek" | "mimo";
+  strategyId: "siliconflow-kimi-main-chat" | "openai-gpt54-main-chat" | "copilot-github-oauth-main-chat" | "deepseek-official-main-chat" | "mimo-official-main-chat";
   requestMode: "chat_completions" | "responses";
-  structuredOutputProtocol: "chat_completions_json_schema" | "responses_text_format";
+  structuredOutputProtocol: "native_chat_json_schema" | "native_responses_json_schema" | "chat_reply_v1";
   description: string;
   modelHint: string;
   authKind: BotConsoleAuthKind;
@@ -92,6 +93,43 @@ export interface BotConsoleBuiltinModelTab {
 export interface BotConsoleModelTabsState {
   activeTab: BotConsoleModelTabId;
   tabs: BotConsoleBuiltinModelTab[];
+}
+
+export interface BotConsoleModelOption {
+  modelId: string;
+  label: string;
+  requestMode?: "chat_completions" | "responses";
+  structuredOutputProtocol?: "native_chat_json_schema" | "native_responses_json_schema" | "chat_reply_v1";
+  deprecated?: boolean;
+  deprecationDate?: string;
+}
+
+export interface DeepSeekModelListRequest {
+  baseUrl?: string;
+  apiKey?: string;
+}
+
+export interface DeepSeekModelListResponse {
+  source: BotConsoleModelListSource;
+  models: BotConsoleModelOption[];
+  error: string | null;
+}
+
+export interface CopilotModelListResponse {
+  source: BotConsoleModelListSource;
+  models: BotConsoleModelOption[];
+  error: string | null;
+}
+
+export interface MimoModelListRequest {
+  baseUrl?: string;
+  apiKey?: string;
+}
+
+export interface MimoModelListResponse {
+  source: BotConsoleModelListSource;
+  models: BotConsoleModelOption[];
+  error: string | null;
 }
 
 export interface ReorderPresetsResponse {
@@ -402,12 +440,15 @@ export interface SaveEnvResponse {
 export interface SaveModelTabsRequest {
   activeTab: BotConsoleModelTabId;
   tabs: BotConsoleBuiltinModelTab[];
+  dirtyTabIds: BotConsoleModelTabId[];
 }
 
 export interface SaveModelTabsResponse {
   env: Record<string, string>;
   modelTabs: BotConsoleModelTabsState;
+  hotSwitched: boolean;
   restartRequired: boolean;
+  restartReason: string | null;
 }
 
 export interface CopilotAuthState {

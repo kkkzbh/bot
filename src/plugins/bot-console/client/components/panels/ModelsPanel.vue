@@ -1,27 +1,26 @@
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useToast } from '../../composables/useToast'
 import {
-  COPILOT_MODEL_OPTIONS,
-  MODEL_SHARED_KEYS,
+  BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA,
+  DEEPSEEK_MODEL_OPTIONS,
+  MIMO_MODEL_OPTIONS,
   MODEL_TAB_IDS,
-  SILICONFLOW_FIXED_MODEL,
-  formatCopilotModelOptionLabel,
 } from '../../composables/useBotConsole'
-import { getFieldHint, getFieldLabel } from '../../utils/constants'
-import type { BotConsoleModelTabId } from '../../types'
+import type { BotConsoleModelOption, BotConsoleModelTabId, BotConsoleModelListSource } from '../../types'
 import type { useBotConsole } from '../../composables/useBotConsole'
 
 const bc = inject<ReturnType<typeof useBotConsole>>('bc')!
 const { add: toastAdd } = useToast()
 
 const {
-  envDraft,
-  changedKeys,
   activeModelTab,
   copilotAuthAttempt,
   currentModelTabDraft,
   canSaveModelSettings,
+  modelTabsChanged,
+  dirtyModelTabIds,
+  currentModelValidation,
   selectModelTab,
 } = bc
 
@@ -31,17 +30,47 @@ const {
   cancelCopilotAuth,
   logoutCopilotAuth,
   refreshCopilotAuthStatus,
+  listCopilotModels,
+  listDeepSeekModels,
+  listMimoModels,
 } = bc
 
 const tabTitles: Record<BotConsoleModelTabId, string> = {
   siliconflow: '硅基流动',
   openai: 'OpenAI',
   copilot: 'GitHub Copilot',
+  deepseek: 'DeepSeek',
+  mimo: 'MIMO',
 }
 
+const currentSchema = computed(() => BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA[activeModelTab.value])
 const currentTabModelHint = computed(() => currentModelTabDraft.value.modelHint)
-const siliconflowModelOptions = [SILICONFLOW_FIXED_MODEL] as const
-const copilotModelOptions = COPILOT_MODEL_OPTIONS
+
+const isCopilotTab = computed(() => activeModelTab.value === 'copilot')
+const isDeepseekTab = computed(() => activeModelTab.value === 'deepseek')
+const isMimoTab = computed(() => activeModelTab.value === 'mimo')
+
+const copilotModelOptions = ref<BotConsoleModelOption[]>([])
+const copilotModelSource = ref<BotConsoleModelListSource>('dynamic')
+const copilotModelError = ref<string | null>(null)
+const copilotModelLoading = ref(false)
+const deepseekModelOptions = ref<BotConsoleModelOption[]>(DEEPSEEK_MODEL_OPTIONS.map(option => ({ ...option })))
+const deepseekModelSource = ref<BotConsoleModelListSource>('static')
+const deepseekModelError = ref<string | null>(null)
+const deepseekModelLoading = ref(false)
+const mimoModelOptions = ref<BotConsoleModelOption[]>(MIMO_MODEL_OPTIONS.map(option => ({ ...option })))
+const mimoModelSource = ref<BotConsoleModelListSource>('static')
+const mimoModelError = ref<string | null>(null)
+const mimoModelLoading = ref(false)
+
+const currentDeepSeekModelId = computed(() => {
+  const value = currentModelTabDraft.value.defaultModel.trim()
+  return value.startsWith('deepseek/') ? value.slice('deepseek/'.length) : value
+})
+const currentMimoModelId = computed(() => {
+  const value = currentModelTabDraft.value.defaultModel.trim()
+  return value.startsWith('mimo/') ? value.slice('mimo/'.length) : value
+})
 const currentCopilotModelId = computed(() => {
   const value = currentModelTabDraft.value.defaultModel.trim()
   if (value.startsWith('openai/')) return value.slice('openai/'.length)
@@ -49,16 +78,24 @@ const currentCopilotModelId = computed(() => {
   return value
 })
 
-function inputType(key: string): string {
-  return key.includes('API_KEY') ? 'password' : 'text'
-}
+const currentModelOptions = computed(() => {
+  if (isCopilotTab.value) return copilotModelOptions.value
+  if (isDeepseekTab.value) return deepseekModelOptions.value
+  if (isMimoTab.value) return mimoModelOptions.value
+  return [...currentSchema.value.modelOptions]
+})
 
-function setTabField(key: 'baseUrl' | 'apiKey' | 'defaultModel', value: string) {
-  currentModelTabDraft.value[key] = value
-}
+const currentModelSelectValue = computed(() => {
+  if (isDeepseekTab.value) return currentDeepSeekModelId.value
+  if (isMimoTab.value) return currentMimoModelId.value
+  if (isCopilotTab.value) return currentCopilotModelId.value
+  return currentModelTabDraft.value.defaultModel
+})
 
-const isCopilotTab = computed(() => activeModelTab.value === 'copilot')
-const isSiliconflowTab = computed(() => activeModelTab.value === 'siliconflow')
+const copilotSourceLabel = computed(() => copilotModelError.value ? '不可用' : 'OAuth 动态')
+const deepseekSourceLabel = computed(() => deepseekModelSource.value === 'dynamic' ? '官方动态' : '官方兜底')
+const mimoSourceLabel = computed(() => mimoModelSource.value === 'dynamic' ? '官方动态' : '静态兜底')
+
 const copilotStatusTone = computed(() => {
   switch (currentModelTabDraft.value.authStatus) {
     case 'ready':
@@ -72,6 +109,7 @@ const copilotStatusTone = computed(() => {
       return 'is-muted'
   }
 })
+
 const copilotStatusLabel = computed(() => {
   switch (currentModelTabDraft.value.authStatus) {
     case 'ready':
@@ -87,7 +125,107 @@ const copilotStatusLabel = computed(() => {
   }
 })
 
+const dirtyBadgeLabel = computed(() => {
+  const ids = dirtyModelTabIds.value
+  if (ids.length === 0) return ''
+  return `${ids.length} 个 Tab 待保存`
+})
+
+let deepseekRefreshTimer: number | null = null
+let mimoRefreshTimer: number | null = null
 let copilotPollTimer: number | null = null
+
+function setTabField(key: 'baseUrl' | 'apiKey' | 'defaultModel', value: string) {
+  currentModelTabDraft.value[key] = value
+}
+
+function stopDeepSeekRefreshTimer() {
+  if (deepseekRefreshTimer != null) {
+    window.clearTimeout(deepseekRefreshTimer)
+    deepseekRefreshTimer = null
+  }
+}
+
+function stopMimoRefreshTimer() {
+  if (mimoRefreshTimer != null) {
+    window.clearTimeout(mimoRefreshTimer)
+    mimoRefreshTimer = null
+  }
+}
+
+async function refreshCopilotModels() {
+  copilotModelLoading.value = true
+  try {
+    const result = await listCopilotModels()
+    copilotModelOptions.value = result.models.map(option => ({ ...option }))
+    copilotModelSource.value = result.source
+    copilotModelError.value = result.error
+  } catch (err: unknown) {
+    copilotModelOptions.value = []
+    copilotModelSource.value = 'dynamic'
+    copilotModelError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    copilotModelLoading.value = false
+  }
+}
+
+async function refreshDeepSeekModels() {
+  deepseekModelLoading.value = true
+  try {
+    const result = await listDeepSeekModels({
+      baseUrl: currentModelTabDraft.value.baseUrl,
+      apiKey: currentModelTabDraft.value.apiKey,
+    })
+    deepseekModelOptions.value = result.models.length > 0
+      ? result.models.map(option => ({ ...option }))
+      : DEEPSEEK_MODEL_OPTIONS.map(option => ({ ...option }))
+    deepseekModelSource.value = result.source
+    deepseekModelError.value = result.error
+  } catch (err: unknown) {
+    deepseekModelOptions.value = DEEPSEEK_MODEL_OPTIONS.map(option => ({ ...option }))
+    deepseekModelSource.value = 'static'
+    deepseekModelError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    deepseekModelLoading.value = false
+  }
+}
+
+async function refreshMimoModels() {
+  mimoModelLoading.value = true
+  try {
+    const result = await listMimoModels({
+      baseUrl: currentModelTabDraft.value.baseUrl,
+      apiKey: currentModelTabDraft.value.apiKey,
+    })
+    mimoModelOptions.value = result.models.length > 0
+      ? result.models.map(option => ({ ...option }))
+      : MIMO_MODEL_OPTIONS.map(option => ({ ...option }))
+    mimoModelSource.value = result.source
+    mimoModelError.value = result.error
+  } catch (err: unknown) {
+    mimoModelOptions.value = MIMO_MODEL_OPTIONS.map(option => ({ ...option }))
+    mimoModelSource.value = 'static'
+    mimoModelError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    mimoModelLoading.value = false
+  }
+}
+
+function scheduleDeepSeekRefresh() {
+  stopDeepSeekRefreshTimer()
+  if (activeModelTab.value !== 'deepseek') return
+  deepseekRefreshTimer = window.setTimeout(() => {
+    void refreshDeepSeekModels()
+  }, 350)
+}
+
+function scheduleMimoRefresh() {
+  stopMimoRefreshTimer()
+  if (activeModelTab.value !== 'mimo') return
+  mimoRefreshTimer = window.setTimeout(() => {
+    void refreshMimoModels()
+  }, 350)
+}
 
 function stopCopilotPolling() {
   if (copilotPollTimer != null) {
@@ -105,12 +243,13 @@ function scheduleCopilotPolling() {
     try {
       const result = await pollCopilotAuth(attempt.attemptId)
       if (result.authStatus === 'ready') {
+        await refreshCopilotModels()
         toastAdd('GitHub Copilot OAuth 登录成功', 'success')
       } else if (result.authStatus === 'error' || result.authStatus === 'expired') {
         toastAdd(result.authError || 'GitHub Copilot OAuth 登录失败', 'error')
       }
     } catch (err: unknown) {
-      toastAdd(err instanceof Error ? err.message : 'GitHub Copilot 状态轮询失败', 'error')
+      toastAdd(formatError(err) ?? 'GitHub Copilot 状态轮询失败', 'error')
     } finally {
       scheduleCopilotPolling()
     }
@@ -123,7 +262,7 @@ async function handleStartCopilotAuth() {
     scheduleCopilotPolling()
     toastAdd(`请在浏览器中输入验证码 ${result.attempt?.userCode ?? ''}`, 'success')
   } catch (err: unknown) {
-    toastAdd(err instanceof Error ? err.message : '发起 GitHub Copilot OAuth 失败', 'error')
+    toastAdd(formatError(err) ?? '发起 GitHub Copilot OAuth 失败', 'error')
   }
 }
 
@@ -133,7 +272,7 @@ async function handleCancelCopilotAuth() {
     stopCopilotPolling()
     toastAdd('已取消 GitHub Copilot OAuth 登录', 'success')
   } catch (err: unknown) {
-    toastAdd(err instanceof Error ? err.message : '取消 GitHub Copilot OAuth 失败', 'error')
+    toastAdd(formatError(err) ?? '取消 GitHub Copilot OAuth 失败', 'error')
   }
 }
 
@@ -141,27 +280,53 @@ async function handleLogoutCopilotAuth() {
   try {
     await logoutCopilotAuth()
     stopCopilotPolling()
+    copilotModelOptions.value = []
+    copilotModelError.value = null
     toastAdd('GitHub Copilot 授权已清除', 'success')
   } catch (err: unknown) {
-    toastAdd(err instanceof Error ? err.message : '退出 GitHub Copilot OAuth 失败', 'error')
+    toastAdd(formatError(err) ?? '退出 GitHub Copilot OAuth 失败', 'error')
   }
 }
 
 async function handleRefreshCopilotAuth() {
   try {
     await refreshCopilotAuthStatus()
+    await refreshCopilotModels()
     toastAdd('GitHub Copilot 状态已刷新', 'success')
   } catch (err: unknown) {
-    toastAdd(err instanceof Error ? err.message : '刷新 GitHub Copilot 状态失败', 'error')
+    toastAdd(formatError(err) ?? '刷新 GitHub Copilot 状态失败', 'error')
   }
 }
 
+function formatError(err: unknown): string | null {
+  if (err == null) return null
+  if (err instanceof Error && err.message) return err.message
+  if (typeof err === 'string' && err.trim()) return err
+  if (typeof err === 'object') {
+    const maybe = (err as { message?: unknown }).message
+    if (typeof maybe === 'string' && maybe.trim()) return maybe
+    try { return JSON.stringify(err) } catch { /* fall through */ }
+  }
+  return null
+}
+
 async function handleSave() {
+  if (!modelTabsChanged.value) return
+  if (!currentModelValidation.value.ok) {
+    toastAdd(currentModelValidation.value.message ?? '当前默认模型不合法', 'error')
+    return
+  }
   try {
-    await bc.saveModelSettings(false)
-    toastAdd('模型配置已保存', 'success')
+    const result = await bc.saveModelSettings(false)
+    if (result?.hotSwitched) {
+      toastAdd('模型已热切换，下一轮对话对所有房间生效', 'success')
+    } else if (result?.restartRequired) {
+      toastAdd(result.restartReason ?? '模型配置已保存，重启后生效', 'success')
+    } else {
+      toastAdd('模型配置已保存', 'success')
+    }
   } catch (err: unknown) {
-    toastAdd(err instanceof Error ? err.message : '保存失败', 'error')
+    toastAdd(formatError(err) ?? '保存失败', 'error')
   }
 }
 
@@ -172,21 +337,43 @@ watch(copilotAuthAttempt, () => {
 watch(activeModelTab, (tabId) => {
   if (tabId === 'copilot') {
     void refreshCopilotAuthStatus().catch(() => null)
-  } else {
-    stopCopilotPolling()
-  }
+    void refreshCopilotModels().catch(() => null)
+	  } else if (tabId === 'deepseek') {
+	    scheduleDeepSeekRefresh()
+	    stopCopilotPolling()
+	  } else if (tabId === 'mimo') {
+	    scheduleMimoRefresh()
+	    stopCopilotPolling()
+	  } else {
+	    stopCopilotPolling()
+	  }
 })
+
+watch(
+  () => [activeModelTab.value, currentModelTabDraft.value.baseUrl, currentModelTabDraft.value.apiKey] as const,
+	  ([tabId]) => {
+	    if (tabId === 'deepseek') scheduleDeepSeekRefresh()
+	    if (tabId === 'mimo') scheduleMimoRefresh()
+	  },
+	)
 
 onMounted(() => {
   if (activeModelTab.value === 'copilot') {
     void refreshCopilotAuthStatus().catch(() => null)
-  }
+    void refreshCopilotModels().catch(() => null)
+	  } else if (activeModelTab.value === 'deepseek') {
+	    scheduleDeepSeekRefresh()
+	  } else if (activeModelTab.value === 'mimo') {
+	    scheduleMimoRefresh()
+	  }
   scheduleCopilotPolling()
 })
 
 onBeforeUnmount(() => {
-  stopCopilotPolling()
-})
+	  stopDeepSeekRefreshTimer()
+	  stopMimoRefreshTimer()
+	  stopCopilotPolling()
+	})
 </script>
 
 <template>
@@ -194,13 +381,13 @@ onBeforeUnmount(() => {
     <div class="bc-panel-head">
       <div>
         <h2>模型接口</h2>
-        <p>固定内置三个主聊天 provider Tab。保存后重启机器人生效。</p>
+	        <p>固定内置五个主聊天 provider Tab。本页配置的就是 chat 主模型；其它功能（语音、回复等）若没有单独配置则回落到当前激活 Tab。保存后重启机器人生效。</p>
       </div>
       <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
         <span
-          v-if="changedKeys.size > 0"
+          v-if="dirtyBadgeLabel"
           class="bc-badge bc-badge-primary"
-        >{{ changedKeys.size }} 项全局配置已修改</span>
+        >{{ dirtyBadgeLabel }}</span>
         <button
           class="bc-btn bc-btn-primary"
           type="button"
@@ -218,10 +405,15 @@ onBeforeUnmount(() => {
           v-for="tabId in MODEL_TAB_IDS"
           :key="tabId"
           type="button"
-          :class="['bc-model-tab', activeModelTab === tabId && 'is-active']"
+          :class="['bc-model-tab', activeModelTab === tabId && 'is-active', dirtyModelTabIds.includes(tabId) && 'is-dirty']"
           @click="selectModelTab(tabId)"
         >
           {{ tabTitles[tabId] }}
+          <span
+            v-if="dirtyModelTabIds.includes(tabId)"
+            class="bc-model-tab-dot"
+            aria-hidden="true"
+          />
         </button>
       </div>
 
@@ -235,26 +427,33 @@ onBeforeUnmount(() => {
             <span class="bc-status-badge is-muted">provider: {{ currentModelTabDraft.provider }}</span>
             <span class="bc-status-badge is-muted">strategy: {{ currentModelTabDraft.strategyId }}</span>
             <span class="bc-status-badge is-muted">mode: {{ currentModelTabDraft.requestMode }}</span>
+            <span
+              v-if="isCopilotTab"
+              :class="['bc-status-badge', copilotStatusTone]"
+            >OAuth：{{ copilotStatusLabel }}</span>
           </div>
         </div>
 
         <div
-          v-if="!isCopilotTab"
           class="bc-field-grid"
           style="margin-top: 1rem;"
         >
           <label class="bc-field">
             <span class="bc-field-label">
               <span>对话模型接口地址</span>
+              <span
+                v-if="!currentSchema.baseUrlEditable"
+                class="bc-field-note"
+              >只读</span>
             </span>
             <input
               type="text"
               :value="currentModelTabDraft.baseUrl"
               spellcheck="false"
               autocomplete="off"
-              :readonly="isSiliconflowTab"
+              :readonly="!currentSchema.baseUrlEditable"
               @input="(e) => {
-                if (!isSiliconflowTab) setTabField('baseUrl', (e.target as HTMLInputElement).value)
+                if (currentSchema.baseUrlEditable) setTabField('baseUrl', (e.target as HTMLInputElement).value)
               }"
             >
           </label>
@@ -262,13 +461,29 @@ onBeforeUnmount(() => {
           <label class="bc-field">
             <span class="bc-field-label">
               <span>对话模型接口密钥</span>
+              <span
+                v-if="!currentSchema.apiKeyEditable"
+                class="bc-field-note"
+              >由 Bridge 自动管理</span>
             </span>
             <input
+              v-if="currentSchema.apiKeyVisible"
               type="password"
               :value="currentModelTabDraft.apiKey"
               spellcheck="false"
               autocomplete="off"
-              @input="(e) => setTabField('apiKey', (e.target as HTMLInputElement).value)"
+              :readonly="!currentSchema.apiKeyEditable"
+              :placeholder="currentSchema.apiKeyEditable ? '' : '由 OAuth bridge 自动注入'"
+              @input="(e) => {
+                if (currentSchema.apiKeyEditable) setTabField('apiKey', (e.target as HTMLInputElement).value)
+              }"
+            >
+            <input
+              v-else
+              type="text"
+              value="(由 OAuth bridge 自动注入)"
+              readonly
+              tabindex="-1"
             >
           </label>
 
@@ -285,16 +500,24 @@ onBeforeUnmount(() => {
               </span>
             </span>
             <select
-              v-if="isSiliconflowTab"
-              :value="currentModelTabDraft.defaultModel"
+              v-if="currentSchema.modelInputKind !== 'free-text'"
+              :value="currentModelSelectValue"
+              :disabled="isCopilotTab && copilotModelOptions.length === 0"
               @change="(e) => setTabField('defaultModel', (e.target as HTMLSelectElement).value)"
             >
               <option
-                v-for="model in siliconflowModelOptions"
-                :key="model"
-                :value="model"
+                v-if="isCopilotTab && copilotModelOptions.length === 0"
+                value=""
+                disabled
               >
-                {{ model }}
+                暂无 OAuth 可用模型
+              </option>
+              <option
+                v-for="option in currentModelOptions"
+                :key="option.modelId"
+                :value="option.modelId"
+              >
+                {{ option.label }}
               </option>
             </select>
             <input
@@ -308,139 +531,133 @@ onBeforeUnmount(() => {
           </label>
         </div>
 
-        <div
-          v-else
-          style="margin-top: 1rem; display: grid; gap: 1rem;"
-        >
-          <section class="bc-model-auth-card">
-            <div class="bc-model-auth-head">
-              <div>
-                <strong>GitHub OAuth 状态</strong>
-                <p class="bc-muted">本地与服务器登录状态独立保存。完成授权后，主聊天会按所选 Copilot 模型经由本地 bridge 走 Responses API 或 chat/completions。</p>
-              </div>
-              <span :class="['bc-status-badge', copilotStatusTone]">{{ copilotStatusLabel }}</span>
-            </div>
+        <p
+          v-if="!currentModelValidation.ok"
+          class="bc-model-validation"
+        >{{ currentModelValidation.message }}</p>
 
-            <div class="bc-model-auth-body">
-              <p><strong>账号：</strong>{{ currentModelTabDraft.accountLabel || '未登录' }}</p>
-              <p><strong>Bridge：</strong>{{ currentModelTabDraft.baseUrl }}</p>
-              <p v-if="currentModelTabDraft.authError"><strong>错误：</strong>{{ currentModelTabDraft.authError }}</p>
-              <p v-if="copilotAuthAttempt">
-                <strong>验证码：</strong>
-                <code>{{ copilotAuthAttempt.userCode }}</code>
-                <a
-                  :href="copilotAuthAttempt.verificationUri"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style="margin-left: 0.5rem;"
-                >打开 GitHub 授权页</a>
-              </p>
-            </div>
-
-            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
-              <button
-                class="bc-btn bc-btn-primary"
-                type="button"
-                :disabled="currentModelTabDraft.authStatus === 'pending'"
-                @click="handleStartCopilotAuth"
-              >
-                开始 OAuth 登录
-              </button>
+        <section class="bc-model-secondary">
+	          <template v-if="currentSchema.secondaryAction === 'deepseek-refresh'">
+	            <div class="bc-model-secondary-row">
+	              <span class="bc-status-badge is-muted">models: {{ deepseekSourceLabel }}</span>
+              <span
+                v-if="deepseekModelLoading"
+                class="bc-status-badge is-muted"
+              >刷新中</span>
+              <span
+                v-if="deepseekModelError"
+                class="bc-status-badge is-warning"
+              >{{ deepseekModelError }}</span>
               <button
                 class="bc-btn"
                 type="button"
-                :disabled="!copilotAuthAttempt || currentModelTabDraft.authStatus !== 'pending'"
-                @click="handleCancelCopilotAuth"
+                :disabled="deepseekModelLoading"
+                @click="refreshDeepSeekModels"
               >
-                取消登录
+                刷新官方列表
               </button>
-              <button
-                class="bc-btn"
-                type="button"
-                :disabled="currentModelTabDraft.authStatus === 'unauthenticated'"
-                @click="handleLogoutCopilotAuth"
-              >
-                退出登录
-              </button>
-              <button
-                class="bc-btn"
-                type="button"
-                @click="handleRefreshCopilotAuth"
-              >
-                刷新状态
-              </button>
-            </div>
-          </section>
+	            </div>
+	          </template>
 
-          <div class="bc-field-grid">
-            <label class="bc-field">
-              <span class="bc-field-label">
-                <span>对话默认模型</span>
+	          <template v-else-if="currentSchema.secondaryAction === 'mimo-refresh'">
+	            <div class="bc-model-secondary-row">
+	              <span class="bc-status-badge is-muted">models: {{ mimoSourceLabel }}</span>
+	              <span
+	                v-if="mimoModelLoading"
+	                class="bc-status-badge is-muted"
+	              >刷新中</span>
+	              <span
+	                v-if="mimoModelError"
+	                class="bc-status-badge is-warning"
+	              >{{ mimoModelError }}</span>
+	              <button
+	                class="bc-btn"
+	                type="button"
+	                :disabled="mimoModelLoading"
+	                @click="refreshMimoModels"
+	              >
+	                刷新官方列表
+	              </button>
+	            </div>
+	          </template>
+
+	          <template v-else-if="currentSchema.secondaryAction === 'copilot-oauth'">
+            <div class="bc-model-secondary-row bc-model-secondary-row-stack">
+              <div class="bc-model-secondary-info">
+                <span><strong>模型：</strong>{{ copilotSourceLabel }}</span>
                 <span
-                  class="bc-field-help"
-                  tabindex="0"
-                  :aria-label="currentTabModelHint"
+                  v-if="copilotModelLoading"
+                  class="bc-model-secondary-muted"
+                >刷新中</span>
+                <span
+                  v-if="copilotModelError"
+                  class="bc-model-secondary-error"
                 >
-                  <span aria-hidden="true">!</span>
-                  <span class="bc-field-tooltip" role="tooltip">{{ currentTabModelHint }}</span>
+                  <strong>模型错误：</strong>{{ copilotModelError }}
                 </span>
-              </span>
-              <select
-                :value="currentCopilotModelId"
-                @change="(e) => setTabField('defaultModel', (e.target as HTMLSelectElement).value)"
-              >
-                <option
-                  v-for="option in copilotModelOptions"
-                  :key="option.modelId"
-                  :value="option.modelId"
+                <span><strong>账号：</strong>{{ currentModelTabDraft.accountLabel || '未登录' }}</span>
+                <span v-if="currentModelTabDraft.authError" class="bc-model-secondary-error">
+                  <strong>错误：</strong>{{ currentModelTabDraft.authError }}
+                </span>
+                <span v-if="copilotAuthAttempt">
+                  <strong>验证码：</strong>
+                  <code>{{ copilotAuthAttempt.userCode }}</code>
+                  <a
+                    :href="copilotAuthAttempt.verificationUri"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style="margin-left: 0.5rem;"
+                  >打开 GitHub 授权页</a>
+                </span>
+              </div>
+              <div class="bc-model-secondary-actions">
+                <button
+                  class="bc-btn bc-btn-primary"
+                  type="button"
+                  :disabled="currentModelTabDraft.authStatus === 'pending'"
+                  @click="handleStartCopilotAuth"
                 >
-                  {{ formatCopilotModelOptionLabel(option) }}
-                </option>
-              </select>
-            </label>
-          </div>
-        </div>
-      </div>
-    </section>
+                  开始 OAuth 登录
+                </button>
+                <button
+                  class="bc-btn"
+                  type="button"
+                  :disabled="!copilotAuthAttempt || currentModelTabDraft.authStatus !== 'pending'"
+                  @click="handleCancelCopilotAuth"
+                >
+                  取消登录
+                </button>
+                <button
+                  class="bc-btn"
+                  type="button"
+                  :disabled="currentModelTabDraft.authStatus === 'unauthenticated'"
+                  @click="handleLogoutCopilotAuth"
+                >
+                  退出登录
+                </button>
+                <button
+                  class="bc-btn"
+                  type="button"
+                  :disabled="copilotModelLoading"
+                  @click="refreshCopilotModels"
+                >
+                  刷新模型列表
+                </button>
+                <button
+                  class="bc-btn"
+                  type="button"
+                  @click="handleRefreshCopilotAuth"
+                >
+                  刷新状态
+                </button>
+              </div>
+            </div>
+          </template>
 
-    <section class="bc-model-shared">
-      <div class="bc-panel-subhead" style="margin-top: 1.25rem;">
-        <div>
-          <h3>全局共享模型配置</h3>
-          <p class="bc-muted">这些字段不跟随上方主聊天 tab 切换，继续作为全局单份配置生效。</p>
-        </div>
-      </div>
-
-      <div class="bc-field-grid" style="margin-top: 1rem;">
-        <label
-          v-for="key in MODEL_SHARED_KEYS"
-          :key="key"
-          class="bc-field"
-        >
-          <span class="bc-field-label">
-            <span>{{ getFieldLabel(key) }}</span>
-            <span
-              v-if="getFieldHint(key)"
-              class="bc-field-help"
-              tabindex="0"
-              :aria-label="getFieldHint(key)"
-            >
-              <span aria-hidden="true">!</span>
-              <span class="bc-field-tooltip" role="tooltip">{{ getFieldHint(key) }}</span>
-            </span>
-            <span
-              v-if="changedKeys.has(key)"
-              class="bc-field-modified"
-            >已修改</span>
-          </span>
-          <input
-            :type="inputType(key)"
-            :value="envDraft[key] ?? ''"
-            spellcheck="false"
-            autocomplete="off"
-            @input="(e) => { envDraft[key] = (e.target as HTMLInputElement).value }"
-          >
-        </label>
+          <template v-else>
+            <span class="bc-muted bc-model-secondary-empty">本 Tab 没有附加配置项。</span>
+          </template>
+        </section>
       </div>
     </section>
   </article>

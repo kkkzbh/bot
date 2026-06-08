@@ -3,6 +3,14 @@ import { join } from 'node:path';
 import { Context, Logger } from 'koishi';
 import { BotConsoleManager, resolveBotEnvFiles } from './server.js';
 import { CopilotOAuthBridgeService } from '../copilot-oauth/index.js';
+import {
+  canHotSwitchMainChatModelOnly,
+  mainChatRuntimeState,
+} from '../shared/llm/main-chat-runtime.js';
+import {
+  normalizeMainChatBuiltinTabId,
+  resolveMainChatRuntimeProfileFromTabConfig,
+} from '../shared/llm/index.js';
 import type {
   BotConsoleProbeResult,
   BotConsoleMemoryState,
@@ -15,6 +23,9 @@ import type {
   CopilotAuthStatusResponse,
   ClearConversationHistoryRequest,
   ClearConversationHistoryResponse,
+  CopilotModelListResponse,
+  DeepSeekModelListResponse,
+  MimoModelListResponse,
   DeleteConversationRoomRequest,
   DeleteConversationRoomResponse,
   EnvPatch,
@@ -62,6 +73,17 @@ type RuntimeServiceContext = {
     get: (table: string, query: Record<string, unknown>) => Promise<any[]>;
   };
 };
+
+function resolveDirtyModelTabIds(input: unknown): Set<SaveModelTabsRequest['activeTab']> {
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new Error('保存模型 Tab 必须携带已修改的 Tab 列表。');
+  }
+  const result = new Set<SaveModelTabsRequest['activeTab']>();
+  for (const value of input) {
+    result.add(normalizeMainChatBuiltinTabId(value) as SaveModelTabsRequest['activeTab']);
+  }
+  return result;
+}
 
 async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager): Promise<BotConsoleState> {
   const statePromise = manager.getState();
@@ -208,15 +230,74 @@ export function apply(ctx: Context): void {
   consoleService.addListener(
     'bot-console/save-model-tabs',
     async (payload: SaveModelTabsRequest): Promise<SaveModelTabsResponse> => {
+      try {
+        const record = ensureRecord(payload);
+        const result = await manager.saveModelTabs({
+          activeTab: String(record.activeTab ?? '') as SaveModelTabsRequest['activeTab'],
+          tabs: Array.isArray(record.tabs) ? (record.tabs as SaveModelTabsRequest['tabs']) : [],
+          dirtyTabIds: Array.isArray(record.dirtyTabIds)
+            ? (record.dirtyTabIds as SaveModelTabsRequest['dirtyTabIds'])
+            : [],
+        });
+        const dirtyIds = resolveDirtyModelTabIds(record.dirtyTabIds);
+        const nextProfile = resolveMainChatRuntimeProfileFromTabConfig(result.modelTabs.activeTab, result.modelTabs.tabs);
+        const currentProfile = mainChatRuntimeState.getProfile();
+        const hotSwitchable =
+          dirtyIds.size === 1 &&
+          dirtyIds.has(nextProfile.tabId) &&
+          canHotSwitchMainChatModelOnly(currentProfile, nextProfile);
+        const hotSwitched = hotSwitchable ? mainChatRuntimeState.hotSwitchModel(nextProfile) : false;
+        return {
+          ...result,
+          hotSwitched,
+          restartRequired: !hotSwitchable,
+          restartReason: hotSwitchable ? null : 'provider、接口地址或密钥变更需要重启 Koishi。',
+        };
+      } catch (err) {
+        // Re-throw with a freshly constructed Error so the message survives koishi's IPC
+        // serialization (the original Error sometimes loses its `message` across the wire,
+        // leaving the client with a useless generic toast).
+        const message = err instanceof Error
+          ? err.message || err.stack?.split('\n', 1)[0] || '保存模型 Tab 失败'
+          : typeof err === 'string'
+            ? err
+            : (() => {
+                try { return JSON.stringify(err); } catch { return '保存模型 Tab 失败'; }
+              })();
+        throw new Error(`bot-console/save-model-tabs: ${message}`);
+      }
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/list-deepseek-models',
+    async (payload: unknown): Promise<DeepSeekModelListResponse> => {
       const record = ensureRecord(payload);
-      const result = await manager.saveModelTabs({
-        activeTab: String(record.activeTab ?? '') as SaveModelTabsRequest['activeTab'],
-        tabs: Array.isArray(record.tabs) ? (record.tabs as SaveModelTabsRequest['tabs']) : [],
+      return manager.listDeepSeekModels({
+        baseUrl: typeof record.baseUrl === 'string' ? record.baseUrl : '',
+        apiKey: typeof record.apiKey === 'string' ? record.apiKey : '',
       });
-      return {
-        ...result,
-        restartRequired: true,
-      };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/list-copilot-models',
+    async (): Promise<CopilotModelListResponse> => {
+      return manager.listCopilotModels();
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/list-mimo-models',
+    async (payload: unknown): Promise<MimoModelListResponse> => {
+      const record = ensureRecord(payload);
+      return manager.listMimoModels({
+        baseUrl: typeof record.baseUrl === 'string' ? record.baseUrl : '',
+        apiKey: typeof record.apiKey === 'string' ? record.apiKey : '',
+      });
     },
     { authority: LISTENER_AUTHORITY },
   );

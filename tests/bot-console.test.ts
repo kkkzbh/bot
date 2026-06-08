@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BotConsoleManager } from '../src/plugins/bot-console/server.js';
+import { resolveMainChatRuntimeProfileFromEnv } from '../src/plugins/shared/llm/index.js';
+import { mainChatRuntimeState } from '../src/plugins/shared/llm/main-chat-runtime.js';
 
 vi.mock('@koishijs/plugin-console', () => ({}));
 vi.mock('koishi', () => {
@@ -43,6 +45,7 @@ import { apply } from '../src/plugins/bot-console/index.js';
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({}));
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -76,7 +79,8 @@ describe('bot-console plugin', () => {
     apply(ctx as any);
 
     expect(addEntry).toHaveBeenCalledTimes(1);
-    expect(addListener).toHaveBeenCalledTimes(20);
+    expect(addListener).toHaveBeenCalledTimes(23);
+    expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/list-copilot-models');
     for (const call of addListener.mock.calls) {
       expect(call[2]).toEqual({ authority: 4 });
     }
@@ -158,6 +162,7 @@ describe('bot-console plugin', () => {
 
     const result = await saveModelTabsListener({
       activeTab: 'openai',
+      dirtyTabIds: ['openai'],
       tabs: [
         {
           id: 'siliconflow',
@@ -183,6 +188,14 @@ describe('bot-console plugin', () => {
           apiKey: 'github_pat_123',
           defaultModel: 'openai/gpt-5.4-mini',
         },
+        {
+          id: 'deepseek',
+          title: 'DeepSeek',
+          provider: 'deepseek',
+          baseUrl: 'https://api.deepseek.com',
+          apiKey: '',
+          defaultModel: 'deepseek-v4-flash',
+        },
       ],
     });
 
@@ -196,8 +209,192 @@ describe('bot-console plugin', () => {
         CHATLUNA_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
         CHATLUNA_SILICONFLOW_BASE_URL: 'https://api.siliconflow.cn/v1',
         CHATLUNA_SILICONFLOW_DEFAULT_MODEL: 'Pro/moonshotai/Kimi-K2.5',
+        CHATLUNA_DEEPSEEK_DEFAULT_MODEL: 'deepseek/deepseek-v4-flash',
       }),
     });
+  });
+
+  it('hot-switches active-tab model-only saves without requiring a restart', async () => {
+    const dir = createTempDir();
+    mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
+    writeFileSync(
+      join(dir, '.env.local'),
+      [
+        'CHATLUNA_ACTIVE_TAB=openai',
+        'CHATLUNA_OPENAI_BASE_URL=https://shell.wyzai.top/v1',
+        'CHATLUNA_OPENAI_API_KEY=sk-openai',
+        'CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      join(dir, 'data/chathub/presets/sakiko.yml'),
+      'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
+      'utf8',
+    );
+    mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({
+      CHATLUNA_ACTIVE_TAB: 'openai',
+      CHATLUNA_OPENAI_BASE_URL: 'https://shell.wyzai.top/v1',
+      CHATLUNA_OPENAI_API_KEY: 'sk-openai',
+      CHATLUNA_OPENAI_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+    }));
+
+    const addListener = vi.fn();
+    apply({
+      baseDir: dir,
+      console: {
+        addEntry: vi.fn(),
+        addListener,
+      },
+    } as any);
+
+    const saveModelTabsListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/save-model-tabs')?.[1];
+    const result = await saveModelTabsListener({
+      activeTab: 'openai',
+      dirtyTabIds: ['openai'],
+      tabs: [
+        {
+          id: 'openai',
+          title: 'OpenAI',
+          provider: 'openai',
+          baseUrl: 'https://shell.wyzai.top/v1',
+          apiKey: 'sk-openai',
+          defaultModel: 'openai/gpt-5.4-high-thinking',
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      hotSwitched: true,
+      restartRequired: false,
+      restartReason: null,
+      env: expect.objectContaining({
+        CHATLUNA_ACTIVE_TAB: 'openai',
+        CHATLUNA_DEFAULT_MODEL: 'openai/gpt-5.4-high-thinking',
+      }),
+    });
+    expect(mainChatRuntimeState.getGeneration()).toBe(1);
+    expect(mainChatRuntimeState.getProfile().canonicalModel).toBe('openai/gpt-5.4-high-thinking');
+  });
+
+  it('routes MIMO model tab saves through IPC without clearing the local key', async () => {
+    const dir = createTempDir();
+    mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
+    writeFileSync(
+      join(dir, '.env.local'),
+      'CHATLUNA_MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1\nCHATLUNA_MIMO_API_KEY=sk-mimo\nCHATLUNA_MIMO_DEFAULT_MODEL=mimo-v2.5-pro\n',
+      'utf8',
+    );
+    writeFileSync(
+      join(dir, 'data/chathub/presets/sakiko.yml'),
+      'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
+      'utf8',
+    );
+
+    const addListener = vi.fn();
+    apply({
+      baseDir: dir,
+      console: {
+        addEntry: vi.fn(),
+        addListener,
+      },
+    } as any);
+
+    const saveModelTabsListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/save-model-tabs')?.[1];
+    expect(saveModelTabsListener).toBeTypeOf('function');
+
+    const result = await saveModelTabsListener({
+      activeTab: 'mimo',
+      dirtyTabIds: ['mimo'],
+      tabs: [
+        {
+          id: 'mimo',
+          title: 'MIMO',
+          provider: 'mimo',
+          baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+          apiKey: '',
+          defaultModel: 'mimo-v2-omni',
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      restartRequired: true,
+      modelTabs: expect.objectContaining({
+        activeTab: 'mimo',
+      }),
+      env: expect.objectContaining({
+        CHATLUNA_PLATFORM: 'mimo',
+        CHATLUNA_API_KEY: 'sk-mimo',
+        CHATLUNA_DEFAULT_MODEL: 'mimo/mimo-v2-omni',
+        CHATLUNA_MIMO_API_KEY: 'sk-mimo',
+        CHATLUNA_MIMO_DEFAULT_MODEL: 'mimo/mimo-v2-omni',
+      }),
+    });
+  });
+
+  it('preserves the manager error message when save-model-tabs validation fails', async () => {
+    const dir = createTempDir();
+    mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
+    writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+    writeFileSync(
+      join(dir, 'data/chathub/presets/sakiko.yml'),
+      'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
+      'utf8',
+    );
+
+    const addListener = vi.fn();
+    apply({
+      baseDir: dir,
+      console: {
+        addEntry: vi.fn(),
+        addListener,
+      },
+    } as any);
+
+    const saveModelTabsListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/save-model-tabs')?.[1];
+    expect(saveModelTabsListener).toBeTypeOf('function');
+
+    // Send an explicitly invalid OpenAI default model. The listener should re-throw a
+    // fresh Error whose message preserves the human-readable manager message — this is
+    // what allows the toast in the browser to show the real cause instead of "保存失败".
+    await expect(
+      saveModelTabsListener({
+        activeTab: 'openai',
+        dirtyTabIds: ['openai'],
+        tabs: [
+          {
+            id: 'siliconflow',
+            provider: 'siliconflow',
+            baseUrl: 'https://api.siliconflow.cn/v1',
+            apiKey: 'sk-kimi',
+            defaultModel: 'Pro/moonshotai/Kimi-K2.5',
+          },
+          {
+            id: 'openai',
+            provider: 'openai',
+            baseUrl: 'https://shell.wyzai.top/v1',
+            apiKey: 'sk-openai',
+            defaultModel: 'openai/gpt-5.2',
+          },
+          {
+            id: 'copilot',
+            provider: 'openai',
+            baseUrl: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+            apiKey: 'github_pat_123',
+            defaultModel: 'openai/gpt-5.4-mini',
+          },
+          {
+            id: 'deepseek',
+            provider: 'deepseek',
+            baseUrl: 'https://api.deepseek.com',
+            apiKey: '',
+            defaultModel: 'deepseek-v4-flash',
+          },
+        ],
+      }),
+    ).rejects.toThrowError(/OpenAI Tab/);
   });
 
   it('includes runtime memory status in get-state payload when the service is available', async () => {

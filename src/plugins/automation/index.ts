@@ -1023,7 +1023,7 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
       content: createAutomationPrompt(job, run.triggeredAt),
       additional_kwargs: {},
     };
-    applyReplyStructuredOutputRequest(replyRoom, message as never, {
+    const outputSpec = applyReplyStructuredOutputRequest(replyRoom, message as never, {
       replyMode: 'automation',
       includeFinalResponseInstruction: false,
       capabilitySnapshot,
@@ -1044,6 +1044,7 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
     const turnInput = buildReplyTurnInput(source.session as never, replyRoom, message);
     const orchestration = await automationReplyOrchestrator.handle(turnInput, source.session as never, {
       responseMessage: response,
+      outputProtocol: outputSpec?.structuredOutputProtocol,
       capabilitySnapshot,
       routeHint: 'automation',
     });

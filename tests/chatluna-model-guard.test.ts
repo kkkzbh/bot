@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildProactiveOpeningState,
   resolveUserTurnIntentState,
@@ -14,7 +14,13 @@ import {
   resolvePlatform,
   supportsStructuredReplyJsonSchema,
 } from '../src/plugins/shared/llm/index.js';
+import { mainChatRuntimeState } from '../src/plugins/shared/llm/main-chat-runtime.js';
+import { syncRoomModelToMainChatRuntime } from '../src/plugins/model-guard/hot-switch.js';
 import { resolveSessionDisplayName } from '../src/plugins/shared/session/index.js';
+
+afterEach(() => {
+  mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({}));
+});
 
 function assertStrictRequiredForAllObjects(schema: unknown): void {
   const visit = (node: unknown): void => {
@@ -73,6 +79,15 @@ describe('normalizeRawModelName', () => {
         availableModels: ['deepseek/deepseek-chat', 'openai/gpt-4o-mini'],
       }),
     ).toBe('deepseek/deepseek-chat');
+  });
+
+  it('resolves plain MIMO chat models by available model suffix', () => {
+    expect(
+      normalizeRawModelName('mimo-v2.5-pro', {
+        availableModels: ['mimo/mimo-v2.5-pro'],
+        preferredPlatform: 'mimo',
+      }),
+    ).toBe('mimo/mimo-v2.5-pro');
   });
 
   it('falls back to preferred platform when suffix is ambiguous', () => {
@@ -152,7 +167,7 @@ describe('supportsStructuredReplyJsonSchema', () => {
     expect(supportsStructuredReplyJsonSchema('openai/gpt-5.4-medium-thinking')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-4o')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-5-mini')).toBe(true);
-    expect(supportsStructuredReplyJsonSchema('openai/gemini-3.1-pro-preview')).toBe(true);
+    expect(supportsStructuredReplyJsonSchema('openai/gemini-3.1-pro-preview')).toBe(false);
   });
 });
 
@@ -164,7 +179,7 @@ describe('buildStructuredReplyRequestSpec', () => {
       }),
     ).toMatchObject({
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'chat_completions_json_schema',
+      structuredOutputProtocol: 'native_chat_json_schema',
       overrideRequestParams: {
         thinking: {
           type: 'disabled',
@@ -178,7 +193,7 @@ describe('buildStructuredReplyRequestSpec', () => {
       }),
     ).toMatchObject({
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'chat_completions_json_schema',
+      structuredOutputProtocol: 'native_chat_json_schema',
       overrideRequestParams: {
         qqbot_canonical_model: 'openai/gpt-5.4-medium-thinking',
         qqbot_transport_model: 'gpt-5.4-medium-thinking',
@@ -194,7 +209,7 @@ describe('buildStructuredReplyRequestSpec', () => {
       }),
     ).toMatchObject({
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'chat_completions_json_schema',
+      structuredOutputProtocol: 'native_chat_json_schema',
       overrideRequestParams: {
         qqbot_canonical_model: 'openai/gpt-4o',
         qqbot_transport_model: 'gpt-4o',
@@ -207,7 +222,8 @@ describe('buildStructuredReplyRequestSpec', () => {
       }),
     ).toMatchObject({
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'chat_completions_json_schema',
+      structuredOutputProtocol: 'chat_reply_v1',
+      finalResponseSchema: null,
       overrideRequestParams: {
         qqbot_canonical_model: 'openai/gemini-3.1-pro-preview',
         qqbot_transport_model: 'gemini-3.1-pro-preview',
@@ -222,7 +238,7 @@ describe('buildStructuredReplyRequestSpec', () => {
       }),
     ).toMatchObject({
       requestMode: 'responses',
-      structuredOutputProtocol: 'responses_text_format',
+      structuredOutputProtocol: 'native_responses_json_schema',
       overrideRequestParams: {
         qqbot_request_mode: 'responses',
         qqbot_canonical_model: 'openai/gpt-5.4-mini',
@@ -315,6 +331,8 @@ describe('isSupportedMainChatModelForTab', () => {
     expect(isSupportedMainChatModelForTab('siliconflow', 'openai/gpt-5.4-medium-thinking')).toBe(false);
     expect(isSupportedMainChatModelForTab('openai', 'openai/gpt-5.4-medium-thinking')).toBe(true);
     expect(isSupportedMainChatModelForTab('openai', 'openai/gpt-5.2')).toBe(false);
+    expect(isSupportedMainChatModelForTab('copilot', 'openai/gpt-5.4')).toBe(false);
+    expect(isSupportedMainChatModelForTab('copilot', 'openai/gpt-5.4-mini')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'gpt-5-mini')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'gpt-4.1')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'gpt-4o')).toBe(true);
@@ -323,6 +341,13 @@ describe('isSupportedMainChatModelForTab', () => {
     expect(isSupportedMainChatModelForTab('copilot', 'openai/gemini-3.1-pro-preview')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'gemini-3-flash-preview')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'bad model')).toBe(false);
+    expect(isSupportedMainChatModelForTab('deepseek', 'deepseek-v4-flash')).toBe(true);
+    expect(isSupportedMainChatModelForTab('deepseek', 'deepseek/deepseek-v4-pro')).toBe(true);
+    expect(isSupportedMainChatModelForTab('deepseek', 'not-official')).toBe(false);
+    expect(isSupportedMainChatModelForTab('deepseek', 'openai/deepseek-v4-pro')).toBe(false);
+    expect(isSupportedMainChatModelForTab('mimo', 'mimo-v2.5-pro')).toBe(true);
+    expect(isSupportedMainChatModelForTab('mimo', 'mimo/mimo-v2.5-pro')).toBe(true);
+    expect(isSupportedMainChatModelForTab('mimo', 'mimo-v2.5-tts')).toBe(false);
   });
 });
 
@@ -333,6 +358,7 @@ describe('inferPlatformFromBaseUrl', () => {
     expect(inferPlatformFromBaseUrl('https://api.openai.com/v1')).toBe('openai');
     expect(inferPlatformFromBaseUrl('https://api.anthropic.com')).toBe('anthropic');
     expect(inferPlatformFromBaseUrl('https://shell.wyzai.top/v1')).toBe('openai');
+    expect(inferPlatformFromBaseUrl('https://token-plan-cn.xiaomimimo.com/v1')).toBe('mimo');
   });
 });
 
@@ -350,7 +376,7 @@ describe('resolveMainChatRuntimeProfileFromEnv', () => {
       provider: 'openai',
       strategyId: 'openai-gpt54-main-chat',
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'chat_completions_json_schema',
+      structuredOutputProtocol: 'native_chat_json_schema',
       baseUrl: 'https://shell.wyzai.top/v1',
       defaultModel: 'openai/gpt-5.4-medium-thinking',
     });
@@ -391,7 +417,7 @@ describe('resolveMainChatRuntimeProfileFromEnv', () => {
       provider: 'openai',
       strategyId: 'copilot-github-oauth-main-chat',
       requestMode: 'responses',
-      structuredOutputProtocol: 'responses_text_format',
+      structuredOutputProtocol: 'native_responses_json_schema',
       baseUrl: 'http://127.0.0.1:5140/api/internal/copilot/v1',
       defaultModel: 'openai/gpt-5.4-mini',
       canonicalModel: 'openai/gpt-5.4-mini',
@@ -412,11 +438,93 @@ describe('resolveMainChatRuntimeProfileFromEnv', () => {
       provider: 'openai',
       strategyId: 'copilot-github-oauth-main-chat',
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'chat_completions_json_schema',
+      structuredOutputProtocol: 'chat_reply_v1',
       defaultModel: 'openai/gemini-3.1-pro-preview',
       canonicalModel: 'openai/gemini-3.1-pro-preview',
       transportModel: 'gemini-3.1-pro-preview',
     });
+  });
+
+  it('resolves the DeepSeek tab into an official chat completions runtime profile', () => {
+    expect(
+      resolveMainChatRuntimeProfileFromEnv({
+        CHATLUNA_ACTIVE_TAB: 'deepseek',
+        CHATLUNA_DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
+        CHATLUNA_DEEPSEEK_API_KEY: 'sk-deepseek',
+        CHATLUNA_DEEPSEEK_DEFAULT_MODEL: 'deepseek-v4-pro',
+      }),
+    ).toMatchObject({
+      tabId: 'deepseek',
+      provider: 'deepseek',
+      strategyId: 'deepseek-official-main-chat',
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'native_chat_json_schema',
+      baseUrl: 'https://api.deepseek.com',
+      defaultModel: 'deepseek/deepseek-v4-pro',
+      canonicalModel: 'deepseek/deepseek-v4-pro',
+      transportModel: 'deepseek-v4-pro',
+    });
+  });
+
+  it('resolves the MIMO tab into a chat completions runtime profile', () => {
+    expect(
+      resolveMainChatRuntimeProfileFromEnv({
+        CHATLUNA_ACTIVE_TAB: 'mimo',
+        CHATLUNA_MIMO_BASE_URL: 'https://token-plan-cn.xiaomimimo.com/v1',
+        CHATLUNA_MIMO_API_KEY: 'sk-mimo',
+        CHATLUNA_MIMO_DEFAULT_MODEL: 'mimo-v2.5-pro',
+      }),
+    ).toMatchObject({
+      tabId: 'mimo',
+      provider: 'mimo',
+      strategyId: 'mimo-official-main-chat',
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'native_chat_json_schema',
+      baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+      defaultModel: 'mimo/mimo-v2.5-pro',
+      canonicalModel: 'mimo/mimo-v2.5-pro',
+      transportModel: 'mimo-v2.5-pro',
+    });
+    expect(isSupportedMainChatModelForTab('mimo', 'mimo/mimo-v2.5-pro')).toBe(true);
+    expect(isSupportedMainChatModelForTab('mimo', 'mimo-v2.5-tts')).toBe(false);
+  });
+});
+
+describe('syncRoomModelToMainChatRuntime', () => {
+  it('lazily overwrites stale room models and clears the cached conversation', async () => {
+    mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({
+      CHATLUNA_ACTIVE_TAB: 'copilot',
+      CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+      CHATLUNA_COPILOT_API_KEY: 'bridge-secret',
+      CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/gpt-5.4-mini',
+    }));
+    mainChatRuntimeState.hotSwitchModel(resolveMainChatRuntimeProfileFromEnv({
+      CHATLUNA_ACTIVE_TAB: 'copilot',
+      CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+      CHATLUNA_COPILOT_API_KEY: 'bridge-secret',
+      CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/claude-haiku-4.5',
+    }));
+
+    const room = {
+      roomId: 1,
+      conversationId: 'conv-1',
+      model: 'openai/gpt-5.4-mini',
+    };
+    const clearCache = vi.fn(async () => undefined);
+    const upsertRoom = vi.fn(async () => undefined);
+
+    await expect(syncRoomModelToMainChatRuntime({ room, clearCache, upsertRoom })).resolves.toMatchObject({
+      changed: true,
+      originalModel: 'openai/gpt-5.4-mini',
+      generation: 1,
+      canonicalModel: 'openai/claude-haiku-4.5',
+      transportModel: 'claude-haiku-4.5',
+      strategyId: 'copilot-github-oauth-main-chat',
+      requestMode: 'chat_completions',
+    });
+    expect(room.model).toBe('openai/claude-haiku-4.5');
+    expect(clearCache).toHaveBeenCalledWith(room);
+    expect(upsertRoom).toHaveBeenCalledWith(room);
   });
 });
 

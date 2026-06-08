@@ -642,6 +642,21 @@ describe('realtime message plugin', () => {
     expect(afterPromotion.items).toEqual([]);
   });
 
+  it('keeps realtime_message_history schema compatible with Copilot Gemini tool validation', async () => {
+    const harness = createHarness();
+    await harness.runReady();
+
+    const entry = harness.tools.get(REALTIME_MESSAGE_HISTORY_TOOL);
+    expect(entry).toBeDefined();
+    const tool = entry.createTool();
+    const schema = (tool as any).schema;
+
+    expect(schema.shape.since._def.typeName).toBe('ZodOptional');
+    expect(schema.shape.since._def.innerType._def.typeName).toBe('ZodString');
+    expect(schema.shape.until._def.typeName).toBe('ZodOptional');
+    expect(schema.shape.until._def.innerType._def.typeName).toBe('ZodString');
+  });
+
   it('returns explicit tool results for private chats and disabled groups', async () => {
     const harness = createHarness();
     const { middleware, runReady, setRealtimeEnabled } = harness;

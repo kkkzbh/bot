@@ -52,14 +52,16 @@ import { normalizeReplyChatMode } from '../compat.js';
 import {
   StructuredReplyCompilerError,
   StructuredReplyEmptyModelOutputError,
+  type ReplyCompilerOutputProtocol,
 } from '../pipeline/compiler.js';
 import { ReplyOrchestratorService } from '../pipeline/orchestrator.js';
 import { buildReplyTurnInput, normalizeReplyRouteHint } from '../pipeline/context-builder.js';
 import {
   buildStructuredReplyRequestSpec,
   isSupportedMainChatModelForTab,
-  resolveMainChatRuntimeProfileFromEnv,
+  type MainChatStructuredOutputSpec,
 } from '../../shared/llm/index.js';
+import { mainChatRuntimeState } from '../../shared/llm/main-chat-runtime.js';
 import {
   type ReplyRoute,
   type ResolvedAction,
@@ -880,12 +882,12 @@ function ensureReplyPluginRoom(room: ReplyRuntimeRoomLike | undefined): void {
 }
 
 export function ensureStructuredReplyJsonSchemaModel(room: ReplyRuntimeRoomLike | undefined): void {
-  const model = typeof room?.model === 'string' ? room.model.trim() : '';
-  const profile = resolveMainChatRuntimeProfileFromEnv(process.env);
-  const strategyModel = model || profile.defaultModel;
+  void room;
+  const profile = mainChatRuntimeState.getProfile();
+  const strategyModel = profile.canonicalModel;
   if (isSupportedMainChatModelForTab(profile.tabId, strategyModel)) return;
 
-  throw new Error(`qqbot reply structured output requires a supported main chat model, got ${model || 'unknown'}.`);
+  throw new Error(`qqbot reply structured output requires a supported main chat model, got ${strategyModel || 'unknown'}.`);
 }
 
 export function applyReplyStructuredOutputRequest(
@@ -895,14 +897,15 @@ export function applyReplyStructuredOutputRequest(
     replyMode?: 'agent' | 'automation';
     includeFinalResponseInstruction?: boolean;
     capabilitySnapshot?: Pick<NonNullable<TurnContext['capabilitySnapshot']>, 'canMention' | 'canVoice' | 'canSticker'> | null;
+    structuredOutputSpec?: MainChatStructuredOutputSpec;
   } = {},
-): void {
-  if (!inputMessage) return;
+): MainChatStructuredOutputSpec | null {
+  if (!inputMessage) return null;
 
-  const profile = resolveMainChatRuntimeProfileFromEnv(process.env);
-  const structuredOutputSpec = buildStructuredReplyRequestSpec({
+  const profile = mainChatRuntimeState.getProfile();
+  const structuredOutputSpec = options.structuredOutputSpec ?? buildStructuredReplyRequestSpec({
     profile,
-    model: typeof room?.model === 'string' ? room.model.trim() : profile.defaultModel,
+    model: profile.canonicalModel,
     canMention: options.capabilitySnapshot?.canMention !== false,
     canVoice: options.capabilitySnapshot?.canVoice !== false,
     canMeme: options.capabilitySnapshot?.canSticker === true,
@@ -914,12 +917,14 @@ export function applyReplyStructuredOutputRequest(
   inputMessage.additional_kwargs = {
     ...(inputMessage.additional_kwargs ?? {}),
     qqbot_reply_mode: replyMode,
-    qqbot_final_response_schema: structuredOutputSpec.finalResponseSchema,
+    qqbot_reply_output_protocol: structuredOutputSpec.structuredOutputProtocol,
+    ...(structuredOutputSpec.finalResponseSchema ? { qqbot_final_response_schema: structuredOutputSpec.finalResponseSchema } : {}),
     ...(includeFinalResponseInstruction && structuredOutputSpec.finalResponseInstruction
       ? { qqbot_final_response_instruction: structuredOutputSpec.finalResponseInstruction }
       : {}),
     ...(overrideRequestParams ? { overrideRequestParams } : {}),
   };
+  return structuredOutputSpec;
 }
 
 export function mergeReplyOverrideRequestParams(
@@ -1085,6 +1090,7 @@ function injectReplyPromptEnvelope(args: {
   chatluna: ChatLunaLike;
   conversationId: string;
   turnContext: Pick<TurnContext, 'input' | 'policySnapshot' | 'capabilitySnapshot' | 'continuationContext'>;
+  outputProtocol?: ReplyCompilerOutputProtocol;
 }): PromptEnvelopeMessage[] {
   const contextManager = args.chatluna.contextManager;
   if (!contextManager) {
@@ -1092,7 +1098,9 @@ function injectReplyPromptEnvelope(args: {
   }
 
   const workingContext = peekPromptFragments(args.conversationId);
-  const envelope = compileReplyPromptEnvelope(buildReplyPromptCompilerInput(args.turnContext, workingContext));
+  const envelope = compileReplyPromptEnvelope(buildReplyPromptCompilerInput(args.turnContext, workingContext, {
+    outputProtocol: args.outputProtocol,
+  }));
   clearPromptAssemblyTurn(args.conversationId);
   if (!envelope?.messages.length) return [];
 
@@ -1903,6 +1911,13 @@ export function apply(ctx: Context, config: Config = {}): void {
           canVoice: turnCapabilitySnapshot?.canVoice ?? false,
           canSticker: turnCapabilitySnapshot?.canSticker ?? false,
         };
+        const outputSpec = buildStructuredReplyRequestSpec({
+          profile: mainChatRuntimeState.getProfile(),
+          model: mainChatRuntimeState.getProfile().canonicalModel,
+          canMention: schemaCapabilitySnapshot.canMention,
+          canVoice: schemaCapabilitySnapshot.canVoice,
+          canMeme: schemaCapabilitySnapshot.canSticker,
+        });
         injectReplyPromptEnvelope({
           chatluna: chatlunaService,
           conversationId,
@@ -1915,9 +1930,11 @@ export function apply(ctx: Context, config: Config = {}): void {
             capabilitySnapshot: turnCapabilitySnapshot,
             continuationContext: null,
           },
+          outputProtocol: outputSpec.structuredOutputProtocol,
         });
         applyReplyStructuredOutputRequest(room, context.options?.inputMessage, {
           capabilitySnapshot: schemaCapabilitySnapshot,
+          structuredOutputSpec: outputSpec,
         });
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       }) as ChatLunaChainBuilderLike;
@@ -2006,10 +2023,15 @@ export function apply(ctx: Context, config: Config = {}): void {
             }));
           rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
           const turnCapabilitySnapshot = buildTurnCapabilitySnapshot(session, snapshot);
+          const outputProtocol =
+            context.options?.inputMessage?.additional_kwargs?.qqbot_reply_output_protocol === 'chat_reply_v1'
+              ? 'chat_reply_v1'
+              : mainChatRuntimeState.getProfile().structuredOutputProtocol;
           let orchestration;
           try {
             orchestration = await replyOrchestrator.handle(turnInput, session, {
               responseMessage,
+              outputProtocol,
               promptFragments: [],
               capabilitySnapshot: turnCapabilitySnapshot,
               continuationContext: null,
@@ -2021,7 +2043,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             }
             const diagnostic = error.diagnostic;
             logger.error(
-              'reply plan executor suppressed structured model failure: runId=%s roomId=%s conversationId=%s messageId=%s queueKey=%s actorKey=%s failureKind=%s requestMode=%s providerOutputTokens=%s toolCallCount=%s toolCallChunkCount=%s functionCallPresent=%s rawOutputKind=%s rawTextLength=%s',
+              'reply plan executor suppressed structured model failure: runId=%s roomId=%s conversationId=%s messageId=%s queueKey=%s actorKey=%s failureKind=%s requestMode=%s providerOutputTokens=%s toolCallCount=%s toolCallChunkCount=%s functionCallPresent=%s rawOutputKind=%s rawTextLength=%s outputProtocol=%s protocolErrorCode=%s protocolErrorLine=%s rawTextPreview=%j',
               runId,
               String(room?.roomId ?? '<unknown>'),
               conversationId ?? '<unknown>',
@@ -2036,6 +2058,10 @@ export function apply(ctx: Context, config: Config = {}): void {
               diagnostic.functionCallPresent ? 'true' : 'false',
               diagnostic.rawOutputKind,
               String(diagnostic.rawTextLength),
+              diagnostic.outputProtocol,
+              diagnostic.protocolErrorCode ?? '<none>',
+              diagnostic.protocolErrorLine == null ? '<none>' : String(diagnostic.protocolErrorLine),
+              diagnostic.rawTextPreview,
             );
             if (context.options) {
               context.options.responseMessage = null;

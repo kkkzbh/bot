@@ -76,7 +76,7 @@ export type StructuredReplyMessage =
 
 export interface StructuredReply {
   decision: 'reply' | 'no_reply';
-  outbound_messages?: StructuredReplyMessage[];
+  outbound_messages: StructuredReplyMessage[] | null;
 }
 
 export type ResolvedAction =
@@ -190,12 +190,13 @@ export function normalizeStructuredReply(raw: unknown): StructuredReply | null {
   if (parsed.data.decision === 'no_reply') {
     return {
       decision: 'no_reply',
+      outbound_messages: null,
     };
   }
 
   return {
     decision: 'reply',
-    outbound_messages: parsed.data.outbound_messages?.map((message) =>
+    outbound_messages: (parsed.data.outbound_messages ?? []).map((message) =>
       message.type === 'message'
         ? (() => {
             const explicitMentions = message.mentions ? normalizeMentionIds(message.mentions) : [];

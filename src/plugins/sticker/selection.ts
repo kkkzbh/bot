@@ -325,13 +325,13 @@ export function buildStickerCapabilityPolicy(args: {
   if (!available.length) return null;
 
   return [
-    '如果要发表情包，就在最终 structured reply 的 messages 里加入一个或多个 meme 消息。',
-    '格式：{"modality":"meme","content":"自然语言意图"}',
+    '如果要发表情包，就在最终 structured reply 的 outbound_messages 里加入一个或多个 meme 消息。',
+    '格式：{"type":"meme","content":"自然语言意图"}',
     'meme.content 不是标签名、文件名或素材 id，而是一句自然语言意图，例如“冷淡拒绝，被追问私事”或“聊到音乐时的得意感”。',
-    'meme 可以和 text / voice 混排；多个 meme 会按顺序一张张发送。',
-    '单张示例：{"decision":"reply","messages":[{"modality":"meme","content":"无语地看对方一眼"}]}',
-    '文本混排示例：{"decision":"reply","messages":[{"modality":"text","content":"……随你"},{"modality":"meme","content":"冷淡拒绝，被追问私事"}]}',
-    '多张示例：{"decision":"reply","messages":[{"modality":"meme","content":"无语地看对方一眼"},{"modality":"meme","content":"生气地噘嘴表达不满"}]}',
+    'meme 可以和 message / voice 混排；多个 meme 会按顺序一张张发送。',
+    '单张示例：{"decision":"reply","outbound_messages":[{"type":"meme","content":"无语地看对方一眼"}]}',
+    '文本混排示例：{"decision":"reply","outbound_messages":[{"type":"message","content":"……随你"},{"type":"meme","content":"冷淡拒绝，被追问私事"}]}',
+    '多张示例：{"decision":"reply","outbound_messages":[{"type":"meme","content":"无语地看对方一眼"},{"type":"meme","content":"生气地噘嘴表达不满"}]}',
   ].join('\n');
 }
 

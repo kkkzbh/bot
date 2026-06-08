@@ -10,6 +10,10 @@ import type {
   ClearConversationHistoryResponse,
   ConversationTarget,
   DeleteConversationRoomResponse,
+  DeepSeekModelListRequest,
+  DeepSeekModelListResponse,
+  MimoModelListRequest,
+  MimoModelListResponse,
   FeatureOverrideInput,
   FeatureScopeKind,
   GetMemoryStateResponse,
@@ -30,6 +34,7 @@ import type {
   CopilotAuthPollResponse,
   CopilotAuthStartResponse,
   CopilotAuthStatusResponse,
+  CopilotModelListResponse,
   ScopedFeatureKey,
   ToolCatalogEntry,
   ToolPolicyOverrideInput,
@@ -50,10 +55,20 @@ import {
   TOOL_ROUTE_PROFILES,
 } from './toolPolicy'
 import {
+  BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA as SHARED_BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA,
   COPILOT_MODEL_OPTIONS as SHARED_COPILOT_MODEL_OPTIONS,
+  DEEPSEEK_DEFAULT_BASE_URL as SHARED_DEEPSEEK_DEFAULT_BASE_URL,
+  DEEPSEEK_DEFAULT_MODEL as SHARED_DEEPSEEK_DEFAULT_MODEL,
+  DEEPSEEK_OFFICIAL_MODEL_OPTIONS as SHARED_DEEPSEEK_MODEL_OPTIONS,
+  MIMO_CHAT_MODEL_OPTIONS as SHARED_MIMO_MODEL_OPTIONS,
+  MIMO_DEFAULT_BASE_URL as SHARED_MIMO_DEFAULT_BASE_URL,
+  MIMO_DEFAULT_MODEL as SHARED_MIMO_DEFAULT_MODEL,
+  formatDeepSeekModelOptionLabel as formatSharedDeepSeekModelOptionLabel,
   formatCopilotModelOptionLabel as formatSharedCopilotModelOptionLabel,
   getCopilotModelOption,
+  validateMainChatTabModel as sharedValidateMainChatTabModel,
 } from '../../../shared/llm/main-chat-tabs'
+import type { BuiltinTabUiSchema, MainChatModelValidationResult } from '../../../shared/llm/main-chat-tabs'
 
 // ─── Env key groups ───────────────────────────────────────────────────────────
 
@@ -81,23 +96,28 @@ export const FILE_SYSTEM_CONTROL_KEYS = [
 export const PRIVATE_DEFAULT_SCOPE_ID = 'private-default'
 export const PRIVATE_UNSUPPORTED_FEATURE_KEYS = ['CHAT_NATURAL_TRIGGER_ENABLED', 'QQBOT_REALTIME_MESSAGE_ENABLED'] as const
 
-export const MODEL_SHARED_KEYS = [
-  'OPENAI_BASE_URL',
-  'OPENAI_API_KEY',
-  'OPENAI_MODEL',
-  'CHATLUNA_DEFAULT_PRESET',
-  'CHATLUNA_MAX_CONTEXT_RATIO',
-] as const
+export const PRESET_SCOPE_KEYS = ['CHATLUNA_DEFAULT_PRESET'] as const
 
-export const MODEL_TAB_IDS = ['siliconflow', 'openai', 'copilot'] as const satisfies readonly BotConsoleModelTabId[]
+export const MODEL_TAB_IDS = ['siliconflow', 'openai', 'copilot', 'deepseek', 'mimo'] as const satisfies readonly BotConsoleModelTabId[]
 export const SILICONFLOW_FIXED_BASE_URL = 'https://api.siliconflow.cn/v1'
 export const SILICONFLOW_FIXED_MODEL = 'Pro/moonshotai/Kimi-K2.5'
+export const DEEPSEEK_DEFAULT_BASE_URL = SHARED_DEEPSEEK_DEFAULT_BASE_URL
+export const DEEPSEEK_DEFAULT_MODEL = SHARED_DEEPSEEK_DEFAULT_MODEL
+export const MIMO_DEFAULT_BASE_URL = SHARED_MIMO_DEFAULT_BASE_URL
+export const MIMO_DEFAULT_MODEL = SHARED_MIMO_DEFAULT_MODEL
 export const COPILOT_MODEL_OPTIONS = SHARED_COPILOT_MODEL_OPTIONS
+export const DEEPSEEK_MODEL_OPTIONS = SHARED_DEEPSEEK_MODEL_OPTIONS
+export const MIMO_MODEL_OPTIONS = SHARED_MIMO_MODEL_OPTIONS
+export const BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA = SHARED_BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA
 export const formatCopilotModelOptionLabel = formatSharedCopilotModelOptionLabel
+export const formatDeepSeekModelOptionLabel = formatSharedDeepSeekModelOptionLabel
+export const validateMainChatTabModel = sharedValidateMainChatTabModel
+export type { BuiltinTabUiSchema, MainChatModelValidationResult }
 
 export const BASIC_KEYS = [
   'CHAT_NATURAL_TRIGGER_ALIASES',
   'CHATLUNA_COMMAND_AUTHORITY',
+  'CHATLUNA_MAX_CONTEXT_RATIO',
 ] as const
 
 export const ALL_ENV_KEYS = [
@@ -105,7 +125,7 @@ export const ALL_ENV_KEYS = [
   ...FEATURE_TEXT_KEYS,
   ...FEATURE_NUMBER_KEYS,
   ...FILE_SYSTEM_CONTROL_KEYS,
-  ...MODEL_SHARED_KEYS,
+  ...PRESET_SCOPE_KEYS,
   ...BASIC_KEYS,
 ] as const
 const BOT_RUNTIME_UNIT = 'qqbot-koishi.service'
@@ -153,7 +173,7 @@ function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltin
       provider: 'siliconflow',
       strategyId: 'siliconflow-kimi-main-chat',
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'chat_completions_json_schema',
+      structuredOutputProtocol: 'native_chat_json_schema',
       description: '当前主聊天固定走硅基流动 provider，接口地址锁定为官方 API，默认使用 Kimi-K2.5。',
       modelHint: '当前仅支持 Pro/moonshotai/Kimi-K2.5。',
       authKind: 'manual',
@@ -166,7 +186,7 @@ function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltin
       provider: 'openai',
       strategyId: 'openai-gpt54-main-chat',
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'chat_completions_json_schema',
+      structuredOutputProtocol: 'native_chat_json_schema',
       description: '当前按 OpenAI 兼容 provider 处理，默认预填 wyzai + gpt-5.4-medium-thinking，并走 chat/completions 结构化输出。',
       modelHint: '推荐填写 openai/gpt-5.4-medium-thinking。当前 OpenAI Tab 默认接入 wyzai。',
       authKind: 'manual',
@@ -179,13 +199,39 @@ function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltin
       provider: 'openai',
       strategyId: 'copilot-github-oauth-main-chat',
       requestMode: copilotDefaultOption?.requestMode ?? 'responses',
-      structuredOutputProtocol: copilotDefaultOption?.structuredOutputProtocol ?? 'responses_text_format',
-      description: `当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 使用 ${copilotDefaultOption ? formatSharedCopilotModelOptionLabel(copilotDefaultOption) : '固定模型目录'}，并按所选模型静态路由到 Responses API 或 chat/completions。`,
+      structuredOutputProtocol: copilotDefaultOption?.structuredOutputProtocol ?? 'native_responses_json_schema',
+      description: `当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 使用 ${copilotDefaultOption ? formatSharedCopilotModelOptionLabel(copilotDefaultOption) : 'OAuth 可用模型'}。`,
       modelHint: copilotDefaultOption
-        ? `当前固定从下拉选择，已选 ${formatSharedCopilotModelOptionLabel(copilotDefaultOption)}。`
-        : '当前固定从下拉选择 Copilot 模型，并按模型静态路由到 responses 或 chat/completions。',
+        ? `当前从 OAuth 可用模型列表选择，默认 ${formatSharedCopilotModelOptionLabel(copilotDefaultOption)}。`
+        : '当前从 OAuth 可用模型列表选择。',
       authKind: 'oauth_device',
       authStatus: 'unauthenticated',
+      accountLabel: null,
+      authError: null,
+    },
+    deepseek: {
+      title: 'DeepSeek',
+      provider: 'deepseek',
+      strategyId: 'deepseek-official-main-chat',
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'native_chat_json_schema',
+      description: '当前按 DeepSeek 官方 OpenAI 兼容接口接入，模型下拉优先从官方 /models 动态拉取，失败时使用官方文档兜底列表。',
+      modelHint: '当前固定从 DeepSeek 官方模型列表选择，发给 provider 的模型 ID 保持官方原始字符串。',
+      authKind: 'manual',
+      authStatus: 'ready',
+      accountLabel: null,
+      authError: null,
+    },
+    mimo: {
+      title: 'MIMO',
+      provider: 'mimo',
+      strategyId: 'mimo-official-main-chat',
+      requestMode: 'chat_completions',
+      structuredOutputProtocol: 'native_chat_json_schema',
+      description: '当前按 Xiaomi MIMO Token Plan 的 OpenAI 兼容 chat/completions 接口接入，聊天模型限定为已验证列表。',
+      modelHint: '仅支持已验证可走 chat/completions 的 MIMO 模型；TTS 模型不会出现在此列表。',
+      authKind: 'manual',
+      authStatus: 'ready',
       accountLabel: null,
       authError: null,
     },
@@ -194,11 +240,17 @@ function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltin
   return {
     id,
     ...tabMeta[id],
-    baseUrl: id === 'siliconflow' ? SILICONFLOW_FIXED_BASE_URL : '',
+    baseUrl: id === 'siliconflow'
+      ? SILICONFLOW_FIXED_BASE_URL
+      : id === 'deepseek'
+        ? DEEPSEEK_DEFAULT_BASE_URL
+        : id === 'mimo'
+          ? MIMO_DEFAULT_BASE_URL
+          : '',
     apiKey: '',
-    defaultModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : '',
-    canonicalModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : '',
-    transportModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : '',
+    defaultModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : id === 'deepseek' ? DEEPSEEK_DEFAULT_MODEL : id === 'mimo' ? MIMO_DEFAULT_MODEL : '',
+    canonicalModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : id === 'deepseek' ? `deepseek/${DEEPSEEK_DEFAULT_MODEL}` : id === 'mimo' ? `mimo/${MIMO_DEFAULT_MODEL}` : '',
+    transportModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : id === 'deepseek' ? DEEPSEEK_DEFAULT_MODEL : id === 'mimo' ? MIMO_DEFAULT_MODEL : '',
   }
 }
 
@@ -390,11 +442,13 @@ export function useBotConsole() {
   const currentPreset = ref<PresetDocument>(createEmptyPreset())
 
   /** Fixed built-in model tabs for the main ChatLuna chain. */
-  const modelTabsDraft = reactive<Record<BotConsoleModelTabId, BotConsoleBuiltinModelTab>>({
-    siliconflow: createEmptyBuiltinModelTab('siliconflow'),
-    openai: createEmptyBuiltinModelTab('openai'),
-    copilot: createEmptyBuiltinModelTab('copilot'),
-  })
+	  const modelTabsDraft = reactive<Record<BotConsoleModelTabId, BotConsoleBuiltinModelTab>>({
+	    siliconflow: createEmptyBuiltinModelTab('siliconflow'),
+	    openai: createEmptyBuiltinModelTab('openai'),
+	    copilot: createEmptyBuiltinModelTab('copilot'),
+	    deepseek: createEmptyBuiltinModelTab('deepseek'),
+	    mimo: createEmptyBuiltinModelTab('mimo'),
+	  })
 
   /** Active built-in model tab currently being edited. */
   const activeModelTab = ref<BotConsoleModelTabId>('siliconflow')
@@ -456,15 +510,39 @@ export function useBotConsole() {
 
   const canSaveEnv = computed(() => changedKeys.value.size > 0)
 
-  const modelTabsChanged = computed<boolean>(() => {
-    const draftState: BotConsoleModelTabsState = {
-      activeTab: activeModelTab.value,
-      tabs: MODEL_TAB_IDS.map(id => ({ ...modelTabsDraft[id] })),
+  const dirtyModelTabIds = computed<BotConsoleModelTabId[]>(() => {
+    const dirty: BotConsoleModelTabId[] = []
+    const originalById = new Map<BotConsoleModelTabId, BotConsoleBuiltinModelTab>()
+    for (const tab of originalModelTabs.value.tabs) originalById.set(tab.id, tab)
+    for (const id of MODEL_TAB_IDS) {
+      const draft = modelTabsDraft[id]
+      const original = originalById.get(id)
+      if (!original) {
+        dirty.push(id)
+        continue
+      }
+      if (
+        draft.baseUrl !== original.baseUrl ||
+        draft.apiKey !== original.apiKey ||
+        draft.defaultModel !== original.defaultModel
+      ) {
+        dirty.push(id)
+      }
     }
-    return serializeModelTabsState(draftState) !== serializeModelTabsState(originalModelTabs.value)
+    return dirty
   })
 
-  const canSaveModelSettings = computed(() => changedKeys.value.size > 0 || modelTabsChanged.value)
+  const modelTabsChanged = computed<boolean>(() => {
+    if (activeModelTab.value !== originalModelTabs.value.activeTab) return true
+    return dirtyModelTabIds.value.length > 0
+  })
+
+  const currentModelValidation = computed<MainChatModelValidationResult>(() => {
+    const draft = modelTabsDraft[activeModelTab.value]
+    return validateMainChatTabModel(activeModelTab.value, draft.defaultModel)
+  })
+
+  const canSaveModelSettings = computed(() => modelTabsChanged.value && currentModelValidation.value.ok)
 
   const changedFeatureOverrideKeys = computed<Set<string>>(() => {
     const keys = new Set<string>()
@@ -741,6 +819,7 @@ export function useBotConsole() {
         title: modelTabsDraft[id].title,
         provider: modelTabsDraft[id].provider,
       })),
+      dirtyTabIds: [...dirtyModelTabIds.value],
     }
 
     const result = await send<SaveModelTabsResponse>('bot-console/save-model-tabs', payload)
@@ -770,18 +849,31 @@ export function useBotConsole() {
     return result
   }
 
-  async function saveModelSettings(restartAfter = false): Promise<void> {
-    if (changedKeys.value.size > 0) {
-      await saveEnvPatch(MODEL_SHARED_KEYS, false)
-    }
+  async function saveModelSettings(restartAfter = false): Promise<SaveModelTabsResponse | undefined> {
+    // Single source of truth: model tabs only. Auxiliary fields (preset, context ratio) live on
+    // their own panels now and are saved through saveEnv there.
+    let result: SaveModelTabsResponse | undefined
     if (modelTabsChanged.value) {
-      await saveModelTabs(false)
+      result = await saveModelTabs(false)
     }
     if (restartAfter) await restartBot()
+    return result
   }
 
   function selectModelTab(id: BotConsoleModelTabId): void {
     activeModelTab.value = id
+  }
+
+  async function listDeepSeekModels(request: DeepSeekModelListRequest): Promise<DeepSeekModelListResponse> {
+    return send<DeepSeekModelListResponse>('bot-console/list-deepseek-models', request)
+  }
+
+  async function listCopilotModels(): Promise<CopilotModelListResponse> {
+    return send<CopilotModelListResponse>('bot-console/list-copilot-models')
+  }
+
+  async function listMimoModels(request: MimoModelListRequest): Promise<MimoModelListResponse> {
+    return send<MimoModelListResponse>('bot-console/list-mimo-models', request)
   }
 
   async function refreshCopilotAuthStatus(): Promise<CopilotAuthStatusResponse> {
@@ -1206,6 +1298,8 @@ export function useBotConsole() {
     changedKeys,
     canSaveEnv,
     modelTabsChanged,
+    dirtyModelTabIds,
+    currentModelValidation,
     canSaveModelSettings,
     changedFeatureOverrideKeys,
     canSaveFeatureOverrides,
@@ -1236,6 +1330,9 @@ export function useBotConsole() {
     pollCopilotAuth,
     cancelCopilotAuth,
     logoutCopilotAuth,
+    listCopilotModels,
+    listDeepSeekModels,
+    listMimoModels,
     saveFeatureOverrides,
     saveFeatureSettings,
     getToolOverrideMode,

@@ -7,24 +7,16 @@ import {
   resolveUserTurnIntentState,
 } from '../reply/index.js';
 import {
-  inferPlatformFromBaseUrl,
-  isSupportedMainChatModelForTab,
-  normalizeRawModelName,
-  resolveMainChatModelDescriptor,
-  resolveMainChatRuntimeProfileFromEnv,
   resolvePlatform,
 } from '../shared/llm/index.js';
 import { beginPromptAssemblyTurn, registerPromptFragment } from '../shared/prompt-context/index.js';
 import { resolveSessionDisplayName } from '../shared/session/index.js';
 import { getNaturalTriggerState } from '../triggers/group-natural/index.js';
+import { syncRoomModelToMainChatRuntime } from './hot-switch.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
   checkConversationRoomAvailability: (ctx: Context, room: unknown) => Promise<boolean>;
-  fixConversationRoomAvailability: (ctx: Context, config: unknown, room: unknown) => Promise<boolean>;
-};
-const ChatLunaPlatformTypes = require('koishi-plugin-chatluna/llm-core/platform/types') as {
-  ModelType?: { llm?: number };
 };
 
 export const name = 'chatluna-model-guard';
@@ -39,9 +31,7 @@ type ChainHookBuilder = {
 
 type ChatLunaLike = {
   awaitLoadPlatform?: (platform: string, timeout?: number) => Promise<void>;
-  platform?: {
-    listAllModels?: (type: number) => { value?: Array<{ toModelName?: () => string; platform?: string; name?: string }> };
-  };
+  clearCache?: (room: RoomLike) => Promise<unknown>;
   chatChain?: {
     middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => ChainHookBuilder;
   };
@@ -70,40 +60,6 @@ type MiddlewareContextLike = {
 };
 
 const logger = new Logger(name);
-const LLM_MODEL_TYPE = ChatLunaPlatformTypes.ModelType?.llm ?? 1;
-
-function listAllLlmModels(chatluna: ChatLunaLike): string[] {
-  try {
-    const models = chatluna.platform?.listAllModels?.(LLM_MODEL_TYPE).value ?? [];
-    return models
-      .map((model) => {
-        if (typeof model.toModelName === 'function') return model.toModelName().trim();
-        if (model.platform && model.name) return `${model.platform}/${model.name}`.trim();
-        return '';
-      })
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-function resolveDefaultModelForGuard(): string | null {
-  const profile = resolveMainChatRuntimeProfileFromEnv(process.env);
-  return profile.defaultModel || process.env.OPENAI_MODEL?.trim() || null;
-}
-
-function resolvePreferredPlatformForGuard(defaultModel: string | null): string | null {
-  const profile = resolveMainChatRuntimeProfileFromEnv(process.env);
-  return (
-    profile.provider ??
-    trimOptionalText(process.env.CHATLUNA_PLATFORM) ??
-    resolvePlatform(defaultModel ?? undefined) ??
-    inferPlatformFromBaseUrl(profile.baseUrl) ??
-    inferPlatformFromBaseUrl(process.env.CHATLUNA_BASE_URL) ??
-    inferPlatformFromBaseUrl(process.env.OPENAI_BASE_URL) ??
-    null
-  );
-}
 
 function trimOptionalText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -192,90 +148,38 @@ export function apply(ctx: Context, config: Config = {}): void {
           const room = context.options?.room;
           if (!room) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
 
-          const profile = resolveMainChatRuntimeProfileFromEnv(process.env);
-          const originalRoomModel = trimOptionalText(room.model);
-          const defaultModel = profile.defaultModel || resolveDefaultModelForGuard();
-          const preferredPlatform = resolvePreferredPlatformForGuard(defaultModel);
-          const normalizedModelInput = normalizeRawModelName(room.model, {
-            availableModels: listAllLlmModels(chatluna),
-            preferredPlatform,
-            defaultModel,
+          const syncResult = await syncRoomModelToMainChatRuntime({
+            room,
+            clearCache: chatluna.clearCache?.bind(chatluna),
+            upsertRoom: (nextRoom) => (
+              ctx.database as unknown as { upsert: (table: string, rows: unknown[]) => Promise<unknown> }
+            ).upsert('chathub_room', [nextRoom]),
           });
-          const normalizedDescriptor = resolveMainChatModelDescriptor({
-            tabId: profile.tabId,
-            model: normalizedModelInput ?? defaultModel,
-          });
-          let shouldPersistRoom = false;
-          if (
-            normalizedDescriptor.canonicalModel !== room.model?.trim()
-          ) {
-            room.model = normalizedDescriptor.canonicalModel;
-            shouldPersistRoom = true;
+          if (syncResult.changed) {
             logger.info(
-              'normalized room model for guard (roomId=%s, model=%s, strategy=%s, requestMode=%s).',
+              'hot-switched room model for guard (roomId=%s, model=%s, generation=%s, strategy=%s, requestMode=%s).',
               String(room.roomId ?? ''),
-              normalizedDescriptor.canonicalModel,
-              normalizedDescriptor.strategyId,
-              normalizedDescriptor.requestMode,
+              syncResult.canonicalModel,
+              String(syncResult.generation),
+              syncResult.strategyId,
+              syncResult.requestMode,
             );
           }
-          const effectiveModel = trimOptionalText(room.model);
-          if (
-            effectiveModel &&
-            defaultModel &&
-            !isSupportedMainChatModelForTab(profile.tabId, effectiveModel)
-          ) {
-            const fallbackDescriptor = resolveMainChatModelDescriptor({
-              tabId: profile.tabId,
-              model: defaultModel,
-            });
-            room.model = fallbackDescriptor.canonicalModel;
-            shouldPersistRoom = true;
-            logger.warn(
-              'room model is unsupported for qqbot main chat (roomId=%s, model=%s), fallback to %s.',
-              String(room.roomId ?? ''),
-              effectiveModel,
-              fallbackDescriptor.canonicalModel,
-            );
-          }
-          const effectiveDescriptor = resolveMainChatModelDescriptor({
-            tabId: profile.tabId,
-            model: trimOptionalText(room.model) ?? defaultModel,
-          });
           logger.info(
             '%s',
             formatStructuredLogBlock('reply-plan-debug', {
               stage: 'model_guard_effective_model',
               roomId: room.roomId ?? null,
               conversationId: trimOptionalText(room.conversationId) ?? null,
-              originalRoomModel,
-              effectiveModel: effectiveDescriptor.canonicalModel,
-              effectiveTransportModel: effectiveDescriptor.transportModel,
-              effectiveStrategyId: effectiveDescriptor.strategyId,
-              effectiveRequestMode: effectiveDescriptor.requestMode,
+              originalRoomModel: syncResult.originalModel,
+              effectiveModel: syncResult.canonicalModel,
+              effectiveTransportModel: syncResult.transportModel,
+              effectiveStrategyId: syncResult.strategyId,
+              effectiveRequestMode: syncResult.requestMode,
+              effectiveOutputProtocol: syncResult.outputProtocol,
               preset: trimOptionalText(room.preset) ?? null,
             }),
           );
-          if (shouldPersistRoom) {
-            await (
-              ctx.database as unknown as { upsert: (table: string, rows: unknown[]) => Promise<unknown> }
-            ).upsert('chathub_room', [room]);
-          }
-          if (trimOptionalText(room.model) === 'deepseek/deepseek-chat') {
-            logger.warn(
-              '%s',
-              formatStructuredLogBlock('reply-plan-debug', {
-                stage: 'model_guard_model_compatibility_risk',
-                roomId: room.roomId ?? null,
-                conversationId: trimOptionalText(room.conversationId) ?? null,
-                effectiveModel: trimOptionalText(room.model),
-                providerBaseUrl:
-                  trimOptionalText(process.env.CHATLUNA_BASE_URL) ??
-                  trimOptionalText(process.env.OPENAI_BASE_URL) ??
-                  null,
-              }),
-            );
-          }
           if (!room.model) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
 
           const platform = resolvePlatform(room.model);
@@ -304,34 +208,16 @@ export function apply(ctx: Context, config: Config = {}): void {
           }
 
           if (!available) {
-            let fixed = false;
-            try {
-              fixed = await ChatLunaChains.fixConversationRoomAvailability(
-                ctx,
-                context.config as never,
-                room as never,
-              );
-            } catch (error) {
-              logger.warn(
-                'auto-fix unavailable room failed (roomId=%s): %s',
-                String(room.roomId ?? ''),
-                (error as Error).message,
-              );
+            const modelName = trimOptionalText(room.model) ?? 'unknown';
+            logger.warn(
+              'current main chat model is unavailable (roomId=%s, model=%s).',
+              String(room.roomId ?? ''),
+              modelName,
+            );
+            if (context.send) {
+              await context.send(`当前主聊天模型不可用：${modelName}`);
             }
-
-            if (fixed) {
-              logger.info(
-                'auto-fixed unavailable room model (roomId=%s, model=%s).',
-                String(room.roomId ?? ''),
-                String(room.model ?? ''),
-              );
-            } else {
-              logger.warn(
-                'room still unavailable after model guard fix (roomId=%s, model=%s), continue to builtin resolver.',
-                String(room.roomId ?? ''),
-                String(room.model ?? ''),
-              );
-            }
+            return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
           }
         } catch (error) {
           logger.warn('model guard middleware failed: %s', (error as Error).message);

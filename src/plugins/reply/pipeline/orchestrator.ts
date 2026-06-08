@@ -1,6 +1,6 @@
 import type { Session } from 'koishi';
 import type { PromptFragment } from '../../shared/prompt-context/types.js';
-import { StructuredReplyCompilerService } from './compiler.js';
+import { StructuredReplyCompilerService, type ReplyCompilerOutputProtocol } from './compiler.js';
 import { buildReplyTurnContext } from './context-builder.js';
 import { ActionResolverService } from './resolver.js';
 import type {
@@ -20,6 +20,7 @@ export interface ReplyOrchestratorHandleContext {
   capabilitySnapshot?: TurnContext['capabilitySnapshot'];
   continuationContext?: TurnContext['continuationContext'];
   routeHint?: ReplyRoute | null;
+  outputProtocol?: ReplyCompilerOutputProtocol;
 }
 
 export type ReplyOrchestratorHandleResult =
@@ -80,7 +81,9 @@ export class ReplyOrchestratorService {
       };
     }
 
-    const compiler = new StructuredReplyCompilerService(context.responseMessage);
+    const compiler = new StructuredReplyCompilerService(context.responseMessage, {
+      outputProtocol: context.outputProtocol,
+    });
     const reply = compiler.compile();
     const actions = this.actionResolver.resolve(reply, turnContext);
     return {

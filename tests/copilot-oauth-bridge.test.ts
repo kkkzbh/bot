@@ -87,6 +87,25 @@ describe('copilot oauth bridge helpers', () => {
     );
   });
 
+  it('does not synthesize a hardcoded models response when OAuth is unavailable', async () => {
+    const dir = createTempDir();
+    const service = new CopilotOAuthBridgeService({
+      rootDir: dir,
+      envFiles: {
+        mode: 'single',
+        baseFilePath: join(dir, '.env.local'),
+        overrideFilePath: null,
+        editTarget: join(dir, '.env.local'),
+      },
+    });
+
+    const result = await service.proxyModels();
+
+    expect(result.status).toBe(401);
+    expect(result.body).toContain('GitHub Copilot 尚未完成 OAuth 登录');
+    expect(result.body).not.toContain('gpt-5.4-mini');
+  });
+
   it('proxies chat completions through the Copilot bridge and normalizes model ids', async () => {
     const dir = createTempDir();
     const service = new CopilotOAuthBridgeService({

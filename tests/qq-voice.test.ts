@@ -158,6 +158,8 @@ vi.mock('../src/plugins/shared/prompt-context/index.js', async () => {
 import { sendVoiceByBridge } from '../src/plugins/bot-console/voice-bridge.js';
 import { apply, ensureCanSendRecord, inject } from '../src/plugins/reply/index.js';
 import { ReplyRuntime } from '../src/plugins/reply/runtime/index.js';
+import { resolveMainChatRuntimeProfileFromEnv } from '../src/plugins/shared/llm/index.js';
+import { mainChatRuntimeState } from '../src/plugins/shared/llm/main-chat-runtime.js';
 
 type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
 type EventHandler = (...args: any[]) => Promise<unknown> | unknown;
@@ -546,11 +548,13 @@ describe('qq voice plugin', () => {
     loggerMocks.warn.mockReset();
     loggerMocks.error.mockReset();
     loggerMocks.debug.mockReset();
+    mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({}));
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({}));
   });
 
   it('declares required services so reply plan middleware can register on the live chat chain', () => {
@@ -2137,9 +2141,21 @@ describe('qq voice plugin', () => {
     ).toBe(true);
   });
 
-  it('rejects plugin rooms whose model does not support structured json schema', async () => {
+  it('rejects plugin rooms when the runtime model does not support structured json schema', async () => {
     const { ready, getPrepare, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+    const unsupportedProfile = resolveMainChatRuntimeProfileFromEnv({
+      CHATLUNA_ACTIVE_TAB: 'openai',
+      CHATLUNA_OPENAI_BASE_URL: 'https://shell.wyzai.top/v1',
+      CHATLUNA_OPENAI_API_KEY: 'sk-openai',
+      CHATLUNA_OPENAI_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+    });
+    mainChatRuntimeState.initialize({
+      ...unsupportedProfile,
+      defaultModel: 'openai/gpt-5.2',
+      canonicalModel: 'openai/gpt-5.2',
+      transportModel: 'gpt-5.2',
+    });
 
     await ready();
     await flushMicrotasks();
@@ -2152,7 +2168,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         room: createPluginRoom('conv-research', {
-          model: 'deepseek/deepseek-chat',
+          model: 'openai/gpt-5.4-medium-thinking',
         }),
         inputMessage: {
           content: '查一下液态玻璃是什么',

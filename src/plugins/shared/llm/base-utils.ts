@@ -18,6 +18,7 @@ export function inferPlatformFromBaseUrl(baseUrl?: string): string | null {
   const value = baseUrl?.trim().toLowerCase();
   if (!value) return null;
   if (value.includes('siliconflow')) return 'siliconflow';
+  if (value.includes('xiaomimimo') || value.includes('mimo')) return 'mimo';
   if (value.includes('wyzai')) return 'openai';
   if (value.includes('deepseek')) return 'deepseek';
   if (value.includes('openai')) return 'openai';

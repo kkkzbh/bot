@@ -1,9 +1,10 @@
 import { buildStructuredReplyJsonSchema } from './structured-reply-schema.js';
 
-export type MainChatBuiltinTabId = 'siliconflow' | 'openai' | 'copilot';
-export type MainChatProvider = 'siliconflow' | 'openai';
+export type MainChatBuiltinTabId = 'siliconflow' | 'openai' | 'copilot' | 'deepseek' | 'mimo';
+export type MainChatProvider = 'siliconflow' | 'openai' | 'deepseek' | 'mimo';
 export type MainChatRequestMode = 'chat_completions' | 'responses';
-export type StructuredOutputProtocol = 'chat_completions_json_schema' | 'responses_text_format';
+export type OutputProtocolId = 'native_chat_json_schema' | 'native_responses_json_schema' | 'chat_reply_v1';
+export type StructuredOutputProtocol = OutputProtocolId;
 export type MainChatAuthKind = 'manual' | 'oauth_device';
 export type MainChatAuthStatus = 'unauthenticated' | 'pending' | 'ready' | 'expired' | 'error';
 
@@ -26,7 +27,7 @@ export interface BuiltinTabDefinition {
 export interface MainChatStructuredOutputSpec {
   requestMode: MainChatRequestMode;
   structuredOutputProtocol: StructuredOutputProtocol;
-  finalResponseSchema: Record<string, unknown>;
+  finalResponseSchema: Record<string, unknown> | null;
   overrideRequestParams: Record<string, unknown> | null;
   finalResponseInstruction?: string;
 }
@@ -41,12 +42,24 @@ export interface CopilotModelOption {
   label: string;
   rateLabel: string;
   requestMode: MainChatRequestMode;
-  structuredOutputProtocol: StructuredOutputProtocol;
+  structuredOutputProtocol: OutputProtocolId;
   deprecated?: boolean;
 }
 
+export interface DeepSeekModelOption {
+  modelId: string;
+  label: string;
+  deprecated?: boolean;
+  deprecationDate?: string;
+}
+
+export interface MimoModelOption {
+  modelId: string;
+  label: string;
+}
+
 export interface MainChatProviderStrategy {
-  id: 'siliconflow-kimi-main-chat' | 'openai-gpt54-main-chat' | 'copilot-github-oauth-main-chat';
+  id: 'siliconflow-kimi-main-chat' | 'openai-gpt54-main-chat' | 'copilot-github-oauth-main-chat' | 'deepseek-official-main-chat' | 'mimo-official-main-chat';
   platform: MainChatProvider;
   supportsModel: (model?: string | null) => boolean;
   buildRequestOverride: (model?: string | null) => Record<string, unknown> | null;
@@ -56,6 +69,19 @@ export interface MainChatProviderStrategy {
   resolveRequestMode: (model?: string | null) => MainChatRequestMode;
   resolveStructuredOutputProtocol: (model?: string | null) => StructuredOutputProtocol;
   describeForConsole: (model?: string | null) => MainChatConsoleDescription;
+}
+
+function buildMainChatStructuredOutputSpec(args: {
+  requestMode: MainChatRequestMode;
+  structuredOutputProtocol: StructuredOutputProtocol;
+  overrideRequestParams: Record<string, unknown> | null;
+}): MainChatStructuredOutputSpec {
+  return {
+    requestMode: args.requestMode,
+    structuredOutputProtocol: args.structuredOutputProtocol,
+    finalResponseSchema: args.structuredOutputProtocol === 'chat_reply_v1' ? null : buildStructuredReplyJsonSchema(),
+    overrideRequestParams: args.overrideRequestParams,
+  };
 }
 
 export interface MainChatModelDescriptor {
@@ -98,42 +124,39 @@ export const SILICONFLOW_DEFAULT_BASE_URL = 'https://api.siliconflow.cn/v1';
 export const SILICONFLOW_DEFAULT_MODEL = 'Pro/moonshotai/Kimi-K2.5';
 export const COPILOT_BRIDGE_DEFAULT_BASE_URL = 'http://127.0.0.1:5140/api/internal/copilot/v1';
 export const COPILOT_DEFAULT_MODEL = 'openai/gpt-5.4-mini';
-export const MAIN_CHAT_BUILTIN_TAB_IDS = ['siliconflow', 'openai', 'copilot'] as const satisfies readonly MainChatBuiltinTabId[];
+export const DEEPSEEK_DEFAULT_BASE_URL = 'https://api.deepseek.com';
+export const DEEPSEEK_DEFAULT_MODEL = 'deepseek-v4-flash';
+export const MIMO_DEFAULT_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
+export const MIMO_DEFAULT_MODEL = 'mimo-v2.5-pro';
+export const MAIN_CHAT_BUILTIN_TAB_IDS = ['siliconflow', 'openai', 'copilot', 'deepseek', 'mimo'] as const satisfies readonly MainChatBuiltinTabId[];
 export const COPILOT_MODEL_OPTIONS = [
-  {
-    modelId: 'gpt-5.4',
-    label: 'GPT-5.4',
-    rateLabel: '1x',
-    requestMode: 'responses',
-    structuredOutputProtocol: 'responses_text_format',
-  },
   {
     modelId: 'gpt-5.4-mini',
     label: 'GPT-5.4 mini',
     rateLabel: '0.33x',
     requestMode: 'responses',
-    structuredOutputProtocol: 'responses_text_format',
+    structuredOutputProtocol: 'native_responses_json_schema',
   },
   {
     modelId: 'gpt-5-mini',
     label: 'GPT-5 mini',
     rateLabel: '0x',
     requestMode: 'chat_completions',
-    structuredOutputProtocol: 'chat_completions_json_schema',
+    structuredOutputProtocol: 'native_chat_json_schema',
   },
   {
     modelId: 'gpt-4.1',
     label: 'GPT-4.1',
     rateLabel: '0x',
     requestMode: 'chat_completions',
-    structuredOutputProtocol: 'chat_completions_json_schema',
+    structuredOutputProtocol: 'native_chat_json_schema',
   },
   {
     modelId: 'gpt-4o',
     label: 'GPT-4o',
     rateLabel: '0x',
     requestMode: 'chat_completions',
-    structuredOutputProtocol: 'chat_completions_json_schema',
+    structuredOutputProtocol: 'native_chat_json_schema',
     deprecated: true,
   },
   {
@@ -141,30 +164,74 @@ export const COPILOT_MODEL_OPTIONS = [
     label: 'Claude Haiku 4.5',
     rateLabel: '0.33x',
     requestMode: 'chat_completions',
-    structuredOutputProtocol: 'chat_completions_json_schema',
+    structuredOutputProtocol: 'chat_reply_v1',
   },
   {
     modelId: 'claude-sonnet-4.5',
     label: 'Claude Sonnet 4.5',
     rateLabel: '1x',
     requestMode: 'chat_completions',
-    structuredOutputProtocol: 'chat_completions_json_schema',
+    structuredOutputProtocol: 'chat_reply_v1',
+  },
+  {
+    modelId: 'claude-opus-4.5',
+    label: 'Claude Opus 4.5',
+    rateLabel: '1x',
+    requestMode: 'chat_completions',
+    structuredOutputProtocol: 'chat_reply_v1',
   },
   {
     modelId: 'gemini-3-flash-preview',
     label: 'Gemini 3 Flash',
     rateLabel: '0.33x',
     requestMode: 'chat_completions',
-    structuredOutputProtocol: 'chat_completions_json_schema',
+    structuredOutputProtocol: 'chat_reply_v1',
   },
   {
     modelId: 'gemini-3.1-pro-preview',
     label: 'Gemini 3.1 Pro',
     rateLabel: '1x',
     requestMode: 'chat_completions',
-    structuredOutputProtocol: 'chat_completions_json_schema',
+    structuredOutputProtocol: 'chat_reply_v1',
+  },
+  {
+    modelId: 'oswe-vscode-prime',
+    label: 'Raptor mini',
+    rateLabel: '1x',
+    requestMode: 'responses',
+    structuredOutputProtocol: 'native_responses_json_schema',
   },
 ] as const satisfies readonly CopilotModelOption[];
+
+export const DEEPSEEK_OFFICIAL_MODEL_OPTIONS = [
+  {
+    modelId: 'deepseek-v4-flash',
+    label: 'deepseek-v4-flash',
+  },
+  {
+    modelId: 'deepseek-v4-pro',
+    label: 'deepseek-v4-pro',
+  },
+  {
+    modelId: 'deepseek-chat',
+    label: 'deepseek-chat',
+    deprecated: true,
+    deprecationDate: '2026-07-24',
+  },
+  {
+    modelId: 'deepseek-reasoner',
+    label: 'deepseek-reasoner',
+    deprecated: true,
+    deprecationDate: '2026-07-24',
+  },
+] as const satisfies readonly DeepSeekModelOption[];
+
+export const MIMO_CHAT_MODEL_OPTIONS = [
+  { modelId: 'mimo-v2.5-pro', label: 'MiMo V2.5 Pro' },
+  { modelId: 'mimo-v2.5', label: 'MiMo V2.5' },
+  { modelId: 'mimo-v2-pro', label: 'MiMo V2 Pro' },
+  { modelId: 'mimo-v2-omni', label: 'MiMo V2 Omni' },
+] as const satisfies readonly MimoModelOption[];
 
 export function formatCopilotModelOptionLabel(option: CopilotModelOption): string {
   return option.deprecated
@@ -175,7 +242,38 @@ export function formatCopilotModelOptionLabel(option: CopilotModelOption): strin
 export function getCopilotModelOption(model?: string | null): CopilotModelOption | null {
   const normalized = normalizeCopilotModelId(model);
   if (!normalized) return null;
-  return COPILOT_MODEL_OPTIONS.find((option) => option.modelId === normalized) ?? null;
+  return copilotDynamicModelOptions.get(normalized) ?? COPILOT_MODEL_OPTIONS.find((option) => option.modelId === normalized) ?? null;
+}
+
+const copilotDynamicModelOptions = new Map<string, CopilotModelOption>();
+
+export function registerCopilotDynamicModelOptions(models: readonly CopilotModelOption[]): void {
+  for (const model of models) {
+    const modelId = normalizeCopilotModelId(model.modelId);
+    if (!modelId) continue;
+    copilotDynamicModelOptions.set(modelId, {
+      ...model,
+      modelId,
+    });
+  }
+}
+
+export function formatDeepSeekModelOptionLabel(option: DeepSeekModelOption): string {
+  return option.deprecated && option.deprecationDate
+    ? `${option.label} (deprecated ${option.deprecationDate})`
+    : option.label;
+}
+
+export function getDeepSeekOfficialModelOption(model?: string | null): DeepSeekModelOption | null {
+  const normalized = normalizeDeepSeekModelId(model);
+  if (!normalized) return null;
+  return DEEPSEEK_OFFICIAL_MODEL_OPTIONS.find((option) => option.modelId === normalized) ?? null;
+}
+
+export function getMimoChatModelOption(model?: string | null): MimoModelOption | null {
+  const normalized = normalizeMimoModelId(model);
+  if (!normalized) return null;
+  return MIMO_CHAT_MODEL_OPTIONS.find((option) => option.modelId === normalized) ?? null;
 }
 
 export const BUILTIN_MAIN_CHAT_TABS: readonly BuiltinTabDefinition[] = [
@@ -218,6 +316,32 @@ export const BUILTIN_MAIN_CHAT_TABS: readonly BuiltinTabDefinition[] = [
     defaultModel: COPILOT_DEFAULT_MODEL,
     strategyId: 'copilot-github-oauth-main-chat',
   },
+  {
+    id: 'deepseek',
+    title: 'DeepSeek',
+    provider: 'deepseek',
+    envKeys: {
+      baseUrl: 'CHATLUNA_DEEPSEEK_BASE_URL',
+      apiKey: 'CHATLUNA_DEEPSEEK_API_KEY',
+      defaultModel: 'CHATLUNA_DEEPSEEK_DEFAULT_MODEL',
+    },
+    defaultBaseUrl: DEEPSEEK_DEFAULT_BASE_URL,
+    defaultModel: DEEPSEEK_DEFAULT_MODEL,
+    strategyId: 'deepseek-official-main-chat',
+  },
+  {
+    id: 'mimo',
+    title: 'MIMO',
+    provider: 'mimo',
+    envKeys: {
+      baseUrl: 'CHATLUNA_MIMO_BASE_URL',
+      apiKey: 'CHATLUNA_MIMO_API_KEY',
+      defaultModel: 'CHATLUNA_MIMO_DEFAULT_MODEL',
+    },
+    defaultBaseUrl: MIMO_DEFAULT_BASE_URL,
+    defaultModel: MIMO_DEFAULT_MODEL,
+    strategyId: 'mimo-official-main-chat',
+  },
 ] as const;
 
 export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] = [
@@ -234,12 +358,11 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       };
     },
     buildStructuredOutputSpec(model) {
-      return {
+      return buildMainChatStructuredOutputSpec({
         requestMode: this.resolveRequestMode(model),
         structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
-        finalResponseSchema: buildStructuredReplyJsonSchema(),
         overrideRequestParams: this.buildRequestOverride(model),
-      };
+      });
     },
     normalizeModel(model) {
       return normalizeSiliconFlowKimiK25ModelId(model);
@@ -251,7 +374,7 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       return 'chat_completions';
     },
     resolveStructuredOutputProtocol() {
-      return 'chat_completions_json_schema';
+      return 'native_chat_json_schema';
     },
     describeForConsole() {
       return {
@@ -278,12 +401,11 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       };
     },
     buildStructuredOutputSpec(model) {
-      return {
+      return buildMainChatStructuredOutputSpec({
         requestMode: this.resolveRequestMode(model),
         structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
-        finalResponseSchema: buildStructuredReplyJsonSchema(),
         overrideRequestParams: this.buildRequestOverride(model),
-      };
+      });
     },
     normalizeModel(model) {
       return normalizeOpenAICanonicalModelId(model);
@@ -295,7 +417,7 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       return 'chat_completions';
     },
     resolveStructuredOutputProtocol() {
-      return 'chat_completions_json_schema';
+      return 'native_chat_json_schema';
     },
     describeForConsole() {
       return {
@@ -309,9 +431,10 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
     platform: 'openai',
     supportsModel: isCopilotModelId,
     buildRequestOverride(model) {
-      if (!isCopilotModelId(model)) return null;
       const canonicalModel = this.normalizeModel(model);
+      if (!canonicalModel) return null;
       const transportModel = this.transportModel(canonicalModel);
+      if (!transportModel) return null;
       const requestMode = this.resolveRequestMode(canonicalModel);
       return {
         ...(requestMode === 'responses' ? { qqbot_request_mode: 'responses' } : {}),
@@ -321,12 +444,11 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       };
     },
     buildStructuredOutputSpec(model) {
-      return {
+      return buildMainChatStructuredOutputSpec({
         requestMode: this.resolveRequestMode(model),
         structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
-        finalResponseSchema: buildStructuredReplyJsonSchema(),
         overrideRequestParams: this.buildRequestOverride(model),
-      };
+      });
     },
     normalizeModel(model) {
       return normalizeCopilotCanonicalModelId(model);
@@ -344,10 +466,96 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       const option = getCopilotModelOption(model);
       const mode = this.resolveRequestMode(model) === 'responses' ? 'Responses API' : 'chat/completions';
       return {
-        description: `当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 使用 ${option ? formatCopilotModelOptionLabel(option) : '固定模型目录'}，并走 ${mode}。`,
+        description: `当前按 GitHub Copilot OAuth 设备登录接入，运行时通过本地 bridge 使用 ${option ? formatCopilotModelOptionLabel(option) : 'OAuth 可用模型'}，并走 ${mode} / ${this.resolveStructuredOutputProtocol(model)}。`,
         modelHint: option
-          ? `当前固定从下拉选择，已选 ${formatCopilotModelOptionLabel(option)}。`
-          : '当前固定从下拉选择 Copilot 模型，并按模型静态路由到 responses 或 chat/completions。',
+          ? `当前从 OAuth 可用模型列表选择，已选 ${formatCopilotModelOptionLabel(option)}。`
+          : '当前从 OAuth 可用模型列表选择；已知模型按路由表走 native 或 CHAT_REPLY_V1，未知模型默认只走文本协议。',
+      };
+    },
+  },
+  {
+    id: 'deepseek-official-main-chat',
+    platform: 'deepseek',
+    supportsModel: isDeepSeekModelId,
+    buildRequestOverride(model) {
+      if (!isDeepSeekModelId(model)) return null;
+      const canonicalModel = this.normalizeModel(model);
+      const transportModel = this.transportModel(canonicalModel);
+      return {
+        qqbot_canonical_model: canonicalModel,
+        qqbot_transport_model: transportModel,
+        qqbot_tool_profile: 'qqbot_openai_main_chat',
+      };
+    },
+    buildStructuredOutputSpec(model) {
+      return buildMainChatStructuredOutputSpec({
+        requestMode: this.resolveRequestMode(model),
+        structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
+        overrideRequestParams: this.buildRequestOverride(model),
+      });
+    },
+    normalizeModel(model) {
+      return normalizeDeepSeekCanonicalModelId(model);
+    },
+    transportModel(model) {
+      return normalizeDeepSeekModelId(model);
+    },
+    resolveRequestMode() {
+      return 'chat_completions';
+    },
+    resolveStructuredOutputProtocol() {
+      return 'native_chat_json_schema';
+    },
+    describeForConsole(model) {
+      const option = getDeepSeekOfficialModelOption(model);
+      return {
+        description: '当前按 DeepSeek 官方 OpenAI 兼容接口接入，模型下拉优先从官方 /models 动态拉取，失败时使用官方文档兜底列表。',
+        modelHint: option
+          ? `当前选择 ${formatDeepSeekModelOptionLabel(option)}。`
+          : '当前固定从 DeepSeek 官方模型列表选择，发给 provider 的模型 ID 保持官方原始字符串。',
+      };
+    },
+  },
+  {
+    id: 'mimo-official-main-chat',
+    platform: 'mimo',
+    supportsModel: isMimoChatModelId,
+    buildRequestOverride(model) {
+      if (!isMimoChatModelId(model)) return null;
+      const canonicalModel = this.normalizeModel(model);
+      const transportModel = this.transportModel(canonicalModel);
+      return {
+        qqbot_canonical_model: canonicalModel,
+        qqbot_transport_model: transportModel,
+        qqbot_tool_profile: 'qqbot_openai_main_chat',
+      };
+    },
+    buildStructuredOutputSpec(model) {
+      return buildMainChatStructuredOutputSpec({
+        requestMode: this.resolveRequestMode(model),
+        structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
+        overrideRequestParams: this.buildRequestOverride(model),
+      });
+    },
+    normalizeModel(model) {
+      return normalizeMimoCanonicalModelId(model);
+    },
+    transportModel(model) {
+      return normalizeMimoModelId(model);
+    },
+    resolveRequestMode() {
+      return 'chat_completions';
+    },
+    resolveStructuredOutputProtocol() {
+      return 'native_chat_json_schema';
+    },
+    describeForConsole(model) {
+      const option = getMimoChatModelOption(model);
+      return {
+        description: '当前按 Xiaomi MIMO Token Plan 的 OpenAI 兼容 chat/completions 接口接入，聊天模型限定为已验证列表。',
+        modelHint: option
+          ? `当前选择 ${option.label}。TTS / VoiceClone / VoiceDesign 模型不会进入主聊天。`
+          : '仅支持已验证可走 chat/completions 的 MIMO 模型；TTS 模型不会出现在此列表。',
       };
     },
   },
@@ -375,7 +583,7 @@ export function getMainChatProviderStrategyForTab(id: MainChatBuiltinTabId): Mai
 
 export function normalizeMainChatBuiltinTabId(value: unknown): MainChatBuiltinTabId {
   const normalized = String(value ?? '').trim();
-  if (normalized === 'siliconflow' || normalized === 'openai' || normalized === 'copilot') {
+  if (normalized === 'siliconflow' || normalized === 'openai' || normalized === 'copilot' || normalized === 'deepseek' || normalized === 'mimo') {
     return normalized;
   }
   throw new Error(`不支持这个模型 Tab：${normalized || 'unknown'}`);
@@ -391,7 +599,7 @@ export function resolveMainChatRuntimeProfileFromEnv(env: Record<string, string>
 
 export function resolveMainChatActiveTabFromEnv(env: Record<string, string> | NodeJS.ProcessEnv): MainChatBuiltinTabId {
   const raw = String(env.CHATLUNA_ACTIVE_TAB ?? '').trim();
-  if (raw === 'openai' || raw === 'copilot') return raw;
+  if (raw === 'openai' || raw === 'copilot' || raw === 'deepseek' || raw === 'mimo') return raw;
   return 'siliconflow';
 }
 
@@ -489,6 +697,8 @@ export function buildMainChatRuntimeEnvPatch(
   const siliconflowTab = requireMainChatTabConfig(tabs, 'siliconflow');
   const openaiTab = requireMainChatTabConfig(tabs, 'openai');
   const copilotTab = requireMainChatTabConfig(tabs, 'copilot');
+  const deepseekTab = requireMainChatTabConfig(tabs, 'deepseek');
+  const mimoTab = requireMainChatTabConfig(tabs, 'mimo');
 
   return {
     CHATLUNA_ACTIVE_TAB: activeTab,
@@ -505,17 +715,23 @@ export function buildMainChatRuntimeEnvPatch(
     CHATLUNA_COPILOT_BASE_URL: copilotTab.baseUrl.trim(),
     CHATLUNA_COPILOT_API_KEY: copilotTab.apiKey.trim(),
     CHATLUNA_COPILOT_DEFAULT_MODEL: (copilotTab.canonicalModel ?? copilotTab.defaultModel).trim(),
+    CHATLUNA_DEEPSEEK_BASE_URL: deepseekTab.baseUrl.trim(),
+    CHATLUNA_DEEPSEEK_API_KEY: deepseekTab.apiKey.trim(),
+    CHATLUNA_DEEPSEEK_DEFAULT_MODEL: (deepseekTab.canonicalModel ?? deepseekTab.defaultModel).trim(),
+    CHATLUNA_MIMO_BASE_URL: mimoTab.baseUrl.trim(),
+    CHATLUNA_MIMO_API_KEY: mimoTab.apiKey.trim(),
+    CHATLUNA_MIMO_DEFAULT_MODEL: (mimoTab.canonicalModel ?? mimoTab.defaultModel).trim(),
   };
 }
 
 export function isSupportedMainChatModelForTab(tabId: MainChatBuiltinTabId, model?: string | null): boolean {
   const strategy = getMainChatProviderStrategyForTab(tabId);
-  const normalized = strategy.normalizeModel(model) ?? model ?? null;
-  return strategy.supportsModel(normalized);
+  return strategy.supportsModel(model);
 }
 
 export function supportsStructuredReplyJsonSchema(model?: string | null): boolean {
-  return MAIN_CHAT_PROVIDER_STRATEGIES.some((strategy) => strategy.supportsModel(model));
+  return MAIN_CHAT_PROVIDER_STRATEGIES.some((strategy) =>
+    strategy.supportsModel(model) && strategy.resolveStructuredOutputProtocol(model) !== 'chat_reply_v1');
 }
 
 export function buildStructuredReplyModelOverride(model?: string | null): Record<string, unknown> | null {
@@ -542,11 +758,13 @@ export function buildStructuredReplyRequestSpec(args: {
   const baseSpec = strategy.buildStructuredOutputSpec(model);
   return {
     ...baseSpec,
-    finalResponseSchema: buildStructuredReplyJsonSchema({
-      canMention: args.canMention,
-      canVoice: args.canVoice,
-      canMeme: args.canMeme,
-    }),
+    finalResponseSchema: baseSpec.structuredOutputProtocol === 'chat_reply_v1'
+      ? null
+      : buildStructuredReplyJsonSchema({
+        canMention: args.canMention,
+        canVoice: args.canVoice,
+        canMeme: args.canMeme,
+      }),
   };
 }
 
@@ -559,9 +777,7 @@ function requireMainChatTabConfig<T extends Pick<MainChatBuiltinTabState, 'id'>>
 }
 
 function resolveMainChatProviderStrategyForModel(model?: string | null): MainChatProviderStrategy | null {
-  const found = MAIN_CHAT_PROVIDER_STRATEGIES.find((strategy) =>
-    strategy.supportsModel(strategy.normalizeModel(model) ?? model ?? null),
-  );
+  const found = MAIN_CHAT_PROVIDER_STRATEGIES.find((strategy) => strategy.supportsModel(model));
   return found ?? null;
 }
 
@@ -598,7 +814,7 @@ function normalizeOpenAICanonicalModelId(model?: string | null): string | null {
   return `openai/${value}`;
 }
 
-function normalizeCopilotModelId(model?: string | null): string | null {
+export function normalizeCopilotModelId(model?: string | null): string | null {
   const value = model?.trim();
   if (!value) return null;
   if (value.startsWith('openai/')) {
@@ -617,6 +833,48 @@ function normalizeCopilotCanonicalModelId(model?: string | null): string | null 
   return `openai/${normalized}`;
 }
 
+export function normalizeDeepSeekModelId(model?: string | null): string | null {
+  const value = model?.trim();
+  if (!value) return null;
+  if (value.startsWith('deepseek/')) {
+    return value.slice('deepseek/'.length).trim() || null;
+  }
+  return value.includes('/') ? null : value;
+}
+
+export function normalizeMimoModelId(model?: string | null): string | null {
+  const value = model?.trim();
+  if (!value) return null;
+  if (value.startsWith('mimo/')) {
+    return value.slice('mimo/'.length).trim() || null;
+  }
+  return value.includes('/') ? null : value;
+}
+
+function normalizeDeepSeekCanonicalModelId(model?: string | null): string | null {
+  const normalized = normalizeDeepSeekModelId(model);
+  return normalized ? `deepseek/${normalized}` : null;
+}
+
+function normalizeMimoCanonicalModelId(model?: string | null): string | null {
+  const normalized = normalizeMimoModelId(model);
+  return normalized ? `mimo/${normalized}` : null;
+}
+
+function isDeepSeekModelId(model?: string | null): boolean {
+  const rawValue = model?.trim();
+  const modelId = normalizeDeepSeekModelId(model);
+  if (!rawValue || !modelId) return false;
+  return rawValue.startsWith('deepseek/') || getDeepSeekOfficialModelOption(modelId) != null;
+}
+
+function isMimoChatModelId(model?: string | null): boolean {
+  const rawValue = model?.trim();
+  const modelId = normalizeMimoModelId(model);
+  if (!rawValue || !modelId) return false;
+  return rawValue.startsWith('mimo/') || getMimoChatModelOption(modelId) != null;
+}
+
 function normalizeProviderTransportModel(model?: string | null): string | null {
   const value = model?.trim();
   if (!value) return null;
@@ -633,7 +891,7 @@ function getCopilotRequestMode(model?: string | null): MainChatRequestMode {
 }
 
 function getCopilotStructuredOutputProtocol(model?: string | null): StructuredOutputProtocol {
-  return getCopilotModelOption(model)?.structuredOutputProtocol ?? 'responses_text_format';
+  return getCopilotModelOption(model)?.structuredOutputProtocol ?? 'chat_reply_v1';
 }
 
 function resolveOpenAIGpt54ReasoningEffort(model?: string | null): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' {
@@ -667,5 +925,249 @@ export function resolveMainChatModelDescriptor(args: {
     requestMode: strategy.resolveRequestMode(canonicalModel),
     canonicalModel,
     transportModel,
+  };
+}
+
+// ─── UI schema (single source of truth for the bot-console Models tab) ────────
+
+export type ModelInputKind = 'select-static' | 'select-dynamic' | 'free-text';
+export type SecondaryActionKind = 'copilot-oauth' | 'deepseek-refresh' | 'mimo-refresh' | null;
+
+export interface ModelOptionSummary {
+  modelId: string;
+  label: string;
+  deprecated?: boolean;
+}
+
+export interface BuiltinTabUiSchema {
+  id: MainChatBuiltinTabId;
+  baseUrlEditable: boolean;
+  apiKeyEditable: boolean;
+  apiKeyVisible: boolean;
+  modelInputKind: ModelInputKind;
+  modelOptions: readonly ModelOptionSummary[];
+  /** Concrete examples shown when the user enters an invalid model. */
+  allowedModelExamples: readonly string[];
+  /** Human-readable description of the allowed model family for tooltips and error messages. */
+  allowedModelsDescription: string;
+  secondaryAction: SecondaryActionKind;
+}
+
+export const OPENAI_GPT54_REASONING_EFFORTS = ['non', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+
+export const OPENAI_GPT54_MODEL_OPTIONS: readonly ModelOptionSummary[] = [
+  { modelId: 'openai/gpt-5.4', label: 'GPT-5.4 (default thinking)' },
+  { modelId: 'openai/gpt-5.4-non-thinking', label: 'GPT-5.4 (non-thinking)' },
+  { modelId: 'openai/gpt-5.4-minimal-thinking', label: 'GPT-5.4 (minimal thinking)' },
+  { modelId: 'openai/gpt-5.4-low-thinking', label: 'GPT-5.4 (low thinking)' },
+  { modelId: 'openai/gpt-5.4-medium-thinking', label: 'GPT-5.4 (medium thinking)' },
+  { modelId: 'openai/gpt-5.4-high-thinking', label: 'GPT-5.4 (high thinking)' },
+  { modelId: 'openai/gpt-5.4-xhigh-thinking', label: 'GPT-5.4 (xhigh thinking)' },
+  { modelId: 'openai/gpt-5.4-thinking', label: 'GPT-5.4 (thinking)' },
+];
+
+const SILICONFLOW_UI_SCHEMA: BuiltinTabUiSchema = {
+  id: 'siliconflow',
+  baseUrlEditable: false,
+  apiKeyEditable: true,
+  apiKeyVisible: true,
+  modelInputKind: 'select-static',
+  modelOptions: [{ modelId: SILICONFLOW_DEFAULT_MODEL, label: SILICONFLOW_DEFAULT_MODEL }],
+  allowedModelExamples: [SILICONFLOW_DEFAULT_MODEL],
+  allowedModelsDescription: '硅基流动 Tab 仅支持 Pro/moonshotai/Kimi-K2.5。',
+  secondaryAction: null,
+};
+
+const OPENAI_UI_SCHEMA: BuiltinTabUiSchema = {
+  id: 'openai',
+  baseUrlEditable: true,
+  apiKeyEditable: true,
+  apiKeyVisible: true,
+  modelInputKind: 'select-static',
+  modelOptions: OPENAI_GPT54_MODEL_OPTIONS,
+  allowedModelExamples: OPENAI_GPT54_MODEL_OPTIONS.map((option) => option.modelId),
+  allowedModelsDescription: 'OpenAI Tab 仅支持 openai/gpt-5.4 系列（含 -non/-minimal/-low/-medium/-high/-xhigh-thinking 变体）。',
+  secondaryAction: null,
+};
+
+const COPILOT_UI_SCHEMA: BuiltinTabUiSchema = {
+  id: 'copilot',
+  baseUrlEditable: false,
+  apiKeyEditable: false,
+  apiKeyVisible: false,
+  modelInputKind: 'select-dynamic',
+  modelOptions: [],
+  allowedModelExamples: [],
+  allowedModelsDescription: 'GitHub Copilot Tab 只能选择当前 OAuth 账号 /models 返回且启用的模型。Bridge 地址 / API key 由本地 OAuth bridge 自动接管。',
+  secondaryAction: 'copilot-oauth',
+};
+
+const DEEPSEEK_UI_SCHEMA: BuiltinTabUiSchema = {
+  id: 'deepseek',
+  baseUrlEditable: true,
+  apiKeyEditable: true,
+  apiKeyVisible: true,
+  modelInputKind: 'select-dynamic',
+  modelOptions: DEEPSEEK_OFFICIAL_MODEL_OPTIONS.map((option) => ({
+    modelId: option.modelId,
+    label: formatDeepSeekModelOptionLabel(option),
+    deprecated: (option as { deprecated?: boolean }).deprecated,
+  })),
+  allowedModelExamples: DEEPSEEK_OFFICIAL_MODEL_OPTIONS.map((option) => option.modelId),
+  allowedModelsDescription: 'DeepSeek Tab 只能选择 DeepSeek 官方 /models 列表中的模型；API key 缺失时使用静态兜底列表。',
+  secondaryAction: 'deepseek-refresh',
+};
+
+const MIMO_UI_SCHEMA: BuiltinTabUiSchema = {
+  id: 'mimo',
+  baseUrlEditable: true,
+  apiKeyEditable: true,
+  apiKeyVisible: true,
+  modelInputKind: 'select-dynamic',
+  modelOptions: MIMO_CHAT_MODEL_OPTIONS.map((option) => ({ ...option })),
+  allowedModelExamples: MIMO_CHAT_MODEL_OPTIONS.map((option) => option.modelId),
+  allowedModelsDescription: 'MIMO Tab 只能选择已验证可走 chat/completions 的模型；TTS / VoiceClone / VoiceDesign 模型不允许用于主聊天。',
+  secondaryAction: 'mimo-refresh',
+};
+
+export const BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA: Readonly<Record<MainChatBuiltinTabId, BuiltinTabUiSchema>> = {
+  siliconflow: SILICONFLOW_UI_SCHEMA,
+  openai: OPENAI_UI_SCHEMA,
+  copilot: COPILOT_UI_SCHEMA,
+  deepseek: DEEPSEEK_UI_SCHEMA,
+  mimo: MIMO_UI_SCHEMA,
+};
+
+export function getBuiltinMainChatTabUiSchema(id: MainChatBuiltinTabId): BuiltinTabUiSchema {
+  return BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA[id];
+}
+
+export interface MainChatModelValidationResult {
+  ok: boolean;
+  message?: string;
+  suggestions?: readonly string[];
+}
+
+/**
+ * Validate a tab's defaultModel value with optional dynamic-list support (DeepSeek).
+ * Returns a structured result so callers can render the same message client-side and server-side.
+ */
+export function validateMainChatTabModel(
+  id: MainChatBuiltinTabId,
+  rawModel: string | null | undefined,
+  options: {
+    copilotDynamicModelIds?: readonly string[];
+    deepseekDynamicModelIds?: readonly string[];
+    mimoDynamicModelIds?: readonly string[];
+  } = {},
+): MainChatModelValidationResult {
+  const definition = getBuiltinMainChatTabDefinition(id);
+  const strategy = getMainChatProviderStrategy(definition.strategyId);
+  const schema = getBuiltinMainChatTabUiSchema(id);
+  const trimmed = String(rawModel ?? '').trim();
+
+  if (!trimmed) {
+    return {
+      ok: false,
+      message: `${definition.title} Tab 默认模型不能为空。${schema.allowedModelsDescription}`,
+      suggestions: schema.allowedModelExamples,
+    };
+  }
+
+  if (id === 'deepseek') {
+    const transportModel = normalizeDeepSeekModelId(trimmed);
+    const dynamicIds = (options.deepseekDynamicModelIds ?? [])
+      .map((value) => normalizeDeepSeekModelId(value))
+      .filter((value): value is string => Boolean(value));
+    const supportedIds = new Set<string>(dynamicIds.length > 0
+      ? dynamicIds
+      : DEEPSEEK_OFFICIAL_MODEL_OPTIONS.map((option) => option.modelId));
+    if (!transportModel || !supportedIds.has(transportModel)) {
+      return {
+        ok: false,
+        message: `DeepSeek Tab：'${trimmed}' 不在允许的模型列表中。可选：${[...supportedIds].slice(0, 6).join(' / ')}${supportedIds.size > 6 ? ' …' : ''}`,
+        suggestions: [...supportedIds],
+      };
+    }
+    return { ok: true };
+  }
+
+  if (id === 'mimo') {
+    const transportModel = normalizeMimoModelId(trimmed);
+    const dynamicIds = (options.mimoDynamicModelIds ?? [])
+      .map((value) => normalizeMimoModelId(value))
+      .filter((value): value is string => Boolean(value));
+    const supportedIds = new Set<string>(dynamicIds.length > 0
+      ? dynamicIds
+      : MIMO_CHAT_MODEL_OPTIONS.map((option) => option.modelId));
+    if (!transportModel || !supportedIds.has(transportModel)) {
+      return {
+        ok: false,
+        message: `MIMO Tab：'${trimmed}' 不在允许的聊天模型列表中。可选：${[...supportedIds].slice(0, 6).join(' / ')}${supportedIds.size > 6 ? ' …' : ''}`,
+        suggestions: [...supportedIds],
+      };
+    }
+    return { ok: true };
+  }
+
+  if (id === 'copilot') {
+    const transportModel = normalizeCopilotModelId(trimmed);
+    const dynamicIds = (options.copilotDynamicModelIds ?? [])
+      .map((value) => normalizeCopilotModelId(value))
+      .filter((value): value is string => Boolean(value));
+    if (dynamicIds.length > 0) {
+      const supportedIds = new Set<string>(dynamicIds);
+      if (!transportModel || !supportedIds.has(transportModel)) {
+        return {
+          ok: false,
+          message: `GitHub Copilot Tab：'${trimmed}' 不在当前 OAuth 可用模型列表内。可选：${[...supportedIds].slice(0, 6).join(' / ')}${supportedIds.size > 6 ? ' …' : ''}`,
+          suggestions: [...supportedIds],
+        };
+      }
+      return { ok: true };
+    }
+
+    if (!transportModel) {
+      return {
+        ok: false,
+        message: `GitHub Copilot Tab 默认模型不能为空。${schema.allowedModelsDescription}`,
+        suggestions: schema.allowedModelExamples,
+      };
+    }
+    return { ok: true };
+  }
+
+  if (!strategy.supportsModel(trimmed)) {
+    return {
+      ok: false,
+      message: `${definition.title} Tab：'${trimmed}' 不在允许的模型族内。${schema.allowedModelsDescription} 例如：${schema.allowedModelExamples.slice(0, 4).join(' / ')}${schema.allowedModelExamples.length > 4 ? ' …' : ''}`,
+      suggestions: schema.allowedModelExamples,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Resolve the credentials any auxiliary feature should use when it doesn't have a dedicated provider.
+ *
+ * Order of preference:
+ * 1. The currently active main chat tab (single source of truth).
+ * 2. Legacy OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL env vars (kept for back-compat).
+ *
+ * Other plugins (e.g. voice STT, replies) should call this instead of reading OPENAI_* directly.
+ */
+export function resolveDefaultLlmCredentials(env: Record<string, string> | NodeJS.ProcessEnv): {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+} {
+  const profile = resolveMainChatRuntimeProfileFromEnv(env);
+  const legacyBaseUrl = trimOptionalEnvValue(env.OPENAI_BASE_URL);
+  const legacyApiKey = trimOptionalEnvValue(env.OPENAI_API_KEY);
+  const legacyModel = trimOptionalEnvValue(env.OPENAI_MODEL);
+  return {
+    baseUrl: profile.baseUrl?.trim() || legacyBaseUrl || '',
+    apiKey: profile.apiKey?.trim() || legacyApiKey || '',
+    model: profile.canonicalModel?.trim() || legacyModel || '',
   };
 }

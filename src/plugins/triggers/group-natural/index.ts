@@ -1,6 +1,7 @@
 import { Context, Logger, Schema, Session } from 'koishi';
 import type { FeaturePolicyServiceLike } from '../../../types/feature-policy.js';
 import { normalizeGroupId, parseGroupSet } from '../../shared/group-id.js';
+import { resolveDefaultLlmCredentials } from '../../shared/llm/main-chat-tabs.js';
 import {
   containsAlias,
   createEmptySpamState,
@@ -70,9 +71,9 @@ export const Config: Schema<Config> = Schema.object({
   decisionEnabled: Schema.boolean().default(true).description('是否启用模型触发判定。'),
   decisionBaseUrl: Schema.string()
     .role('link')
-    .description('触发判定模型 API Base URL（默认复用 OPENAI_BASE_URL）。'),
-  decisionApiKey: Schema.string().role('secret').description('触发判定模型 API Key（默认复用 OPENAI_API_KEY）。'),
-  decisionModel: Schema.string().description('触发判定模型名（默认复用 OPENAI_MODEL）。'),
+    .description('触发判定模型 API Base URL（默认回落到当前主聊天 Tab）。'),
+  decisionApiKey: Schema.string().role('secret').description('触发判定模型 API Key（默认回落到当前主聊天 Tab）。'),
+  decisionModel: Schema.string().description('触发判定模型名（默认回落到当前主聊天 Tab）。'),
   decisionTimeoutMs: Schema.natural().role('time').default(4000).description('触发判定模型超时（毫秒）。'),
   decisionMinConfidence: Schema.number().min(0).max(1).default(0.62).description('触发判定模型最小置信度。'),
 });
@@ -135,10 +136,11 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
   const directTriggerProbability = Number(
     config.directTriggerProbability ?? process.env.CHAT_NATURAL_TRIGGER_DIRECT_PROBABILITY ?? 0.25,
   );
+  const fallback = resolveDefaultLlmCredentials(process.env);
   const decisionBaseUrl = (
     config.decisionBaseUrl ??
     process.env.CHAT_NATURAL_TRIGGER_DECISION_BASE_URL ??
-    process.env.OPENAI_BASE_URL ??
+    fallback.baseUrl ??
     ''
   ).replace(/\/+$/, '');
 
@@ -161,9 +163,9 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
       String(process.env.CHAT_NATURAL_TRIGGER_DECISION_ENABLED ?? 'true').toLowerCase() !== 'false',
     decisionBaseUrl,
     decisionApiKey:
-      config.decisionApiKey ?? process.env.CHAT_NATURAL_TRIGGER_DECISION_API_KEY ?? process.env.OPENAI_API_KEY ?? '',
+      config.decisionApiKey ?? process.env.CHAT_NATURAL_TRIGGER_DECISION_API_KEY ?? fallback.apiKey ?? '',
     decisionModel:
-      config.decisionModel ?? process.env.CHAT_NATURAL_TRIGGER_DECISION_MODEL ?? process.env.OPENAI_MODEL ?? '',
+      config.decisionModel ?? process.env.CHAT_NATURAL_TRIGGER_DECISION_MODEL ?? fallback.model ?? '',
     decisionTimeoutMs: Number(
       config.decisionTimeoutMs ?? process.env.CHAT_NATURAL_TRIGGER_DECISION_TIMEOUT_MS ?? 4000,
     ),

@@ -165,6 +165,32 @@ describe('prompt assembly', () => {
     expect(compiledContent).not.toContain('submit_working_state');
   });
 
+  it('injects CHAT_REPLY_V1 output rules when text protocol is selected', () => {
+    const envelope = compileReplyPromptEnvelope(
+      buildReplyPromptCompilerInput(
+        {
+          input: {
+            text: '当前走文本协议',
+            hasImageInput: false,
+            imageCount: 0,
+            displayName: '小祥',
+            userId: 'u1',
+            isDirect: true,
+          },
+          capabilitySnapshot: null,
+          continuationContext: null,
+        },
+        [],
+        { outputProtocol: 'chat_reply_v1' },
+      ),
+    );
+
+    const compiledContent = envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '';
+    expect(compiledContent).toContain('CHAT_REPLY_V1 <nonce>');
+    expect(compiledContent).toContain('payload 内容行必须以 `|` 开头');
+    expect(compiledContent).not.toContain('"outbound_messages"');
+  });
+
   it('consumes a turn envelope exactly once', () => {
     beginPromptAssemblyTurn('conv-1');
     registerPromptFragment('conv-1', {

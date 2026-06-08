@@ -153,6 +153,8 @@ describe('chatluna prompt pollution regression', () => {
 
     expect(sharedAdapterRequesterSource).toContain("override['qqbot_request_mode'] === 'responses'");
     expect(sharedAdapterRequesterSource).toContain("completionUrl: string = 'responses'");
+    expect(sharedAdapterRequesterSource).toContain('sanitizeOverrideRequestParams');
+    expect(sharedAdapterRequesterSource).toContain("key.startsWith('qqbot_')");
     expect(openAIRequesterSource).toContain("params.overrideRequestParams['qqbot_request_mode'] === 'responses'");
     expect(openAIRequesterSource).toContain("completionResponses(");
   });

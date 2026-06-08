@@ -24,6 +24,12 @@ export const FIELD_LABELS: Record<string, string> = {
   CHATLUNA_COPILOT_BASE_URL: 'GitHub Copilot Bridge 地址',
   CHATLUNA_COPILOT_API_KEY: 'GitHub Copilot Bridge 密钥',
   CHATLUNA_COPILOT_DEFAULT_MODEL: 'GitHub Copilot 默认模型',
+  CHATLUNA_DEEPSEEK_BASE_URL: 'DeepSeek 接口地址',
+  CHATLUNA_DEEPSEEK_API_KEY: 'DeepSeek 接口密钥',
+  CHATLUNA_DEEPSEEK_DEFAULT_MODEL: 'DeepSeek 默认模型',
+  CHATLUNA_MIMO_BASE_URL: 'MIMO 接口地址',
+  CHATLUNA_MIMO_API_KEY: 'MIMO 接口密钥',
+  CHATLUNA_MIMO_DEFAULT_MODEL: 'MIMO 默认模型',
   OPENAI_BASE_URL: '通用模型接口地址',
   OPENAI_API_KEY: '通用模型接口密钥',
   OPENAI_MODEL: '通用默认模型',
@@ -49,7 +55,7 @@ export const FIELD_HINTS: Record<string, string> = {
   CHATLUNA_OPENAI_DEFAULT_MODEL:
     'OpenAI Tab 当前按 OpenAI 兼容 provider 处理，并通过 chat/completions + response_format 输出结构化结果，默认推荐 openai/gpt-5.4-medium-thinking。',
   CHATLUNA_COPILOT_DEFAULT_MODEL:
-    'GitHub Copilot Tab 当前按 OAuth + 本地 bridge 处理，并按所选模型静态路由到 Responses API 或 chat/completions，默认推荐 openai/gpt-5.4-mini。',
+    'GitHub Copilot Tab 当前按 OAuth + 本地 bridge 处理，并从 OAuth 可用模型列表选择模型，默认推荐 openai/gpt-5.4-mini。',
   CHAT_NATURAL_TRIGGER_GROUPS:
     '只有填在这里的群号才会命中群聊自然触发。多个群号用英文逗号分隔；留空时不会在任何群自动触发。',
   QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT:

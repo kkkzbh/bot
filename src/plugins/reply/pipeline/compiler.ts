@@ -3,13 +3,17 @@ import {
   STRUCTURED_REPLY_SCHEMA,
   type StructuredReply,
 } from './types.js';
+import { ChatReplyV1ParseError, ChatReplyV1Parser } from './chat-reply-v1.js';
 
 const PROVIDER_RESPONSE_DIAGNOSTIC_KEY = '__chatluna_provider_response_diagnostic_v1';
+
+export type ReplyCompilerOutputProtocol = 'native_chat_json_schema' | 'native_responses_json_schema' | 'chat_reply_v1';
 
 export type StructuredReplyFailureKind =
   | 'provider_empty_finish'
   | 'provider_tool_calls_lost'
   | 'invalid_structured_json'
+  | 'invalid_text_protocol'
   | 'invalid_structured_schema'
   | 'empty_after_flatten';
 
@@ -30,6 +34,7 @@ export interface StructuredReplyCompilerDiagnostic {
   failureKind: StructuredReplyFailureKind;
   rawOutputKind: string;
   rawTextLength: number;
+  rawTextPreview: string;
   requestMode: string | null;
   providerToolCallCount: number;
   messageToolCallCount: number;
@@ -40,6 +45,9 @@ export interface StructuredReplyCompilerDiagnostic {
   rawChoiceKeys: string[];
   rawContentKind: string | null;
   rawContentLength: number | null;
+  outputProtocol: ReplyCompilerOutputProtocol;
+  protocolErrorCode?: string | null;
+  protocolErrorLine?: number | null;
 }
 
 export class StructuredReplyCompilerError extends Error {
@@ -165,6 +173,8 @@ function buildCompilerDiagnostic(
   rawModelOutput: unknown,
   rawText: string,
   failureKind: StructuredReplyFailureKind,
+  outputProtocol: ReplyCompilerOutputProtocol,
+  protocolError?: { code: string; line: number } | null,
 ): StructuredReplyCompilerDiagnostic {
   const providerDiagnostic = extractProviderDiagnostic(rawModelOutput);
   const messageToolCallCount = Math.max(
@@ -180,6 +190,7 @@ function buildCompilerDiagnostic(
     failureKind,
     rawOutputKind: detectRawOutputKind(rawModelOutput),
     rawTextLength: rawText.length,
+    rawTextPreview: rawText.slice(0, 300),
     requestMode: typeof providerDiagnostic?.requestMode === 'string' ? providerDiagnostic.requestMode : null,
     providerToolCallCount: toFiniteNumberOrNull(providerDiagnostic?.providerToolCallCount) ?? 0,
     messageToolCallCount,
@@ -193,6 +204,9 @@ function buildCompilerDiagnostic(
     rawChoiceKeys: toStringArray(providerDiagnostic?.rawChoiceKeys),
     rawContentKind: typeof providerDiagnostic?.rawContentKind === 'string' ? providerDiagnostic.rawContentKind : null,
     rawContentLength: toFiniteNumberOrNull(providerDiagnostic?.rawContentLength),
+    outputProtocol,
+    protocolErrorCode: protocolError?.code ?? null,
+    protocolErrorLine: protocolError?.line ?? null,
   };
 }
 
@@ -234,6 +248,7 @@ export class StructuredReplyCompilerService {
           tool_calls?: unknown[];
           tool_call_chunks?: unknown[];
         },
+    private readonly options: { outputProtocol?: ReplyCompilerOutputProtocol } = {},
   ) {}
 
   compile(): StructuredReply {
@@ -242,29 +257,44 @@ export class StructuredReplyCompilerService {
         ? this.rawModelOutput
         : { content: this.rawModelOutput };
     const rawText = flattenModelOutputContent(normalizedOutput.content);
+    const outputProtocol = this.options.outputProtocol ?? 'native_chat_json_schema';
     if (!rawText) {
       throw new StructuredReplyEmptyModelOutputError(
-        buildCompilerDiagnostic(normalizedOutput, rawText, resolveEmptyFailureKind(normalizedOutput)),
+        buildCompilerDiagnostic(normalizedOutput, rawText, resolveEmptyFailureKind(normalizedOutput), outputProtocol),
       );
     }
 
-    let parsedJson: unknown;
-    try {
-      parsedJson = JSON.parse(rawText);
-    } catch (error) {
-      throw new StructuredReplyCompilerError(
-        `structured reply compiler expected JSON: ${(error as Error).message}`,
-        buildCompilerDiagnostic(normalizedOutput, rawText, 'invalid_structured_json'),
-      );
+    let rawReply: unknown;
+    if (outputProtocol === 'chat_reply_v1') {
+      try {
+        rawReply = new ChatReplyV1Parser().parse(rawText);
+      } catch (error) {
+        const protocolError = error instanceof ChatReplyV1ParseError
+          ? { code: error.code, line: error.line }
+          : null;
+        throw new StructuredReplyCompilerError(
+          `structured reply compiler expected CHAT_REPLY_V1: ${(error as Error).message}`,
+          buildCompilerDiagnostic(normalizedOutput, rawText, 'invalid_text_protocol', outputProtocol, protocolError),
+        );
+      }
+    } else {
+      try {
+        rawReply = JSON.parse(rawText);
+      } catch (error) {
+        throw new StructuredReplyCompilerError(
+          `structured reply compiler expected JSON: ${(error as Error).message}`,
+          buildCompilerDiagnostic(normalizedOutput, rawText, 'invalid_structured_json', outputProtocol),
+        );
+      }
     }
 
-    const parsedReply = STRUCTURED_REPLY_SCHEMA.safeParse(parsedJson);
+    const parsedReply = STRUCTURED_REPLY_SCHEMA.safeParse(rawReply);
     if (!parsedReply.success) {
       throw new StructuredReplyCompilerError(
         `structured reply compiler received invalid StructuredReply: ${parsedReply.error.issues
           .map((issue) => `${issue.path.join('.') || 'root'} ${issue.message}`)
           .join('; ')}`,
-        buildCompilerDiagnostic(normalizedOutput, rawText, 'invalid_structured_schema'),
+        buildCompilerDiagnostic(normalizedOutput, rawText, 'invalid_structured_schema', outputProtocol),
       );
     }
 
@@ -272,7 +302,7 @@ export class StructuredReplyCompilerService {
     if (!normalized) {
       throw new StructuredReplyCompilerError(
         'structured reply compiler failed to normalize StructuredReply.',
-        buildCompilerDiagnostic(normalizedOutput, rawText, 'invalid_structured_schema'),
+        buildCompilerDiagnostic(normalizedOutput, rawText, 'invalid_structured_schema', outputProtocol),
       );
     }
 

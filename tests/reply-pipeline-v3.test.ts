@@ -502,6 +502,63 @@ describe('reply pipeline v3', () => {
     });
   });
 
+  it('compiles CHAT_REPLY_V1 text protocol when selected by the route', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+
+    await expect(
+      orchestrator.handle(createTurnInput('回一句'), {} as never, {
+        routeHint: 'agent',
+        outputProtocol: 'chat_reply_v1',
+        responseMessage: {
+          content: [
+            'CHAT_REPLY_V1 abc12345',
+            'DECISION reply',
+            'BEGIN message',
+            'MENTIONS none',
+            'CONTENT',
+            '|收到。',
+            'END',
+            'DONE abc12345',
+          ].join('\n'),
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: 'ready',
+      reply: {
+        decision: 'reply',
+        outbound_messages: [{ type: 'message', content: '收到。', mentions: [] }],
+      },
+      actions: [{ kind: 'message', content: '收到。', mentions: [] }],
+    });
+  });
+
+  it('classifies invalid CHAT_REPLY_V1 output separately from invalid JSON', () => {
+    const compiler = new StructuredReplyCompilerService(
+      [
+        'CHAT_REPLY_V1 abc12345',
+        'DECISION reply',
+        'BEGIN message',
+        'MENTIONS none',
+        'CONTENT',
+        'missing pipe',
+        'END',
+        'DONE abc12345',
+      ].join('\n'),
+      { outputProtocol: 'chat_reply_v1' },
+    );
+
+    try {
+      compiler.compile();
+    } catch (error) {
+      expect(error).toBeInstanceOf(StructuredReplyCompilerError);
+      expect((error as StructuredReplyCompilerError).diagnostic).toMatchObject({
+        failureKind: 'invalid_text_protocol',
+        outputProtocol: 'chat_reply_v1',
+        protocolErrorCode: 'PAYLOAD_LINE_WITHOUT_PIPE',
+      });
+    }
+  });
+
   it('throws a dedicated error when the model output is empty', () => {
     const compiler = new StructuredReplyCompilerService('   ');
 

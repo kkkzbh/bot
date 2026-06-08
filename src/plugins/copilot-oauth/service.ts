@@ -6,7 +6,6 @@ import type {
   CopilotAuthAttempt,
   CopilotAuthState,
 } from '../../types/bot-console.js';
-import { COPILOT_MODEL_OPTIONS } from '../shared/llm/main-chat-tabs.js';
 
 const DEFAULT_KOISHI_PORT = '5140';
 const DEFAULT_CLIENT_ID = 'Iv1.b507a08c87ecfe98';
@@ -16,7 +15,6 @@ const COPILOT_TOKEN_URL = 'https://api.github.com/copilot_internal/v2/token';
 const GITHUB_USER_URL = 'https://api.github.com/user';
 const DEFAULT_COPILOT_API_BASE_URL = 'https://api.individual.githubcopilot.com';
 const SESSION_EXPIRY_SKEW_MS = 5 * 60 * 1000;
-const FALLBACK_COPILOT_MODELS = COPILOT_MODEL_OPTIONS.map((option) => option.modelId);
 
 type ResolvedEnvFiles = {
   mode: 'single' | 'layered';
@@ -414,20 +412,10 @@ export class CopilotOAuthBridgeService implements CopilotBridgeStateProvider {
   }
 
   async proxyModels(): Promise<{ status: number; headers: Record<string, string>; body: string }> {
-    try {
-      return await this.doProxyUpstream({
-        method: 'GET',
-        path: '/models',
-      }, false);
-    } catch {
-      return {
-        status: 200,
-        headers: { 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({
-          data: FALLBACK_COPILOT_MODELS.map((id) => ({ id, object: 'model' })),
-        }),
-      };
-    }
+    return this.proxyUpstream({
+      method: 'GET',
+      path: '/models',
+    });
   }
 
   async proxyResponses(body: unknown): Promise<{ status: number; headers: Record<string, string>; body: string }> {

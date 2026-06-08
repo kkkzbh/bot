@@ -7,6 +7,9 @@ import {
   applyEnvPatchToContent,
   buildModelTabsStateFromEnv,
   BotConsoleManager,
+  listCopilotModelsFromOAuthBridge,
+  listDeepSeekModelsFromOfficialSource,
+  listMimoModelsFromOfficialSource,
   mergeManagedEnvRecords,
   parsePresetDocument,
   parseSystemdShowOutput,
@@ -18,11 +21,13 @@ import {
   serializePresetDocument,
   writeFileAtomicWithBackup,
 } from '../src/plugins/bot-console/server.js';
+import { resolveDefaultLlmCredentials } from '../src/plugins/shared/llm/index.js';
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -31,6 +36,44 @@ function createTempDir(): string {
   tempDirs.push(dir);
   return dir;
 }
+
+function createCopilotBridgeWithModels(models: unknown[]) {
+  return {
+    getRuntimeConfig: async () => ({
+      baseUrl: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+      apiKey: 'bridge-secret',
+    }),
+    getConsoleStatus: async () => ({
+      authKind: 'oauth_device' as const,
+      authStatus: 'ready' as const,
+      accountLabel: 'tester',
+      authError: null,
+    }),
+    proxyModels: async () => ({
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ data: models }),
+    }),
+  };
+}
+
+const COPILOT_ENABLED_MODEL_PAYLOAD = [
+  {
+    id: 'gpt-5.4-mini',
+    name: 'GPT-5.4 mini',
+    policy: { state: 'enabled' },
+    model_picker_enabled: true,
+    supported_endpoints: ['/responses', 'ws:/responses'],
+  },
+  {
+    id: 'gpt-4o',
+    name: 'GPT-4o',
+    policy: { state: 'enabled' },
+    model_picker_enabled: true,
+    capabilities: { supports: { structured_outputs: true } },
+    supported_endpoints: ['/chat/completions'],
+  },
+];
 
 describe('bot-console env helpers', () => {
   it('preserves comments and unknown lines while patching managed keys', () => {
@@ -149,6 +192,12 @@ describe('bot-console env helpers', () => {
       CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
       CHATLUNA_COPILOT_API_KEY: 'github_pat_123',
       CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/gpt-5.4-mini',
+      CHATLUNA_DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
+      CHATLUNA_DEEPSEEK_API_KEY: 'sk-deepseek',
+      CHATLUNA_DEEPSEEK_DEFAULT_MODEL: 'deepseek-v4-pro',
+      CHATLUNA_MIMO_BASE_URL: 'https://token-plan-cn.xiaomimimo.com/v1',
+      CHATLUNA_MIMO_API_KEY: 'sk-mimo',
+      CHATLUNA_MIMO_DEFAULT_MODEL: 'mimo-v2.5-pro',
       CHATLUNA_SILICONFLOW_BASE_URL: 'https://custom.invalid/v1',
       CHATLUNA_SILICONFLOW_API_KEY: 'sk-kimi',
       CHATLUNA_SILICONFLOW_DEFAULT_MODEL: 'siliconflow/Pro/moonshotai/Kimi-K2.5',
@@ -167,7 +216,7 @@ describe('bot-console env helpers', () => {
       expect.objectContaining({
         id: 'openai',
         requestMode: 'chat_completions',
-        structuredOutputProtocol: 'chat_completions_json_schema',
+        structuredOutputProtocol: 'native_chat_json_schema',
         baseUrl: 'https://shell.wyzai.top/v1',
         defaultModel: 'openai/gpt-5.4-medium-thinking',
       }),
@@ -175,12 +224,189 @@ describe('bot-console env helpers', () => {
         id: 'copilot',
         strategyId: 'copilot-github-oauth-main-chat',
         requestMode: 'responses',
-        structuredOutputProtocol: 'responses_text_format',
+        structuredOutputProtocol: 'native_responses_json_schema',
         defaultModel: 'openai/gpt-5.4-mini',
         canonicalModel: 'openai/gpt-5.4-mini',
         transportModel: 'gpt-5.4-mini',
       }),
+      expect.objectContaining({
+        id: 'deepseek',
+        strategyId: 'deepseek-official-main-chat',
+        requestMode: 'chat_completions',
+        structuredOutputProtocol: 'native_chat_json_schema',
+        baseUrl: 'https://api.deepseek.com',
+        defaultModel: 'deepseek/deepseek-v4-pro',
+        canonicalModel: 'deepseek/deepseek-v4-pro',
+        transportModel: 'deepseek-v4-pro',
+      }),
+      expect.objectContaining({
+        id: 'mimo',
+        strategyId: 'mimo-official-main-chat',
+        requestMode: 'chat_completions',
+        structuredOutputProtocol: 'native_chat_json_schema',
+        baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+        apiKey: 'sk-mimo',
+        defaultModel: 'mimo/mimo-v2.5-pro',
+        canonicalModel: 'mimo/mimo-v2.5-pro',
+        transportModel: 'mimo-v2.5-pro',
+      }),
     ]);
+  });
+
+  it('loads DeepSeek model ids from the official models endpoint', async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe('https://api.deepseek.com/models');
+      expect(init?.headers).toMatchObject({
+        Authorization: 'Bearer sk-deepseek',
+        Accept: 'application/json',
+      });
+      return new Response(
+        JSON.stringify({
+          object: 'list',
+          data: [
+            { id: 'deepseek-v4-pro', object: 'model' },
+            { id: 'deepseek-v4-flash', object: 'model' },
+            { id: 'deepseek-v4-pro', object: 'model' },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      listDeepSeekModelsFromOfficialSource({
+        baseUrl: 'https://api.deepseek.com/',
+        apiKey: 'sk-deepseek',
+      }),
+    ).resolves.toMatchObject({
+      source: 'dynamic',
+      error: null,
+      models: [
+        { modelId: 'deepseek-v4-pro', label: 'deepseek-v4-pro' },
+        { modelId: 'deepseek-v4-flash', label: 'deepseek-v4-flash' },
+      ],
+    });
+  });
+
+  it('falls back to the official static DeepSeek model list without an api key', async () => {
+    await expect(
+      listDeepSeekModelsFromOfficialSource({
+        baseUrl: 'https://api.deepseek.com',
+        apiKey: '',
+      }),
+    ).resolves.toMatchObject({
+      source: 'static',
+      models: [
+        { modelId: 'deepseek-v4-flash' },
+        { modelId: 'deepseek-v4-pro' },
+        { modelId: 'deepseek-chat', deprecated: true, deprecationDate: '2026-07-24' },
+        { modelId: 'deepseek-reasoner', deprecated: true, deprecationDate: '2026-07-24' },
+      ],
+    });
+  });
+
+  it('loads and filters MIMO chat model ids from the official models endpoint', async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe('https://token-plan-cn.xiaomimimo.com/v1/models');
+      expect(init?.headers).toMatchObject({
+        Authorization: 'Bearer sk-mimo',
+        Accept: 'application/json',
+      });
+      return new Response(
+        JSON.stringify({
+          object: 'list',
+          data: [
+            { id: 'mimo-v2.5-pro', object: 'model' },
+            { id: 'mimo-v2.5-tts', object: 'model' },
+            { id: 'mimo-v2-omni', object: 'model' },
+            { id: 'mimo-v2.5-tts-voiceclone', object: 'model' },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      listMimoModelsFromOfficialSource({
+        baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1/',
+        apiKey: 'sk-mimo',
+      }),
+    ).resolves.toMatchObject({
+      source: 'dynamic',
+      error: null,
+      models: [
+        { modelId: 'mimo-v2.5-pro', label: 'mimo-v2.5-pro' },
+        { modelId: 'mimo-v2-omni', label: 'mimo-v2-omni' },
+      ],
+    });
+  });
+
+  it('falls back to the static MIMO chat model list without an api key', async () => {
+    await expect(
+      listMimoModelsFromOfficialSource({
+        baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+        apiKey: '',
+      }),
+    ).resolves.toMatchObject({
+      source: 'static',
+      models: [
+        { modelId: 'mimo-v2.5-pro' },
+        { modelId: 'mimo-v2.5' },
+        { modelId: 'mimo-v2-pro' },
+        { modelId: 'mimo-v2-omni' },
+      ],
+    });
+  });
+
+  it('loads only enabled picker models from the Copilot OAuth bridge models endpoint', async () => {
+    await expect(
+      listCopilotModelsFromOAuthBridge(createCopilotBridgeWithModels([
+        {
+          id: 'gpt-5.4',
+          name: 'GPT-5.4',
+          policy: { state: 'disabled' },
+          model_picker_enabled: true,
+          supported_endpoints: ['/responses'],
+        },
+        {
+          id: 'gpt-5.4-mini',
+          name: 'GPT-5.4 mini',
+          policy: { state: 'enabled' },
+          model_picker_enabled: true,
+          supported_endpoints: ['/responses', 'ws:/responses'],
+        },
+        {
+          id: 'hidden-model',
+          name: 'Hidden',
+          policy: { state: 'enabled' },
+          model_picker_enabled: false,
+          supported_endpoints: ['/responses'],
+        },
+        {
+          id: 'messages-only',
+          name: 'Messages only',
+          policy: { state: 'enabled' },
+          model_picker_enabled: true,
+          supported_endpoints: ['/v1/messages'],
+        },
+      ])),
+    ).resolves.toMatchObject({
+      source: 'dynamic',
+      error: null,
+      models: [
+        { modelId: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
+      ],
+    });
+  });
+
+  it('does not fall back to a hardcoded Copilot model list when the bridge is unavailable', async () => {
+    await expect(listCopilotModelsFromOAuthBridge(undefined)).resolves.toMatchObject({
+      source: 'dynamic',
+      models: [],
+      error: expect.stringContaining('bridge is unavailable'),
+    });
   });
 });
 
@@ -555,6 +781,7 @@ describe('bot-console manager', () => {
     const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
     const result = await manager.saveModelTabs({
       activeTab: 'openai',
+      dirtyTabIds: ['openai'],
       tabs: [
         {
           id: 'siliconflow',
@@ -562,7 +789,7 @@ describe('bot-console manager', () => {
           provider: 'siliconflow',
           strategyId: 'siliconflow-kimi-main-chat',
           requestMode: 'chat_completions',
-          structuredOutputProtocol: 'chat_completions_json_schema',
+          structuredOutputProtocol: 'native_chat_json_schema',
           description: 'siliconflow',
           modelHint: 'kimi',
           authKind: 'manual',
@@ -579,7 +806,7 @@ describe('bot-console manager', () => {
           provider: 'openai',
           strategyId: 'openai-gpt54-main-chat',
           requestMode: 'chat_completions',
-          structuredOutputProtocol: 'chat_completions_json_schema',
+          structuredOutputProtocol: 'native_chat_json_schema',
           description: 'openai',
           modelHint: 'gpt-5.4',
           authKind: 'manual',
@@ -596,7 +823,7 @@ describe('bot-console manager', () => {
           provider: 'openai',
           strategyId: 'copilot-github-oauth-main-chat',
           requestMode: 'responses',
-          structuredOutputProtocol: 'responses_text_format',
+          structuredOutputProtocol: 'native_responses_json_schema',
           description: 'copilot',
           modelHint: 'openai/gpt-5.4-mini',
           authKind: 'oauth_device',
@@ -606,6 +833,23 @@ describe('bot-console manager', () => {
           baseUrl: 'http://127.0.0.1:5140/api/internal/copilot/v1',
           apiKey: 'github_pat_123',
           defaultModel: 'openai/gpt-5.4-mini',
+        },
+        {
+          id: 'deepseek',
+          title: 'DeepSeek',
+          provider: 'deepseek',
+          strategyId: 'deepseek-official-main-chat',
+          requestMode: 'chat_completions',
+          structuredOutputProtocol: 'native_chat_json_schema',
+          description: 'deepseek',
+          modelHint: 'deepseek-v4-flash',
+          authKind: 'manual',
+          authStatus: 'ready',
+          accountLabel: null,
+          authError: null,
+          baseUrl: 'https://api.deepseek.com',
+          apiKey: '',
+          defaultModel: 'deepseek-v4-flash',
         },
       ],
     });
@@ -630,7 +874,146 @@ describe('bot-console manager', () => {
       CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
       CHATLUNA_COPILOT_API_KEY: 'github_pat_123',
       CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/gpt-5.4-mini',
+      CHATLUNA_DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
+      CHATLUNA_DEEPSEEK_DEFAULT_MODEL: 'deepseek/deepseek-v4-flash',
     });
+  });
+
+  it('mirrors the DeepSeek tab into runtime chatluna env keys', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    const result = await manager.saveModelTabs({
+      activeTab: 'deepseek',
+      dirtyTabIds: ['deepseek'],
+      tabs: [
+        {
+          id: 'siliconflow',
+          provider: 'siliconflow',
+          baseUrl: 'https://api.siliconflow.cn/v1',
+          apiKey: 'sk-kimi',
+          defaultModel: 'Pro/moonshotai/Kimi-K2.5',
+        },
+        {
+          id: 'openai',
+          provider: 'openai',
+          baseUrl: 'https://shell.wyzai.top/v1',
+          apiKey: 'sk-openai',
+          defaultModel: 'openai/gpt-5.4-medium-thinking',
+        },
+        {
+          id: 'copilot',
+          provider: 'openai',
+          baseUrl: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+          apiKey: 'github_pat_123',
+          defaultModel: 'openai/gpt-5.4-mini',
+        },
+        {
+          id: 'deepseek',
+          provider: 'deepseek',
+          baseUrl: 'https://api.deepseek.com/',
+          apiKey: '',
+          defaultModel: 'deepseek-v4-pro',
+        },
+      ] as any,
+    });
+
+    expect(result.modelTabs.activeTab).toBe('deepseek');
+    expect(result.modelTabs.tabs).toContainEqual(expect.objectContaining({
+      id: 'deepseek',
+      baseUrl: 'https://api.deepseek.com',
+      defaultModel: 'deepseek/deepseek-v4-pro',
+      canonicalModel: 'deepseek/deepseek-v4-pro',
+      transportModel: 'deepseek-v4-pro',
+    }));
+    expect(result.env).toMatchObject({
+      CHATLUNA_ACTIVE_TAB: 'deepseek',
+      CHATLUNA_PLATFORM: 'deepseek',
+      CHATLUNA_BASE_URL: 'https://api.deepseek.com',
+      CHATLUNA_DEFAULT_MODEL: 'deepseek/deepseek-v4-pro',
+      CHATLUNA_DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
+      CHATLUNA_DEEPSEEK_DEFAULT_MODEL: 'deepseek/deepseek-v4-pro',
+    });
+  });
+
+  it('mirrors the MIMO tab into runtime chatluna env keys and inherited credentials', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(
+      envFilePath,
+      [
+        'CHATLUNA_MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1',
+        'CHATLUNA_MIMO_API_KEY=sk-mimo',
+        'CHATLUNA_MIMO_DEFAULT_MODEL=mimo-v2.5-pro',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    const result = await manager.saveModelTabs({
+      activeTab: 'mimo',
+      dirtyTabIds: ['mimo'],
+      tabs: [
+        {
+          id: 'mimo',
+          provider: 'mimo',
+          baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1/',
+          apiKey: '',
+          defaultModel: 'mimo-v2-omni',
+        },
+      ] as any,
+    });
+
+    expect(result.modelTabs.activeTab).toBe('mimo');
+    expect(result.modelTabs.tabs).toContainEqual(expect.objectContaining({
+      id: 'mimo',
+      baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+      apiKey: 'sk-mimo',
+      defaultModel: 'mimo/mimo-v2-omni',
+      canonicalModel: 'mimo/mimo-v2-omni',
+      transportModel: 'mimo-v2-omni',
+    }));
+    expect(result.env).toMatchObject({
+      CHATLUNA_ACTIVE_TAB: 'mimo',
+      CHATLUNA_PLATFORM: 'mimo',
+      CHATLUNA_BASE_URL: 'https://token-plan-cn.xiaomimimo.com/v1',
+      CHATLUNA_API_KEY: 'sk-mimo',
+      CHATLUNA_DEFAULT_MODEL: 'mimo/mimo-v2-omni',
+      CHATLUNA_MIMO_BASE_URL: 'https://token-plan-cn.xiaomimimo.com/v1',
+      CHATLUNA_MIMO_API_KEY: 'sk-mimo',
+      CHATLUNA_MIMO_DEFAULT_MODEL: 'mimo/mimo-v2-omni',
+    });
+    expect(resolveDefaultLlmCredentials(result.env)).toMatchObject({
+      baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+      apiKey: 'sk-mimo',
+      model: 'mimo/mimo-v2-omni',
+    });
+  });
+
+  it('rejects unsupported MIMO TTS models', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_MIMO_API_KEY=sk-mimo\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    await expect(
+      manager.saveModelTabs({
+        activeTab: 'mimo',
+        dirtyTabIds: ['mimo'],
+        tabs: [
+          {
+            id: 'mimo',
+            provider: 'mimo',
+            baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+            apiKey: '',
+            defaultModel: 'mimo-v2.5-tts',
+          },
+        ] as any,
+      }),
+    ).rejects.toThrow(/MIMO Tab：.*不在允许的聊天模型列表中/);
   });
 
   it('rejects unsupported OpenAI tab models', async () => {
@@ -642,6 +1025,7 @@ describe('bot-console manager', () => {
     await expect(
       manager.saveModelTabs({
         activeTab: 'openai',
+        dirtyTabIds: ['openai'],
         tabs: [
           {
             id: 'siliconflow',
@@ -649,7 +1033,7 @@ describe('bot-console manager', () => {
             provider: 'siliconflow',
           strategyId: 'siliconflow-kimi-main-chat',
           requestMode: 'chat_completions',
-          structuredOutputProtocol: 'chat_completions_json_schema',
+          structuredOutputProtocol: 'native_chat_json_schema',
           description: 'siliconflow',
           modelHint: 'kimi',
           authKind: 'manual',
@@ -666,7 +1050,7 @@ describe('bot-console manager', () => {
             provider: 'openai',
           strategyId: 'openai-gpt54-main-chat',
           requestMode: 'chat_completions',
-          structuredOutputProtocol: 'chat_completions_json_schema',
+          structuredOutputProtocol: 'native_chat_json_schema',
           description: 'openai',
           modelHint: 'gpt-5.4',
           authKind: 'manual',
@@ -683,7 +1067,7 @@ describe('bot-console manager', () => {
           provider: 'openai',
           strategyId: 'copilot-github-oauth-main-chat',
           requestMode: 'responses',
-          structuredOutputProtocol: 'responses_text_format',
+          structuredOutputProtocol: 'native_responses_json_schema',
           description: 'copilot',
           modelHint: 'openai/gpt-5.4-mini',
           authKind: 'oauth_device',
@@ -696,7 +1080,7 @@ describe('bot-console manager', () => {
         },
       ],
     }),
-    ).rejects.toThrow('OpenAI Tab 只支持当前允许的模型族');
+    ).rejects.toThrow(/OpenAI Tab：.*不在允许的模型族内/);
   });
 
   it('derives Copilot chat-completions metadata from the selected Copilot model', async () => {
@@ -704,9 +1088,14 @@ describe('bot-console manager', () => {
     const envFilePath = join(dir, '.env.local');
     writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
-    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    const manager = new BotConsoleManager({
+      rootDir: dir,
+      envFilePath,
+      copilotBridge: createCopilotBridgeWithModels(COPILOT_ENABLED_MODEL_PAYLOAD),
+    });
     const result = await manager.saveModelTabs({
       activeTab: 'copilot',
+      dirtyTabIds: ['copilot'],
       tabs: [
         {
           id: 'siliconflow',
@@ -714,7 +1103,7 @@ describe('bot-console manager', () => {
           provider: 'siliconflow',
           strategyId: 'siliconflow-kimi-main-chat',
           requestMode: 'chat_completions',
-          structuredOutputProtocol: 'chat_completions_json_schema',
+          structuredOutputProtocol: 'native_chat_json_schema',
           description: 'siliconflow',
           modelHint: 'kimi',
           authKind: 'manual',
@@ -731,7 +1120,7 @@ describe('bot-console manager', () => {
           provider: 'openai',
           strategyId: 'openai-gpt54-main-chat',
           requestMode: 'chat_completions',
-          structuredOutputProtocol: 'chat_completions_json_schema',
+          structuredOutputProtocol: 'native_chat_json_schema',
           description: 'openai',
           modelHint: 'gpt-5.4',
           authKind: 'manual',
@@ -748,7 +1137,7 @@ describe('bot-console manager', () => {
           provider: 'openai',
           strategyId: 'copilot-github-oauth-main-chat',
           requestMode: 'responses',
-          structuredOutputProtocol: 'responses_text_format',
+          structuredOutputProtocol: 'native_responses_json_schema',
           description: 'copilot',
           modelHint: 'openai/gpt-4o',
           authKind: 'oauth_device',
@@ -759,6 +1148,23 @@ describe('bot-console manager', () => {
           apiKey: 'github_pat_123',
           defaultModel: 'openai/gpt-4o',
         },
+        {
+          id: 'deepseek',
+          title: 'DeepSeek',
+          provider: 'deepseek',
+          strategyId: 'deepseek-official-main-chat',
+          requestMode: 'chat_completions',
+          structuredOutputProtocol: 'native_chat_json_schema',
+          description: 'deepseek',
+          modelHint: 'deepseek-v4-flash',
+          authKind: 'manual',
+          authStatus: 'ready',
+          accountLabel: null,
+          authError: null,
+          baseUrl: 'https://api.deepseek.com',
+          apiKey: '',
+          defaultModel: 'deepseek-v4-flash',
+        },
       ],
     });
 
@@ -766,7 +1172,7 @@ describe('bot-console manager', () => {
     expect(result.modelTabs.tabs).toContainEqual(expect.objectContaining({
       id: 'copilot',
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'chat_completions_json_schema',
+      structuredOutputProtocol: 'native_chat_json_schema',
       defaultModel: 'openai/gpt-4o',
       canonicalModel: 'openai/gpt-4o',
       transportModel: 'gpt-4o',
@@ -783,10 +1189,15 @@ describe('bot-console manager', () => {
     const envFilePath = join(dir, '.env.local');
     writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
 
-    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    const manager = new BotConsoleManager({
+      rootDir: dir,
+      envFilePath,
+      copilotBridge: createCopilotBridgeWithModels(COPILOT_ENABLED_MODEL_PAYLOAD.slice(0, 1)),
+    });
     await expect(
       manager.saveModelTabs({
         activeTab: 'copilot',
+        dirtyTabIds: ['copilot'],
         tabs: [
           {
             id: 'siliconflow',
@@ -794,7 +1205,7 @@ describe('bot-console manager', () => {
             provider: 'siliconflow',
           strategyId: 'siliconflow-kimi-main-chat',
           requestMode: 'chat_completions',
-          structuredOutputProtocol: 'chat_completions_json_schema',
+          structuredOutputProtocol: 'native_chat_json_schema',
           description: 'siliconflow',
           modelHint: 'kimi',
           authKind: 'manual',
@@ -811,7 +1222,7 @@ describe('bot-console manager', () => {
             provider: 'openai',
           strategyId: 'openai-gpt54-main-chat',
           requestMode: 'chat_completions',
-          structuredOutputProtocol: 'chat_completions_json_schema',
+          structuredOutputProtocol: 'native_chat_json_schema',
           description: 'openai',
           modelHint: 'gpt-5.4',
           authKind: 'manual',
@@ -828,7 +1239,7 @@ describe('bot-console manager', () => {
           provider: 'openai',
           strategyId: 'copilot-github-oauth-main-chat',
           requestMode: 'responses',
-          structuredOutputProtocol: 'responses_text_format',
+          structuredOutputProtocol: 'native_responses_json_schema',
           description: 'copilot',
           modelHint: 'openai/gpt-5.4-mini',
           authKind: 'oauth_device',
@@ -841,7 +1252,128 @@ describe('bot-console manager', () => {
         },
       ],
     }),
-    ).rejects.toThrow('GitHub Copilot Tab 只支持当前允许的模型族');
+    ).rejects.toThrow(/GitHub Copilot Tab：.*不在当前 OAuth 可用模型列表内/);
+  });
+
+  it('rejects unsupported DeepSeek tab models when using the official fallback list', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    await expect(
+      manager.saveModelTabs({
+        activeTab: 'deepseek',
+        dirtyTabIds: ['deepseek'],
+        tabs: [
+          {
+            id: 'siliconflow',
+            provider: 'siliconflow',
+            baseUrl: 'https://api.siliconflow.cn/v1',
+            apiKey: 'sk-kimi',
+            defaultModel: 'Pro/moonshotai/Kimi-K2.5',
+          },
+          {
+            id: 'openai',
+            provider: 'openai',
+            baseUrl: 'https://shell.wyzai.top/v1',
+            apiKey: 'sk-openai',
+            defaultModel: 'openai/gpt-5.4-medium-thinking',
+          },
+          {
+            id: 'copilot',
+            provider: 'openai',
+            baseUrl: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+            apiKey: 'github_pat_123',
+            defaultModel: 'openai/gpt-5.4-mini',
+          },
+          {
+            id: 'deepseek',
+            provider: 'deepseek',
+            baseUrl: 'https://api.deepseek.com',
+            apiKey: '',
+            defaultModel: 'not-official',
+          },
+        ] as any,
+      }),
+    ).rejects.toThrow(/DeepSeek Tab：.*不在允许的模型列表中/);
+  });
+
+  it('skips strict validation for tabs that the client did not mark as dirty', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(
+      envFilePath,
+      [
+        'CHATLUNA_ACTIVE_TAB=siliconflow',
+        'CHATLUNA_OPENAI_BASE_URL=https://shell.wyzai.top/v1',
+        'CHATLUNA_OPENAI_API_KEY=sk-stale',
+        // legacy/invalid value left in env from a prior bad save
+        'CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.2',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+
+    // Client only marks the deepseek tab as dirty. The stale OPENAI tab value should not
+    // block the unrelated save anymore.
+    const result = await manager.saveModelTabs({
+      activeTab: 'deepseek',
+      dirtyTabIds: ['deepseek'],
+      tabs: [
+        {
+          id: 'siliconflow',
+          provider: 'siliconflow',
+          baseUrl: 'https://api.siliconflow.cn/v1',
+          apiKey: 'sk-kimi',
+          defaultModel: 'Pro/moonshotai/Kimi-K2.5',
+        },
+        {
+          id: 'openai',
+          provider: 'openai',
+          baseUrl: 'https://shell.wyzai.top/v1',
+          apiKey: 'sk-stale',
+          // unchanged, still illegal — but client did not mark this tab dirty
+          defaultModel: 'openai/gpt-5.2',
+        },
+        {
+          id: 'copilot',
+          provider: 'openai',
+          baseUrl: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+          apiKey: 'github_pat_123',
+          defaultModel: 'openai/gpt-5.4-mini',
+        },
+        {
+          id: 'deepseek',
+          provider: 'deepseek',
+          baseUrl: 'https://api.deepseek.com',
+          apiKey: '',
+          defaultModel: 'deepseek-v4-flash',
+        },
+      ] as any,
+    });
+
+    expect(result.modelTabs.activeTab).toBe('deepseek');
+    expect(result.env).toMatchObject({
+      CHATLUNA_ACTIVE_TAB: 'deepseek',
+      CHATLUNA_DEEPSEEK_DEFAULT_MODEL: 'deepseek/deepseek-v4-flash',
+    });
+  });
+
+  it('rejects model tab saves without a dirty tab list', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    await expect(
+      manager.saveModelTabs({
+        activeTab: 'openai',
+        tabs: [],
+      } as any),
+    ).rejects.toThrow('保存模型 Tab 必须携带已修改的 Tab 列表');
   });
 
   it('schedules qqbot.target restart through a transient user unit', async () => {

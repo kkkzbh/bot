@@ -19,11 +19,17 @@ import type {
   BotConsoleEnvFilesState,
   BotConsoleBuiltinModelTab,
   BotConsoleAuthStatus,
+  BotConsoleModelOption,
   BotConsoleModelTabId,
   BotConsoleModelTabsState,
   BotServiceStatus,
   BotServiceUnit,
+  CopilotModelListResponse,
+  DeepSeekModelListRequest,
+  DeepSeekModelListResponse,
   EnvPatch,
+  MimoModelListRequest,
+  MimoModelListResponse,
   PresetDocument,
   PresetSource,
   PresetSummary,
@@ -32,13 +38,24 @@ import type {
 } from '../../types/bot-console.js';
 import {
   buildMainChatRuntimeEnvPatch,
+  DEEPSEEK_DEFAULT_BASE_URL,
+  DEEPSEEK_OFFICIAL_MODEL_OPTIONS,
   getBuiltinMainChatTabDefinition,
   getMainChatProviderStrategy,
-  isSupportedMainChatModelForTab,
   MAIN_CHAT_BUILTIN_TAB_IDS,
+  MIMO_CHAT_MODEL_OPTIONS,
+  MIMO_DEFAULT_BASE_URL,
+  normalizeCopilotModelId,
+  normalizeDeepSeekModelId,
   normalizeMainChatBuiltinTabId,
+  normalizeMimoModelId,
+  registerCopilotDynamicModelOptions,
   resolveMainChatActiveTabFromEnv,
   resolveMainChatTabStateFromEnv,
+  validateMainChatTabModel,
+  type CopilotModelOption,
+  type MainChatRequestMode,
+  type OutputProtocolId,
 } from '../shared/llm/index.js';
 
 const execFile = promisify(execFileCallback);
@@ -108,6 +125,7 @@ type CopilotBridgeConsoleState = {
 type CopilotBridgeStateProvider = {
   getRuntimeConfig: () => Promise<CopilotBridgeRuntimeConfig>;
   getConsoleStatus: (options?: { probe?: boolean }) => Promise<CopilotBridgeConsoleState>;
+  proxyModels?: () => Promise<{ status: number; headers: Record<string, string>; body: string }>;
 };
 
 type ResolvedEnvFiles = {
@@ -137,6 +155,8 @@ const PRESET_ROLE_SET = new Set(['system', 'user', 'assistant', 'tool']);
 const RUNTIME_ENV_FILE_BASENAME = '.env.runtime';
 const LOCAL_RUNTIME_ENV_RELATIVE = join('.runtime', RUNTIME_ENV_FILE_BASENAME);
 const CHATLUNA_AGENT_CONFIG_RELATIVE = join('data', 'chatluna', 'agent', 'config.json');
+const DEEPSEEK_MODEL_LIST_TIMEOUT_MS = 5000;
+const MIMO_MODEL_LIST_TIMEOUT_MS = 5000;
 
 export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
   { key: 'QQBOT_REALTIME_MESSAGE_ENABLED', label: '实时消息', type: 'toggle', section: 'features' },
@@ -163,6 +183,12 @@ export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
   { key: 'CHATLUNA_COPILOT_BASE_URL', label: 'GitHub Copilot 接口地址', type: 'text', section: 'model' },
   { key: 'CHATLUNA_COPILOT_API_KEY', label: 'GitHub Copilot Bridge 密钥', type: 'secret', section: 'model' },
   { key: 'CHATLUNA_COPILOT_DEFAULT_MODEL', label: 'GitHub Copilot 默认模型', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_DEEPSEEK_BASE_URL', label: 'DeepSeek 接口地址', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_DEEPSEEK_API_KEY', label: 'DeepSeek 接口密钥', type: 'secret', section: 'model' },
+  { key: 'CHATLUNA_DEEPSEEK_DEFAULT_MODEL', label: 'DeepSeek 默认模型', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_MIMO_BASE_URL', label: 'MIMO 接口地址', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_MIMO_API_KEY', label: 'MIMO 接口密钥', type: 'secret', section: 'model' },
+  { key: 'CHATLUNA_MIMO_DEFAULT_MODEL', label: 'MIMO 默认模型', type: 'text', section: 'model' },
   { key: 'OPENAI_BASE_URL', label: '通用模型接口地址', type: 'text', section: 'model' },
   { key: 'OPENAI_API_KEY', label: '通用模型接口密钥', type: 'secret', section: 'model' },
   { key: 'OPENAI_MODEL', label: '通用默认模型', type: 'text', section: 'model' },
@@ -330,47 +356,440 @@ export function buildModelTabsStateFromEnv(env: Record<string, string>): BotCons
   };
 }
 
-function findRequiredModelTab(
-  tabs: readonly BotConsoleBuiltinModelTab[],
-  id: BotConsoleModelTabId,
-): BotConsoleBuiltinModelTab {
-  const tab = tabs.find((item) => item.id === id);
-  if (!tab) {
-    throw new Error(`缺少内置模型 Tab：${id}`);
-  }
-  return tab;
+function cloneStaticDeepSeekModelOptions(): BotConsoleModelOption[] {
+  return DEEPSEEK_OFFICIAL_MODEL_OPTIONS.map((option) => ({ ...option }));
 }
+
+function cloneStaticMimoModelOptions(): BotConsoleModelOption[] {
+  return MIMO_CHAT_MODEL_OPTIONS.map((option) => ({ ...option }));
+}
+
+function normalizeProviderBaseUrl(value: unknown, fallback: string): string {
+  const normalized = String(value ?? '').trim().replace(/\/+$/u, '');
+  return normalized || fallback;
+}
+
+function normalizeDeepSeekBaseUrl(value: unknown): string {
+  return normalizeProviderBaseUrl(value, DEEPSEEK_DEFAULT_BASE_URL);
+}
+
+function normalizeMimoBaseUrl(value: unknown): string {
+  return normalizeProviderBaseUrl(value, MIMO_DEFAULT_BASE_URL);
+}
+
+function normalizeDeepSeekModelList(models: readonly BotConsoleModelOption[]): BotConsoleModelOption[] {
+  const result: BotConsoleModelOption[] = [];
+  const seen = new Set<string>();
+  for (const item of models) {
+    const modelId = normalizeDeepSeekModelId(item.modelId);
+    if (!modelId || seen.has(modelId)) continue;
+    const staticOption = DEEPSEEK_OFFICIAL_MODEL_OPTIONS.find((option) => option.modelId === modelId) as BotConsoleModelOption | undefined;
+    result.push({
+      modelId,
+      label: item.label?.trim() || staticOption?.label || modelId,
+      deprecated: item.deprecated ?? staticOption?.deprecated,
+      deprecationDate: item.deprecationDate ?? staticOption?.deprecationDate,
+    });
+    seen.add(modelId);
+  }
+  return result;
+}
+
+function normalizeMimoModelList(models: readonly BotConsoleModelOption[]): BotConsoleModelOption[] {
+  const result: BotConsoleModelOption[] = [];
+  const seen = new Set<string>();
+  for (const item of models) {
+    const modelId = normalizeMimoModelId(item.modelId);
+    if (!modelId || seen.has(modelId)) continue;
+    const staticOption = MIMO_CHAT_MODEL_OPTIONS.find((option) => option.modelId === modelId) as BotConsoleModelOption | undefined;
+    if (!staticOption) continue;
+    result.push({
+      modelId,
+      label: item.label?.trim() || staticOption.label || modelId,
+      deprecated: item.deprecated,
+      deprecationDate: item.deprecationDate,
+    });
+    seen.add(modelId);
+  }
+  return result;
+}
+
+function readStringField(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function readStringArrayField(record: Record<string, unknown>, key: string): string[] {
+  const value = record[key];
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim());
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isSupportedCopilotModelEndpoint(endpoint: string): boolean {
+  const normalized = endpoint.trim().toLowerCase().replace(/^ws:/u, '');
+  return normalized === '/responses'
+    || normalized === '/v1/responses'
+    || normalized === '/chat/completions'
+    || normalized === '/v1/chat/completions';
+}
+
+function hasCopilotEndpoint(endpoints: readonly string[], kind: MainChatRequestMode): boolean {
+  return endpoints.some((endpoint) => {
+    const normalized = endpoint.trim().toLowerCase().replace(/^ws:/u, '');
+    return kind === 'responses'
+      ? normalized === '/responses' || normalized === '/v1/responses'
+      : normalized === '/chat/completions' || normalized === '/v1/chat/completions';
+  });
+}
+
+function copilotModelSupportsStructuredOutputs(record: Record<string, unknown>): boolean {
+  const capabilities = record.capabilities;
+  if (!isObjectRecord(capabilities)) return false;
+  const supports = capabilities.supports;
+  if (!isObjectRecord(supports)) return false;
+  return supports.structured_outputs === true;
+}
+
+function resolveCopilotOutputRoute(record: Record<string, unknown>): {
+  requestMode: MainChatRequestMode;
+  structuredOutputProtocol: OutputProtocolId;
+} | null {
+  const endpoints = readStringArrayField(record, 'supported_endpoints');
+  if (!endpoints.some(isSupportedCopilotModelEndpoint)) return null;
+
+  const hasResponses = hasCopilotEndpoint(endpoints, 'responses');
+  const hasChatCompletions = hasCopilotEndpoint(endpoints, 'chat_completions');
+  const native = copilotModelSupportsStructuredOutputs(record);
+
+  if (native && hasResponses) {
+    return { requestMode: 'responses', structuredOutputProtocol: 'native_responses_json_schema' };
+  }
+  if (native && hasChatCompletions) {
+    return { requestMode: 'chat_completions', structuredOutputProtocol: 'native_chat_json_schema' };
+  }
+  if (hasResponses) {
+    return { requestMode: 'responses', structuredOutputProtocol: 'chat_reply_v1' };
+  }
+  if (hasChatCompletions) {
+    return { requestMode: 'chat_completions', structuredOutputProtocol: 'chat_reply_v1' };
+  }
+  return null;
+}
+
+function isCopilotModelPickerEnabled(record: Record<string, unknown>): boolean {
+  return record.model_picker_enabled !== false;
+}
+
+function isCopilotModelPolicyEnabled(record: Record<string, unknown>): boolean {
+  const policy = record.policy;
+  if (!isObjectRecord(policy)) return true;
+  const state = readStringField(policy, 'state')?.toLowerCase();
+  return state == null || state === 'enabled';
+}
+
+function normalizeCopilotModelList(models: readonly BotConsoleModelOption[]): BotConsoleModelOption[] {
+  const result: BotConsoleModelOption[] = [];
+  const seen = new Set<string>();
+  for (const item of models) {
+    const modelId = normalizeCopilotModelId(item.modelId);
+    if (!modelId || seen.has(modelId)) continue;
+    result.push({
+      modelId,
+      label: item.label?.trim() || modelId,
+      requestMode: item.requestMode,
+      structuredOutputProtocol: item.structuredOutputProtocol,
+      deprecated: item.deprecated,
+      deprecationDate: item.deprecationDate,
+    });
+    seen.add(modelId);
+  }
+  return result;
+}
+
+function parseCopilotModelListPayload(payload: unknown): BotConsoleModelOption[] {
+  if (!isObjectRecord(payload)) return [];
+  const data = payload.data;
+  if (!Array.isArray(data)) return [];
+
+  return normalizeCopilotModelList(
+    data.flatMap((item): BotConsoleModelOption[] => {
+      if (!isObjectRecord(item)) return [];
+      const id = readStringField(item, 'id');
+      if (!id) return [];
+      if (!isCopilotModelPolicyEnabled(item)) return [];
+      if (!isCopilotModelPickerEnabled(item)) return [];
+      const route = resolveCopilotOutputRoute(item);
+      if (!route) return [];
+      return [{
+        modelId: id,
+        label: readStringField(item, 'name') ?? id,
+        requestMode: route.requestMode,
+        structuredOutputProtocol: route.structuredOutputProtocol,
+      }];
+    }),
+  );
+}
+
+function staticDeepSeekModelList(error: string | null): DeepSeekModelListResponse {
+  return {
+    source: 'static',
+    models: cloneStaticDeepSeekModelOptions(),
+    error,
+  };
+}
+
+function staticMimoModelList(error: string | null): MimoModelListResponse {
+  return {
+    source: 'static',
+    models: cloneStaticMimoModelOptions(),
+    error,
+  };
+}
+
+function parseDeepSeekModelListPayload(payload: unknown): BotConsoleModelOption[] {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [];
+  const data = (payload as { data?: unknown }).data;
+  if (!Array.isArray(data)) return [];
+  return normalizeDeepSeekModelList(
+    data.flatMap((item): BotConsoleModelOption[] => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+      const id = (item as { id?: unknown }).id;
+      if (typeof id !== 'string' || !id.trim()) return [];
+      return [{ modelId: id.trim(), label: id.trim() }];
+    }),
+  );
+}
+
+function parseMimoModelListPayload(payload: unknown): BotConsoleModelOption[] {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [];
+  const data = (payload as { data?: unknown }).data;
+  if (!Array.isArray(data)) return [];
+  return normalizeMimoModelList(
+    data.flatMap((item): BotConsoleModelOption[] => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+      const id = (item as { id?: unknown }).id;
+      if (typeof id !== 'string' || !id.trim()) return [];
+      return [{ modelId: id.trim(), label: id.trim() }];
+    }),
+  );
+}
+
+function unavailableCopilotModelList(error: string | null): CopilotModelListResponse {
+  return {
+    source: 'dynamic',
+    models: [],
+    error,
+  };
+}
+
+export async function listCopilotModelsFromOAuthBridge(
+  bridge: CopilotBridgeStateProvider | undefined,
+): Promise<CopilotModelListResponse> {
+  if (!bridge?.proxyModels) {
+    return unavailableCopilotModelList('GitHub Copilot OAuth bridge is unavailable.');
+  }
+
+  try {
+    const response = await bridge.proxyModels();
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`GitHub Copilot /models returned HTTP ${response.status}: ${response.body.slice(0, 240)}`);
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(response.body) as unknown;
+    } catch (error) {
+      throw new Error(`GitHub Copilot /models returned non-JSON response: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const models = parseCopilotModelListPayload(payload);
+    if (models.length === 0) {
+      throw new Error('GitHub Copilot /models returned no enabled chat models.');
+    }
+    registerCopilotDynamicModelOptions(models.flatMap((model): CopilotModelOption[] => {
+      if (!model.requestMode || !model.structuredOutputProtocol) return [];
+      return [{
+        modelId: model.modelId,
+        label: model.label,
+        rateLabel: '',
+        requestMode: model.requestMode,
+        structuredOutputProtocol: model.structuredOutputProtocol,
+        deprecated: model.deprecated,
+      }];
+    }));
+
+    return {
+      source: 'dynamic',
+      models,
+      error: null,
+    };
+  } catch (error) {
+    return unavailableCopilotModelList(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export async function listDeepSeekModelsFromOfficialSource(
+  request: DeepSeekModelListRequest,
+): Promise<DeepSeekModelListResponse> {
+  const baseUrl = normalizeDeepSeekBaseUrl(request.baseUrl);
+  const apiKey = String(request.apiKey ?? '').trim();
+  if (!apiKey) {
+    return staticDeepSeekModelList('DeepSeek API key is missing; using official static fallback.');
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DEEPSEEK_MODEL_LIST_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${baseUrl}/models`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: 'application/json',
+      },
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`DeepSeek /models returned HTTP ${response.status}: ${text.slice(0, 240)}`);
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text) as unknown;
+    } catch (error) {
+      throw new Error(`DeepSeek /models returned non-JSON response: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const models = parseDeepSeekModelListPayload(payload);
+    if (models.length === 0) {
+      throw new Error('DeepSeek /models returned no model ids.');
+    }
+
+    return {
+      source: 'dynamic',
+      models,
+      error: null,
+    };
+  } catch (error) {
+    return staticDeepSeekModelList(error instanceof Error ? error.message : String(error));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function listMimoModelsFromOfficialSource(
+  request: MimoModelListRequest,
+): Promise<MimoModelListResponse> {
+  const baseUrl = normalizeMimoBaseUrl(request.baseUrl);
+  const apiKey = String(request.apiKey ?? '').trim();
+  if (!apiKey) {
+    return staticMimoModelList('MIMO API key is missing; using static fallback.');
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MIMO_MODEL_LIST_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${baseUrl}/models`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: 'application/json',
+      },
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`MIMO /models returned HTTP ${response.status}: ${text.slice(0, 240)}`);
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text) as unknown;
+    } catch (error) {
+      throw new Error(`MIMO /models returned non-JSON response: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const models = parseMimoModelListPayload(payload);
+    if (models.length === 0) {
+      throw new Error('MIMO /models returned no allowed chat model ids.');
+    }
+
+    return {
+      source: 'dynamic',
+      models,
+      error: null,
+    };
+  } catch (error) {
+    return staticMimoModelList(error instanceof Error ? error.message : String(error));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+type NormalizeModelTabInputOptions = {
+  copilotModelIds?: readonly string[];
+  deepseekModelIds?: readonly string[];
+  mimoModelIds?: readonly string[];
+  /** When false, validation errors are skipped (used for tabs the user did not touch in this save). */
+  validate?: boolean;
+  /** Existing env-derived state for this tab; used to fill blanks instead of zero defaults. */
+  existing?: BotConsoleBuiltinModelTab;
+};
 
 function normalizeModelTabInput(
   input: Partial<BotConsoleBuiltinModelTab> | null | undefined,
+  options: NormalizeModelTabInputOptions = {},
 ): BotConsoleBuiltinModelTab {
   const id = normalizeMainChatBuiltinTabId(input?.id) as BotConsoleModelTabId;
-  const defaultTab = resolveMainChatTabStateFromEnv(id, readManagedEnvFromContent('')) as BotConsoleBuiltinModelTab;
+  const fallbackTab = options.existing ?? (resolveMainChatTabStateFromEnv(id, readManagedEnvFromContent('')) as BotConsoleBuiltinModelTab);
   const definition = getBuiltinMainChatTabDefinition(id);
   const strategy = getMainChatProviderStrategy(definition.strategyId);
-  const normalizedModel = strategy.normalizeModel(String(input?.defaultModel ?? defaultTab.defaultModel ?? '').trim()) ?? '';
+  const rawModel = String(input?.defaultModel ?? fallbackTab.defaultModel ?? '').trim();
+  const normalizedModel = strategy.normalizeModel(rawModel) ?? '';
+  const requestMode = strategy.resolveRequestMode(normalizedModel);
+  const structuredOutputProtocol = strategy.resolveStructuredOutputProtocol(normalizedModel);
+  const consoleDescription = strategy.describeForConsole(normalizedModel);
   const normalized: BotConsoleBuiltinModelTab = {
     id,
     title: definition.title,
     provider: definition.provider,
-    strategyId: defaultTab.strategyId,
-    requestMode: defaultTab.requestMode,
-    structuredOutputProtocol: defaultTab.structuredOutputProtocol,
-    description: defaultTab.description,
-    modelHint: defaultTab.modelHint,
-    authKind: defaultTab.authKind,
-    authStatus: defaultTab.authStatus,
-    accountLabel: defaultTab.accountLabel,
-    authError: defaultTab.authError,
-    baseUrl: id === 'siliconflow' ? definition.defaultBaseUrl : String(input?.baseUrl ?? defaultTab.baseUrl ?? '').trim(),
-    apiKey: String(input?.apiKey ?? defaultTab.apiKey ?? '').trim(),
+    strategyId: fallbackTab.strategyId,
+    requestMode,
+    structuredOutputProtocol,
+    description: consoleDescription.description,
+    modelHint: consoleDescription.modelHint,
+    authKind: fallbackTab.authKind,
+    authStatus: fallbackTab.authStatus,
+    accountLabel: fallbackTab.accountLabel,
+    authError: fallbackTab.authError,
+    baseUrl: id === 'siliconflow'
+      ? definition.defaultBaseUrl
+      : id === 'deepseek'
+        ? normalizeDeepSeekBaseUrl(input?.baseUrl ?? fallbackTab.baseUrl)
+        : id === 'mimo'
+          ? normalizeMimoBaseUrl(input?.baseUrl ?? fallbackTab.baseUrl)
+          : String(input?.baseUrl ?? fallbackTab.baseUrl ?? '').trim(),
+    apiKey: String(input?.apiKey || fallbackTab.apiKey || '').trim(),
     defaultModel: normalizedModel,
     canonicalModel: normalizedModel,
     transportModel: strategy.transportModel(normalizedModel) ?? normalizedModel,
   };
 
-  if (!isSupportedMainChatModelForTab(id, normalized.defaultModel)) {
-    throw new Error(`${normalized.title} Tab 只支持当前允许的模型族，收到：${normalized.defaultModel || '空值'}`);
+  if (options.validate !== false) {
+    const validation = validateMainChatTabModel(id, normalized.defaultModel || rawModel, {
+      copilotDynamicModelIds: options.copilotModelIds,
+      deepseekDynamicModelIds: options.deepseekModelIds,
+      mimoDynamicModelIds: options.mimoModelIds,
+    });
+    if (!validation.ok) {
+      throw new Error(validation.message ?? `${normalized.title} Tab 的默认模型不合法：${normalized.defaultModel || '空值'}`);
+    }
   }
 
   return normalized;
@@ -848,6 +1267,18 @@ export class BotConsoleManager {
     };
   }
 
+  async listDeepSeekModels(input: DeepSeekModelListRequest): Promise<DeepSeekModelListResponse> {
+    return listDeepSeekModelsFromOfficialSource(input);
+  }
+
+  async listCopilotModels(): Promise<CopilotModelListResponse> {
+    return listCopilotModelsFromOAuthBridge(this.copilotBridge);
+  }
+
+  async listMimoModels(input: MimoModelListRequest): Promise<MimoModelListResponse> {
+    return listMimoModelsFromOfficialSource(input);
+  }
+
   async savePreset(document: PresetDocument): Promise<PresetDocument> {
     const normalized = normalizePresetDocument(document);
     const targetPath = this.resolveRuntimePresetPath(normalized.name);
@@ -1111,19 +1542,101 @@ export class BotConsoleManager {
   private async buildModelTabsPatch(input: SaveModelTabsRequest): Promise<EnvPatch> {
     const activeTab = normalizeMainChatBuiltinTabId(input?.activeTab) as BotConsoleModelTabId;
     const providedTabs = Array.isArray(input?.tabs) ? input.tabs : [];
-    const tabs = providedTabs.map((item) => normalizeModelTabInput(item));
+    const dirtyIds = new Set<BotConsoleModelTabId>();
+    if (!Array.isArray(input?.dirtyTabIds) || input.dirtyTabIds.length === 0) {
+      throw new Error('保存模型 Tab 必须携带已修改的 Tab 列表。');
+    }
+    for (const value of input.dirtyTabIds) {
+      try {
+        dirtyIds.add(normalizeMainChatBuiltinTabId(value) as BotConsoleModelTabId);
+      } catch {
+        throw new Error(`未知模型 Tab：${String(value ?? '')}`);
+      }
+    }
+    if (dirtyIds.size === 0) {
+      throw new Error('保存模型 Tab 必须携带已修改的 Tab 列表。');
+    }
+    dirtyIds.add(activeTab);
 
-    if (this.copilotBridge) {
-      const runtime = await this.copilotBridge.getRuntimeConfig();
-      const copilotTab = findRequiredModelTab(tabs, 'copilot');
-      copilotTab.baseUrl = runtime.baseUrl;
-      copilotTab.apiKey = runtime.apiKey;
+    const currentEnvFromDisk = await this.readEffectiveEnv();
+    const existingByTab = Object.fromEntries(
+      MAIN_CHAT_BUILTIN_TAB_IDS.map((id) => [
+        id,
+        resolveMainChatTabStateFromEnv(id, currentEnvFromDisk) as BotConsoleBuiltinModelTab,
+      ]),
+    ) as Record<BotConsoleModelTabId, BotConsoleBuiltinModelTab>;
+
+    let copilotModelIds: string[] | undefined;
+    if (dirtyIds.has('copilot')) {
+      const copilotModels = await this.listCopilotModels();
+      if (copilotModels.error || copilotModels.models.length === 0) {
+        throw new Error(`GitHub Copilot OAuth 模型列表不可用：${copilotModels.error ?? '未返回可用模型'}`);
+      }
+      copilotModelIds = copilotModels.models.map((model) => model.modelId);
     }
 
-    findRequiredModelTab(tabs, 'siliconflow');
-    findRequiredModelTab(tabs, 'openai');
-    findRequiredModelTab(tabs, 'copilot');
+    const deepseekInput = providedTabs.find((item) => String(item?.id ?? '').trim() === 'deepseek');
+    const deepseekModels = await this.listDeepSeekModels({
+      baseUrl: deepseekInput?.baseUrl ?? existingByTab.deepseek.baseUrl,
+      apiKey: deepseekInput?.apiKey || existingByTab.deepseek.apiKey,
+    });
+    const deepseekModelIds = deepseekModels.models.map((model) => model.modelId);
+    const mimoInput = providedTabs.find((item) => String(item?.id ?? '').trim() === 'mimo');
+    const mimoModels = await this.listMimoModels({
+      baseUrl: mimoInput?.baseUrl ?? existingByTab.mimo.baseUrl,
+      apiKey: mimoInput?.apiKey || existingByTab.mimo.apiKey,
+    });
+    const mimoModelIds = mimoModels.models.map((model) => model.modelId);
+
+    const providedById = new Map<BotConsoleModelTabId, Partial<BotConsoleBuiltinModelTab>>();
+    for (const item of providedTabs) {
+      try {
+        const id = normalizeMainChatBuiltinTabId(item?.id) as BotConsoleModelTabId;
+        providedById.set(id, item);
+      } catch {
+        // Ignore unknown tab ids in the payload rather than aborting the entire save.
+      }
+    }
+
+    const tabs: BotConsoleBuiltinModelTab[] = MAIN_CHAT_BUILTIN_TAB_IDS.map((id) => {
+      const provided = providedById.get(id);
+      const existing = existingByTab[id];
+      return normalizeModelTabInput(provided ?? existing, {
+        copilotModelIds,
+        deepseekModelIds,
+        mimoModelIds,
+        existing,
+        validate: dirtyIds.has(id),
+      });
+    });
+
+    if (this.copilotBridge) {
+      const runtime = await this.copilotBridge.getRuntimeConfig().catch(() => null);
+      if (runtime) {
+        const copilotTab = tabs.find((tab) => tab.id === 'copilot');
+        if (copilotTab) {
+          if (typeof runtime.baseUrl === 'string' && runtime.baseUrl.trim()) {
+            copilotTab.baseUrl = runtime.baseUrl.trim();
+          }
+          if (typeof runtime.apiKey === 'string' && runtime.apiKey.trim()) {
+            copilotTab.apiKey = runtime.apiKey.trim();
+          }
+        }
+      }
+    }
+
     return buildMainChatRuntimeEnvPatch(activeTab, tabs);
+  }
+
+  private async readEffectiveEnv(): Promise<Record<string, string>> {
+    const [baseContent, targetContent] = await Promise.all([
+      readFileIfExists(this.fs, this.envFiles.baseFilePath),
+      readFileIfExists(this.fs, this.envFiles.editTarget),
+    ]);
+    return mergeManagedEnvRecords(
+      readManagedEnvPatchFromContent(baseContent),
+      readManagedEnvPatchFromContent(targetContent),
+    );
   }
 
   private async decorateModelTabsState(state: BotConsoleModelTabsState): Promise<BotConsoleModelTabsState> {
