@@ -57,31 +57,55 @@ describe('llbot host runtime helpers', () => {
 
     const changed = await prepareRuntimeVersion({
       runtimeDir,
-      version: '7.11.0',
+      version: '7.12.15',
       fetchImpl: vi.fn(async () => new Response(new Uint8Array([1, 2, 3]))),
       extractZip,
     });
 
     expect(changed).toBe(true);
     expect(extractZip).toHaveBeenCalledTimes(1);
-    expect(readFileSync(join(runtimeDir, VERSION_MARKER), 'utf8').trim()).toBe('7.11.0');
+    expect(readFileSync(join(runtimeDir, VERSION_MARKER), 'utf8').trim()).toBe('7.12.15');
   });
 
   it('skips re-download when the runtime version already matches', async () => {
     const runtimeDir = join(createTempDir(), 'llbot-runtime');
     mkdirSync(runtimeDir, { recursive: true });
-    writeFileSync(join(runtimeDir, VERSION_MARKER), '7.11.0\n', 'utf8');
+    writeFileSync(join(runtimeDir, VERSION_MARKER), '7.12.15\n', 'utf8');
     writeFileSync(join(runtimeDir, 'llbot.js'), 'console.log("llbot")\n', 'utf8');
     writeFileSync(join(runtimeDir, 'default_config.json'), '{}\n', 'utf8');
 
     const changed = await prepareRuntimeVersion({
       runtimeDir,
-      version: '7.11.0',
+      version: '7.12.15',
       fetchImpl: vi.fn(),
       extractZip: vi.fn(),
     });
 
     expect(changed).toBe(false);
+  });
+
+  it('re-downloads when the matching runtime entrypoint is empty', async () => {
+    const runtimeDir = join(createTempDir(), 'llbot-runtime');
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(join(runtimeDir, VERSION_MARKER), '7.12.15\n', 'utf8');
+    writeFileSync(join(runtimeDir, 'llbot.js'), '', 'utf8');
+    writeFileSync(join(runtimeDir, 'default_config.json'), '{}\n', 'utf8');
+    const extractZip = vi.fn(async (_zipPath: string, targetDir: string) => {
+      mkdirSync(targetDir, { recursive: true });
+      writeFileSync(join(targetDir, 'llbot.js'), 'console.log("llbot")\n', 'utf8');
+      writeFileSync(join(targetDir, 'default_config.json'), '{}\n', 'utf8');
+    });
+
+    const changed = await prepareRuntimeVersion({
+      runtimeDir,
+      version: '7.12.15',
+      fetchImpl: vi.fn(async () => new Response(new Uint8Array([1, 2, 3]))),
+      extractZip,
+    });
+
+    expect(changed).toBe(true);
+    expect(extractZip).toHaveBeenCalledTimes(1);
+    expect(readFileSync(join(runtimeDir, 'llbot.js'), 'utf8')).toContain('console.log("llbot")');
   });
 
   it('rewrites llbot managed config to host loopback pmhq and local websocket settings', () => {
@@ -139,6 +163,30 @@ describe('llbot host runtime helpers', () => {
     disableWebUIAuthMiddleware({ runtimeDir, dataDir, disableAuth: true });
 
     expect(readFileSync(join(runtimeDir, 'llbot.js'), 'utf8')).toContain('\tnext();');
+    expect(() => readFileSync(join(dataDir, 'webui_token.txt'), 'utf8')).toThrow();
+  });
+
+  it('disables newer async webui auth middleware signatures', () => {
+    const dir = createTempDir();
+    const runtimeDir = join(dir, 'runtime');
+    const dataDir = join(dir, 'data');
+    mkdirSync(runtimeDir, { recursive: true });
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(
+      join(runtimeDir, 'llbot.js'),
+      [
+        'async function authMiddleware(c, next) {',
+        '\tif (!c.req.header("X-Webui-Token")) return c.json({}, 403);',
+        '\tawait next();',
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(join(dataDir, 'webui_token.txt'), 'secret-token\n', 'utf8');
+
+    disableWebUIAuthMiddleware({ runtimeDir, dataDir, disableAuth: true });
+
+    expect(readFileSync(join(runtimeDir, 'llbot.js'), 'utf8')).toContain('\treturn await next();');
     expect(() => readFileSync(join(dataDir, 'webui_token.txt'), 'utf8')).toThrow();
   });
 
@@ -293,6 +341,43 @@ describe('llbot host runtime helpers', () => {
     expect(patched).not.toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  }\n  /** 上传文件到 QQ 的文件夹 */');
   });
 
+  it('patches tab-indented llbot media path resolution from newer bundles', () => {
+    const dir = createTempDir();
+    const runtimeDir = join(dir, 'runtime');
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(
+      join(runtimeDir, 'llbot.js'),
+      [
+        'class NTFileApi {',
+        '\tasync getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {',
+        '\t\treturn await this.ctx.pmhq.invoke(NTMethod.MEDIA_FILE_PATH, [{',
+        '\t\t\tmd5HexStr,',
+        '\t\t\tfileName,',
+        '\t\t\telementType,',
+        '\t\t\telementSubType,',
+        '\t\t\tthumbSize: 0,',
+        '\t\t\tneedCreate: true,',
+        '\t\t\tdownloadType: 1,',
+        '\t\t\tfile_uuid: ""',
+        '\t\t}]);',
+        '\t}',
+        '\t/** 上传文件到 QQ 的文件夹 */',
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const changed = patchLlbotMediaPathResolution({
+      runtimeDir,
+      qqConfigMountSource: '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
+    });
+
+    const patched = readFileSync(join(runtimeDir, 'llbot.js'), 'utf8');
+    expect(changed).toBe(true);
+    expect(patched).toContain('const mediaPath = await this.ctx.pmhq.invoke(NTMethod.MEDIA_FILE_PATH');
+    expect(patched).toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n\t/** 上传文件到 QQ 的文件夹 */');
+  });
+
   it('fails fast when the llbot media path signature changes upstream', () => {
     const dir = createTempDir();
     const runtimeDir = join(dir, 'runtime');
@@ -313,7 +398,7 @@ describe('llbot host runtime helpers', () => {
     const qqMountSource = join(dir, 'pmhq-qq');
     mkdirSync(runtimeDir, { recursive: true });
     mkdirSync(join(qqMountSource, 'nt_qq_test', 'nt_data', 'Pic'), { recursive: true });
-    writeFileSync(join(runtimeDir, '.qqbot-llbot-version'), '7.11.0\n', 'utf8');
+    writeFileSync(join(runtimeDir, '.qqbot-llbot-version'), '7.12.15\n', 'utf8');
     writeFileSync(
       join(runtimeDir, 'llbot.js'),
       [
@@ -355,7 +440,7 @@ describe('llbot host runtime helpers', () => {
     );
 
     await prepareManagedRuntime({
-      LLBOT_VERSION: '7.11.0',
+      LLBOT_VERSION: '7.12.15',
       LLBOT_RUNTIME_DIR: runtimeDir,
       LLONEBOT_DATA_DIR: dataDir,
       QQBOT_QQ_CONFIG_MOUNT_SOURCE: qqMountSource,

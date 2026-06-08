@@ -16,7 +16,7 @@ if [ -n "${ENV_FILE}" ]; then
   fi
 fi
 
-export LLBOT_VERSION="${LLBOT_VERSION:-7.11.0}"
+export LLBOT_VERSION="${LLBOT_VERSION:-7.12.15}"
 export LLBOT_RUNTIME_DIR="${LLBOT_RUNTIME_DIR:-${ROOT_DIR}/.runtime/llbot}"
 export LLONEBOT_DATA_DIR="${LLONEBOT_DATA_DIR:-${ROOT_DIR}/.runtime/llonebot}"
 export LLONEBOT_WEBUI_PORT="${LLONEBOT_WEBUI_PORT:-3080}"

@@ -96,46 +96,53 @@ function patchLlbotMediaPathResolution({ runtimeDir, qqConfigMountSource }) {
   const source = fs.readFileSync(entrypointPath, 'utf8');
 
   const startMarker = 'async getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {';
-  const endMarker = '\n  /** 上传文件到 QQ 的文件夹 */';
   const start = source.indexOf(startMarker);
   if (start === -1) {
     throw new Error('Failed to locate llbot getRichMediaFilePath for managed media path rewrite');
   }
 
-  const end = source.indexOf(endMarker, start);
-  if (end === -1) {
+  const afterStart = source.slice(start);
+  const terminatorMatch = afterStart.match(/\n([ \t]*)\/\*\* 上传文件到 QQ 的文件夹 \*\//);
+  if (!terminatorMatch || terminatorMatch.index === undefined) {
     throw new Error('Failed to locate llbot getRichMediaFilePath terminator for managed media path rewrite');
   }
+  const end = start + terminatorMatch.index;
+  const methodLineStart = source.lastIndexOf('\n', start) + 1;
+  const methodIndent = source.slice(methodLineStart, start);
+  const innerIndent = `${methodIndent}${methodIndent.includes('\t') ? '\t' : '  '}`;
+  const originalBlock = source.slice(start, end);
+  const invokeMatch = originalBlock.match(/(?:return|const\s+mediaPath\s*=\s*)\s*await\s+(.+?)\(NTMethod\.MEDIA_FILE_PATH\s*,/s);
+  const invokeExpression = (invokeMatch?.[1] || 'invoke').trim();
 
   const replacement = [
     startMarker,
-    `    const mediaPath = await invoke(NTMethod.MEDIA_FILE_PATH, [`,
-    `      {`,
-    `        md5HexStr,`,
-    `        fileName,`,
-    `        elementType,`,
-    `        elementSubType,`,
-    `        thumbSize: 0,`,
-    `        needCreate: true,`,
-    `        downloadType: 1,`,
-    `        file_uuid: ""`,
-    `      }`,
-    `    ]);`,
-    `    const qqbotManagedPmhqMediaRoot = ${JSON.stringify(sourceDir)};`,
-    `    const qqbotManagedPmhqMediaPath = ${JSON.stringify(PMHQ_QQ_CONFIG_DESTINATION)};`,
-    `    const qqbotManagedRelativeMediaPath = typeof mediaPath === "string"`,
-    `      ? mediaPath.slice(qqbotManagedPmhqMediaPath.length).replace(/^[/\\\\]+/, "")`,
-    `      : "";`,
-    `    return typeof mediaPath === "string" && mediaPath.startsWith(qqbotManagedPmhqMediaPath)`,
-    `      ? qqbotManagedRelativeMediaPath`,
-    `        ? \`${'${'}qqbotManagedPmhqMediaRoot.replace(/[/\\\\]+$/, "")}/${'${'}qqbotManagedRelativeMediaPath}\``,
-    `        : qqbotManagedPmhqMediaRoot.replace(/[/\\\\]+$/, "")`,
-    `      : mediaPath;`,
-    `  }`,
-    `  /* ${PMHQ_MEDIA_PATH_PATCH_MARKER} */`,
+    `${innerIndent}const mediaPath = await ${invokeExpression}(NTMethod.MEDIA_FILE_PATH, [`,
+    `${innerIndent}  {`,
+    `${innerIndent}    md5HexStr,`,
+    `${innerIndent}    fileName,`,
+    `${innerIndent}    elementType,`,
+    `${innerIndent}    elementSubType,`,
+    `${innerIndent}    thumbSize: 0,`,
+    `${innerIndent}    needCreate: true,`,
+    `${innerIndent}    downloadType: 1,`,
+    `${innerIndent}    file_uuid: ""`,
+    `${innerIndent}  }`,
+    `${innerIndent}]);`,
+    `${innerIndent}const qqbotManagedPmhqMediaRoot = ${JSON.stringify(sourceDir)};`,
+    `${innerIndent}const qqbotManagedPmhqMediaPath = ${JSON.stringify(PMHQ_QQ_CONFIG_DESTINATION)};`,
+    `${innerIndent}const qqbotManagedRelativeMediaPath = typeof mediaPath === "string"`,
+    `${innerIndent}  ? mediaPath.slice(qqbotManagedPmhqMediaPath.length).replace(/^[/\\\\]+/, "")`,
+    `${innerIndent}  : "";`,
+    `${innerIndent}return typeof mediaPath === "string" && mediaPath.startsWith(qqbotManagedPmhqMediaPath)`,
+    `${innerIndent}  ? qqbotManagedRelativeMediaPath`,
+    `${innerIndent}    ? \`${'${'}qqbotManagedPmhqMediaRoot.replace(/[/\\\\]+$/, "")}/${'${'}qqbotManagedRelativeMediaPath}\``,
+    `${innerIndent}    : qqbotManagedPmhqMediaRoot.replace(/[/\\\\]+$/, "")`,
+    `${innerIndent}  : mediaPath;`,
+    `${methodIndent}}`,
+    `${methodIndent}/* ${PMHQ_MEDIA_PATH_PATCH_MARKER} */`,
   ].join('\n');
 
-  if (source.slice(start, end) === replacement) {
+  if (originalBlock === replacement) {
     return false;
   }
 
@@ -152,8 +159,8 @@ function disableWebUIAuthMiddleware({ runtimeDir, dataDir, disableAuth }) {
 
   const entrypointPath = path.join(runtimeDir, ENTRYPOINT_FILE);
   const source = fs.readFileSync(entrypointPath, 'utf8');
-  const startMarker = 'function authMiddleware(req, res, next) {';
-  const start = source.indexOf(startMarker);
+  const startMatch = source.match(/(async\s+)?function authMiddleware\(([^)]*)\) \{/);
+  const start = startMatch?.index ?? -1;
   let end = -1;
 
   if (start !== -1) {
@@ -176,7 +183,12 @@ function disableWebUIAuthMiddleware({ runtimeDir, dataDir, disableAuth }) {
     throw new Error('Failed to locate llbot WebUI auth middleware');
   }
 
-  const replacement = `${startMarker}\n\tnext();\n}`;
+  const asyncPrefix = startMatch?.[1] || '';
+  const params = startMatch?.[2] || 'req, res, next';
+  const nextParam = params.split(',').map((item) => item.trim()).filter(Boolean).at(-1) || 'next';
+  const replacement = asyncPrefix
+    ? `${asyncPrefix}function authMiddleware(${params}) {\n\treturn await ${nextParam}();\n}`
+    : `function authMiddleware(${params}) {\n\t${nextParam}();\n}`;
   fs.writeFileSync(entrypointPath, `${source.slice(0, start)}${replacement}${source.slice(end)}`, 'utf8');
 
   const tokenPath = path.join(dataDir, 'webui_token.txt');
@@ -286,6 +298,14 @@ function findPythonBinary() {
   throw new Error('python3 or python is required to extract LLBot.zip');
 }
 
+function hasNonEmptyFile(filePath) {
+  try {
+    return fs.statSync(filePath).size > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function extractReleaseZip(zipPath, runtimeDir) {
   const python = findPythonBinary();
   const result = spawnSync(python, ['-m', 'zipfile', '-e', zipPath, runtimeDir], {
@@ -311,8 +331,8 @@ async function prepareRuntimeVersion(options) {
 
   if (
     currentVersion === version &&
-    fs.existsSync(entrypointPath) &&
-    fs.existsSync(configPath)
+    hasNonEmptyFile(entrypointPath) &&
+    hasNonEmptyFile(configPath)
   ) {
     return false;
   }

@@ -97,11 +97,20 @@ plugins:
     chatluna-openai-like-adapter:0o3zho:
       platform: ${{ env.CHATLUNA_PLATFORM || 'siliconflow' }}
       nonStreaming: true
+      pullModels: '${{ env.CHATLUNA_PLATFORM === ''mimo'' ? false : true }}'
       maxContextRatio: ${{ +env.CHATLUNA_MAX_CONTEXT_RATIO || 0.35 }}
       apiKeys:
         - - ${{ env.CHATLUNA_API_KEY || '' }}
           - ${{ env.CHATLUNA_BASE_URL || 'https://api.siliconflow.cn/v1' }}
           - true
+      additionalModels: >-
+        ${{ env.CHATLUNA_PLATFORM === 'mimo' ? [ { model: 'mimo-v2.5-pro',
+        modelType: 'LLM 大语言模型', modelCapabilities: ['tool_call'], contextSize:
+        128000 }, { model: 'mimo-v2.5', modelType: 'LLM 大语言模型',
+        modelCapabilities: ['tool_call'], contextSize: 128000 }, { model:
+        'mimo-v2-pro', modelType: 'LLM 大语言模型', modelCapabilities: ['tool_call'],
+        contextSize: 128000 }, { model: 'mimo-v2-omni', modelType: 'LLM 大语言模型',
+        modelCapabilities: ['tool_call'], contextSize: 128000 } ] : [] }}
     puppeteer:0vx5c7: {}
     chatluna-search-service:search:
       enabled: ${{ env.CHATLUNA_SEARCH_SERVICE_ENABLED !== 'false' }}

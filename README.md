@@ -35,17 +35,22 @@ Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime.
 - `CHATLUNA_COPILOT_API_KEY`
 - `CHATLUNA_COPILOT_DEFAULT_MODEL`
 - `CHATLUNA_COPILOT_OAUTH_CLIENT_ID`
+- `CHATLUNA_DEEPSEEK_BASE_URL`
+- `CHATLUNA_DEEPSEEK_API_KEY`
+- `CHATLUNA_DEEPSEEK_DEFAULT_MODEL`
 - `OPENAI_BASE_URL`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `MEMORY_EMBED_API_KEY`
 - `CHATLUNA_COMMAND_AUTHORITY`
 
-Main chat provider selection is fixed to three built-in tabs:
+Main chat provider selection is fixed to five built-in tabs:
 
 - `siliconflow`: current Kimi main-chat chain, fixed to `https://api.siliconflow.cn/v1` with `Pro/moonshotai/Kimi-K2.5`
 - `openai`: OpenAI-compatible provider tab, defaulting to `wyzai` with `openai/gpt-5.4-medium-thinking`
 - `copilot`: GitHub Copilot OAuth tab, defaulting to the local bridge `http://127.0.0.1:5140/api/internal/copilot/v1` with `gpt-5.4-mini`
+- `deepseek`: DeepSeek official OpenAI-compatible tab, defaulting to `https://api.deepseek.com` with `deepseek-v4-flash`
+- `mimo`: Xiaomi MIMO Token Plan OpenAI-compatible tab, defaulting to `https://token-plan-cn.xiaomimimo.com/v1` with `mimo-v2.5-pro`
 
 `CHATLUNA_ACTIVE_TAB` selects which built-in tab is mirrored into the runtime
 keys `CHATLUNA_PLATFORM` / `CHATLUNA_BASE_URL` / `CHATLUNA_API_KEY` /
@@ -57,6 +62,8 @@ endpoint preset:
 - `siliconflow` uses the existing `chat/completions` main-chat path, locks the official SiliconFlow endpoint, and applies the Kimi-specific non-thinking override
 - `openai` uses the OpenAI-compatible GPT-5.4 strategy, currently pinned to `chat/completions` + `response_format` structured output for provider compatibility
 - `copilot` uses GitHub device-flow OAuth, exchanges GitHub token into a short-lived Copilot session token at runtime, and routes ChatLuna through the local bridge to either `responses` or `chat/completions` based on the selected Copilot model
+- `deepseek` uses DeepSeek's official `/models` endpoint for its dropdown when a key is available, then falls back to the official static model list without adding local variants
+- `mimo` uses the MIMO `/models` endpoint when a key is available, then filters the result to the verified chat/completions allowlist so TTS models never become main-chat options
 
 ## Developer docs (web)
 
@@ -400,7 +407,7 @@ pnpm build
 - OneBot WS cannot connect:
   - Confirm Koishi process is running.
   - Confirm LLBot `WebSocket正向` is enabled at `3001`.
-  - LLBot `7.11.0` only starts `3001` after QQ login succeeds; if `pmhq` logs `quick login failed` / `登录系统连接异常`, treat a missing `3001` listener as a login-state problem instead of a network/bootstrap problem.
+  - LLBot `7.12.15` only starts `3001` after QQ login succeeds; if `pmhq` logs `quick login failed` / `登录系统连接异常`, treat a missing `3001` listener as a login-state problem instead of a network/bootstrap problem.
   - If QQ has not finished login yet, do not treat a missing `3001` listener as a stack bootstrap failure; verify LLBot WebUI and `PMHQ WebSocket 连接成功` first.
   - Confirm `ONEBOT_WS_ENDPOINT` points to LLBot OneBot WS endpoint.
   - Confirm `scripts/verify-qqbot-host-runtime.sh` passes on host.
