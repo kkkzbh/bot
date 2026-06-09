@@ -23,6 +23,17 @@ export interface MemoryProviderProfile {
   supportsJsonMode?: boolean;
 }
 
+export interface MemoryExtractProviderOverrides {
+  routeId?: string;
+  baseUrl?: string | null;
+  apiKey?: string | null;
+  model?: string | null;
+  timeoutMs?: number;
+  requestMode?: string | null;
+  structuredOutputProtocol?: string | null;
+  supportsJsonMode?: boolean;
+}
+
 export interface MemoryExtractInput {
   address: MemoryAddress;
   target: MemoryExtractionTarget;
@@ -59,6 +70,49 @@ export function buildMemoryProviderProfile(
     structuredOutputProtocol: overrides.structuredOutputProtocol ?? profile.structuredOutputProtocol,
     supportsJsonMode: overrides.supportsJsonMode ?? false,
   };
+}
+
+function normalizeRequestMode(value: unknown, fallback: MainChatRuntimeProfile['requestMode']): MainChatRuntimeProfile['requestMode'] {
+  return value === 'responses' || value === 'chat_completions' ? value : fallback;
+}
+
+function normalizeStructuredOutputProtocol(
+  value: unknown,
+  fallback: MainChatRuntimeProfile['structuredOutputProtocol'],
+): MemoryProviderProfile['structuredOutputProtocol'] {
+  if (
+    value === 'native_chat_json_schema' ||
+    value === 'native_responses_json_schema' ||
+    value === 'chat_reply_v1' ||
+    value === 'json_mode'
+  ) {
+    return value;
+  }
+  return fallback;
+}
+
+export function buildMemoryExtractProviderProfile(
+  mainProfile: MainChatRuntimeProfile,
+  overrides: MemoryExtractProviderOverrides = {},
+): MemoryProviderProfile {
+  const baseUrl = String(overrides.baseUrl ?? '').trim();
+  const apiKey = String(overrides.apiKey ?? '').trim();
+  const model = String(overrides.model ?? '').trim();
+  const hasDedicatedProvider = Boolean(baseUrl || apiKey || model);
+  return buildMemoryProviderProfile(mainProfile, {
+    routeId: overrides.routeId ?? 'memory-extract',
+    baseUrl: hasDedicatedProvider ? baseUrl : mainProfile.baseUrl,
+    apiKey: hasDedicatedProvider ? apiKey : mainProfile.apiKey,
+    model: hasDedicatedProvider ? model : mainProfile.transportModel,
+    timeoutMs: overrides.timeoutMs ?? 60_000,
+    requestMode: hasDedicatedProvider
+      ? normalizeRequestMode(overrides.requestMode, 'chat_completions')
+      : normalizeRequestMode(overrides.requestMode, mainProfile.requestMode),
+    structuredOutputProtocol: hasDedicatedProvider
+      ? normalizeStructuredOutputProtocol(overrides.structuredOutputProtocol, 'chat_reply_v1')
+      : normalizeStructuredOutputProtocol(overrides.structuredOutputProtocol, mainProfile.structuredOutputProtocol),
+    supportsJsonMode: overrides.supportsJsonMode ?? false,
+  });
 }
 
 export function resolveMemoryOutputProtocol(profile: MemoryProviderProfile | MainChatRuntimeProfile): MemoryOutputProtocolId {

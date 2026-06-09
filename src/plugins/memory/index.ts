@@ -1,5 +1,4 @@
 import { Context, Logger, Schema, type Session } from 'koishi';
-import type { MainChatRuntimeProfile } from '../shared/llm/main-chat-tabs.js';
 import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
 import { consumePromptEnvelope, registerPromptFragment } from '../shared/prompt-context/index.js';
 import { resolveSessionDisplayName } from '../shared/session/index.js';
@@ -12,7 +11,7 @@ import { runLegacyMemoryMigration } from './migration.js';
 import { MemoryStatusService } from './status.js';
 export { MemoryStatusService, createUnavailableMemoryStatusSnapshot } from './status.js';
 import { embedTexts, isEmbedRuntimeConfigured } from './providers/embedding-client.js';
-import { buildMemoryProviderProfile } from './providers/router.js';
+import { buildMemoryExtractProviderProfile } from './providers/router.js';
 import { runMemoryJobTick, processMaintenanceJob } from './pipeline.js';
 import { extractPlainText, MemoryStore } from './store.js';
 export { MemoryStore } from './store.js';
@@ -57,9 +56,9 @@ export const Config: Schema<Config> = Schema.object({
   enabled: Schema.boolean().default(true).description('是否启用本地长期记忆。'),
   readEnabled: Schema.boolean().default(true).description('是否启用长期记忆召回。'),
   writeEnabled: Schema.boolean().default(true).description('是否启用长期记忆提炼写入。'),
-  extractBaseUrl: Schema.string().description('长期记忆提炼用 OpenAI 兼容 Base URL；留空时使用主聊天 provider。'),
-  extractApiKey: Schema.string().role('secret').description('长期记忆提炼用 API Key；留空时使用主聊天 provider。'),
-  extractModel: Schema.string().description('长期记忆提炼模型；留空时使用主聊天模型。'),
+  extractBaseUrl: Schema.string().description('长期记忆提炼用 OpenAI 兼容 Base URL；Base URL/API Key/模型三项全空时才整体使用主聊天 provider。'),
+  extractApiKey: Schema.string().role('secret').description('长期记忆提炼用 API Key；不要和主聊天 provider 混用。'),
+  extractModel: Schema.string().description('长期记忆提炼模型；不要和主聊天 API Key 混用。'),
   extractTimeoutMs: Schema.natural().role('time').default(60000).description('长期记忆提炼请求超时（毫秒）。'),
   extractRequestMode: Schema.string().default('').description('提炼请求模式：chat_completions / responses；留空跟随主聊天。'),
   extractStructuredOutputProtocol: Schema.string().default('').description('提炼输出协议；留空跟随主聊天。'),
@@ -127,42 +126,20 @@ function resolveChatLunaService(ctx: ContextServiceView): ChatLunaLike | undefin
   return ctx.chatluna;
 }
 
-function normalizeRequestMode(value: unknown, fallback: MainChatRuntimeProfile['requestMode']): MainChatRuntimeProfile['requestMode'] {
-  return value === 'responses' || value === 'chat_completions' ? value : fallback;
-}
-
-function normalizeStructuredOutputProtocol(
-  value: unknown,
-  fallback: MainChatRuntimeProfile['structuredOutputProtocol'],
-): 'native_chat_json_schema' | 'native_responses_json_schema' | 'chat_reply_v1' | 'json_mode' {
-  if (
-    value === 'native_chat_json_schema' ||
-    value === 'native_responses_json_schema' ||
-    value === 'chat_reply_v1' ||
-    value === 'json_mode'
-  ) {
-    return value;
-  }
-  return fallback;
-}
-
-function toRuntimeConfig(config: Config): MemoryRuntimeConfig {
+export function toRuntimeConfig(config: Config): MemoryRuntimeConfig {
   const mainProfile = mainChatRuntimeState.getProfile();
   return {
     enabled: config.enabled !== false,
     readEnabled: config.readEnabled !== false,
     writeEnabled: config.writeEnabled !== false,
-    extract: buildMemoryProviderProfile(mainProfile, {
+    extract: buildMemoryExtractProviderProfile(mainProfile, {
       routeId: 'memory-extract',
-      baseUrl: String(config.extractBaseUrl ?? '').trim() || mainProfile.baseUrl,
-      apiKey: String(config.extractApiKey ?? '').trim() || mainProfile.apiKey,
-      model: String(config.extractModel ?? '').trim() || mainProfile.transportModel,
+      baseUrl: config.extractBaseUrl,
+      apiKey: config.extractApiKey,
+      model: config.extractModel,
       timeoutMs: clampNatural(config.extractTimeoutMs, 60000, 3000),
-      requestMode: normalizeRequestMode(config.extractRequestMode, mainProfile.requestMode),
-      structuredOutputProtocol: normalizeStructuredOutputProtocol(
-        config.extractStructuredOutputProtocol,
-        mainProfile.structuredOutputProtocol,
-      ),
+      requestMode: config.extractRequestMode,
+      structuredOutputProtocol: config.extractStructuredOutputProtocol,
       supportsJsonMode: config.extractSupportsJsonMode === true,
     }),
     embed: {

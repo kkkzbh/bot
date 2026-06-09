@@ -1,12 +1,12 @@
 import type {
   MemoryCandidateSubject,
   MemoryOutputProtocolId,
-  MemoryProfileKind,
   MemorySensitivity,
   MemoryVisibility,
 } from '../../../types/memory.js';
 import type { ExtractedMemoryCandidate } from '../gates.js';
 import { clampScore, uniqueKeywords } from '../format.js';
+import { normalizeProfileKind } from './profile-kind.js';
 
 export interface MemoryConversationTurn {
   id: string;
@@ -19,7 +19,6 @@ export interface MemoryConversationTurn {
   attributionSource: 'additional_kwargs' | 'speaker_tag' | 'direct_fallback' | 'assistant' | 'unknown';
 }
 
-const PROFILE_KINDS = new Set<MemoryProfileKind>(['identity', 'preference', 'trait', 'boundary', 'plan', 'relationship', 'response_policy']);
 const VISIBILITIES = new Set<MemoryVisibility>([
   'global',
   'private_only',
@@ -189,7 +188,7 @@ export function buildMemoryExtractionPrompt(
     `提取“助手对目标 speaker 的长期记忆候选”。目标 speaker_id=${target.speakerId} speaker_name=${quoteAttr(target.speakerName)}。`,
     '只允许把 [target ...] 行作为自动写入证据；[other ...]、[unknown_speaker ...]、[assistant ...] 只能作上下文。',
     '不要记录其他群友的信息，也不要把群共享知识库当作个人记忆。',
-    '长期记忆候选分为 fact 和 episode。fact 用于稳定身份、偏好、特点、边界、长期计划、关系；episode 用于将来值得回忆的用户相关事件。',
+    '长期记忆候选分为 fact 和 episode。fact kind 只能使用 identity、preference、trait、boundary、plan、relationship、response_policy；兴趣、爱好、喜欢/不喜欢统一用 preference。episode 用于将来值得回忆的用户相关事件。',
     '不要把群聊玩笑、外号、梗、第三方隐私、API key、token、password 写成长期记忆。',
     'visibility 建议：私聊中的低风险稳定用户偏好可 global；私密信息 private_only；群聊来源默认 source_context_only；只有用户明确要求“所有地方都记住”且低风险，群聊记忆才可 global；不确定则 pending_review。',
     'sensitivity 建议：普通偏好 low，个人信息 personal，隐私/健康/账号 sensitive，密钥 secret。',
@@ -230,9 +229,7 @@ function normalizeStringArray(value: unknown): string[] {
 function normalizeFact(raw: unknown): ExtractedMemoryCandidate | null {
   if (!raw || typeof raw !== 'object') return null;
   const item = raw as Record<string, unknown>;
-  const kind = typeof item.kind === 'string' && PROFILE_KINDS.has(item.kind as MemoryProfileKind)
-    ? item.kind as MemoryProfileKind
-    : null;
+  const kind = normalizeProfileKind(item.kind);
   const content = typeof item.content === 'string' ? item.content.trim() : '';
   const topicKey = typeof item.topicKey === 'string' ? item.topicKey.trim() : '';
   const visibility = normalizeVisibility(item.suggestedVisibility);

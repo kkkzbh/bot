@@ -83,7 +83,6 @@ plugins:
         - 小祥
       isNickNameWithContent: true
       sendThinkingMessage: false
-      defaultModel: ${{ env.CHATLUNA_DEFAULT_MODEL || '无' }}
       defaultPreset: sakiko
       isLog: true
     chatluna-storage-service:attachment-storage:
@@ -255,14 +254,12 @@ plugins:
       enabled: ${{ env.MEMORY_ENABLED !== 'false' }}
       readEnabled: ${{ env.MEMORY_READ_ENABLED !== 'false' }}
       writeEnabled: ${{ env.MEMORY_WRITE_ENABLED !== 'false' }}
-      extractBaseUrl: ${{ env.MEMORY_EXTRACT_BASE_URL || 'https://api.siliconflow.cn/v1' }}
+      extractBaseUrl: ${{ env.MEMORY_EXTRACT_BASE_URL || '' }}
       extractApiKey: ${{ env.MEMORY_EXTRACT_API_KEY || '' }}
-      extractModel: ${{ env.MEMORY_EXTRACT_MODEL || 'Qwen/Qwen3.5-35B-A3B' }}
-      extractTimeoutMs: ${{ +env.MEMORY_EXTRACT_TIMEOUT_MS || 60000 }}
-      extractRequestMode: ${{ env.MEMORY_EXTRACT_REQUEST_MODE || 'chat_completions' }}
-      extractStructuredOutputProtocol: >-
-        ${{ env.MEMORY_EXTRACT_STRUCTURED_OUTPUT_PROTOCOL ||
-        'native_chat_json_schema' }}
+      extractModel: ${{ env.MEMORY_EXTRACT_MODEL || '' }}
+      extractTimeoutMs: ${{ +env.MEMORY_EXTRACT_TIMEOUT_MS || 180000 }}
+      extractRequestMode: ${{ env.MEMORY_EXTRACT_REQUEST_MODE || '' }}
+      extractStructuredOutputProtocol: ${{ env.MEMORY_EXTRACT_STRUCTURED_OUTPUT_PROTOCOL || '' }}
       extractSupportsJsonMode: ${{ env.MEMORY_EXTRACT_SUPPORTS_JSON_MODE === 'true' }}
       embedBaseUrl: ${{ env.MEMORY_EMBED_BASE_URL || 'https://api.siliconflow.cn/v1' }}
       embedApiKey: ${{ env.MEMORY_EMBED_API_KEY || '' }}

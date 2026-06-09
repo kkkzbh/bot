@@ -3,6 +3,19 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('chatluna search service wiring', () => {
+  it('keeps memory extract provider unset unless explicitly configured as a complete provider', () => {
+    const content = readFileSync(resolve(process.cwd(), 'koishi.yml'), 'utf8');
+
+    expect(content).toContain("extractBaseUrl: ${{ env.MEMORY_EXTRACT_BASE_URL || '' }}");
+    expect(content).toContain("extractApiKey: ${{ env.MEMORY_EXTRACT_API_KEY || '' }}");
+    expect(content).toContain("extractModel: ${{ env.MEMORY_EXTRACT_MODEL || '' }}");
+    expect(content).toContain("extractTimeoutMs: ${{ +env.MEMORY_EXTRACT_TIMEOUT_MS || 180000 }}");
+    expect(content).toContain("extractRequestMode: ${{ env.MEMORY_EXTRACT_REQUEST_MODE || '' }}");
+    expect(content).toContain("extractStructuredOutputProtocol: ${{ env.MEMORY_EXTRACT_STRUCTURED_OUTPUT_PROTOCOL || '' }}");
+    expect(content).not.toContain("extractBaseUrl: ${{ env.MEMORY_EXTRACT_BASE_URL || 'https://api.siliconflow.cn/v1' }}");
+    expect(content).not.toContain("extractModel: ${{ env.MEMORY_EXTRACT_MODEL || 'Qwen/Qwen3.5-35B-A3B' }}");
+  });
+
   it('uses upstream chatluna-search-service with tavily only', () => {
     const content = readFileSync(resolve(process.cwd(), 'koishi.yml'), 'utf8');
 

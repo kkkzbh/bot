@@ -1,8 +1,8 @@
-import type { MemoryProfileKind, MemorySensitivity, MemoryVisibility } from '../../../types/memory.js';
+import type { MemorySensitivity, MemoryVisibility } from '../../../types/memory.js';
 import type { ExtractedMemoryCandidate } from '../gates.js';
 import { uniqueKeywords } from '../format.js';
+import { normalizeProfileKind } from './profile-kind.js';
 
-const PROFILE_KINDS = new Set<MemoryProfileKind>(['identity', 'preference', 'trait', 'boundary', 'plan', 'relationship', 'response_policy']);
 const VISIBILITIES = new Set<MemoryVisibility>([
   'global',
   'private_only',
@@ -88,8 +88,8 @@ function parseFact(fields: string[]): ExtractedMemoryCandidate {
   if (fields.length < 3) throw new Error('malformed_fact');
   const content = fields[fields.length - 1]?.trim();
   const kv = parseKvFields(fields.slice(1, -1));
-  const kind = kv.kind as MemoryProfileKind;
-  if (!PROFILE_KINDS.has(kind)) throw new Error(`invalid_kind:${kv.kind ?? ''}`);
+  const kind = normalizeProfileKind(kv.kind);
+  if (!kind) throw new Error(`invalid_kind:${kv.kind ?? ''}`);
   if (!kv.topic?.trim() || !content) throw new Error('missing_fact_required_field');
   return {
     candidateType: 'fact',
