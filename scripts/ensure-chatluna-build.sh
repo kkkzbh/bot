@@ -118,19 +118,15 @@ PY
 
 if [[ "${#BUILD_TARGETS[@]}" -gt 0 ]]; then
   echo "[info] Building linked ChatLuna packages: ${BUILD_TARGETS[*]}"
-  if [[ -f "$CHATLUNA_ROOT_DIR/yarn.lock" && ! -f "$CHATLUNA_ROOT_DIR/pnpm-lock.yaml" ]]; then
-    if ! command -v yarn >/dev/null 2>&1; then
-      if command -v corepack >/dev/null 2>&1; then
-        corepack enable
-      fi
+  if ! command -v yarn >/dev/null 2>&1; then
+    if command -v corepack >/dev/null 2>&1; then
+      corepack enable
     fi
-    if command -v yarn >/dev/null 2>&1; then
-      (cd "$CHATLUNA_ROOT_DIR" && yarn fast-build "${BUILD_TARGETS[@]}")
-    else
-      echo "[warn] yarn is unavailable for linked ChatLuna; falling back to pnpm." >&2
-      (cd "$CHATLUNA_ROOT_DIR" && pnpm run fast-build "${BUILD_TARGETS[@]}")
-    fi
+  fi
+  if command -v yarn >/dev/null 2>&1; then
+    (cd "$CHATLUNA_ROOT_DIR" && yarn fast-build "${BUILD_TARGETS[@]}")
   else
+    echo "[warn] yarn is unavailable for linked ChatLuna; falling back to pnpm." >&2
     (cd "$CHATLUNA_ROOT_DIR" && pnpm run fast-build "${BUILD_TARGETS[@]}")
   fi
 else
