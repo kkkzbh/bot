@@ -9,6 +9,7 @@ import {
   type FeatureOverrideMode,
 } from '../../composables/useBotConsole'
 import { getFieldHint, getFieldLabel } from '../../utils/constants'
+import { formatErrorMessage } from '../../utils/format'
 import type { useBotConsole } from '../../composables/useBotConsole'
 import type { ConsoleFeatureScope, ConversationTarget, ScopedFeatureKey } from '../../types'
 import InlineConfirm from '../InlineConfirm.vue'
@@ -151,7 +152,7 @@ async function handleSave() {
     await bc.saveFeatureSettings(false)
     toastAdd('功能配置已保存', 'success')
   } catch (e: unknown) {
-    toastAdd(e instanceof Error ? e.message : '保存失败', 'error')
+    toastAdd(formatErrorMessage(e, '保存失败'), 'error')
   }
 }
 

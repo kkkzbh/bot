@@ -51,6 +51,14 @@ export function formatErrorMessage(error: unknown, fallback = '操作失败'): s
         return nestedMessage
       }
     }
+
+    const eventType = record.type
+    if (typeof eventType === 'string') {
+      const normalizedType = eventType.toLowerCase()
+      if (normalizedType === 'error' || normalizedType === 'close' || normalizedType === 'offline') {
+        return '管理台连接已断开，请刷新页面后重试。'
+      }
+    }
   }
 
   return fallback
