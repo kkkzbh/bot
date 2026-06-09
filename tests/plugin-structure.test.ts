@@ -54,4 +54,17 @@ describe('plugin structure', () => {
 
     expect(violations).toEqual([]);
   });
+
+  it('does not reference removed legacy memory chain nodes', () => {
+    const removedLegacyMemoryChainNode = ['qqbot', 'memory', 'v2'].join('_');
+    const violations = walk(PLUGINS_ROOT)
+      .map((file) => ({
+        file,
+        content: readFileSync(file, 'utf8'),
+      }))
+      .filter(({ content }) => content.includes(removedLegacyMemoryChainNode))
+      .map(({ file }) => posix.normalize(file.replace(`${PLUGINS_ROOT}/`, '').replace(/\\/g, '/')));
+
+    expect(violations).toEqual([]);
+  });
 });

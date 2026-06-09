@@ -1826,7 +1826,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     prepareBuilder.after('read_chat_message');
     prepareBuilder.before('message_delay');
     prepareBuilder.before('chatluna_time_context');
-    prepareBuilder.before('qqbot_memory_v2');
+    prepareBuilder.before('qqbot_memory_v3');
     prepareBuilder.before('qqbot_reply_transport_policy');
 
     const toolMemoryBuilder = chain.middleware('qqbot_reply_tool_memory_state', async (rawSession, rawContext) => {
@@ -1876,7 +1876,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       }) as ChatLunaChainBuilderLike;
     policyBuilder.after('qqbot_reply_tool_memory_state');
     policyBuilder.after('chatluna_time_context');
-    policyBuilder.after('qqbot_memory_v2');
+    policyBuilder.after('qqbot_memory_v3');
     policyBuilder.after('qqbot_sticker_policy');
     policyBuilder.before('lifecycle-handle_command');
 
@@ -1941,7 +1941,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     promptCompilerBuilder.after('qqbot_reply_transport_policy');
     promptCompilerBuilder.after('qqbot_reply_tool_memory_state');
     promptCompilerBuilder.after('chatluna_time_context');
-    promptCompilerBuilder.after('qqbot_memory_v2');
+    promptCompilerBuilder.after('qqbot_memory_v3');
     promptCompilerBuilder.after('qqbot_sticker_policy');
     promptCompilerBuilder.before('qqbot_prompt_envelope');
     promptCompilerBuilder.before('lifecycle-handle_command');

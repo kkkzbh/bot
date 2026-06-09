@@ -187,18 +187,6 @@ function resolveInputText(session: Session, context: MemoryMiddlewareContextLike
   return extractPlainText(session.stripped?.content ?? session.content ?? context.options?.inputMessage?.content);
 }
 
-function warnOldMemoryConfig(): void {
-  const legacyPrefixes = [
-    ['MEMORY', '_', 'V2', '_'].join(''),
-    ['MEMORY', '_', 'EXTRACT', '_'].join(''),
-    ['MEMORY', '_', 'EMBED', '_'].join(''),
-  ];
-  const oldKeys = Object.keys(process.env).filter((key) => legacyPrefixes.some((prefix) => key.startsWith(prefix)));
-  if (oldKeys.length) {
-    logger.warn('old memory env vars are ignored by memory-v3: %s', oldKeys.join(','));
-  }
-}
-
 async function injectMemoryContext(
   store: MemoryV3Store,
   runtime: MemoryRuntimeConfig,
@@ -230,7 +218,6 @@ async function injectMemoryContext(
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
-  warnOldMemoryConfig();
   const services = ctx as unknown as ContextServiceView;
   const database = services.database;
   const runtime = toRuntimeConfig(config);
