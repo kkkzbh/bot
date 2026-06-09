@@ -680,7 +680,7 @@ describe('task automation tools and execution', () => {
       expect.objectContaining({
         status: 'succeeded',
         outputText: null,
-        outputPayload: { decision: 'no_reply' },
+        outputPayload: { decision: 'no_reply', outbound_messages: null },
       }),
     ]);
   });

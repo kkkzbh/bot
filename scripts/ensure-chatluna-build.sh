@@ -122,6 +122,8 @@ if [[ "${#BUILD_TARGETS[@]}" -gt 0 ]]; then
     (cd "$CHATLUNA_ROOT_DIR" && COREPACK_ENABLE_PROJECT_SPEC=0 corepack yarn@1.22.22 fast-build "${BUILD_TARGETS[@]}")
   elif command -v yarn >/dev/null 2>&1; then
     (cd "$CHATLUNA_ROOT_DIR" && yarn fast-build "${BUILD_TARGETS[@]}")
+  elif command -v npm >/dev/null 2>&1; then
+    (cd "$CHATLUNA_ROOT_DIR" && npm exec --yes yarn@1.22.22 -- fast-build "${BUILD_TARGETS[@]}")
   elif [[ -f "$CHATLUNA_ROOT_DIR/pnpm-lock.yaml" || -f "$CHATLUNA_ROOT_DIR/pnpm-workspace.yaml" ]]; then
     echo "[warn] yarn/corepack unavailable and linked ChatLuna declares pnpm; using pnpm." >&2
     (cd "$CHATLUNA_ROOT_DIR" && pnpm run fast-build "${BUILD_TARGETS[@]}")
