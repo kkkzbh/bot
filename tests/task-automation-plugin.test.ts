@@ -76,6 +76,8 @@ vi.mock('koishi', () => {
 });
 
 import { apply } from '../src/plugins/automation/index.js';
+import { mainChatRuntimeState } from '../src/plugins/shared/llm/main-chat-runtime.js';
+import { resolveMainChatRuntimeProfileFromEnv } from '../src/plugins/shared/llm/main-chat-tabs.js';
 import { TOOL_CATALOG } from '../src/plugins/tool-policy/catalog.js';
 
 type ListenerMap = Record<string, Array<() => Promise<void> | void>>;
@@ -297,6 +299,7 @@ describe('task automation tools and execution', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-03T10:00:00+08:00'));
     process.env.CHATLUNA_ACTIVE_TAB = 'openai';
+    mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv(process.env));
   });
 
   afterEach(() => {
@@ -482,12 +485,15 @@ describe('task automation tools and execution', () => {
     expect(modelMessage?.additional_kwargs).toEqual(
       expect.objectContaining({
         qqbot_reply_mode: 'automation',
-        qqbot_final_response_schema: expect.objectContaining({
-          title: 'StructuredReply',
+        qqbot_final_response_contract: expect.objectContaining({
+          protocol: 'native_chat_json_schema',
+          schema: expect.objectContaining({
+            title: 'StructuredReply',
+          }),
+          instruction: null,
         }),
       }),
     );
-    expect(modelMessage?.additional_kwargs).not.toHaveProperty('qqbot_final_response_instruction');
     expect(harness.ctx.chatluna.chat.mock.calls[0]?.[8]).toEqual(automationMask);
     expect(harness.bot.sendMessage).toHaveBeenCalled();
     expect(await harness.database.get('automation_job', { id: 1 })).toEqual([
@@ -502,6 +508,69 @@ describe('task automation tools and execution', () => {
         }),
       }),
     ]);
+  });
+
+  it('keeps the CHAT_REPLY_V1 contract in automation metadata for tool continuations', async () => {
+    const originalActiveTab = process.env.CHATLUNA_ACTIVE_TAB;
+    const originalCopilotModel = process.env.CHATLUNA_COPILOT_DEFAULT_MODEL;
+    process.env.CHATLUNA_ACTIVE_TAB = 'copilot';
+    process.env.CHATLUNA_COPILOT_DEFAULT_MODEL = 'gemini-3.1-pro-preview';
+    mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv(process.env));
+
+    try {
+      const harness = createHarness({
+        chathub_room: [createRoom({ roomName: '当前群房间' })],
+        automation_job: [createJob({ runAt: Date.now() - 1 })],
+      });
+      harness.ctx.chatluna.chat.mockResolvedValueOnce({
+        content: [
+          'CHAT_REPLY_V1 abc12345',
+          'DECISION reply',
+          'BEGIN message',
+          'MENTIONS none',
+          'CONTENT',
+          '|自动化执行结果',
+          'END',
+          'DONE abc12345',
+        ].join('\n'),
+        additional_kwargs: {},
+      });
+      await harness.runReady();
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      const modelMessage = harness.ctx.chatluna.chat.mock.calls[0]?.[2] as {
+        content?: unknown;
+        additional_kwargs?: Record<string, unknown>;
+      } | undefined;
+      expect(modelMessage?.additional_kwargs).toEqual(
+        expect.objectContaining({
+          qqbot_reply_mode: 'automation',
+          qqbot_final_response_contract: expect.objectContaining({
+            protocol: 'chat_reply_v1',
+            schema: null,
+            instruction: expect.stringContaining('CHAT_REPLY_V1 <nonce>'),
+          }),
+        }),
+      );
+      expect(String(modelMessage?.additional_kwargs?.qqbot_after_user_message ?? '')).not.toContain('CHAT_REPLY_V1 <nonce>');
+      expect(String(modelMessage?.content ?? '')).not.toContain('CHAT_REPLY_V1 <nonce>');
+      expect(String(modelMessage?.content ?? '')).not.toContain('payload 内容行必须以 `|` 开头');
+      expect(await harness.database.get('automation_job_run', { jobId: 1 })).toEqual([
+        expect.objectContaining({
+          status: 'succeeded',
+          outputText: '自动化执行结果',
+        }),
+      ]);
+    } finally {
+      process.env.CHATLUNA_ACTIVE_TAB = originalActiveTab;
+      if (originalCopilotModel === undefined) {
+        delete process.env.CHATLUNA_COPILOT_DEFAULT_MODEL;
+      } else {
+        process.env.CHATLUNA_COPILOT_DEFAULT_MODEL = originalCopilotModel;
+      }
+      mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv(process.env));
+    }
   });
 
   it('executes due once jobs in private chat without mention wrapper', async () => {

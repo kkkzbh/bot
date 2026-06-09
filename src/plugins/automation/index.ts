@@ -7,14 +7,14 @@ import { z } from 'zod';
 import type { AutomationJob, AutomationJobRun, TaskKind, TaskScope } from '../../types/task-automation.js';
 import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
 import {
-  applyReplyStructuredOutputRequest,
+  applyReplyOutputContract,
   buildReplyTransportPlanFromResolvedActions,
   buildReplyTurnInput,
   buildTurnCapabilitySnapshot,
   createVoiceRuntimeConfig,
   createPromptTextFragment,
   deliverStandaloneReplyPlan,
-  ensureStructuredReplyJsonSchemaModel,
+  ensureSupportedStructuredReplyModel,
   ReplyOrchestratorService,
   resolveReplyCapabilitySnapshot,
   type TurnContext,
@@ -1016,16 +1016,15 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
     const source = await resolveSourceRoomContext(ctx, job);
     tempRoom = await createTemporaryExecutionRoom(ctx, source.room, source.session, job);
     const replyRoom = toReplyAutomationRoom(tempRoom);
-    ensureStructuredReplyJsonSchemaModel(replyRoom);
+    ensureSupportedStructuredReplyModel(replyRoom);
     const capabilitySnapshot = await prepareAutomationExecutionContext(ctx, source.room, tempRoom, source.session);
     const toolMask = await resolveAutomationToolMask(ctx, source.session, source.room);
     const message: ChatLunaMessage = {
       content: createAutomationPrompt(job, run.triggeredAt),
       additional_kwargs: {},
     };
-    const outputSpec = applyReplyStructuredOutputRequest(replyRoom, message as never, {
+    const replyOutputContract = applyReplyOutputContract(replyRoom, message as never, {
       replyMode: 'automation',
-      includeFinalResponseInstruction: false,
       capabilitySnapshot,
     });
 
@@ -1044,7 +1043,7 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
     const turnInput = buildReplyTurnInput(source.session as never, replyRoom, message);
     const orchestration = await automationReplyOrchestrator.handle(turnInput, source.session as never, {
       responseMessage: response,
-      outputProtocol: outputSpec?.structuredOutputProtocol,
+      outputProtocol: replyOutputContract?.protocol,
       capabilitySnapshot,
       routeHint: 'automation',
     });

@@ -1,13 +1,13 @@
 export { Config, apply, inject, name, type Config as ReplyConfig } from './voice/generation.js';
 export {
-  applyReplyStructuredOutputRequest,
+  applyReplyOutputContract,
   buildReplyTransportPlanFromResolvedActions,
   buildTurnCapabilitySnapshot,
   createAudioDataUri,
   createVoiceRuntimeConfig,
   deliverStandaloneReplyPlan,
   ensureCanSendRecord,
-  ensureStructuredReplyJsonSchemaModel,
+  ensureSupportedStructuredReplyModel,
   isVoiceOutputConfigured,
   mergeReplyOverrideRequestParams,
   resolveReplyCapabilitySnapshot,

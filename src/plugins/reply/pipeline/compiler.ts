@@ -3,11 +3,12 @@ import {
   STRUCTURED_REPLY_SCHEMA,
   type StructuredReply,
 } from './types.js';
+import type { ReplyOutputProtocol } from '../../shared/llm/reply-output-contract.js';
 import { ChatReplyV1ParseError, ChatReplyV1Parser } from './chat-reply-v1.js';
 
 const PROVIDER_RESPONSE_DIAGNOSTIC_KEY = '__chatluna_provider_response_diagnostic_v1';
 
-export type ReplyCompilerOutputProtocol = 'native_chat_json_schema' | 'native_responses_json_schema' | 'chat_reply_v1';
+export type ReplyCompilerOutputProtocol = ReplyOutputProtocol;
 
 export type StructuredReplyFailureKind =
   | 'provider_empty_finish'

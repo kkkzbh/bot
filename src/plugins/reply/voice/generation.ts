@@ -57,9 +57,9 @@ import {
 import { ReplyOrchestratorService } from '../pipeline/orchestrator.js';
 import { buildReplyTurnInput, normalizeReplyRouteHint } from '../pipeline/context-builder.js';
 import {
-  buildStructuredReplyRequestSpec,
+  buildReplyOutputContract,
   isSupportedMainChatModelForTab,
-  type MainChatStructuredOutputSpec,
+  type MainChatReplyOutputContract,
 } from '../../shared/llm/index.js';
 import { mainChatRuntimeState } from '../../shared/llm/main-chat-runtime.js';
 import {
@@ -881,50 +881,44 @@ function ensureReplyPluginRoom(room: ReplyRuntimeRoomLike | undefined): void {
   throw new Error(`qqbot reply requires room.chatMode=plugin, got ${chatMode || 'unknown'}.`);
 }
 
-export function ensureStructuredReplyJsonSchemaModel(room: ReplyRuntimeRoomLike | undefined): void {
+export function ensureSupportedStructuredReplyModel(room: ReplyRuntimeRoomLike | undefined): void {
   void room;
   const profile = mainChatRuntimeState.getProfile();
   const strategyModel = profile.canonicalModel;
   if (isSupportedMainChatModelForTab(profile.tabId, strategyModel)) return;
 
-  throw new Error(`qqbot reply structured output requires a supported main chat model, got ${strategyModel || 'unknown'}.`);
+  throw new Error(`qqbot reply output contract requires a supported main chat model, got ${strategyModel || 'unknown'}.`);
 }
 
-export function applyReplyStructuredOutputRequest(
+export function applyReplyOutputContract(
   room: ReplyRuntimeRoomLike | undefined,
   inputMessage: NonNullable<MiddlewareContextLike['options']>['inputMessage'] | undefined,
   options: {
     replyMode?: 'agent' | 'automation';
-    includeFinalResponseInstruction?: boolean;
     capabilitySnapshot?: Pick<NonNullable<TurnContext['capabilitySnapshot']>, 'canMention' | 'canVoice' | 'canSticker'> | null;
-    structuredOutputSpec?: MainChatStructuredOutputSpec;
+    replyOutputContract?: MainChatReplyOutputContract;
   } = {},
-): MainChatStructuredOutputSpec | null {
+): MainChatReplyOutputContract | null {
   if (!inputMessage) return null;
 
   const profile = mainChatRuntimeState.getProfile();
-  const structuredOutputSpec = options.structuredOutputSpec ?? buildStructuredReplyRequestSpec({
+  const replyOutputContract = options.replyOutputContract ?? buildReplyOutputContract({
     profile,
     model: profile.canonicalModel,
     canMention: options.capabilitySnapshot?.canMention !== false,
     canVoice: options.capabilitySnapshot?.canVoice !== false,
     canMeme: options.capabilitySnapshot?.canSticker === true,
   });
-  const overrideRequestParams = mergeReplyOverrideRequestParams(inputMessage.additional_kwargs, structuredOutputSpec.overrideRequestParams);
+  const overrideRequestParams = mergeReplyOverrideRequestParams(inputMessage.additional_kwargs, replyOutputContract.overrideRequestParams);
   const replyMode = options.replyMode ?? 'agent';
-  const includeFinalResponseInstruction = options.includeFinalResponseInstruction !== false;
 
   inputMessage.additional_kwargs = {
     ...(inputMessage.additional_kwargs ?? {}),
     qqbot_reply_mode: replyMode,
-    qqbot_reply_output_protocol: structuredOutputSpec.structuredOutputProtocol,
-    ...(structuredOutputSpec.finalResponseSchema ? { qqbot_final_response_schema: structuredOutputSpec.finalResponseSchema } : {}),
-    ...(includeFinalResponseInstruction && structuredOutputSpec.finalResponseInstruction
-      ? { qqbot_final_response_instruction: structuredOutputSpec.finalResponseInstruction }
-      : {}),
+    qqbot_final_response_contract: replyOutputContract,
     ...(overrideRequestParams ? { overrideRequestParams } : {}),
   };
-  return structuredOutputSpec;
+  return replyOutputContract;
 }
 
 export function mergeReplyOverrideRequestParams(
@@ -945,6 +939,21 @@ export function mergeReplyOverrideRequestParams(
 function asPlainRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+function resolveReplyOutputProtocolFromMessage(
+  inputMessage: NonNullable<MiddlewareContextLike['options']>['inputMessage'] | undefined,
+): ReplyCompilerOutputProtocol {
+  const contract = asPlainRecord(inputMessage?.additional_kwargs?.qqbot_final_response_contract);
+  const protocol = contract?.protocol;
+  if (
+    protocol === 'native_chat_json_schema' ||
+    protocol === 'native_responses_json_schema' ||
+    protocol === 'chat_reply_v1'
+  ) {
+    return protocol;
+  }
+  return mainChatRuntimeState.getProfile().structuredOutputProtocol;
 }
 
 function applyReplyTurnInputMetadata(
@@ -1783,7 +1792,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
         ensureReplyPluginRoom(room);
-        ensureStructuredReplyJsonSchemaModel(room);
+        ensureSupportedStructuredReplyModel(room);
         const turnInput = buildReplyTurnInput(session, room, context.options?.inputMessage);
         applyReplyTurnInputMetadata(context.options?.inputMessage, turnInput);
         const routeHint = normalizeReplyRouteHint(normalizeReplyChatMode((room as { chatMode?: unknown }).chatMode));
@@ -1826,7 +1835,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     prepareBuilder.after('read_chat_message');
     prepareBuilder.before('message_delay');
     prepareBuilder.before('chatluna_time_context');
-    prepareBuilder.before('qqbot_memory_v3');
+    prepareBuilder.before('qqbot_memory');
     prepareBuilder.before('qqbot_reply_transport_policy');
 
     const toolMemoryBuilder = chain.middleware('qqbot_reply_tool_memory_state', async (rawSession, rawContext) => {
@@ -1876,7 +1885,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       }) as ChatLunaChainBuilderLike;
     policyBuilder.after('qqbot_reply_tool_memory_state');
     policyBuilder.after('chatluna_time_context');
-    policyBuilder.after('qqbot_memory_v3');
+    policyBuilder.after('qqbot_memory');
     policyBuilder.after('qqbot_sticker_policy');
     policyBuilder.before('lifecycle-handle_command');
 
@@ -1900,7 +1909,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
         ensureReplyPluginRoom(room);
-        ensureStructuredReplyJsonSchemaModel(room);
+        ensureSupportedStructuredReplyModel(room);
 
         const capability = getAuthorizedReplyCapabilitySnapshot(session, replyCapabilitySnapshots);
         const turnInput = buildReplyTurnInput(session, room, context.options?.inputMessage);
@@ -1911,7 +1920,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           canVoice: turnCapabilitySnapshot?.canVoice ?? false,
           canSticker: turnCapabilitySnapshot?.canSticker ?? false,
         };
-        const outputSpec = buildStructuredReplyRequestSpec({
+        const replyOutputContract = buildReplyOutputContract({
           profile: mainChatRuntimeState.getProfile(),
           model: mainChatRuntimeState.getProfile().canonicalModel,
           canMention: schemaCapabilitySnapshot.canMention,
@@ -1930,18 +1939,18 @@ export function apply(ctx: Context, config: Config = {}): void {
             capabilitySnapshot: turnCapabilitySnapshot,
             continuationContext: null,
           },
-          outputProtocol: outputSpec.structuredOutputProtocol,
+          outputProtocol: replyOutputContract.protocol,
         });
-        applyReplyStructuredOutputRequest(room, context.options?.inputMessage, {
+        applyReplyOutputContract(room, context.options?.inputMessage, {
           capabilitySnapshot: schemaCapabilitySnapshot,
-          structuredOutputSpec: outputSpec,
+          replyOutputContract,
         });
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       }) as ChatLunaChainBuilderLike;
     promptCompilerBuilder.after('qqbot_reply_transport_policy');
     promptCompilerBuilder.after('qqbot_reply_tool_memory_state');
     promptCompilerBuilder.after('chatluna_time_context');
-    promptCompilerBuilder.after('qqbot_memory_v3');
+    promptCompilerBuilder.after('qqbot_memory');
     promptCompilerBuilder.after('qqbot_sticker_policy');
     promptCompilerBuilder.before('qqbot_prompt_envelope');
     promptCompilerBuilder.before('lifecycle-handle_command');
@@ -1960,7 +1969,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const room = context.options?.room as ReplyRuntimeRoomLike | undefined;
         const conversationId = room?.conversationId?.trim();
         ensureReplyPluginRoom(room);
-        ensureStructuredReplyJsonSchemaModel(room);
+        ensureSupportedStructuredReplyModel(room);
         const runMode = await resolveReplyRunMode(session);
         let runId = getReplyRunId(session);
         if (!runId) {
@@ -2023,10 +2032,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             }));
           rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
           const turnCapabilitySnapshot = buildTurnCapabilitySnapshot(session, snapshot);
-          const outputProtocol =
-            context.options?.inputMessage?.additional_kwargs?.qqbot_reply_output_protocol === 'chat_reply_v1'
-              ? 'chat_reply_v1'
-              : mainChatRuntimeState.getProfile().structuredOutputProtocol;
+          const outputProtocol = resolveReplyOutputProtocolFromMessage(context.options?.inputMessage);
           let orchestration;
           try {
             orchestration = await replyOrchestrator.handle(turnInput, session, {

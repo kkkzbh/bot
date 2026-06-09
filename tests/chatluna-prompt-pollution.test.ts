@@ -98,7 +98,7 @@ describe('chatluna prompt pollution regression', () => {
     expect(pluginChainSource).toContain('toolMask,\n            finishContract');
   });
 
-  it('removes the legacy reply_plan module and switches executor to final json_schema responses', () => {
+  it('removes the legacy reply_plan module and switches executor to the final response contract', () => {
     const packageRoot = resolveChatlunaSourceRoot();
     const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/executor.ts'), 'utf8');
 
@@ -106,7 +106,7 @@ describe('chatluna prompt pollution regression', () => {
     expect(executorSource).not.toContain('finishContract.maxRetries');
     expect(executorSource).not.toContain('finishContract.retryMessage');
     expect(executorSource).toContain("type: 'json_schema'");
-    expect(executorSource).toContain('qqbot_final_response_schema');
+    expect(executorSource).toContain('qqbot_final_response_contract');
   });
 
   it('removes plugin chat chain whole-turn retry loop', () => {
@@ -120,15 +120,15 @@ describe('chatluna prompt pollution regression', () => {
     expect(builtEntry).toContain('response = await request2();');
   });
 
-  it('wires structured reply schema through the plugin request path', () => {
+  it('wires the reply output contract through the plugin request path', () => {
     const packageRoot = resolveChatlunaSourceRoot();
     const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
     const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/executor.ts'), 'utf8');
 
-    expect(pluginChainSource).toContain("requests['qqbot_final_response_schema'] = finalResponseSchema");
-    expect(pluginChainSource).toContain("requests['qqbot_final_response_instruction'] =");
+    expect(pluginChainSource).toContain("requests['qqbot_final_response_contract'] = finalResponseContract");
     expect(executorSource).toContain("type: 'json_schema'");
     expect(executorSource).toContain('buildFinalResponseOverrideRequestParams');
+    expect(executorSource).toContain('mergeFinalResponseInstructionAfterUserMessage');
     expect(executorSource).not.toContain('buildFinalResponseMessage');
     expect(executorSource).not.toContain("tool_choice: 'none'");
     expect(executorSource).not.toContain('finalResponseMode');
@@ -140,7 +140,7 @@ describe('chatluna prompt pollution regression', () => {
   it('keeps provider-aware structured reply request overrides wired into the reply chain', () => {
     const generationSource = readFileSync(join(process.cwd(), 'src/plugins/reply/voice/generation.ts'), 'utf8');
 
-    expect(generationSource).toContain('buildStructuredReplyRequestSpec');
+    expect(generationSource).toContain('buildReplyOutputContract');
     expect(generationSource).toContain('mergeReplyOverrideRequestParams');
     expect(generationSource).toContain('overrideRequestParams');
   });

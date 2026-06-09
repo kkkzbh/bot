@@ -1129,19 +1129,23 @@ describe('qq voice plugin', () => {
     expect(context.options.inputMessage.additional_kwargs).toEqual(
       expect.objectContaining({
         qqbot_reply_mode: 'agent',
-        qqbot_final_response_schema: expect.objectContaining({
-          title: 'StructuredReply',
-          properties: expect.objectContaining({
-            decision: expect.objectContaining({
-              description: expect.any(String),
+        qqbot_final_response_contract: expect.objectContaining({
+          protocol: 'native_chat_json_schema',
+          schema: expect.objectContaining({
+            title: 'StructuredReply',
+            properties: expect.objectContaining({
+              decision: expect.objectContaining({
+                description: expect.any(String),
+              }),
             }),
           }),
+          instruction: null,
         }),
       }),
     );
-    const groupSchema = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_schema;
+    const groupContract = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_contract;
+    const groupSchema = groupContract?.schema;
     expect(extractSchemaMessageTitles(groupSchema)).toContain('MessageItem');
-    expect(context.options.inputMessage.additional_kwargs).not.toHaveProperty('qqbot_final_response_instruction');
   });
 
   it('removes mention modality from the injected schema for private chats', async () => {
@@ -1179,7 +1183,8 @@ describe('qq voice plugin', () => {
       'conv-private',
       expect.objectContaining({ source: 'qqbot_reply_delivery_safety' }),
     );
-    const schema = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_schema as Record<string, any> | undefined;
+    const contract = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_contract as Record<string, any> | undefined;
+    const schema = contract?.schema as Record<string, any> | undefined;
     const messageSchema = (schema?.properties?.outbound_messages?.anyOf?.find((item: any) => item.items?.anyOf)?.items?.anyOf ?? [])
       .flatMap((item: any) => (Array.isArray(item.anyOf) ? item.anyOf : [item]))
       .find((item: any) => item.title === 'MessageItem');

@@ -4,7 +4,7 @@ import {
   resolveUserTurnIntentState,
 } from '../src/plugins/reply/prompt/time-context.js';
 import {
-  buildStructuredReplyRequestSpec,
+  buildReplyOutputContract,
   buildStructuredReplyModelOverride,
   buildSiliconFlowKimiK25NonThinkingOverride,
   inferPlatformFromBaseUrl,
@@ -171,15 +171,19 @@ describe('supportsStructuredReplyJsonSchema', () => {
   });
 });
 
-describe('buildStructuredReplyRequestSpec', () => {
+describe('buildReplyOutputContract', () => {
   it('routes siliconflow and non-responses Copilot models to chat completions json_schema', () => {
     expect(
-      buildStructuredReplyRequestSpec({
+      buildReplyOutputContract({
         model: 'Pro/moonshotai/Kimi-K2.5',
       }),
     ).toMatchObject({
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'native_chat_json_schema',
+      protocol: 'native_chat_json_schema',
+      schema: expect.objectContaining({
+        title: 'StructuredReply',
+      }),
+      instruction: null,
       overrideRequestParams: {
         thinking: {
           type: 'disabled',
@@ -188,12 +192,16 @@ describe('buildStructuredReplyRequestSpec', () => {
     });
 
     expect(
-      buildStructuredReplyRequestSpec({
+      buildReplyOutputContract({
         model: 'openai/gpt-5.4-medium-thinking',
       }),
     ).toMatchObject({
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'native_chat_json_schema',
+      protocol: 'native_chat_json_schema',
+      schema: expect.objectContaining({
+        title: 'StructuredReply',
+      }),
+      instruction: null,
       overrideRequestParams: {
         qqbot_canonical_model: 'openai/gpt-5.4-medium-thinking',
         qqbot_transport_model: 'gpt-5.4-medium-thinking',
@@ -204,12 +212,16 @@ describe('buildStructuredReplyRequestSpec', () => {
     });
 
     expect(
-      buildStructuredReplyRequestSpec({
+      buildReplyOutputContract({
         model: 'gpt-4o',
       }),
     ).toMatchObject({
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'native_chat_json_schema',
+      protocol: 'native_chat_json_schema',
+      schema: expect.objectContaining({
+        title: 'StructuredReply',
+      }),
+      instruction: null,
       overrideRequestParams: {
         qqbot_canonical_model: 'openai/gpt-4o',
         qqbot_transport_model: 'gpt-4o',
@@ -217,13 +229,14 @@ describe('buildStructuredReplyRequestSpec', () => {
     });
 
     expect(
-      buildStructuredReplyRequestSpec({
+      buildReplyOutputContract({
         model: 'openai/gemini-3.1-pro-preview',
       }),
     ).toMatchObject({
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'chat_reply_v1',
-      finalResponseSchema: null,
+      protocol: 'chat_reply_v1',
+      schema: null,
+      instruction: expect.stringContaining('CHAT_REPLY_V1 <nonce>'),
       overrideRequestParams: {
         qqbot_canonical_model: 'openai/gemini-3.1-pro-preview',
         qqbot_transport_model: 'gemini-3.1-pro-preview',
@@ -233,12 +246,16 @@ describe('buildStructuredReplyRequestSpec', () => {
 
   it('keeps Copilot gpt-5.4 family on responses mode', () => {
     expect(
-      buildStructuredReplyRequestSpec({
+      buildReplyOutputContract({
         model: 'openai/gpt-5.4-mini',
       }),
     ).toMatchObject({
       requestMode: 'responses',
-      structuredOutputProtocol: 'native_responses_json_schema',
+      protocol: 'native_responses_json_schema',
+      schema: expect.objectContaining({
+        title: 'StructuredReply',
+      }),
+      instruction: null,
       overrideRequestParams: {
         qqbot_request_mode: 'responses',
         qqbot_canonical_model: 'openai/gpt-5.4-mini',
@@ -248,10 +265,10 @@ describe('buildStructuredReplyRequestSpec', () => {
   });
 
   it('exposes mention output only when mention capability is enabled', () => {
-    const schema = buildStructuredReplyRequestSpec({
+    const schema = buildReplyOutputContract({
       model: 'openai/gpt-5.4-medium-thinking',
       canMention: true,
-    }).finalResponseSchema as {
+    }).schema as {
       properties?: {
         outbound_messages?: {
           anyOf?: Array<{
@@ -295,10 +312,10 @@ describe('buildStructuredReplyRequestSpec', () => {
     expect(structuredBlock?.properties?.type?.description).toBe('Structured text that should stay intact in one message.');
     expect(structuredBlock?.properties?.content?.description).toBe('Structured text to keep intact, such as code, lists, or quotes.');
 
-    const privateSchema = buildStructuredReplyRequestSpec({
+    const privateSchema = buildReplyOutputContract({
       model: 'openai/gpt-5.4-medium-thinking',
       canMention: false,
-    }).finalResponseSchema as {
+    }).schema as {
       properties?: {
         outbound_messages?: {
           anyOf?: Array<{

@@ -1,9 +1,13 @@
-import { buildStructuredReplyJsonSchema } from './structured-reply-schema.js';
+import {
+  createReplyOutputContract,
+  type ReplyOutputContract,
+  type ReplyOutputProtocol,
+} from './reply-output-contract.js';
 
 export type MainChatBuiltinTabId = 'siliconflow' | 'openai' | 'copilot' | 'deepseek' | 'mimo';
 export type MainChatProvider = 'siliconflow' | 'openai' | 'deepseek' | 'mimo';
 export type MainChatRequestMode = 'chat_completions' | 'responses';
-export type OutputProtocolId = 'native_chat_json_schema' | 'native_responses_json_schema' | 'chat_reply_v1';
+export type OutputProtocolId = ReplyOutputProtocol;
 export type StructuredOutputProtocol = OutputProtocolId;
 export type MainChatAuthKind = 'manual' | 'oauth_device';
 export type MainChatAuthStatus = 'unauthenticated' | 'pending' | 'ready' | 'expired' | 'error';
@@ -24,13 +28,7 @@ export interface BuiltinTabDefinition {
   strategyId: MainChatProviderStrategy['id'];
 }
 
-export interface MainChatStructuredOutputSpec {
-  requestMode: MainChatRequestMode;
-  structuredOutputProtocol: StructuredOutputProtocol;
-  finalResponseSchema: Record<string, unknown> | null;
-  overrideRequestParams: Record<string, unknown> | null;
-  finalResponseInstruction?: string;
-}
+export type MainChatReplyOutputContract = ReplyOutputContract;
 
 export interface MainChatConsoleDescription {
   description: string;
@@ -63,7 +61,7 @@ export interface MainChatProviderStrategy {
   platform: MainChatProvider;
   supportsModel: (model?: string | null) => boolean;
   buildRequestOverride: (model?: string | null) => Record<string, unknown> | null;
-  buildStructuredOutputSpec: (model?: string | null) => MainChatStructuredOutputSpec;
+  buildReplyOutputContract: (model?: string | null) => MainChatReplyOutputContract;
   normalizeModel: (model?: string | null) => string | null;
   transportModel: (model?: string | null) => string | null;
   resolveRequestMode: (model?: string | null) => MainChatRequestMode;
@@ -71,17 +69,16 @@ export interface MainChatProviderStrategy {
   describeForConsole: (model?: string | null) => MainChatConsoleDescription;
 }
 
-function buildMainChatStructuredOutputSpec(args: {
+function buildMainChatReplyOutputContract(args: {
   requestMode: MainChatRequestMode;
-  structuredOutputProtocol: StructuredOutputProtocol;
+  protocol: StructuredOutputProtocol;
   overrideRequestParams: Record<string, unknown> | null;
-}): MainChatStructuredOutputSpec {
-  return {
+}): MainChatReplyOutputContract {
+  return createReplyOutputContract({
     requestMode: args.requestMode,
-    structuredOutputProtocol: args.structuredOutputProtocol,
-    finalResponseSchema: args.structuredOutputProtocol === 'chat_reply_v1' ? null : buildStructuredReplyJsonSchema(),
+    protocol: args.protocol,
     overrideRequestParams: args.overrideRequestParams,
-  };
+  });
 }
 
 export interface MainChatModelDescriptor {
@@ -357,10 +354,10 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
         },
       };
     },
-    buildStructuredOutputSpec(model) {
-      return buildMainChatStructuredOutputSpec({
+    buildReplyOutputContract(model) {
+      return buildMainChatReplyOutputContract({
         requestMode: this.resolveRequestMode(model),
-        structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
+        protocol: this.resolveStructuredOutputProtocol(model),
         overrideRequestParams: this.buildRequestOverride(model),
       });
     },
@@ -400,10 +397,10 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
         },
       };
     },
-    buildStructuredOutputSpec(model) {
-      return buildMainChatStructuredOutputSpec({
+    buildReplyOutputContract(model) {
+      return buildMainChatReplyOutputContract({
         requestMode: this.resolveRequestMode(model),
-        structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
+        protocol: this.resolveStructuredOutputProtocol(model),
         overrideRequestParams: this.buildRequestOverride(model),
       });
     },
@@ -443,10 +440,10 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
         qqbot_tool_profile: 'qqbot_openai_main_chat',
       };
     },
-    buildStructuredOutputSpec(model) {
-      return buildMainChatStructuredOutputSpec({
+    buildReplyOutputContract(model) {
+      return buildMainChatReplyOutputContract({
         requestMode: this.resolveRequestMode(model),
-        structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
+        protocol: this.resolveStructuredOutputProtocol(model),
         overrideRequestParams: this.buildRequestOverride(model),
       });
     },
@@ -487,10 +484,10 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
         qqbot_tool_profile: 'qqbot_openai_main_chat',
       };
     },
-    buildStructuredOutputSpec(model) {
-      return buildMainChatStructuredOutputSpec({
+    buildReplyOutputContract(model) {
+      return buildMainChatReplyOutputContract({
         requestMode: this.resolveRequestMode(model),
-        structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
+        protocol: this.resolveStructuredOutputProtocol(model),
         overrideRequestParams: this.buildRequestOverride(model),
       });
     },
@@ -530,10 +527,10 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
         qqbot_tool_profile: 'qqbot_openai_main_chat',
       };
     },
-    buildStructuredOutputSpec(model) {
-      return buildMainChatStructuredOutputSpec({
+    buildReplyOutputContract(model) {
+      return buildMainChatReplyOutputContract({
         requestMode: this.resolveRequestMode(model),
-        structuredOutputProtocol: this.resolveStructuredOutputProtocol(model),
+        protocol: this.resolveStructuredOutputProtocol(model),
         overrideRequestParams: this.buildRequestOverride(model),
       });
     },
@@ -744,28 +741,27 @@ export function buildSiliconFlowKimiK25NonThinkingOverride(model?: string | null
   return getMainChatProviderStrategy('siliconflow-kimi-main-chat').buildRequestOverride(model);
 }
 
-export function buildStructuredReplyRequestSpec(args: {
+export function buildReplyOutputContract(args: {
   model?: string | null;
   profile?: MainChatRuntimeProfile | null;
   canMention?: boolean;
   canVoice?: boolean;
   canMeme?: boolean;
-}): MainChatStructuredOutputSpec {
+}): MainChatReplyOutputContract {
   const strategy = args.profile
     ? getMainChatProviderStrategy(args.profile.strategyId)
     : resolveMainChatProviderStrategyForModel(args.model) ?? getMainChatProviderStrategy('siliconflow-kimi-main-chat');
   const model = strategy.normalizeModel(args.model ?? args.profile?.canonicalModel ?? args.profile?.defaultModel ?? null);
-  const baseSpec = strategy.buildStructuredOutputSpec(model);
-  return {
-    ...baseSpec,
-    finalResponseSchema: baseSpec.structuredOutputProtocol === 'chat_reply_v1'
-      ? null
-      : buildStructuredReplyJsonSchema({
-        canMention: args.canMention,
-        canVoice: args.canVoice,
-        canMeme: args.canMeme,
-      }),
-  };
+  const baseContract = strategy.buildReplyOutputContract(model);
+  return createReplyOutputContract({
+    requestMode: baseContract.requestMode,
+    protocol: baseContract.protocol,
+    overrideRequestParams: baseContract.overrideRequestParams,
+    name: baseContract.name,
+    canMention: args.canMention,
+    canVoice: args.canVoice,
+    canMeme: args.canMeme,
+  });
 }
 
 function requireMainChatTabConfig<T extends Pick<MainChatBuiltinTabState, 'id'>>(tabs: readonly T[], id: MainChatBuiltinTabId): T {
