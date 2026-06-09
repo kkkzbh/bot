@@ -151,11 +151,24 @@ class CfUserProfileTool extends StructuredTool {
       rendered.buffer,
       `cf-profile-${profile.handle}-${randomUUID().slice(0, 8)}.png`,
     );
+    const recentPerformance = profile.recentPerformance ?? {
+      sampleSize: 0,
+      acceptedCount: 0,
+      rejectedCount: 0,
+      acceptedRate: 0,
+      acceptedProblems: [],
+      latestSubmittedAt: null,
+      latestVerdicts: [],
+    };
 
     return JSON.stringify({
       tool: this.name,
       handle: profile.handle,
       summary: `${profile.handle} 当前 rating ${profile.rating ?? 'Unrated'}，段位 ${profile.rank}，最高 ${profile.maxRating ?? 'Unrated'}。`,
+      recommendedReplyOrder: [
+        'send image as the first outbound message using image.assetRef and image.alt',
+        'then send one short message evaluating the user from current rating/rank and recentPerformance',
+      ],
       profile: {
         rating: profile.rating,
         rank: profile.rank,
@@ -165,6 +178,10 @@ class CfUserProfileTool extends StructuredTool {
         organization: profile.organization,
         solvedTotal: profile.solvedTotal,
         solvedBuckets: profile.solvedBuckets,
+        recentPerformance: {
+          ...recentPerformance,
+          latestSubmittedAt: formatTimestamp(recentPerformance.latestSubmittedAt),
+        },
         lastOnlineAt: formatTimestamp(profile.lastOnlineAt),
         registeredAt: formatTimestamp(profile.registeredAt),
       },
@@ -211,6 +228,10 @@ class CfUserRatingTool extends StructuredTool {
       tool: this.name,
       handle: history.handle,
       summary: `${history.handle} 当前 rating ${history.currentRating ?? 'Unrated'}，最高 ${history.maxRating ?? 'Unrated'}，共 ${history.points.length} 场评分比赛。`,
+      recommendedReplyOrder: [
+        'send image as the first outbound message using image.assetRef and image.alt',
+        'then send one short message evaluating the recent rating trend from history.latest',
+      ],
       history: {
         currentRating: history.currentRating,
         maxRating: history.maxRating,

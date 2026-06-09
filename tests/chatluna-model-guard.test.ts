@@ -14,6 +14,11 @@ import {
   resolvePlatform,
   supportsStructuredReplyJsonSchema,
 } from '../src/plugins/shared/llm/index.js';
+import {
+  buildChatReplyV1OutputContractLines,
+  buildNativeJsonOutputContractLines,
+  buildReplySemanticContractLines,
+} from '../src/plugins/shared/llm/reply-output-contract.js';
 import { mainChatRuntimeState } from '../src/plugins/shared/llm/main-chat-runtime.js';
 import { syncRoomModelToMainChatRuntime } from '../src/plugins/model-guard/hot-switch.js';
 import { resolveSessionDisplayName } from '../src/plugins/shared/session/index.js';
@@ -172,6 +177,18 @@ describe('supportsStructuredReplyJsonSchema', () => {
 });
 
 describe('buildReplyOutputContract', () => {
+  it('documents CF image-first final replies with recent-performance evaluation', () => {
+    expect(buildReplySemanticContractLines().join('\n')).toContain(
+      'CF 用户资料、分数卡、rating 图这类带图结果的最终回复顺序必须是：第一条 `image`，第二条 `message`',
+    );
+    expect(buildNativeJsonOutputContractLines().join('\n')).toContain(
+      'liuliu00 目前 rating 896，段位 newbie',
+    );
+    expect(buildChatReplyV1OutputContractLines().join('\n')).toContain(
+      'CF 带图回复示例（先 image，再 message）',
+    );
+  });
+
   it('routes siliconflow and non-responses Copilot models to chat completions json_schema', () => {
     expect(
       buildReplyOutputContract({

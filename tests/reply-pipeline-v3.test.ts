@@ -400,6 +400,43 @@ describe('reply pipeline v3', () => {
     ]);
   });
 
+  it('sends Codeforces card images before text evaluation even if the model orders them late', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+    const ready = await orchestrator.handle(createTurnInput('cf liuliu00'), {} as never, {
+      routeHint: 'agent',
+      capabilitySnapshot: {
+        canMultiline: true,
+        canVoice: false,
+        canSticker: false,
+        stickerAvailableCount: 0,
+        source: 'test',
+      },
+      responseMessage: createStructuredResponse({
+        decision: 'reply',
+        outbound_messages: [
+          { type: 'message', content: 'liuliu00 目前 rating 896，段位 newbie。', mentions: [] },
+          { type: 'image', assetRef: 'https://example.com/cf.png', alt: 'liuliu00 的 Codeforces 分数卡' },
+        ],
+      }),
+    });
+
+    expect(ready.status).toBe('ready');
+    if (ready.status !== 'ready') {
+      throw new Error('expected ready');
+    }
+    expect(ready.reply).toEqual({
+      decision: 'reply',
+      outbound_messages: [
+        { type: 'message', content: 'liuliu00 目前 rating 896，段位 newbie。', mentions: [] },
+        { type: 'image', assetRef: 'https://example.com/cf.png', alt: 'liuliu00 的 Codeforces 分数卡' },
+      ],
+    });
+    expect(ready.actions).toEqual([
+      { kind: 'image', assetRef: 'https://example.com/cf.png', alt: 'liuliu00 的 Codeforces 分数卡' },
+      { kind: 'message', content: 'liuliu00 目前 rating 896，段位 newbie。', mentions: [] },
+    ]);
+  });
+
   it('sanitizes markdown-like message content into ordinary plain text', async () => {
     const orchestrator = new ReplyOrchestratorService();
     const ready = await orchestrator.handle(createTurnInput('回一句'), {} as never, {

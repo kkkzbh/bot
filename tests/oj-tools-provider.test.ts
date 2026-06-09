@@ -66,6 +66,7 @@ describe('CodeforcesProvider', () => {
             result: [
               { id: 1, verdict: 'OK', problem: { contestId: 1, index: 'A', name: 'One', rating: 900 }, creationTimeSeconds: 10, programmingLanguage: 'GNU C++17' },
               { id: 2, verdict: 'OK', problem: { contestId: 1, index: 'B', name: 'Two', rating: 1500 }, creationTimeSeconds: 20, programmingLanguage: 'GNU C++17' },
+              { id: 3, verdict: 'WRONG_ANSWER', problem: { contestId: 1, index: 'C', name: 'Three', rating: 1700 }, creationTimeSeconds: 30, programmingLanguage: 'GNU C++17' },
             ],
           }),
         };
@@ -101,6 +102,18 @@ describe('CodeforcesProvider', () => {
       handle: 'YingCir',
       rating: 1015,
       solvedTotal: 2,
+      recentPerformance: {
+        sampleSize: 3,
+        acceptedCount: 2,
+        rejectedCount: 1,
+        acceptedRate: 66.7,
+        acceptedProblems: ['1A', '1B'],
+        latestSubmittedAt: 30,
+        latestVerdicts: [
+          { verdict: 'OK', count: 2 },
+          { verdict: 'WRONG_ANSWER', count: 1 },
+        ],
+      },
     });
     await expect(provider.getUserRatingHistory('YingCir')).resolves.toMatchObject({
       handle: 'YingCir',

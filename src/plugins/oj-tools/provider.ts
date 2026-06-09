@@ -93,6 +93,7 @@ export interface CodeforcesUserProfile {
   stars: number;
   solvedTotal: number;
   solvedBuckets: SolvedBucket[];
+  recentPerformance?: CodeforcesRecentPerformanceSummary;
 }
 
 export interface CodeforcesRatingPoint {
@@ -121,6 +122,19 @@ export interface CodeforcesSubmissionSummary {
   verdict: string;
   language: string;
   submittedAt: number | null;
+}
+
+export interface CodeforcesRecentPerformanceSummary {
+  sampleSize: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  acceptedRate: number;
+  acceptedProblems: string[];
+  latestSubmittedAt: number | null;
+  latestVerdicts: Array<{
+    verdict: string;
+    count: number;
+  }>;
 }
 
 export interface CodeforcesContestSummary {
@@ -230,6 +244,43 @@ export function summarizeSolvedBuckets(submissions: CodeforcesSubmission[]): {
   };
 }
 
+function summarizeRecentPerformance(submissions: CodeforcesSubmission[], limit = 20): CodeforcesRecentPerformanceSummary {
+  const recent = submissions.slice(0, Math.max(1, Math.floor(limit)));
+  const verdictCounts = new Map<string, number>();
+  const acceptedProblems = new Set<string>();
+  let acceptedCount = 0;
+  let latestSubmittedAt: number | null = null;
+
+  for (const submission of recent) {
+    const verdict = String(submission.verdict ?? 'UNKNOWN').trim() || 'UNKNOWN';
+    verdictCounts.set(verdict, (verdictCounts.get(verdict) ?? 0) + 1);
+    if (submission.verdict === 'OK') {
+      acceptedCount += 1;
+      const problem = submission.problem;
+      const label = [problem?.contestId, problem?.index].filter((item) => item != null && String(item).trim()).join('');
+      if (label) acceptedProblems.add(label);
+    }
+    if (typeof submission.creationTimeSeconds === 'number') {
+      latestSubmittedAt = latestSubmittedAt == null
+        ? submission.creationTimeSeconds
+        : Math.max(latestSubmittedAt, submission.creationTimeSeconds);
+    }
+  }
+
+  return {
+    sampleSize: recent.length,
+    acceptedCount,
+    rejectedCount: Math.max(0, recent.length - acceptedCount),
+    acceptedRate: recent.length > 0 ? Number(((acceptedCount / recent.length) * 100).toFixed(1)) : 0,
+    acceptedProblems: [...acceptedProblems].slice(0, 8),
+    latestSubmittedAt,
+    latestVerdicts: [...verdictCounts.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .slice(0, 5)
+      .map(([verdict, count]) => ({ verdict, count })),
+  };
+}
+
 export function filterContestsByMode(
   contests: CodeforcesContest[],
   mode: ContestQueryMode,
@@ -290,6 +341,7 @@ export class CodeforcesProvider {
       handle: normalizedHandle,
     });
     const solvedSummary = summarizeSolvedBuckets(submissions);
+    const recentPerformance = summarizeRecentPerformance(submissions);
 
     return {
       handle: user.handle,
@@ -309,6 +361,7 @@ export class CodeforcesProvider {
       ),
       solvedTotal: solvedSummary.solvedTotal,
       solvedBuckets: solvedSummary.solvedBuckets,
+      recentPerformance,
     };
   }
 

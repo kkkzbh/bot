@@ -1,6 +1,19 @@
 import { sanitizeStructuredReplyText } from '../../shared/outbound/index.js';
 import type { ResolvedAction, StructuredReply, TurnContext } from './types.js';
 
+function isCodeforcesImageAction(action: ResolvedAction): boolean {
+  return action.kind === 'image' && /(?:Codeforces|CF|分数卡|rating)/iu.test(`${action.alt} ${action.assetRef}`);
+}
+
+function preferCodeforcesImagesFirst(actions: ResolvedAction[]): ResolvedAction[] {
+  const codeforcesImages = actions.filter(isCodeforcesImageAction);
+  if (!codeforcesImages.length) return actions;
+  return [
+    ...codeforcesImages,
+    ...actions.filter((action) => !isCodeforcesImageAction(action)),
+  ];
+}
+
 function normalizeMentionIds(mentions: string[] | undefined): string[] {
   const seen = new Set<string>();
   const normalized: string[] = [];
@@ -91,6 +104,6 @@ export class ActionResolverService {
       return [{ kind: 'no_reply' }];
     }
 
-    return resolved;
+    return preferCodeforcesImagesFirst(resolved);
   }
 }
