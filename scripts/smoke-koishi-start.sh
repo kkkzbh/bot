@@ -74,7 +74,7 @@ const keep = new Set([
   'chatluna-search-service:search',
   './dist/plugins/sticker:sticker',
   './dist/plugins/model-guard:mjddgg',
-  './dist/plugins/memory:memory-v2',
+  './dist/plugins/memory:memory-v3',
 ]);
 
 for (const key of Object.keys(entry)) {
@@ -124,8 +124,8 @@ if ! grep -F "loader apply plugin ./dist/plugins/model-guard" "$LOG_FILE" >/dev/
   exit 1
 fi
 
-if ! grep -F "loader apply plugin ./dist/plugins/memory:memory-v2" "$LOG_FILE" >/dev/null; then
-  echo "Koishi smoke startup did not load memory-v2 plugin." >&2
+if ! grep -F "loader apply plugin ./dist/plugins/memory:memory-v3" "$LOG_FILE" >/dev/null; then
+  echo "Koishi smoke startup did not load memory-v3 plugin." >&2
   exit 1
 fi
 

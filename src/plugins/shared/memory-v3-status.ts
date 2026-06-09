@@ -1,11 +1,13 @@
-import type { MemoryV2StatusSnapshot } from '../../types/memory-v2.js';
+import type { MemoryV3StatusSnapshot } from '../../types/memory-v3.js';
 
-export function createUnavailableMemoryV2StatusSnapshot(
-  overrides: Partial<MemoryV2StatusSnapshot> = {},
-): MemoryV2StatusSnapshot {
+export function createUnavailableMemoryV3StatusSnapshot(
+  overrides: Partial<MemoryV3StatusSnapshot> = {},
+): MemoryV3StatusSnapshot {
   return {
     available: false,
     enabled: false,
+    readEnabled: false,
+    writeEnabled: false,
     extractConfigured: false,
     embedConfigured: false,
     extractModel: '',
@@ -14,10 +16,14 @@ export function createUnavailableMemoryV2StatusSnapshot(
     jobs: {
       extractPending: 0,
       extractProcessing: 0,
+      privacyReviewPending: 0,
+      consolidatePending: 0,
       embedPending: 0,
       embedProcessing: 0,
+      deadLetter: 0,
     },
-    lastArchiveAt: null,
+    providerRoutes: [],
+    lastMaintenanceAt: null,
     extract: {
       configured: false,
       state: 'never',

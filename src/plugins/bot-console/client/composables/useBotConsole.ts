@@ -2,6 +2,7 @@ import { ref, reactive, computed } from 'vue'
 import { send } from '@koishijs/client'
 import type {
   BotConsoleBuiltinModelTab,
+  BotConsoleMemoryMutationResponse,
   BotConsoleMemoryState,
   BotConsoleModelTabId,
   BotConsoleModelTabsState,
@@ -41,6 +42,8 @@ import type {
   ToolOverrideMode,
   ToolPolicyScope,
   ToolRouteProfile,
+  MemoryRecordType,
+  MemoryVisibility,
 } from '../types'
 import {
   buildToolOverrideKey,
@@ -120,6 +123,31 @@ export const BASIC_KEYS = [
   'CHATLUNA_MAX_CONTEXT_RATIO',
 ] as const
 
+export const MEMORY_V3_KEYS = [
+  'MEMORY_V3_ENABLED',
+  'MEMORY_V3_READ_ENABLED',
+  'MEMORY_V3_WRITE_ENABLED',
+  'MEMORY_V3_EXTRACT_BASE_URL',
+  'MEMORY_V3_EXTRACT_API_KEY',
+  'MEMORY_V3_EXTRACT_MODEL',
+  'MEMORY_V3_EXTRACT_TIMEOUT_MS',
+  'MEMORY_V3_EXTRACT_REQUEST_MODE',
+  'MEMORY_V3_EXTRACT_STRUCTURED_OUTPUT_PROTOCOL',
+  'MEMORY_V3_EXTRACT_SUPPORTS_JSON_MODE',
+  'MEMORY_V3_EMBED_BASE_URL',
+  'MEMORY_V3_EMBED_API_KEY',
+  'MEMORY_V3_EMBED_MODEL',
+  'MEMORY_V3_EMBED_TIMEOUT_MS',
+  'MEMORY_V3_QUERY_TOPK',
+  'MEMORY_V3_PROMPT_BUDGET_TOKENS',
+  'MEMORY_V3_EMBED_BATCH_SIZE',
+  'MEMORY_V3_EXTRACT_IDLE_MS',
+  'MEMORY_V3_EXTRACT_MESSAGE_BATCH',
+  'MEMORY_V3_ARCHIVE_DAYS',
+  'MEMORY_V3_MAX_JOB_RETRIES',
+  'MEMORY_V3_JOB_LOCK_TIMEOUT_MS',
+] as const
+
 export const ALL_ENV_KEYS = [
   ...FEATURE_KEYS,
   ...FEATURE_TEXT_KEYS,
@@ -127,6 +155,7 @@ export const ALL_ENV_KEYS = [
   ...FILE_SYSTEM_CONTROL_KEYS,
   ...PRESET_SCOPE_KEYS,
   ...BASIC_KEYS,
+  ...MEMORY_V3_KEYS,
 ] as const
 const BOT_RUNTIME_UNIT = 'qqbot-koishi.service'
 
@@ -1240,24 +1269,24 @@ export function useBotConsole() {
   }
 
   /**
-   * Runs an embedding health probe, updates the in-memory memoryV2 snapshot,
+   * Runs a memory health probe, updates the in-memory memoryV3 snapshot,
    * and returns the full probe result for callers to handle toasts / feedback.
    */
-  async function probeEmbedding(): Promise<BotConsoleProbeResponse> {
+  async function probeEmbedding(target: BotConsoleProbeResponse['target'] = 'embedding'): Promise<BotConsoleProbeResponse> {
     probePending.value = true
     try {
       const result = await send<BotConsoleProbeResponse>(
         'bot-console/run-status-probe',
-        'embedding',
+        target,
       )
 
       // Patch the in-memory snapshot so the Overview panel updates without a full refresh
-      if (result?.memoryV2?.snapshot && botState.value) {
+      if (result?.memoryV3?.snapshot && botState.value) {
         botState.value = {
           ...botState.value,
           runtimeStatus: {
             ...botState.value.runtimeStatus,
-            memoryV2: result.memoryV2.snapshot,
+            memoryV3: result.memoryV3.snapshot,
           },
         }
       }
@@ -1266,6 +1295,50 @@ export function useBotConsole() {
     } finally {
       probePending.value = false
     }
+  }
+
+  async function updateMemoryVisibility(payload: {
+    userKey: string
+    type: MemoryRecordType
+    id: number
+    visibility: MemoryVisibility
+  }): Promise<BotConsoleMemoryMutationResponse> {
+    const result = await send<BotConsoleMemoryMutationResponse>('bot-console/memory/update-visibility', payload)
+    memoryState.value = result.memory
+    return result
+  }
+
+  async function editMemory(payload: {
+    userKey: string
+    type: MemoryRecordType
+    id: number
+    content: string
+  }): Promise<BotConsoleMemoryMutationResponse> {
+    const result = await send<BotConsoleMemoryMutationResponse>('bot-console/memory/edit', payload)
+    memoryState.value = result.memory
+    return result
+  }
+
+  async function forgetMemory(payload: {
+    userKey: string
+    type?: MemoryRecordType
+    id?: number
+    topicKey?: string
+    contextKey?: string
+    all?: boolean
+  }): Promise<BotConsoleMemoryMutationResponse> {
+    const result = await send<BotConsoleMemoryMutationResponse>('bot-console/memory/forget', payload)
+    memoryState.value = result.memory
+    return result
+  }
+
+  async function reviewMemoryCandidate(payload: {
+    candidateId: number
+    action: 'approve' | 'reject' | 'private'
+  }): Promise<BotConsoleMemoryMutationResponse> {
+    const result = await send<BotConsoleMemoryMutationResponse>('bot-console/memory/review', payload)
+    memoryState.value = result.memory
+    return result
   }
 
   // ── Public API ────────────────────────────────────────────────────────────────
@@ -1352,5 +1425,9 @@ export function useBotConsole() {
     runServiceAction,
     restartBot,
     probeEmbedding,
+    updateMemoryVisibility,
+    editMemory,
+    forgetMemory,
+    reviewMemoryCandidate,
   }
 }

@@ -41,7 +41,7 @@ Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime.
 - `OPENAI_BASE_URL`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
-- `MEMORY_EMBED_API_KEY`
+- `MEMORY_V3_EMBED_API_KEY`
 - `CHATLUNA_COMMAND_AUTHORITY`
 
 Main chat provider selection is fixed to five built-in tabs:

@@ -1,14 +1,20 @@
 import type {
+  MemoryOutputProtocolId,
   MemoryStatusSource,
-  MemoryV2OperationSnapshot,
-  MemoryV2ProbeResult,
-  MemoryV2QueueSummary,
-  MemoryV2StatusServiceLike,
-  MemoryV2StatusSnapshot,
-} from '../../types/memory-v2.js';
-export { createUnavailableMemoryV2StatusSnapshot } from '../shared/memory-v2-status.js';
-import type { MemoryEmbedRuntime, MemoryExtractRuntime } from './llm.js';
-import { isEmbedRuntimeConfigured, isExtractRuntimeConfigured } from './llm.js';
+  MemoryV3OperationSnapshot,
+  MemoryV3ProbeResult,
+  MemoryV3ProviderRouteStats,
+  MemoryV3QueueSummary,
+  MemoryV3StatusServiceLike,
+  MemoryV3StatusSnapshot,
+} from '../../types/memory-v3.js';
+import { createUnavailableMemoryV3StatusSnapshot } from '../shared/memory-v3-status.js';
+import type { MemoryEmbedRuntime } from './providers/embedding-client.js';
+import { isEmbedRuntimeConfigured } from './providers/embedding-client.js';
+import type { MemoryProviderProfile } from './providers/router.js';
+import { isMemoryProviderConfigured } from './providers/router.js';
+
+export { createUnavailableMemoryV3StatusSnapshot };
 
 interface OperationStatusDraft {
   state: 'never' | 'success' | 'failed';
@@ -21,9 +27,11 @@ interface OperationStatusDraft {
   consecutiveFailures: number;
 }
 
-export interface MemoryV2StatusRuntimeLike {
+export interface MemoryV3StatusRuntimeLike {
   enabled: boolean;
-  extract: MemoryExtractRuntime;
+  readEnabled: boolean;
+  writeEnabled: boolean;
+  extract: MemoryProviderProfile;
   embed: MemoryEmbedRuntime;
 }
 
@@ -45,19 +53,7 @@ function toErrorSummary(error: unknown): string {
   return String(error);
 }
 
-function createUnavailableQueueSummary(): MemoryV2QueueSummary {
-  return {
-    extractPending: 0,
-    extractProcessing: 0,
-    embedPending: 0,
-    embedProcessing: 0,
-  };
-}
-
-function toOperationSnapshot(
-  draft: OperationStatusDraft,
-  configured: boolean,
-): MemoryV2OperationSnapshot {
+function toOperationSnapshot(draft: OperationStatusDraft, configured: boolean): MemoryV3OperationSnapshot {
   return {
     configured,
     state: draft.state,
@@ -71,15 +67,17 @@ function toOperationSnapshot(
   };
 }
 
-export class MemoryV2StatusService implements MemoryV2StatusServiceLike {
+export class MemoryV3StatusService implements MemoryV3StatusServiceLike {
   private readonly extract = createEmptyOperationStatus();
   private readonly embed = createEmptyOperationStatus();
-  private lastArchiveAt: number | null = null;
+  private lastMaintenanceAt: number | null = null;
+  private readonly routeStats = new Map<MemoryOutputProtocolId, MemoryV3ProviderRouteStats>();
 
   constructor(
-    private readonly runtime: MemoryV2StatusRuntimeLike,
-    private readonly store: { getJobSummary: () => Promise<MemoryV2QueueSummary> },
+    private readonly runtime: MemoryV3StatusRuntimeLike,
+    private readonly store: { getJobSummary: () => Promise<MemoryV3QueueSummary> },
     private readonly embedProbe: () => Promise<void>,
+    private readonly extractionProbe?: () => Promise<void>,
   ) {}
 
   recordAttempt(kind: 'extract' | 'embed', source: Exclude<MemoryStatusSource, null>, at = Date.now()): void {
@@ -88,12 +86,7 @@ export class MemoryV2StatusService implements MemoryV2StatusServiceLike {
     target.lastAttemptAt = at;
   }
 
-  recordSuccess(
-    kind: 'extract' | 'embed',
-    source: Exclude<MemoryStatusSource, null>,
-    latencyMs: number,
-    at = Date.now(),
-  ): void {
+  recordSuccess(kind: 'extract' | 'embed', source: Exclude<MemoryStatusSource, null>, latencyMs: number, at = Date.now()): void {
     const target = kind === 'extract' ? this.extract : this.embed;
     target.state = 'success';
     target.lastSource = source;
@@ -104,13 +97,7 @@ export class MemoryV2StatusService implements MemoryV2StatusServiceLike {
     target.consecutiveFailures = 0;
   }
 
-  recordFailure(
-    kind: 'extract' | 'embed',
-    source: Exclude<MemoryStatusSource, null>,
-    error: unknown,
-    latencyMs: number | null = null,
-    at = Date.now(),
-  ): void {
+  recordFailure(kind: 'extract' | 'embed', source: Exclude<MemoryStatusSource, null>, error: unknown, latencyMs: number | null = null, at = Date.now()): void {
     const target = kind === 'extract' ? this.extract : this.embed;
     target.state = 'failed';
     target.lastSource = source;
@@ -121,58 +108,95 @@ export class MemoryV2StatusService implements MemoryV2StatusServiceLike {
     target.consecutiveFailures += 1;
   }
 
-  recordArchive(at = Date.now()): void {
-    this.lastArchiveAt = at;
+  recordRoute(route: MemoryOutputProtocolId, ok: boolean, error: string | null = null): void {
+    const current = this.routeStats.get(route) ?? { route, success: 0, failure: 0, lastError: null };
+    if (ok) {
+      current.success += 1;
+      current.lastError = null;
+    } else {
+      current.failure += 1;
+      current.lastError = error;
+    }
+    this.routeStats.set(route, current);
   }
 
-  async getSnapshot(): Promise<MemoryV2StatusSnapshot> {
+  recordMaintenance(at = Date.now()): void {
+    this.lastMaintenanceAt = at;
+  }
+
+  async getSnapshot(): Promise<MemoryV3StatusSnapshot> {
     const jobs = await this.store.getJobSummary();
     return {
       available: true,
       enabled: this.runtime.enabled,
-      extractConfigured: isExtractRuntimeConfigured(this.runtime.extract),
+      readEnabled: this.runtime.readEnabled,
+      writeEnabled: this.runtime.writeEnabled,
+      extractConfigured: isMemoryProviderConfigured(this.runtime.extract),
       embedConfigured: isEmbedRuntimeConfigured(this.runtime.embed),
       extractModel: this.runtime.extract.model,
       embedBaseUrl: this.runtime.embed.baseUrl,
       embedModel: this.runtime.embed.model,
       jobs,
-      lastArchiveAt: this.lastArchiveAt,
-      extract: toOperationSnapshot(this.extract, isExtractRuntimeConfigured(this.runtime.extract)),
+      providerRoutes: [...this.routeStats.values()],
+      lastMaintenanceAt: this.lastMaintenanceAt,
+      extract: toOperationSnapshot(this.extract, isMemoryProviderConfigured(this.runtime.extract)),
       embed: toOperationSnapshot(this.embed, isEmbedRuntimeConfigured(this.runtime.embed)),
     };
   }
 
-  async probeEmbedding(): Promise<MemoryV2ProbeResult> {
+  async probeEmbedding(): Promise<MemoryV3ProbeResult> {
+    return this.runProbe('embedding', 'embed', this.embedProbe, isEmbedRuntimeConfigured(this.runtime.embed));
+  }
+
+  async probeExtraction(): Promise<MemoryV3ProbeResult> {
+    return this.runProbe(
+      'extraction',
+      'extract',
+      this.extractionProbe ?? (async () => {}),
+      isMemoryProviderConfigured(this.runtime.extract),
+    );
+  }
+
+  async probeProvider(): Promise<MemoryV3ProbeResult> {
+    return this.probeExtraction();
+  }
+
+  private async runProbe(
+    target: MemoryV3ProbeResult['target'],
+    kind: 'extract' | 'embed',
+    probe: () => Promise<void>,
+    configured: boolean,
+  ): Promise<MemoryV3ProbeResult> {
     const checkedAt = Date.now();
     if (!this.runtime.enabled) {
       return {
-        target: 'embedding',
+        target,
         ok: false,
         checkedAt,
         latencyMs: null,
-        error: 'memory-v2 disabled',
+        error: 'memory-v3 disabled',
         snapshot: await this.getSnapshot(),
       };
     }
-    if (!isEmbedRuntimeConfigured(this.runtime.embed)) {
+    if (!configured) {
       return {
-        target: 'embedding',
+        target,
         ok: false,
         checkedAt,
         latencyMs: null,
-        error: 'embedding runtime is not configured',
+        error: `${target} runtime is not configured`,
         snapshot: await this.getSnapshot(),
       };
     }
 
-    this.recordAttempt('embed', 'probe', checkedAt);
+    this.recordAttempt(kind, 'probe', checkedAt);
     const startedAt = Date.now();
     try {
-      await this.embedProbe();
+      await probe();
       const latencyMs = Math.max(0, Date.now() - startedAt);
-      this.recordSuccess('embed', 'probe', latencyMs, Date.now());
+      this.recordSuccess(kind, 'probe', latencyMs, Date.now());
       return {
-        target: 'embedding',
+        target,
         ok: true,
         checkedAt: Date.now(),
         latencyMs,
@@ -181,9 +205,9 @@ export class MemoryV2StatusService implements MemoryV2StatusServiceLike {
       };
     } catch (error) {
       const latencyMs = Math.max(0, Date.now() - startedAt);
-      this.recordFailure('embed', 'probe', error, latencyMs, Date.now());
+      this.recordFailure(kind, 'probe', error, latencyMs, Date.now());
       return {
-        target: 'embedding',
+        target,
         ok: false,
         checkedAt: Date.now(),
         latencyMs,

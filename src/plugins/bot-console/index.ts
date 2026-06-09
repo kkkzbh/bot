@@ -13,7 +13,12 @@ import {
 } from '../shared/llm/index.js';
 import type {
   BotConsoleProbeResult,
+  BotConsoleMemoryEditRequest,
+  BotConsoleMemoryForgetRequest,
+  BotConsoleMemoryMutationResponse,
+  BotConsoleMemoryReviewRequest,
   BotConsoleMemoryState,
+  BotConsoleMemoryVisibilityRequest,
   BotConsoleState,
   BotServiceUnit,
   CopilotAuthCancelResponse,
@@ -40,9 +45,9 @@ import type {
   ServiceAction,
 } from '../../types/bot-console.js';
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
-import type { MemoryV2StatusServiceLike } from '../../types/memory-v2.js';
+import type { MemoryV3StatusServiceLike } from '../../types/memory-v3.js';
 import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
-import { createUnavailableMemoryV2StatusSnapshot } from '../shared/memory-v2-status.js';
+import { createUnavailableMemoryV3StatusSnapshot } from '../shared/memory-v3-status.js';
 import { buildMemoryState, createUnavailableMemoryState } from './memory.js';
 import {
   parseQqVoiceBridgeRequest,
@@ -54,7 +59,7 @@ import {
 const logger = new Logger('bot-console');
 
 export const name = 'bot-console';
-export const inject = { required: ['console'], optional: ['server', 'memoryV2Status', 'featurePolicy', 'toolPolicy', 'database'] } as const;
+export const inject = { required: ['console'], optional: ['server', 'memoryV3Status', 'featurePolicy', 'toolPolicy', 'database'] } as const;
 
 const LISTENER_AUTHORITY = 4;
 
@@ -66,11 +71,14 @@ function ensureRecord(value: unknown): Record<string, unknown> {
 }
 
 type RuntimeServiceContext = {
-  memoryV2Status?: MemoryV2StatusServiceLike;
+  memoryV3Status?: MemoryV3StatusServiceLike;
   featurePolicy?: FeaturePolicyServiceLike;
   toolPolicy?: ToolPolicyServiceLike;
   database?: {
     get: (table: string, query: Record<string, unknown>) => Promise<any[]>;
+    set?: (table: string, query: Record<string, unknown>, data: Record<string, unknown>) => Promise<unknown>;
+    create?: (table: string, row: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    remove?: (table: string, query: Record<string, unknown>) => Promise<unknown>;
   };
 };
 
@@ -87,12 +95,12 @@ function resolveDirtyModelTabIds(input: unknown): Set<SaveModelTabsRequest['acti
 
 async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager): Promise<BotConsoleState> {
   const statePromise = manager.getState();
-  let memoryV2 = createUnavailableMemoryV2StatusSnapshot();
-  if (ctx.memoryV2Status) {
+  let memoryV3 = createUnavailableMemoryV3StatusSnapshot();
+  if (ctx.memoryV3Status) {
     try {
-      memoryV2 = await ctx.memoryV2Status.getSnapshot();
+      memoryV3 = await ctx.memoryV3Status.getSnapshot();
     } catch {
-      memoryV2 = createUnavailableMemoryV2StatusSnapshot();
+      memoryV3 = createUnavailableMemoryV3StatusSnapshot();
     }
   }
   const featureScopesPromise = ctx.featurePolicy?.listConsoleFeatureScopes?.() ?? Promise.resolve([]);
@@ -126,7 +134,7 @@ async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager
       conversationTargets: toolPolicy.conversationTargets.length > 0 ? toolPolicy.conversationTargets : conversationTargets,
     },
     runtimeStatus: {
-      memoryV2,
+      memoryV3,
     },
   };
 }
@@ -168,25 +176,32 @@ export function apply(ctx: Context): void {
   consoleService.addListener(
     'bot-console/run-status-probe',
     async (target: string): Promise<BotConsoleProbeResult> => {
-      if (String(target ?? '') !== 'embedding') {
+      const normalizedTarget = String(target ?? '');
+      if (normalizedTarget !== 'embedding' && normalizedTarget !== 'extraction' && normalizedTarget !== 'provider') {
         throw new Error('不支持这个探测目标。');
       }
 
-      const memoryV2 =
-        runtimeCtx.memoryV2Status?.probeEmbedding != null
-          ? await runtimeCtx.memoryV2Status.probeEmbedding()
+      const probe =
+        normalizedTarget === 'embedding'
+          ? runtimeCtx.memoryV3Status?.probeEmbedding
+          : normalizedTarget === 'extraction'
+            ? runtimeCtx.memoryV3Status?.probeExtraction
+            : runtimeCtx.memoryV3Status?.probeProvider;
+      const memoryV3 =
+        probe != null
+          ? await probe.call(runtimeCtx.memoryV3Status)
           : {
-              target: 'embedding' as const,
+              target: normalizedTarget as BotConsoleProbeResult['target'],
               ok: false,
               checkedAt: Date.now(),
               latencyMs: null,
-              error: 'memory-v2 status service unavailable',
-              snapshot: createUnavailableMemoryV2StatusSnapshot(),
+              error: 'memory-v3 status service unavailable',
+              snapshot: createUnavailableMemoryV3StatusSnapshot(),
             };
 
       return {
-        target: 'embedding',
-        memoryV2,
+        target: normalizedTarget as BotConsoleProbeResult['target'],
+        memoryV3,
       };
     },
     { authority: LISTENER_AUTHORITY },
@@ -196,11 +211,105 @@ export function apply(ctx: Context): void {
     'bot-console/get-memory-state',
     async (): Promise<BotConsoleMemoryState> => {
       try {
-        return await buildMemoryState(runtimeCtx.database);
+        const status = runtimeCtx.memoryV3Status ? await runtimeCtx.memoryV3Status.getSnapshot() : createUnavailableMemoryV3StatusSnapshot();
+        return await buildMemoryState(runtimeCtx.database, status);
       } catch (error) {
         logger.warn('failed to build memory console state: %s', error instanceof Error ? error.message : String(error));
-        return createUnavailableMemoryState();
+        return createUnavailableMemoryState(createUnavailableMemoryV3StatusSnapshot());
       }
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  async function mutateMemoryState(
+    handler: (store: import('../memory/store.js').MemoryV3Store) => Promise<boolean>,
+  ): Promise<BotConsoleMemoryMutationResponse> {
+    if (!runtimeCtx.database?.get || !runtimeCtx.database.set || !runtimeCtx.database.create || !runtimeCtx.database.remove) {
+      throw new Error('memory-v3 database service unavailable');
+    }
+    const { MemoryV3Store } = await import('../memory/store.js');
+    const store = new MemoryV3Store(runtimeCtx.database as any);
+    const ok = await handler(store);
+    const status = runtimeCtx.memoryV3Status ? await runtimeCtx.memoryV3Status.getSnapshot() : createUnavailableMemoryV3StatusSnapshot();
+    return {
+      ok,
+      memory: await buildMemoryState(runtimeCtx.database, status),
+    };
+  }
+
+  consoleService.addListener(
+    'bot-console/memory/update-visibility',
+    async (payload: BotConsoleMemoryVisibilityRequest): Promise<BotConsoleMemoryMutationResponse> => {
+      const record = ensureRecord(payload);
+      return mutateMemoryState((store) => store.updateVisibility({
+        userKey: String(record.userKey ?? ''),
+        type: record.type === 'episode' ? 'episode' : 'fact',
+        id: Number(record.id),
+        visibility: String(record.visibility ?? '') as BotConsoleMemoryVisibilityRequest['visibility'],
+      }));
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/memory/edit',
+    async (payload: BotConsoleMemoryEditRequest): Promise<BotConsoleMemoryMutationResponse> => {
+      const record = ensureRecord(payload);
+      return mutateMemoryState((store) => store.editMemory({
+        userKey: String(record.userKey ?? ''),
+        type: record.type === 'episode' ? 'episode' : 'fact',
+        id: Number(record.id),
+        content: String(record.content ?? ''),
+      }));
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/memory/forget',
+    async (payload: BotConsoleMemoryForgetRequest): Promise<BotConsoleMemoryMutationResponse> => {
+      const record = ensureRecord(payload);
+      return mutateMemoryState(async (store) => {
+        const userKey = String(record.userKey ?? '');
+        if (record.all === true) return (await store.forgetAll(userKey)) > 0;
+        if (typeof record.topicKey === 'string' && record.topicKey.trim()) {
+          return (await store.forgetTopic(userKey, record.topicKey.trim(), typeof record.contextKey === 'string' ? record.contextKey : null)) > 0;
+        }
+        if (typeof record.contextKey === 'string' && record.contextKey.trim()) {
+          return (await store.forgetContext(userKey, record.contextKey.trim())) > 0;
+        }
+        return store.forgetMemory({
+          userKey,
+          type: record.type === 'episode' ? 'episode' : 'fact',
+          id: Number(record.id),
+        });
+      });
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/memory/review',
+    async (payload: BotConsoleMemoryReviewRequest): Promise<BotConsoleMemoryMutationResponse> => {
+      const record = ensureRecord(payload);
+      return mutateMemoryState((store) => store.reviewCandidate({
+        candidateId: Number(record.candidateId),
+        action: record.action === 'reject' ? 'reject' : record.action === 'private' ? 'private' : 'approve',
+      }));
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/memory/export',
+    async (userKey: string) => {
+      if (!runtimeCtx.database?.get) throw new Error('memory-v3 database service unavailable');
+      const [facts, episodes, provenance] = await Promise.all([
+        runtimeCtx.database.get('memory_fact_v3', { userKey: String(userKey ?? '') }),
+        runtimeCtx.database.get('memory_episode_v3', { userKey: String(userKey ?? '') }),
+        runtimeCtx.database.get('memory_provenance', { userKey: String(userKey ?? '') }),
+      ]);
+      return { userKey, facts, episodes, provenance };
     },
     { authority: LISTENER_AUTHORITY },
   );

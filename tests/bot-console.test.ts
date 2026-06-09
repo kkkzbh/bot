@@ -79,7 +79,7 @@ describe('bot-console plugin', () => {
     apply(ctx as any);
 
     expect(addEntry).toHaveBeenCalledTimes(1);
-    expect(addListener).toHaveBeenCalledTimes(23);
+    expect(addListener).toHaveBeenCalledTimes(28);
     expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/list-copilot-models');
     for (const call of addListener.mock.calls) {
       expect(call[2]).toEqual({ authority: 4 });
@@ -410,17 +410,20 @@ describe('bot-console plugin', () => {
     const addListener = vi.fn();
     apply({
       baseDir: dir,
-      memoryV2Status: {
+      memoryV3Status: {
         getSnapshot: vi.fn().mockResolvedValue({
           available: true,
           enabled: true,
+          readEnabled: true,
+          writeEnabled: true,
           extractConfigured: true,
           embedConfigured: true,
           extractModel: 'deepseek/deepseek-chat',
           embedBaseUrl: 'https://api.siliconflow.cn/v1',
           embedModel: 'Qwen/Qwen3-Embedding-8B',
-          jobs: { extractPending: 1, extractProcessing: 0, embedPending: 2, embedProcessing: 1 },
-          lastArchiveAt: null,
+          jobs: { extractPending: 1, extractProcessing: 0, privacyReviewPending: 0, consolidatePending: 0, embedPending: 2, embedProcessing: 1, deadLetter: 0 },
+          providerRoutes: [],
+          lastMaintenanceAt: null,
           extract: {
             configured: true,
             state: 'never',
@@ -495,8 +498,8 @@ describe('bot-console plugin', () => {
 
     const getStateListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/get-state')?.[1];
     const state = await getStateListener();
-    expect(state.runtimeStatus.memoryV2.embedModel).toBe('Qwen/Qwen3-Embedding-8B');
-    expect(state.runtimeStatus.memoryV2.jobs.embedPending).toBe(2);
+    expect(state.runtimeStatus.memoryV3.embedModel).toBe('Qwen/Qwen3-Embedding-8B');
+    expect(state.runtimeStatus.memoryV3.jobs.embedPending).toBe(2);
     expect(state.featureScopes).toEqual([
       expect.objectContaining({ scopeKind: 'private_default', scopeId: 'private-default' }),
     ]);
@@ -505,7 +508,7 @@ describe('bot-console plugin', () => {
     ]);
   });
 
-  it('routes manual probe requests to memory-v2 status service', async () => {
+  it('routes manual probe requests to memory-v3 status service', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
     writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
@@ -524,13 +527,16 @@ describe('bot-console plugin', () => {
       snapshot: {
         available: true,
         enabled: true,
+        readEnabled: true,
+        writeEnabled: true,
         extractConfigured: true,
         embedConfigured: true,
         extractModel: 'deepseek/deepseek-chat',
         embedBaseUrl: 'https://api.siliconflow.cn/v1',
         embedModel: 'Qwen/Qwen3-Embedding-8B',
-        jobs: { extractPending: 0, extractProcessing: 0, embedPending: 0, embedProcessing: 0 },
-        lastArchiveAt: null,
+        jobs: { extractPending: 0, extractProcessing: 0, privacyReviewPending: 0, consolidatePending: 0, embedPending: 0, embedProcessing: 0, deadLetter: 0 },
+        providerRoutes: [],
+        lastMaintenanceAt: null,
         extract: {
           configured: true,
           state: 'never',
@@ -559,7 +565,7 @@ describe('bot-console plugin', () => {
     const addListener = vi.fn();
     apply({
       baseDir: dir,
-      memoryV2Status: {
+      memoryV3Status: {
         getSnapshot: vi.fn(),
         probeEmbedding,
       },
@@ -572,8 +578,8 @@ describe('bot-console plugin', () => {
     const probeListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/run-status-probe')?.[1];
     const result = await probeListener('embedding');
     expect(probeEmbedding).toHaveBeenCalledTimes(1);
-    expect(result.memoryV2.ok).toBe(true);
-    expect(result.memoryV2.snapshot.embed.lastSource).toBe('probe');
+    expect(result.memoryV3.ok).toBe(true);
+    expect(result.memoryV3.snapshot.embed.lastSource).toBe('probe');
   });
 
   it('exposes memory explorer data through a protected listener', async () => {
@@ -591,67 +597,110 @@ describe('bot-console plugin', () => {
       baseDir: dir,
       database: {
         get: vi.fn(async (table: string) => {
-          if (table === 'memory_fact') {
+          if (table === 'memory_user') {
             return [
               {
                 id: 1,
-                scopeType: 'user',
-                scopeKey: 'onebot:bot:user:10001',
+                userKey: 'onebot:user:10001',
+                platform: 'onebot',
+                userId: '10001',
+                firstSeenAt: 1,
+                lastSeenAt: 12,
+                readEnabled: 1,
+                writeEnabled: 1,
+              },
+            ];
+          }
+          if (table === 'memory_context') {
+            return [];
+          }
+          if (table === 'memory_fact_v3') {
+            return [
+              {
+                id: 1,
+                userKey: 'onebot:user:10001',
                 kind: 'preference',
                 topicKey: 'nickname',
                 content: '用户更喜欢被叫小嘉。',
                 keywords: '["昵称"]',
                 importance: 0.8,
                 confidence: 0.9,
+                sensitivity: 'low',
+                visibility: 'global',
+                sourceContextKey: 'onebot:bot:20001:dm:10001',
+                allowedContextKeys: null,
+                deniedContextKeys: null,
+                applicability: null,
+                validFrom: null,
+                validUntil: null,
+                expiresAt: null,
                 firstSeenAt: 1,
                 lastSeenAt: 10,
-                sourceMessageIds: '[]',
+                lastAccessedAt: null,
                 embeddingModel: null,
                 embedding: null,
                 version: 1,
                 archived: 0,
+                supersedesId: null,
+                conflictSetId: null,
               },
             ];
           }
-          if (table === 'memory_episode') {
+          if (table === 'memory_episode_v3') {
             return [
               {
                 id: 2,
-                scopeType: 'user',
-                scopeKey: 'onebot:bot:user:10001',
+                userKey: 'onebot:user:10001',
                 title: '第一次晚安语音',
                 summary: '用户第一次主动索要晚安语音。',
                 keywords: '["晚安","语音"]',
                 importance: 0.9,
                 confidence: 0.95,
+                sensitivity: 'low',
+                visibility: 'global',
+                sourceContextKey: 'onebot:bot:20001:dm:10001',
+                allowedContextKeys: null,
+                deniedContextKeys: null,
+                applicability: null,
                 periodStart: 3,
                 periodEnd: 4,
+                validFrom: null,
+                validUntil: null,
+                expiresAt: null,
                 firstSeenAt: 3,
                 lastSeenAt: 12,
                 lastAccessedAt: 15,
-                sourceMessageIds: '[]',
                 embeddingModel: 'Qwen/Qwen3-Embedding-8B',
                 embedding: '[1,2,3]',
+                version: 1,
                 archived: 0,
+                supersedesId: null,
+                conflictSetId: null,
               },
             ];
           }
-          if (table === 'memory_job') {
+          if (table === 'memory_candidate_v3') {
+            return [];
+          }
+          if (table === 'memory_job_v3') {
             return [
               {
                 id: 9,
                 jobKey: 'extract:conv-1',
                 jobType: 'extract',
                 status: 'processing',
-                payload: '{"conversationId":"conv-1","scopeType":"user","scopeKey":"onebot:bot:user:10001","maxMessages":12}',
+                payload: '{"address":{"userKey":"onebot:user:10001","contextKey":"onebot:bot:20001:dm:10001","conversationId":"conv-1"},"maxMessages":12}',
                 retryCount: 0,
                 nextRunAt: 20,
+                lockedAt: 18,
                 lastError: null,
                 createdAt: 16,
                 updatedAt: 18,
               },
             ];
           }
+          if (table === 'memory_audit_event') return [];
+          if (table === 'memory_provenance') return [{ id: 1 }];
           return [];
         }),
       },
@@ -668,21 +717,22 @@ describe('bot-console plugin', () => {
     expect(result.available).toBe(true);
     expect(result.summary).toEqual(
       expect.objectContaining({
-        scopeCount: 1,
-        profileItemCount: 1,
+        userCount: 1,
+        factCount: 1,
         episodeCount: 1,
         processingJobs: 1,
       }),
     );
-    expect(result.scopes).toEqual([
+    expect(result.users).toEqual([
       expect.objectContaining({
-        scopeKey: 'onebot:bot:user:10001',
-        label: '私聊用户 10001',
+        userKey: 'onebot:user:10001',
+        label: '用户 10001',
       }),
     ]);
     expect(result.jobs).toEqual([
       expect.objectContaining({
-        scopeKey: 'onebot:bot:user:10001',
+        userKey: 'onebot:user:10001',
+        contextKey: 'onebot:bot:20001:dm:10001',
         conversationId: 'conv-1',
       }),
     ]);

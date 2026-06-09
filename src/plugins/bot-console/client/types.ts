@@ -1,5 +1,5 @@
 // Client-side type definitions
-// Mirrors src/types/bot-console.ts + src/types/memory-v2.ts without koishi dependency
+// Mirrors src/types/bot-console.ts + src/types/memory-v3.ts without koishi dependency
 
 export type ServiceAction = "start" | "stop" | "restart" | "enable";
 
@@ -136,19 +136,50 @@ export interface ReorderPresetsResponse {
   presets: PresetSummary[];
 }
 
-// ─── Memory V2 ───────────────────────────────────────────────────────────────
+// ─── Memory V3 ───────────────────────────────────────────────────────────────
 
 export type MemoryStatusState = "never" | "success" | "failed";
 export type MemoryStatusSource = "runtime" | "probe" | null;
+export type MemoryVisibility =
+  | "global"
+  | "private_only"
+  | "source_context_only"
+  | "allowed_contexts"
+  | "denied_contexts"
+  | "pending_review"
+  | "archived";
+export type MemorySensitivity = "low" | "personal" | "sensitive" | "secret";
+export type MemoryRecordType = "fact" | "episode";
+export type MemoryProfileKind = "identity" | "preference" | "trait" | "boundary" | "plan" | "relationship";
+export type MemoryOutputProtocolId =
+  | "native_responses_json_schema"
+  | "native_chat_json_schema"
+  | "json_mode_with_repair"
+  | "plain_text_memory_v1"
+  | "no_write_fallback";
+export type MemoryJobV3Type =
+  | "extract"
+  | "privacy_review"
+  | "consolidate"
+  | "embed"
+  | "reembed"
+  | "maintenance"
+  | "forget"
+  | "migration_backfill"
+  | "eval_probe";
+export type MemoryJobV3Status = "pending" | "processing" | "done" | "failed" | "dead_letter";
 
-export interface MemoryV2QueueSummary {
+export interface MemoryV3QueueSummary {
   extractPending: number;
   extractProcessing: number;
+  privacyReviewPending: number;
+  consolidatePending: number;
   embedPending: number;
   embedProcessing: number;
+  deadLetter: number;
 }
 
-export interface MemoryV2OperationSnapshot {
+export interface MemoryV3OperationSnapshot {
   configured: boolean;
   state: MemoryStatusState;
   lastSource: MemoryStatusSource;
@@ -160,25 +191,37 @@ export interface MemoryV2OperationSnapshot {
   consecutiveFailures: number;
 }
 
-export interface MemoryV2StatusSnapshot {
+export interface MemoryV3ProviderRouteStats {
+  route: MemoryOutputProtocolId;
+  success: number;
+  failure: number;
+  lastError: string | null;
+}
+
+export interface MemoryV3StatusSnapshot {
   available: boolean;
   enabled: boolean;
+  readEnabled: boolean;
+  writeEnabled: boolean;
   extractConfigured: boolean;
   embedConfigured: boolean;
   extractModel: string;
   embedBaseUrl: string;
   embedModel: string;
-  jobs: MemoryV2QueueSummary;
-  lastArchiveAt: number | null;
-  extract: MemoryV2OperationSnapshot;
-  embed: MemoryV2OperationSnapshot;
+  jobs: MemoryV3QueueSummary;
+  providerRoutes: MemoryV3ProviderRouteStats[];
+  lastMaintenanceAt: number | null;
+  extract: MemoryV3OperationSnapshot;
+  embed: MemoryV3OperationSnapshot;
 }
 
-export interface MemoryV2ProbeResult {
+export interface MemoryV3ProbeResult {
+  target: "embedding" | "extraction" | "provider";
   ok: boolean;
+  checkedAt: number;
   latencyMs: number | null;
   error: string | null;
-  snapshot: MemoryV2StatusSnapshot;
+  snapshot: MemoryV3StatusSnapshot;
 }
 
 // ─── Scoped Feature Policy ────────────────────────────────────────────────────
@@ -341,48 +384,54 @@ export interface BotConsoleState {
   toolPolicy?: BotConsoleToolPolicyState | null;
   modelTabs: BotConsoleModelTabsState;
   runtimeStatus: {
-    memoryV2: MemoryV2StatusSnapshot;
+    memoryV3: MemoryV3StatusSnapshot;
   };
 }
 
-export interface BotConsoleMemoryScopeSummary {
-  scopeType: "user" | "user_group";
-  scopeKey: string;
+export interface BotConsoleMemoryUserItem {
+  userKey: string;
   platform: string | null;
-  botSelfId: string | null;
   userId: string | null;
-  groupId: string | null;
   label: string;
-  profileItemCount: number;
+  factCount: number;
   episodeCount: number;
+  pendingReviewCount: number;
+  readEnabled: boolean;
+  writeEnabled: boolean;
   latestSeenAt: number | null;
 }
 
-export interface BotConsoleMemoryProfileItem {
+export interface BotConsoleMemoryFactItem {
   id: number;
-  scopeType: "user" | "user_group";
-  scopeKey: string;
-  kind: "identity" | "preference" | "trait" | "boundary" | "plan" | "relationship";
+  userKey: string;
+  sourceContextKey: string;
+  kind: MemoryProfileKind;
   topicKey: string;
   content: string;
   keywords: string[];
   importance: number;
   confidence: number;
+  sensitivity: MemorySensitivity;
+  visibility: MemoryVisibility;
   firstSeenAt: number;
   lastSeenAt: number;
+  lastAccessedAt: number | null;
   hasEmbedding: boolean;
   archived: boolean;
+  conflictSetId: string | null;
 }
 
 export interface BotConsoleMemoryEpisodeItem {
   id: number;
-  scopeType: "user" | "user_group";
-  scopeKey: string;
+  userKey: string;
+  sourceContextKey: string;
   title: string;
   summary: string;
   keywords: string[];
   importance: number;
   confidence: number;
+  sensitivity: MemorySensitivity;
+  visibility: MemoryVisibility;
   periodStart: number | null;
   periodEnd: number | null;
   firstSeenAt: number;
@@ -390,47 +439,90 @@ export interface BotConsoleMemoryEpisodeItem {
   lastAccessedAt: number | null;
   hasEmbedding: boolean;
   archived: boolean;
+  conflictSetId: string | null;
+}
+
+export interface BotConsoleMemoryPendingReviewItem {
+  id: number;
+  batchId: string;
+  candidateType: "fact" | "episode" | "drop";
+  userKey: string;
+  contextKey: string;
+  conversationId: string;
+  payload: string;
+  sensitivity: MemorySensitivity;
+  suggestedVisibility: MemoryVisibility;
+  finalVisibility: MemoryVisibility | null;
+  dropReason: string | null;
+  providerRoute: MemoryOutputProtocolId;
+  createdAt: number;
 }
 
 export interface BotConsoleMemoryJobItem {
   id: number;
-  jobType: "extract" | "embed";
-  status: "pending" | "processing";
-  scopeType: "user" | "user_group" | null;
-  scopeKey: string | null;
+  jobType: MemoryJobV3Type;
+  status: MemoryJobV3Status;
+  userKey: string | null;
+  contextKey: string | null;
   conversationId: string | null;
   retryCount: number;
   nextRunAt: number;
+  lockedAt: number | null;
   createdAt: number;
   updatedAt: number;
   lastError: string | null;
 }
 
+export interface BotConsoleMemoryAuditItem {
+  id: number;
+  userKey: string | null;
+  contextKey: string | null;
+  eventType: string;
+  memoryType: MemoryRecordType | null;
+  memoryId: number | null;
+  candidateId: number | null;
+  turnId: string | null;
+  detail: string | null;
+  createdAt: number;
+}
+
 export interface BotConsoleMemorySummary {
-  scopeCount: number;
-  userScopeCount: number;
-  userGroupScopeCount: number;
-  profileItemCount: number;
+  userCount: number;
+  factCount: number;
   episodeCount: number;
+  pendingReviewCount: number;
   pendingJobs: number;
   processingJobs: number;
+  deadLetterJobs: number;
 }
 
 export interface BotConsoleMemoryState {
   available: boolean;
   summary: BotConsoleMemorySummary;
-  scopes: BotConsoleMemoryScopeSummary[];
-  profileItems: BotConsoleMemoryProfileItem[];
+  users: BotConsoleMemoryUserItem[];
+  selectedUser: string | null;
+  facts: BotConsoleMemoryFactItem[];
   episodes: BotConsoleMemoryEpisodeItem[];
+  pendingReview: BotConsoleMemoryPendingReviewItem[];
   jobs: BotConsoleMemoryJobItem[];
+  audit: BotConsoleMemoryAuditItem[];
+  provenanceCount: number;
+  status: MemoryV3StatusSnapshot | null;
+  providerRoutes: MemoryV3ProviderRouteStats[];
+  recentFailures: string[];
 }
 
 export interface BotConsoleProbeResponse {
-  target: "embedding";
-  memoryV2: MemoryV2ProbeResult;
+  target: "embedding" | "extraction" | "provider";
+  memoryV3: MemoryV3ProbeResult;
 }
 
 export interface GetMemoryStateResponse extends BotConsoleMemoryState {}
+
+export interface BotConsoleMemoryMutationResponse {
+  ok: boolean;
+  memory: BotConsoleMemoryState;
+}
 
 export interface SaveEnvResponse {
   env: Record<string, string>;

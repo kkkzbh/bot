@@ -12,7 +12,7 @@ import {
   getStatusDotClass,
 } from '../../utils/constants'
 import { formatDateTime, formatLatency } from '../../utils/format'
-import type { MemoryV2StatusSnapshot } from '../../types'
+import type { MemoryV3StatusSnapshot } from '../../types'
 
 const bc = inject<ReturnType<typeof useBotConsole>>('bc')!
 const { add: toastAdd } = useToast()
@@ -29,8 +29,8 @@ const modelTabs = computed(() => botState.value?.modelTabs)
 const activeModelProfile = computed(() =>
   modelTabs.value?.tabs?.find(tab => tab.id === modelTabs.value?.activeTab) ?? null,
 )
-const memory    = computed<MemoryV2StatusSnapshot | undefined>(
-  () => botState.value?.runtimeStatus?.memoryV2,
+const memory    = computed<MemoryV3StatusSnapshot | undefined>(
+  () => botState.value?.runtimeStatus?.memoryV3,
 )
 
 const targetActiveState = computed(
@@ -80,13 +80,13 @@ function getServiceByUnit(unit: string) {
 async function handleProbe() {
   try {
     const result = await bc.probeEmbedding()
-    if (result?.memoryV2?.ok) {
+    if (result?.memoryV3?.ok) {
       toastAdd(
-        `Embedding 检测成功，耗时 ${formatLatency(result.memoryV2.latencyMs)}`,
+        `Embedding 检测成功，耗时 ${formatLatency(result.memoryV3.latencyMs)}`,
         'success',
       )
     } else {
-      toastAdd(result?.memoryV2?.error || 'Embedding 检测失败', 'error')
+      toastAdd(result?.memoryV3?.error || 'Embedding 检测失败', 'error')
     }
   } catch (e: unknown) {
     toastAdd(e instanceof Error ? e.message : '检测失败', 'error')
@@ -209,8 +209,12 @@ async function handleProbe() {
         </div>
 
         <div class="bc-overview-kv">
-          <span>memory-v2</span>
+          <span>memory-v3</span>
           <strong>{{ memory?.enabled ? '已启用' : '未启用' }}</strong>
+        </div>
+        <div class="bc-overview-kv">
+          <span>read / write</span>
+          <strong>{{ memory?.readEnabled ? 'on' : 'off' }} / {{ memory?.writeEnabled ? 'on' : 'off' }}</strong>
         </div>
         <div class="bc-overview-kv">
           <span>extract 模型</span>
@@ -229,7 +233,17 @@ async function handleProbe() {
           <span>队列</span>
           <strong>
             extract {{ memory.jobs.extractPending }} 待处理 / {{ memory.jobs.extractProcessing }} 处理中，
-            embed {{ memory.jobs.embedPending }} 待处理 / {{ memory.jobs.embedProcessing }} 处理中
+            review {{ memory.jobs.privacyReviewPending }}，
+            consolidate {{ memory.jobs.consolidatePending }}，
+            embed {{ memory.jobs.embedPending }} 待处理 / {{ memory.jobs.embedProcessing }} 处理中，
+            dead {{ memory.jobs.deadLetter }}
+          </strong>
+        </div>
+
+        <div v-if="memory?.providerRoutes?.length" class="bc-overview-kv bc-overview-kv-block">
+          <span>routes</span>
+          <strong>
+            {{ memory.providerRoutes.map(route => `${route.route}: ${route.success}/${route.failure}`).join('，') }}
           </strong>
         </div>
 

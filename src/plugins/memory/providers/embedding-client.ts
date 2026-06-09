@@ -16,7 +16,7 @@ export function isEmbedRuntimeConfigured(runtime: MemoryEmbedRuntime): boolean {
   return Boolean(runtime.baseUrl.trim() && runtime.apiKey.trim() && runtime.model.trim());
 }
 
-export async function embedTexts(runtime: MemoryEmbedRuntime, inputs: string[]): Promise<Array<number[] | null>> {
+export async function embedTexts(runtime: MemoryEmbedRuntime, inputs: readonly string[]): Promise<Array<number[] | null>> {
   if (!isEmbedRuntimeConfigured(runtime)) {
     return inputs.map(() => null);
   }
@@ -37,12 +37,9 @@ export async function embedTexts(runtime: MemoryEmbedRuntime, inputs: string[]):
       }),
       signal: controller.signal,
     });
+    if (!response.ok) throw new Error(`embed_http_${response.status}`);
 
-    if (!response.ok) {
-      throw new Error(`embed_http_${response.status}`);
-    }
-
-    const payload = (await response.json()) as EmbeddingResponse;
+    const payload = await response.json() as EmbeddingResponse;
     const rows = Array.isArray(payload.data) ? payload.data : [];
     const result = inputs.map(() => null as number[] | null);
     for (const [position, row] of rows.entries()) {
