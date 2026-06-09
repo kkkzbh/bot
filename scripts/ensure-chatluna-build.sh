@@ -119,7 +119,7 @@ PY
 if [[ "${#BUILD_TARGETS[@]}" -gt 0 ]]; then
   echo "[info] Building linked ChatLuna packages: ${BUILD_TARGETS[*]}"
   if command -v corepack >/dev/null 2>&1; then
-    (cd "$CHATLUNA_ROOT_DIR" && corepack yarn@1.22.22 fast-build "${BUILD_TARGETS[@]}")
+    (cd "$CHATLUNA_ROOT_DIR" && COREPACK_ENABLE_PROJECT_SPEC=0 corepack yarn@1.22.22 fast-build "${BUILD_TARGETS[@]}")
   elif command -v yarn >/dev/null 2>&1; then
     (cd "$CHATLUNA_ROOT_DIR" && yarn fast-build "${BUILD_TARGETS[@]}")
   elif [[ -f "$CHATLUNA_ROOT_DIR/pnpm-lock.yaml" || -f "$CHATLUNA_ROOT_DIR/pnpm-workspace.yaml" ]]; then

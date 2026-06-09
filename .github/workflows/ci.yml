@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           cd chatluna-src
-          corepack yarn@1.22.22 install --frozen-lockfile
+          COREPACK_ENABLE_PROJECT_SPEC=0 corepack yarn@1.22.22 install --frozen-lockfile
 
       - name: Ensure linked ChatLuna runtime builds
         run: bash ./scripts/ensure-chatluna-build.sh
