@@ -2,6 +2,10 @@ import { defineConfig, type LibraryFormats } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'node:path'
 
+const outDir = process.env.QQBOT_CONSOLE_OUT_DIR
+  ? resolve(process.env.QQBOT_CONSOLE_OUT_DIR)
+  : resolve(__dirname, '../../../../dist/plugins/bot-console/client')
+
 export default defineConfig({
   plugins: [vue({})],
   build: {
@@ -17,10 +21,7 @@ export default defineConfig({
         assetFileNames: 'style[extname]',
       },
     },
-    outDir: resolve(
-      __dirname,
-      '../../../../node_modules/.cache/qqbot-bot-console',
-    ),
+    outDir,
     emptyOutDir: true,
     cssCodeSplit: false,
   },

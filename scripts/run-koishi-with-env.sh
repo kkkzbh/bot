@@ -74,6 +74,6 @@ else
 fi
 
 cd "$ROOT_DIR"
-./scripts/ensure-chatluna-build.sh
-pnpm build
+./scripts/ensure-chatluna-build.sh --check
+node ./scripts/verify-runtime-artifacts.mjs --config koishi.yml
 exec pnpm exec koishi start koishi.yml

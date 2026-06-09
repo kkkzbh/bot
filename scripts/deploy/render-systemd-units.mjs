@@ -117,7 +117,7 @@ Environment=QQBOT_ENV_BASE_FILE=${envServer}
 Environment=QQBOT_ENV_OVERRIDE_FILE=${envRuntime}
 Environment=CHATLUNA_PRESET_DIRS=${shared}/presets:${app}/data/chathub/presets
 Environment=CHATLUNA_RUNTIME_PRESET_DIR=${shared}/presets
-ExecStart=/usr/bin/env bash -lc 'cd "${app}" && exec pnpm exec koishi start koishi.yml'
+ExecStart=/usr/bin/env bash -lc 'cd "${app}" && exec pnpm start:server'
 Restart=always
 RestartSec=5
 

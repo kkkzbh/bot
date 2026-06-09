@@ -147,7 +147,7 @@ export function apply(ctx: Context): void {
   const manager = new BotConsoleManager({ rootDir: ctx.baseDir, copilotBridge });
   const consoleService = ctx.console as any;
   const runtimeCtx = ctx as unknown as RuntimeServiceContext;
-  const entryDir = join(ctx.baseDir, 'node_modules/.cache/qqbot-bot-console');
+  const entryDir = join(ctx.baseDir, 'dist/plugins/bot-console/client');
 
   try {
     manager.syncManagedChatLunaAgentConfig();

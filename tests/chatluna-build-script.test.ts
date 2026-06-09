@@ -11,4 +11,13 @@ describe('chatluna build script dependency closure', () => {
     expect(content).toContain("*package_data.get('peerDependencies', {}),");
     expect(content).toContain('visit(dep_dir)');
   });
+
+  it('supports a check-only mode for service startup preflight', () => {
+    const content = readFileSync(resolve(process.cwd(), 'scripts/ensure-chatluna-build.sh'), 'utf8');
+
+    expect(content).toContain('MODE="${1:-build}"');
+    expect(content).toContain('if [[ "$MODE" == "--check" ]]');
+    expect(content).toContain('Linked ChatLuna packages need build');
+    expect(content).toContain('Run: pnpm build');
+  });
 });

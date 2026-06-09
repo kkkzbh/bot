@@ -93,15 +93,24 @@ pnpm docs:preview
 
 ## 3. Start Koishi bot (host)
 
+Build the runtime artifacts explicitly after source changes:
+
+```bash
+pnpm build
+```
+
 ```bash
 pnpm start
 ```
 
-`pnpm start` will build `dist/`, then resolve bot env in this order:
+`pnpm start` does not build or delete runtime artifacts. It checks linked
+ChatLuna packages and `dist/plugins/*` first, then resolves bot env in this
+order:
 
 - `.env.local`
 
-Then it runs `koishi start koishi.yml`.
+Then it runs `koishi start koishi.yml`. If the preflight fails, run
+`pnpm build` before starting again.
 
 Koishi listens on `KOISHI_HOST:KOISHI_PORT` (default `0.0.0.0:5140`).
 
@@ -378,6 +387,7 @@ pnpm docs:build
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm runtime:check
 ```
 
 ## 13. Fedora / Podman notes

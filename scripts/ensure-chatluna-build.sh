@@ -3,6 +3,12 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CHATLUNA_ROOT_DIR="${CHATLUNA_ROOT_DIR:-}"
+MODE="${1:-build}"
+
+if [[ "$MODE" != "build" && "$MODE" != "--check" ]]; then
+  echo "[error] usage: ensure-chatluna-build.sh [--check]" >&2
+  exit 2
+fi
 
 if [[ -z "$CHATLUNA_ROOT_DIR" ]]; then
   CHATLUNA_CORE_DIR="${CHATLUNA_CORE_DIR:-$ROOT_DIR/../chatluna/packages/core}"
@@ -117,6 +123,12 @@ PY
 )
 
 if [[ "${#BUILD_TARGETS[@]}" -gt 0 ]]; then
+  if [[ "$MODE" == "--check" ]]; then
+    echo "[error] Linked ChatLuna packages need build: ${BUILD_TARGETS[*]}" >&2
+    echo "[error] Run: pnpm build" >&2
+    exit 1
+  fi
+
   echo "[info] Building linked ChatLuna packages: ${BUILD_TARGETS[*]}"
   if command -v corepack >/dev/null 2>&1; then
     (cd "$CHATLUNA_ROOT_DIR" && COREPACK_ENABLE_PROJECT_SPEC=0 corepack yarn@1.22.22 fast-build "${BUILD_TARGETS[@]}")

@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-./scripts/ensure-chatluna-build.sh
+./scripts/ensure-chatluna-build.sh --check
+node ./scripts/verify-runtime-artifacts.mjs --config koishi.yml
 
 # Provide deterministic minimal runtime env for local/CI smoke start.
 export ONEBOT_SELF_ID="${ONEBOT_SELF_ID:-100000001}"
