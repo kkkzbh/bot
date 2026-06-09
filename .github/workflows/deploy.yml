@@ -67,9 +67,8 @@ jobs:
       - name: Install linked ChatLuna dependencies
         run: |
           set -euo pipefail
-          corepack enable
           cd chatluna-src
-          yarn install --frozen-lockfile
+          corepack yarn@1.22.22 install --frozen-lockfile
 
       - name: Ensure linked ChatLuna runtime builds
         run: bash ./scripts/ensure-chatluna-build.sh
@@ -361,7 +360,7 @@ jobs:
 
           if ! command -v pnpm >/dev/null 2>&1; then
             if command -v corepack >/dev/null 2>&1; then
-              corepack enable
+              corepack enable pnpm
               corepack prepare pnpm@9.15.4 --activate
             fi
           fi
@@ -410,7 +409,7 @@ jobs:
                 exit 1
               fi
               mkdir -p "${CHATLUNA_DIR}/.yarn-cache"
-              YARN_CACHE_FOLDER="${CHATLUNA_DIR}/.yarn-cache" corepack yarn install --frozen-lockfile
+              YARN_CACHE_FOLDER="${CHATLUNA_DIR}/.yarn-cache" corepack yarn@1.22.22 install --frozen-lockfile
             )
           fi
 

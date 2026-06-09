@@ -2,6 +2,7 @@
   "name": "qqbot",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@9.15.4",
   "description": "QQ group AI chat bot powered by Koishi + OneBot on Fedora/Podman",
   "scripts": {
     "chatluna:build": "bash ./scripts/ensure-chatluna-build.sh",
