@@ -3,8 +3,9 @@ set -euo pipefail
 
 APP_DIR="${DEPLOY_APP_DIR:-$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SHARED_DIR="${QQBOT_SHARED_DIR:-$(dirname "${APP_DIR}")/shared}"
-BASE_ENV_FILE="${APP_DIR}/.env.server"
 RUNTIME_ENV_FILE="${SHARED_DIR}/.env.runtime"
+BASE_ENV_FILE="${QQBOT_SERVER_ENV_FILE:-${SHARED_DIR}/.env.server}"
+LEGACY_BASE_ENV_FILE="${APP_DIR}/.env.server"
 RUNTIME_PRESET_DIR="${SHARED_DIR}/presets"
 RUNTIME_LLBOT_DIR="${SHARED_DIR}/llonebot"
 RUNTIME_LLBOT_RUNTIME_DIR="${SHARED_DIR}/llbot-runtime"
@@ -86,6 +87,37 @@ for (const line of envText.split(/\r?\n/)) {
 
 const output = [
   '# Seeded from previous .env.server during first runtime-layer migration.',
+  ...selected.values(),
+  '',
+].join('\n')
+
+fs.writeFileSync(targetEnvPath, output, 'utf8')
+NODE
+  elif [[ -f "${LEGACY_BASE_ENV_FILE}" ]]; then
+    node - "${LEGACY_BASE_ENV_FILE}" "${RUNTIME_ENV_FILE}" "${APP_DIR}/src/plugins/bot-console/server.ts" <<'NODE'
+const fs = require('node:fs')
+
+const [, , sourceEnvPath, targetEnvPath, sourceFilePath] = process.argv
+const sourceText = fs.readFileSync(sourceFilePath, 'utf8')
+const envText = fs.readFileSync(sourceEnvPath, 'utf8')
+const keyMatches = [...sourceText.matchAll(/key:\s*'([^']+)'/g)]
+const managedKeys = new Set(keyMatches.map((match) => match[1]))
+
+if (managedKeys.size === 0) {
+  throw new Error(`failed to discover managed env keys from ${sourceFilePath}`)
+}
+
+const selected = new Map()
+for (const line of envText.split(/\r?\n/)) {
+  const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
+  if (!match) continue
+  const [, key] = match
+  if (!managedKeys.has(key)) continue
+  selected.set(key, line)
+}
+
+const output = [
+  '# Seeded from previous release-local .env.server during runtime-layer migration.',
   ...selected.values(),
   '',
 ].join('\n')

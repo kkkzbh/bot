@@ -1,0 +1,113 @@
+name: Setup QQBot workspace
+description: Checkout qqbot and linked ChatLuna, then install deterministic Node dependencies.
+
+inputs:
+  qqbot-ref:
+    description: QQBot ref to checkout. Empty uses the workflow event ref.
+    required: false
+    default: ''
+  chatluna-repository:
+    description: ChatLuna repository in owner/name form.
+    required: false
+    default: kkkzbh/chatluna
+  chatluna-ref:
+    description: ChatLuna ref or resolved commit SHA to checkout.
+    required: false
+    default: v1-dev
+  node-version:
+    description: Node.js version.
+    required: false
+    default: '22'
+  pnpm-version:
+    description: pnpm version.
+    required: false
+    default: 9.15.4
+  yarn-version:
+    description: Yarn version used by linked ChatLuna.
+    required: false
+    default: 1.22.22
+  install:
+    description: Install qqbot and ChatLuna dependencies.
+    required: false
+    default: 'true'
+  build-chatluna:
+    description: Build linked ChatLuna runtime packages after install.
+    required: false
+    default: 'true'
+
+outputs:
+  qqbot-sha:
+    description: Checked out QQBot commit SHA.
+    value: ${{ steps.revisions.outputs.qqbot-sha }}
+  chatluna-sha:
+    description: Checked out ChatLuna commit SHA.
+    value: ${{ steps.revisions.outputs.chatluna-sha }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout qqbot
+      if: inputs.qqbot-ref != ''
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      with:
+        ref: ${{ inputs.qqbot-ref }}
+        persist-credentials: false
+
+    - name: Checkout qqbot
+      if: inputs.qqbot-ref == ''
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      with:
+        persist-credentials: false
+
+    - name: Checkout linked ChatLuna
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      with:
+        repository: ${{ inputs.chatluna-repository }}
+        ref: ${{ inputs.chatluna-ref }}
+        path: chatluna-src
+        persist-credentials: false
+
+    - name: Prepare linked ChatLuna workspace
+      shell: bash
+      run: |
+        set -euo pipefail
+        ln -sfn "${GITHUB_WORKSPACE}/chatluna-src" "${GITHUB_WORKSPACE}/../chatluna"
+        test -f "${GITHUB_WORKSPACE}/../chatluna/packages/core/package.json"
+
+    - name: Setup pnpm
+      uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+      with:
+        version: ${{ inputs.pnpm-version }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+        cache-dependency-path: pnpm-lock.yaml
+
+    - name: Install qqbot dependencies
+      if: inputs.install == 'true'
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    - name: Install linked ChatLuna dependencies
+      if: inputs.install == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd chatluna-src
+        COREPACK_ENABLE_PROJECT_SPEC=0 corepack yarn@${{ inputs.yarn-version }} install --frozen-lockfile
+
+    - name: Ensure linked ChatLuna runtime builds
+      if: inputs.install == 'true' && inputs.build-chatluna == 'true'
+      shell: bash
+      run: bash ./scripts/ensure-chatluna-build.sh
+
+    - name: Capture workspace revisions
+      id: revisions
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "qqbot-sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+        echo "chatluna-sha=$(git -C chatluna-src rev-parse HEAD)" >> "${GITHUB_OUTPUT}"

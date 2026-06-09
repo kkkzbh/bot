@@ -3,15 +3,15 @@ name: Deploy
 on:
   push:
     tags:
-      - 'deploy-*'
+      - deploy-*
   workflow_dispatch:
     inputs:
       deploy_ref:
-        description: "Deploy branch/ref (default: main)"
+        description: 'Deploy branch/ref (default: current ref)'
         required: false
         type: string
       chatluna_ref:
-        description: "ChatLuna branch/ref (default: repo variable or v1-dev)"
+        description: 'ChatLuna branch/ref (default: v1-dev)'
         required: false
         type: string
 
@@ -19,538 +19,219 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-qqbot-${{ github.ref }}
-  cancel-in-progress: true
+  group: deploy-qqbot-production
+  cancel-in-progress: false
+
+env:
+  DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_ref || github.ref }}
+  DEPLOY_CHATLUNA_REPO: kkkzbh/chatluna
+  DEPLOY_CHATLUNA_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chatluna_ref || 'v1-dev' }}
+  DEPLOY_PORT: ${{ vars.QQBOT_SERVER_PORT || '22' }}
+  DEPLOY_APP_DIR: ${{ vars.QQBOT_SERVER_APP_DIR || '/opt/qqbot/current' }}
+  DEPLOY_SHARED_DIR: ${{ vars.QQBOT_SERVER_SHARED_DIR || '/opt/qqbot/shared' }}
+  DEPLOY_SYSTEMD_TARGET: ${{ vars.QQBOT_SYSTEMD_TARGET || 'qqbot.target' }}
 
 jobs:
-  deploy:
-    name: Deploy to Server
+  resolve-revisions:
+    name: Resolve external revisions
     runs-on: ubuntu-latest
-    env:
-      DEPLOY_PORT: ${{ vars.QQBOT_SERVER_PORT || '22' }}
-      DEPLOY_APP_DIR: ${{ vars.QQBOT_SERVER_APP_DIR || '/opt/qqbot/current' }}
-      DEPLOY_SHARED_DIR: ${{ vars.QQBOT_SERVER_SHARED_DIR || '/opt/qqbot/shared' }}
-      DEPLOY_SYSTEMD_TARGET: ${{ vars.QQBOT_SYSTEMD_TARGET || 'qqbot.target' }}
-      DEPLOY_CHATLUNA_REPO: kkkzbh/chatluna
-      DEPLOY_CHATLUNA_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.chatluna_ref || 'v1-dev' }}
+    outputs:
+      chatluna-sha: ${{ steps.chatluna.outputs.sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.inputs.deploy_ref || github.ref }}
-          persist-credentials: false
-
-      - name: Checkout linked ChatLuna
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ env.DEPLOY_CHATLUNA_REPO }}
-          ref: ${{ env.DEPLOY_CHATLUNA_REF }}
-          path: chatluna-src
-          persist-credentials: false
-
-      - name: Prepare linked ChatLuna workspace
+      - name: Resolve ChatLuna ref
+        id: chatluna
+        shell: bash
         run: |
           set -euo pipefail
-          ln -sfn "${GITHUB_WORKSPACE}/chatluna-src" "${GITHUB_WORKSPACE}/../chatluna"
-          test -f "${GITHUB_WORKSPACE}/../chatluna/packages/core/package.json"
+          repo_url="https://github.com/${DEPLOY_CHATLUNA_REPO}.git"
+          ref="${DEPLOY_CHATLUNA_REF}"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+          if [[ "${ref}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            sha="${ref}"
+          else
+            sha="$(git ls-remote --exit-code "${repo_url}" "refs/heads/${ref}" | awk '{print $1; exit}' || true)"
+            if [[ -z "${sha}" ]]; then
+              sha="$(git ls-remote --exit-code "${repo_url}" "refs/tags/${ref}^{}" | awk '{print $1; exit}' || true)"
+            fi
+            if [[ -z "${sha}" ]]; then
+              sha="$(git ls-remote --exit-code "${repo_url}" "refs/tags/${ref}" | awk '{print $1; exit}' || true)"
+            fi
+            if [[ -z "${sha}" ]]; then
+              sha="$(git ls-remote --exit-code "${repo_url}" "${ref}" | awk '{print $1; exit}' || true)"
+            fi
+          fi
+
+          if [[ -z "${sha}" ]]; then
+            echo "Failed to resolve ${DEPLOY_CHATLUNA_REPO}@${ref}" >&2
+            exit 1
+          fi
+
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Resolved revisions"
+            echo "- QQBot ref: \`${DEPLOY_REF}\`"
+            echo "- ChatLuna: \`${DEPLOY_CHATLUNA_REPO}@${ref}\` -> \`${sha}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  build-release:
+    name: Build release bundle
+    runs-on: ubuntu-latest
+    needs:
+      - resolve-revisions
+    steps:
+      - name: Checkout workflow action
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          version: 9.15.4
+          ref: ${{ env.DEPLOY_REF }}
+          persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Setup workspace
+        id: workspace
+        uses: ./.github/actions/setup-qqbot-workspace
         with:
-          node-version: "22"
+          qqbot-ref: ${{ env.DEPLOY_REF }}
+          chatluna-repository: ${{ env.DEPLOY_CHATLUNA_REPO }}
+          chatluna-ref: ${{ needs.resolve-revisions.outputs.chatluna-sha }}
 
-      - name: Install linked ChatLuna dependencies
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test -- --reporter=dot
+
+      - name: Build
+        run: pnpm build
+
+      - name: Koishi startup smoke test
+        env:
+          ONEBOT_SELF_ID: '100000001'
+          OPENAI_API_KEY: sk-ci-smoke
+          OPENAI_MODEL: deepseek/deepseek-chat
+          TASK_AUTOMATION_INTENT_ENABLED: 'false'
+        run: pnpm smoke:start
+
+      - name: Write build manifest
+        env:
+          QQBOT_REPOSITORY: ${{ github.repository }}
+          QQBOT_REF: ${{ env.DEPLOY_REF }}
+          QQBOT_SHA: ${{ steps.workspace.outputs.qqbot-sha }}
+          CHATLUNA_REPOSITORY: ${{ env.DEPLOY_CHATLUNA_REPO }}
+          CHATLUNA_REF: ${{ env.DEPLOY_CHATLUNA_REF }}
+          CHATLUNA_SHA: ${{ steps.workspace.outputs.chatluna-sha }}
+        run: node ./scripts/ci/write-build-manifest.mjs --output artifacts/build-manifest.json
+
+      - name: Create deploy bundle
+        id: bundle
         run: |
           set -euo pipefail
-          cd chatluna-src
-          COREPACK_ENABLE_PROJECT_SPEC=0 corepack yarn@1.22.22 install --frozen-lockfile
+          bundle_path="$(BUILD_MANIFEST_PATH=artifacts/build-manifest.json CHATLUNA_SOURCE_DIR=chatluna-src bash ./scripts/ci/create-deploy-bundle.sh)"
+          echo "bundle-path=${bundle_path}" >> "${GITHUB_OUTPUT}"
+          echo "bundle-name=$(basename "${bundle_path}")" >> "${GITHUB_OUTPUT}"
 
-      - name: Ensure linked ChatLuna runtime builds
-        run: bash ./scripts/ensure-chatluna-build.sh
+      - name: Upload release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qqbot-release
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ steps.bundle.outputs.bundle-path }}
+            artifacts/build-manifest.json
 
+  deploy-production:
+    name: Deploy production
+    runs-on: ubuntu-latest
+    needs:
+      - build-release
+    environment:
+      name: production
+    steps:
       - name: Validate required secrets
         env:
           DEPLOY_HOST: ${{ secrets.QQBOT_SERVER_HOST }}
           DEPLOY_USER: ${{ secrets.QQBOT_SERVER_USER }}
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.QQBOT_SSH_PRIVATE_KEY }}
           DEPLOY_DOTENV: ${{ secrets.QQBOT_DOTENV }}
+          SSH_KNOWN_HOSTS: ${{ secrets.QQBOT_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          if [ -z "${DEPLOY_HOST}" ]; then
-            echo "Missing required secret: QQBOT_SERVER_HOST" >&2
-            exit 1
-          fi
-          if [ -z "${DEPLOY_USER}" ]; then
-            echo "Missing required secret: QQBOT_SERVER_USER" >&2
-            exit 1
-          fi
-          if [ -z "${DEPLOY_SSH_PRIVATE_KEY}" ]; then
-            echo "Missing required secret: QQBOT_SSH_PRIVATE_KEY" >&2
-            exit 1
-          fi
-          if [ -z "${DEPLOY_DOTENV}" ]; then
-            echo "Missing required secret: QQBOT_DOTENV" >&2
-            exit 1
-          fi
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_PRIVATE_KEY DEPLOY_DOTENV SSH_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing required secret: ${name}" >&2
+              exit 1
+            fi
+          done
 
-      - name: Quality gates
-        run: |
-          set -euo pipefail
-          pnpm install --frozen-lockfile
-          pnpm typecheck
-          pnpm test \
-            tests/voice-config.test.ts \
-            tests/group-natural-trigger.test.ts \
-            tests/chatluna-live-reply.test.ts \
-            tests/chatluna-speaker-format.test.ts
-          pnpm build
+      - name: Download release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qqbot-release
+          path: artifacts
 
       - name: Setup SSH key
-        uses: webfactory/ssh-agent@v0.10.0
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
         with:
           ssh-private-key: ${{ secrets.QQBOT_SSH_PRIVATE_KEY }}
 
       - name: Setup known_hosts
         env:
-          DEPLOY_HOST: ${{ secrets.QQBOT_SERVER_HOST }}
           SSH_KNOWN_HOSTS: ${{ secrets.QQBOT_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
-          if [ -n "${SSH_KNOWN_HOSTS}" ]; then
-            printf "%s\n" "${SSH_KNOWN_HOSTS}" > "$HOME/.ssh/known_hosts"
-          else
-            ssh-keyscan -p "${DEPLOY_PORT}" "${DEPLOY_HOST}" > "$HOME/.ssh/known_hosts"
-          fi
-          chmod 600 "$HOME/.ssh/known_hosts"
+          mkdir -p "${HOME}/.ssh"
+          chmod 700 "${HOME}/.ssh"
+          printf "%s\n" "${SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/known_hosts"
 
-      - name: Sync project files
-        env:
-          DEPLOY_HOST: ${{ secrets.QQBOT_SERVER_HOST }}
-          DEPLOY_USER: ${{ secrets.QQBOT_SERVER_USER }}
-        run: |
-          set -euo pipefail
-          retry_cmd() {
-            local attempt=1
-            while true; do
-              if "$@"; then
-                return 0
-              fi
-              if [ "${attempt}" -ge 6 ]; then
-                return 1
-              fi
-              sleep "$((attempt * 10))"
-              attempt="$((attempt + 1))"
-            done
-          }
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
-          retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_APP_DIR}'"
-          retry_cmd rsync -az --delete \
-            --exclude='.git' \
-            --exclude='node_modules' \
-            --exclude='dist' \
-            --exclude='.env' \
-            --exclude='.env.local' \
-            --exclude='.env.server' \
-            --exclude='data' \
-            --exclude='downloads' \
-            --exclude='zpix.ttf' \
-            --exclude='koishi-runtime.log' \
-            --exclude='chatluna-src' \
-            -e "${RSYNC_RSH}" \
-            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_APP_DIR}/"
-
-      - name: Sync linked ChatLuna files
-        env:
-          DEPLOY_HOST: ${{ secrets.QQBOT_SERVER_HOST }}
-          DEPLOY_USER: ${{ secrets.QQBOT_SERVER_USER }}
-        run: |
-          set -euo pipefail
-          retry_cmd() {
-            local attempt=1
-            while true; do
-              if "$@"; then
-                return 0
-              fi
-              if [ "${attempt}" -ge 6 ]; then
-                return 1
-              fi
-              sleep "$((attempt * 10))"
-              attempt="$((attempt + 1))"
-            done
-          }
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
-          DEPLOY_CHATLUNA_DIR="$(dirname "${DEPLOY_APP_DIR}")/chatluna"
-          retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_CHATLUNA_DIR}'"
-          retry_cmd rsync -az --delete \
-            --exclude='.git' \
-            --exclude='node_modules' \
-            --exclude='.idea' \
-            -e "${RSYNC_RSH}" \
-            ./chatluna-src/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_CHATLUNA_DIR}/"
-
-      - name: Prepare server runtime layer
-        env:
-          DEPLOY_HOST: ${{ secrets.QQBOT_SERVER_HOST }}
-          DEPLOY_USER: ${{ secrets.QQBOT_SERVER_USER }}
-        run: |
-          set -euo pipefail
-          retry_cmd() {
-            local attempt=1
-            while true; do
-              if "$@"; then
-                return 0
-              fi
-              if [ "${attempt}" -ge 6 ]; then
-                return 1
-              fi
-              sleep "$((attempt * 10))"
-              attempt="$((attempt + 1))"
-            done
-          }
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' QQBOT_SHARED_DIR='${DEPLOY_SHARED_DIR}' bash '${DEPLOY_APP_DIR}/scripts/prepare-server-runtime-layer.sh'"
-
-      - name: Sync bundled preset files
-        env:
-          DEPLOY_HOST: ${{ secrets.QQBOT_SERVER_HOST }}
-          DEPLOY_USER: ${{ secrets.QQBOT_SERVER_USER }}
-        run: |
-          set -euo pipefail
-          retry_cmd() {
-            local attempt=1
-            while true; do
-              if "$@"; then
-                return 0
-              fi
-              if [ "${attempt}" -ge 6 ]; then
-                return 1
-              fi
-              sleep "$((attempt * 10))"
-              attempt="$((attempt + 1))"
-            done
-          }
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
-          if [ -d "./data/chathub/presets" ]; then
-            retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_APP_DIR}/data/chathub/presets'"
-            retry_cmd rsync -az \
-              -e "${RSYNC_RSH}" \
-              ./data/chathub/presets/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_APP_DIR}/data/chathub/presets/"
-          fi
-
-      - name: Sync sticker files
-        env:
-          DEPLOY_HOST: ${{ secrets.QQBOT_SERVER_HOST }}
-          DEPLOY_USER: ${{ secrets.QQBOT_SERVER_USER }}
-        run: |
-          set -euo pipefail
-          retry_cmd() {
-            local attempt=1
-            while true; do
-              if "$@"; then
-                return 0
-              fi
-              if [ "${attempt}" -ge 6 ]; then
-                return 1
-              fi
-              sleep "$((attempt * 10))"
-              attempt="$((attempt + 1))"
-            done
-          }
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          RSYNC_RSH="ssh -p ${DEPLOY_PORT} -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes"
-          if [ -d "./data/chathub/stickers" ]; then
-            retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-              "mkdir -p '${DEPLOY_APP_DIR}/data/chathub/stickers'"
-            retry_cmd rsync -az \
-              -e "${RSYNC_RSH}" \
-              ./data/chathub/stickers/ \
-              "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_APP_DIR}/data/chathub/stickers/"
-          fi
-
-      - name: Sync runtime .env.server
+      - name: Upload bundle and runtime env
         env:
           DEPLOY_HOST: ${{ secrets.QQBOT_SERVER_HOST }}
           DEPLOY_USER: ${{ secrets.QQBOT_SERVER_USER }}
           DEPLOY_DOTENV: ${{ secrets.QQBOT_DOTENV }}
         run: |
           set -euo pipefail
-          VALIDATE_ENV_FILE="$(mktemp)"
-          trap 'rm -f "${VALIDATE_ENV_FILE}"' EXIT
-          printf "%s" "${DEPLOY_DOTENV}" > "${VALIDATE_ENV_FILE}"
-          node ./scripts/validate-server-voice-env.mjs "${VALIDATE_ENV_FILE}"
-          retry_ssh_pipe() {
-            local attempt=1
-            while true; do
-              if printf "%s" "${DEPLOY_DOTENV}" | ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "cat > '${DEPLOY_APP_DIR}/.env.server'"; then
-                return 0
-              fi
-              if [ "${attempt}" -ge 6 ]; then
-                return 1
-              fi
-              sleep "$((attempt * 10))"
-              attempt="$((attempt + 1))"
-            done
-          }
-          retry_cmd() {
-            local attempt=1
-            while true; do
-              if "$@"; then
-                return 0
-              fi
-              if [ "${attempt}" -ge 6 ]; then
-                return 1
-              fi
-              sleep "$((attempt * 10))"
-              attempt="$((attempt + 1))"
-            done
-          }
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          retry_ssh_pipe
-          retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "chmod 600 '${DEPLOY_APP_DIR}/.env.server'"
+          bundle_path="$(find artifacts -maxdepth 1 -type f -name 'qqbot-release-*.tar.gz' -print -quit)"
+          if [[ -z "${bundle_path}" ]]; then
+            echo "Missing release bundle in artifacts/" >&2
+            exit 1
+          fi
 
-      - name: Install, build and restart service on server
+          remote_base="$(dirname "${DEPLOY_APP_DIR}")"
+          remote_incoming="${remote_base}/incoming"
+          remote_bundle="${remote_incoming}/$(basename "${bundle_path}")"
+          ssh_opts=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+
+          ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p $(printf '%q' "${remote_incoming}") $(printf '%q' "${DEPLOY_SHARED_DIR}")"
+          scp -P "${DEPLOY_PORT}" "${bundle_path}" "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_bundle}"
+
+          tmp_env="${DEPLOY_SHARED_DIR}/.env.server.tmp"
+          final_env="${DEPLOY_SHARED_DIR}/.env.server"
+          printf "%s" "${DEPLOY_DOTENV}" | ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "umask 077; cat > $(printf '%q' "${tmp_env}") && mv $(printf '%q' "${tmp_env}") $(printf '%q' "${final_env}") && chmod 600 $(printf '%q' "${final_env}")"
+
+          {
+            echo "REMOTE_BUNDLE=${remote_bundle}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Install release on server
         env:
           DEPLOY_HOST: ${{ secrets.QQBOT_SERVER_HOST }}
           DEPLOY_USER: ${{ secrets.QQBOT_SERVER_USER }}
         run: |
           set -euo pipefail
-          retry_cmd() {
-            local attempt=1
-            while true; do
-              if "$@"; then
-                return 0
-              fi
-              if [ "${attempt}" -ge 6 ]; then
-                return 1
-              fi
-              sleep "$((attempt * 10))"
-              attempt="$((attempt + 1))"
-            done
-          }
-          SSH_OPTS=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
-          retry_cmd ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' DEPLOY_SHARED_DIR='${DEPLOY_SHARED_DIR}' DEPLOY_SYSTEMD_TARGET='${DEPLOY_SYSTEMD_TARGET}' bash -s" <<'EOF'
+          ssh_opts=(-p "${DEPLOY_PORT}" -o ConnectTimeout=30 -o ConnectionAttempts=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes)
+          remote_base="$(dirname "${DEPLOY_APP_DIR}")"
+          remote_tmp="${remote_base}/incoming/install-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "QQBOT_RELEASE_BUNDLE=$(printf '%q' "${REMOTE_BUNDLE}") DEPLOY_APP_DIR=$(printf '%q' "${DEPLOY_APP_DIR}") QQBOT_SHARED_DIR=$(printf '%q' "${DEPLOY_SHARED_DIR}") DEPLOY_SYSTEMD_TARGET=$(printf '%q' "${DEPLOY_SYSTEMD_TARGET}") QQBOT_REMOTE_INSTALL_TMP=$(printf '%q' "${remote_tmp}") bash -s" <<'REMOTE'
           set -euo pipefail
-
-          APP_DIR="${DEPLOY_APP_DIR}"
-          SHARED_DIR="${DEPLOY_SHARED_DIR}"
-          CHATLUNA_DIR="$(dirname "${APP_DIR}")/chatluna"
-          SYSTEMD_TARGET="${DEPLOY_SYSTEMD_TARGET}"
-          USER_SYSTEMD_DIR="${HOME}/.config/systemd/user"
-
-          cd "${APP_DIR}"
-
-          if [ ! -f "${APP_DIR}/.env.server" ]; then
-            echo "Missing runtime .env at ${APP_DIR}/.env.server" >&2
-            exit 1
-          fi
-
-          bash "${APP_DIR}/scripts/install-host-log-policy.sh"
-
-          if ! command -v pnpm >/dev/null 2>&1; then
-            if command -v corepack >/dev/null 2>&1; then
-              corepack enable pnpm
-              corepack prepare pnpm@9.15.4 --activate
-            fi
-          fi
-
-          if ! command -v pnpm >/dev/null 2>&1; then
-            echo "pnpm is not installed on target host" >&2
-            exit 1
-          fi
-
-          if ! command -v google-chrome >/dev/null 2>&1; then
-            if ! command -v apt-get >/dev/null 2>&1; then
-              echo "google-chrome is missing on target host and automatic .deb install requires apt-get" >&2
-              exit 1
-            fi
-
-            export DEBIAN_FRONTEND=noninteractive
-            if ! command -v wget >/dev/null 2>&1; then
-              apt-get update
-              apt-get install -y wget
-            fi
-
-            CHROME_DEB="/tmp/google-chrome-stable_current_amd64.deb"
-            rm -f "${CHROME_DEB}"
-            wget -q -O "${CHROME_DEB}" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-            apt-get update
-            apt-get install -y "${CHROME_DEB}"
-            rm -f "${CHROME_DEB}"
-          fi
-
-          apt-get purge -y chromium-browser >/dev/null 2>&1 || true
-          if command -v snap >/dev/null 2>&1; then
-            snap remove --purge chromium >/dev/null 2>&1 || true
-          fi
-
-          chown -R "$(id -u):$(id -g)" "${APP_DIR}" >/dev/null 2>&1 || true
-          mkdir -p "${SHARED_DIR}/presets"
-          touch "${SHARED_DIR}/.env.runtime"
-          chmod 700 "${SHARED_DIR}" "${SHARED_DIR}/presets"
-          chmod 600 "${SHARED_DIR}/.env.runtime"
-          if [ -d "${CHATLUNA_DIR}" ]; then
-            chown -R "$(id -u):$(id -g)" "${CHATLUNA_DIR}" >/dev/null 2>&1 || true
-            (
-              cd "${CHATLUNA_DIR}"
-              if ! command -v corepack >/dev/null 2>&1; then
-                echo "corepack is not installed on target host" >&2
-                exit 1
-              fi
-              mkdir -p "${CHATLUNA_DIR}/.yarn-cache"
-              COREPACK_ENABLE_PROJECT_SPEC=0 YARN_CACHE_FOLDER="${CHATLUNA_DIR}/.yarn-cache" corepack yarn@1.22.22 install --frozen-lockfile
-            )
-          fi
-
-          if [ -d "${CHATLUNA_DIR}" ]; then
-            CHATLUNA_ROOT_DIR="${CHATLUNA_DIR}" bash "${APP_DIR}/scripts/ensure-chatluna-build.sh"
-          fi
-
-          if [ "${SYSTEMD_TARGET}" = "qqbot.target" ]; then
-            if ! command -v podman-compose >/dev/null 2>&1; then
-              echo "podman-compose is not installed on target host" >&2
-              exit 1
-            fi
-
-            PODMAN_COMPOSE_BIN="$(command -v podman-compose)"
-            mkdir -p "${USER_SYSTEMD_DIR}"
-
-            cat > "${USER_SYSTEMD_DIR}/qqbot-pmhq.service" <<UNIT
-          [Unit]
-          Description=QQBot PMHQ Service
-          After=network-online.target
-          Wants=network-online.target
-          PartOf=qqbot.target
-
-          [Service]
-          Type=oneshot
-          RemainAfterExit=yes
-          WorkingDirectory=${APP_DIR}
-          EnvironmentFile=${APP_DIR}/.env.server
-          EnvironmentFile=-${SHARED_DIR}/.env.runtime
-          Environment=CONTAINERS_CONF=${APP_DIR}/config/podman/containers.conf
-          Environment=QQBOT_ENV_BASE_FILE=${APP_DIR}/.env.server
-          Environment=QQBOT_ENV_OVERRIDE_FILE=${SHARED_DIR}/.env.runtime
-          Environment=QQBOT_PODMAN_COMPOSE_BIN=${PODMAN_COMPOSE_BIN}
-          ExecStartPre=/usr/bin/env bash -lc "podman rm -f qqbot-voice-asr >/dev/null 2>&1 || true"
-          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && ./scripts/podman-pmhq-service.sh up'
-          ExecStop=/usr/bin/env bash -lc 'cd ${APP_DIR} && ./scripts/podman-pmhq-service.sh stop'
-
-          [Install]
-          WantedBy=qqbot.target
-          UNIT
-
-            cat > "${USER_SYSTEMD_DIR}/qqbot-llbot.service" <<UNIT
-          [Unit]
-          Description=QQBot LLBot Service
-          After=network-online.target qqbot-pmhq.service
-          Wants=network-online.target qqbot-pmhq.service
-          PartOf=qqbot.target
-
-          [Service]
-          Type=simple
-          WorkingDirectory=${APP_DIR}
-          EnvironmentFile=${APP_DIR}/.env.server
-          EnvironmentFile=-${SHARED_DIR}/.env.runtime
-          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && exec ./scripts/run-llbot-host.sh'
-          Restart=always
-          RestartSec=5
-
-          [Install]
-          WantedBy=qqbot.target
-          UNIT
-
-            cat > "${USER_SYSTEMD_DIR}/qqbot-koishi.service" <<UNIT
-          [Unit]
-          Description=QQBot Koishi Service
-          After=network-online.target qqbot-llbot.service
-          Wants=network-online.target qqbot-llbot.service
-          PartOf=qqbot.target
-
-          [Service]
-          Type=simple
-          WorkingDirectory=${APP_DIR}
-          EnvironmentFile=${APP_DIR}/.env.server
-          EnvironmentFile=-${SHARED_DIR}/.env.runtime
-          Environment=QQBOT_ENV_BASE_FILE=${APP_DIR}/.env.server
-          Environment=QQBOT_ENV_OVERRIDE_FILE=${SHARED_DIR}/.env.runtime
-          Environment=CHATLUNA_PRESET_DIRS=${SHARED_DIR}/presets:${APP_DIR}/data/chathub/presets
-          Environment=CHATLUNA_RUNTIME_PRESET_DIR=${SHARED_DIR}/presets
-          ExecStart=/usr/bin/env bash -lc 'cd ${APP_DIR} && exec pnpm exec koishi start koishi.yml'
-          Restart=always
-          RestartSec=5
-
-          [Install]
-          WantedBy=qqbot.target
-          UNIT
-
-            cat > "${USER_SYSTEMD_DIR}/qqbot.target" <<'UNIT'
-          [Unit]
-          Description=QQBot Full Stack Target
-          Wants=qqbot-pmhq.service qqbot-llbot.service qqbot-koishi.service
-          After=qqbot-pmhq.service qqbot-llbot.service
-
-          [Install]
-          WantedBy=default.target
-          UNIT
-          fi
-
-          pnpm install --frozen-lockfile
-          pnpm build
-
-          if ! command -v systemctl >/dev/null 2>&1; then
-            echo "systemctl is not available on target host" >&2
-            exit 1
-          fi
-
-          if command -v loginctl >/dev/null 2>&1; then
-            if [ "$(id -u)" -eq 0 ]; then
-              loginctl enable-linger root >/dev/null 2>&1 || true
-            elif command -v sudo >/dev/null 2>&1; then
-              sudo -n loginctl enable-linger "$(whoami)" >/dev/null 2>&1 || true
-            fi
-          fi
-
-          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-          if [ ! -S "${XDG_RUNTIME_DIR}/bus" ]; then
-            echo "User systemd bus not available. Check loginctl enable-linger and user service setup." >&2
-            exit 1
-          fi
-
-          systemctl --user daemon-reload
-          systemctl --user enable "${SYSTEMD_TARGET}" >/dev/null 2>&1 || true
-          systemctl --user restart "${SYSTEMD_TARGET}"
-          systemctl --user is-active --quiet "${SYSTEMD_TARGET}"
-
-          if [ "${SYSTEMD_TARGET}" = "qqbot.target" ]; then
-            for unit in qqbot-pmhq.service qqbot-llbot.service qqbot-koishi.service; do
-              for _ in $(seq 1 150); do
-                if systemctl --user is-active --quiet "${unit}"; then
-                  break
-                fi
-                if systemctl --user is-failed --quiet "${unit}"; then
-                  systemctl --user status "${unit}" --no-pager >&2 || true
-                  exit 1
-                fi
-                sleep 1
-              done
-              if ! systemctl --user is-active --quiet "${unit}"; then
-                systemctl --user status "${unit}" --no-pager >&2 || true
-                exit 1
-              fi
-            done
-
-            bash "${APP_DIR}/scripts/verify-qqbot-host-runtime.sh"
-          fi
-          EOF
+          rm -rf "${QQBOT_REMOTE_INSTALL_TMP}"
+          mkdir -p "${QQBOT_REMOTE_INSTALL_TMP}"
+          cleanup() {
+            rm -rf "${QQBOT_REMOTE_INSTALL_TMP}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          tar -xzf "${QQBOT_RELEASE_BUNDLE}" -C "${QQBOT_REMOTE_INSTALL_TMP}"
+          bash "${QQBOT_REMOTE_INSTALL_TMP}/qqbot/scripts/deploy/install-release.sh" "${QQBOT_RELEASE_BUNDLE}"
+          REMOTE

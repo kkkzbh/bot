@@ -157,34 +157,50 @@ describe('qq voice config wiring', () => {
     expect(content).not.toContain('<qqbot-voice>');
   });
 
-  it('deploys server units for pmhq, llbot and koishi with layered envs', () => {
-    const content = readFileSync(resolve(process.cwd(), '.github/workflows/deploy.yml'), 'utf8');
+  it('deploys through a release bundle and renders server units from tracked scripts', () => {
+    const workflow = readFileSync(resolve(process.cwd(), '.github/workflows/deploy.yml'), 'utf8');
+    const renderer = readFileSync(resolve(process.cwd(), 'scripts/deploy/render-systemd-units.mjs'), 'utf8');
+    const installer = readFileSync(resolve(process.cwd(), 'scripts/deploy/install-release.sh'), 'utf8');
+    const prereqs = readFileSync(resolve(process.cwd(), 'scripts/deploy/verify-host-prereqs.sh'), 'utf8');
 
-    expect(content).toContain('PODMAN_COMPOSE_BIN="$(command -v podman-compose)"');
-    expect(content).toContain('podman rm -f qqbot-voice-asr >/dev/null 2>&1 || true');
-    expect(content).toContain('retry_cmd() {');
-    expect(content).toContain('ConnectTimeout=30');
-    expect(content).toContain('ConnectionAttempts=5');
-    expect(content).toContain('EnvironmentFile=${APP_DIR}/.env.server');
-    expect(content).toContain('EnvironmentFile=-${SHARED_DIR}/.env.runtime');
-    expect(content).toContain('DEPLOY_SHARED_DIR');
-    expect(content).toContain("QQBOT_SHARED_DIR='${DEPLOY_SHARED_DIR}' bash '${DEPLOY_APP_DIR}/scripts/prepare-server-runtime-layer.sh'");
-    expect(content).toContain('Environment=QQBOT_ENV_BASE_FILE=${APP_DIR}/.env.server');
-    expect(content).toContain('Environment=QQBOT_ENV_OVERRIDE_FILE=${SHARED_DIR}/.env.runtime');
-    expect(content).toContain('Environment=QQBOT_PODMAN_COMPOSE_BIN=${PODMAN_COMPOSE_BIN}');
-    expect(content).toContain('Environment=CHATLUNA_PRESET_DIRS=${SHARED_DIR}/presets:${APP_DIR}/data/chathub/presets');
-    expect(content).toContain('Environment=CHATLUNA_RUNTIME_PRESET_DIR=${SHARED_DIR}/presets');
-    expect(content).toContain('cat > "${USER_SYSTEMD_DIR}/qqbot-pmhq.service"');
-    expect(content).toContain('cat > "${USER_SYSTEMD_DIR}/qqbot-llbot.service"');
-    expect(content).toContain('cat > "${USER_SYSTEMD_DIR}/qqbot-koishi.service"');
-    expect(content).toContain("./scripts/podman-pmhq-service.sh up");
-    expect(content).toContain("./scripts/run-llbot-host.sh");
-    expect(content).toContain('After=network-online.target qqbot-llbot.service');
-    expect(content).toContain('Wants=qqbot-pmhq.service qqbot-llbot.service qqbot-koishi.service');
-    expect(content).toContain('bash "${APP_DIR}/scripts/verify-qqbot-host-runtime.sh"');
-    expect(content).not.toContain('qqbot-stack.service');
-    expect(content).not.toContain('verify-pmhq-network.sh');
-    expect(content).not.toContain('podman-stack-up.sh');
+    expect(workflow).toContain('environment:');
+    expect(workflow).toContain('name: production');
+    expect(workflow).toContain('node ./scripts/ci/write-build-manifest.mjs --output artifacts/build-manifest.json');
+    expect(workflow).toContain('bash ./scripts/ci/create-deploy-bundle.sh');
+    expect(workflow).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
+    expect(workflow).toContain('actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093');
+    expect(workflow).toContain('webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555');
+    expect(workflow).toContain('SSH_KNOWN_HOSTS: ${{ secrets.QQBOT_SSH_KNOWN_HOSTS }}');
+    expect(workflow).toContain('bash "${QQBOT_REMOTE_INSTALL_TMP}/qqbot/scripts/deploy/install-release.sh"');
+    expect(workflow).not.toContain('ssh-keyscan');
+    expect(workflow).not.toContain('apt-get install');
+    expect(workflow).not.toContain('cat > "${USER_SYSTEMD_DIR}/qqbot-pmhq.service"');
+
+    expect(renderer).toContain("writeUnit(\n  systemdDir,\n  'qqbot-pmhq.service'");
+    expect(renderer).toContain("writeUnit(\n  systemdDir,\n  'qqbot-llbot.service'");
+    expect(renderer).toContain("writeUnit(\n  systemdDir,\n  'qqbot-koishi.service'");
+    expect(renderer).toContain('EnvironmentFile=${envServer}');
+    expect(renderer).toContain('EnvironmentFile=-${envRuntime}');
+    expect(renderer).toContain('Environment=QQBOT_ENV_BASE_FILE=${envServer}');
+    expect(renderer).toContain('Environment=QQBOT_ENV_OVERRIDE_FILE=${envRuntime}');
+    expect(renderer).toContain('Environment=CHATLUNA_PRESET_DIRS=${shared}/presets:${app}/data/chathub/presets');
+    expect(renderer).toContain('podman rm -f qqbot-voice-asr >/dev/null 2>&1 || true');
+    expect(renderer).toContain('./scripts/podman-pmhq-service.sh up');
+    expect(renderer).toContain('./scripts/run-llbot-host.sh');
+    expect(renderer).toContain('Wants=qqbot-pmhq.service qqbot-llbot.service qqbot-koishi.service');
+
+    expect(installer).toContain('bash "${APP_DIR}/scripts/deploy/verify-host-prereqs.sh"');
+    expect(installer).toContain('bash "${APP_DIR}/scripts/prepare-server-runtime-layer.sh"');
+    expect(installer).toContain('ln -sfn "${APP_DIR}" "${CURRENT_LINK}"');
+    expect(installer).toContain('bash "${CURRENT_LINK}/scripts/verify-qqbot-host-runtime.sh"');
+    expect(installer).toContain('QQBOT_DEPLOY_DRY_RUN');
+    expect(installer).toContain('QQBOT_SERVER_ENV_FILE="${SHARED_DIR}/.env.server"');
+
+    expect(prereqs).toContain('require_cmd corepack');
+    expect(prereqs).toContain('require_cmd google-chrome');
+    expect(prereqs).toContain('require_cmd podman');
+    expect(prereqs).toContain('podman compose version');
+    expect(prereqs).not.toContain('apt-get');
   });
 
   it('ships a dedicated pmhq compose helper for the host topology', () => {

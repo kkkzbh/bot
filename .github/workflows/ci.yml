@@ -3,8 +3,8 @@ name: CI
 on:
   push:
     branches:
-      - master
       - main
+      - master
   pull_request:
 
 permissions:
@@ -14,87 +14,110 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CHATLUNA_REPO: kkkzbh/chatluna
+  CHATLUNA_REF: v1-dev
+
 jobs:
-  checks:
-    name: Typecheck + Test + Build + Smoke
+  resolve-revisions:
+    name: Resolve external revisions
     runs-on: ubuntu-latest
-    env:
-      CHATLUNA_REPO: kkkzbh/chatluna
-      CHATLUNA_REF: v1-dev
+    outputs:
+      chatluna-sha: ${{ steps.chatluna.outputs.sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Resolve ChatLuna ref
+        id: chatluna
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_url="https://github.com/${CHATLUNA_REPO}.git"
+          ref="${CHATLUNA_REF}"
+
+          if [[ "${ref}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            sha="${ref}"
+          else
+            sha="$(git ls-remote --exit-code "${repo_url}" "refs/heads/${ref}" | awk '{print $1; exit}' || true)"
+            if [[ -z "${sha}" ]]; then
+              sha="$(git ls-remote --exit-code "${repo_url}" "refs/tags/${ref}^{}" | awk '{print $1; exit}' || true)"
+            fi
+            if [[ -z "${sha}" ]]; then
+              sha="$(git ls-remote --exit-code "${repo_url}" "refs/tags/${ref}" | awk '{print $1; exit}' || true)"
+            fi
+            if [[ -z "${sha}" ]]; then
+              sha="$(git ls-remote --exit-code "${repo_url}" "${ref}" | awk '{print $1; exit}' || true)"
+            fi
+          fi
+
+          if [[ -z "${sha}" ]]; then
+            echo "Failed to resolve ${CHATLUNA_REPO}@${ref}" >&2
+            exit 1
+          fi
+
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Resolved revisions"
+            echo "- ChatLuna: \`${CHATLUNA_REPO}@${ref}\` -> \`${sha}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  unit:
+    name: Typecheck + unit tests
+    runs-on: ubuntu-latest
+    needs:
+      - resolve-revisions
+    steps:
+      - name: Checkout workflow action
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
 
-      - name: Checkout linked ChatLuna
-        uses: actions/checkout@v6
+      - name: Setup workspace
+        uses: ./.github/actions/setup-qqbot-workspace
         with:
-          repository: ${{ env.CHATLUNA_REPO }}
-          ref: ${{ env.CHATLUNA_REF }}
-          path: chatluna-src
-          persist-credentials: false
-
-      - name: Prepare linked ChatLuna workspace
-        run: |
-          set -euo pipefail
-          ln -sfn "${GITHUB_WORKSPACE}/chatluna-src" "${GITHUB_WORKSPACE}/../chatluna"
-          test -f "${GITHUB_WORKSPACE}/../chatluna/packages/core/package.json"
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-        with:
-          version: 9.15.4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Install linked ChatLuna dependencies
-        run: |
-          set -euo pipefail
-          cd chatluna-src
-          COREPACK_ENABLE_PROJECT_SPEC=0 corepack yarn@1.22.22 install --frozen-lockfile
-
-      - name: Ensure linked ChatLuna runtime builds
-        run: bash ./scripts/ensure-chatluna-build.sh
+          chatluna-repository: ${{ env.CHATLUNA_REPO }}
+          chatluna-ref: ${{ needs.resolve-revisions.outputs.chatluna-sha }}
 
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
-        run: pnpm test
+      - name: Unit tests
+        run: pnpm test -- --reporter=dot
 
-      - name: Task automation regression tests
-        run: pnpm test -- tests/task-automation-llm.test.ts
+  build-smoke:
+    name: Build + Koishi smoke
+    runs-on: ubuntu-latest
+    needs:
+      - resolve-revisions
+    steps:
+      - name: Checkout workflow action
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
 
-      - name: Task automation context regression tests
-        run: pnpm test -- tests/qbot-context-scenarios.test.ts tests/task-automation.test.ts
+      - name: Setup workspace
+        uses: ./.github/actions/setup-qqbot-workspace
+        with:
+          chatluna-repository: ${{ env.CHATLUNA_REPO }}
+          chatluna-ref: ${{ needs.resolve-revisions.outputs.chatluna-sha }}
 
       - name: Build
         run: pnpm build
 
       - name: Koishi startup smoke test
         env:
-          ONEBOT_SELF_ID: "100000001"
-          OPENAI_API_KEY: "sk-ci-smoke"
-          OPENAI_MODEL: "deepseek/deepseek-chat"
-          TASK_AUTOMATION_INTENT_ENABLED: "false"
+          ONEBOT_SELF_ID: '100000001'
+          OPENAI_API_KEY: sk-ci-smoke
+          OPENAI_MODEL: deepseek/deepseek-chat
+          TASK_AUTOMATION_INTENT_ENABLED: 'false'
         run: pnpm smoke:start
 
       - name: Koishi startup smoke test (delivery model config)
         env:
-          ONEBOT_SELF_ID: "100000001"
-          OPENAI_API_KEY: "sk-ci-smoke"
-          OPENAI_MODEL: "deepseek/deepseek-chat"
-          TASK_AUTOMATION_INTENT_ENABLED: "false"
-          TASK_AUTOMATION_DELIVERY_MODEL: "deepseek-reasoner"
-          TASK_AUTOMATION_CHAT_REPLY_MODEL: "deepseek-reasoner"
-          TASK_AUTOMATION_DELIVERY_TIMEOUT_MS: "18000"
-          TASK_AUTOMATION_CHAT_REPLY_TIMEOUT_MS: "12000"
+          ONEBOT_SELF_ID: '100000001'
+          OPENAI_API_KEY: sk-ci-smoke
+          OPENAI_MODEL: deepseek/deepseek-chat
+          TASK_AUTOMATION_INTENT_ENABLED: 'false'
+          TASK_AUTOMATION_DELIVERY_MODEL: deepseek-reasoner
+          TASK_AUTOMATION_CHAT_REPLY_MODEL: deepseek-reasoner
+          TASK_AUTOMATION_DELIVERY_TIMEOUT_MS: '18000'
+          TASK_AUTOMATION_CHAT_REPLY_TIMEOUT_MS: '12000'
         run: pnpm smoke:start
