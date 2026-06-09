@@ -9,15 +9,15 @@ import type {
 } from '../../types/bot-console.js';
 import type {
   MemoryAuditEventRecord,
-  MemoryCandidateV3Record,
+  MemoryCandidateRecord,
   MemoryContextRecord,
-  MemoryEpisodeV3Record,
-  MemoryFactV3Record,
-  MemoryJobV3Record,
+  MemoryEpisodeRecord,
+  MemoryFactRecord,
+  MemoryJobRecord,
   MemoryProvenanceRecord,
   MemoryUserRecord,
-  MemoryV3StatusSnapshot,
-} from '../../types/memory-v3.js';
+  MemoryStatusSnapshot,
+} from '../../types/memory.js';
 
 type MemoryDatabaseLike = {
   get(table: string, query: Record<string, unknown>): Promise<any[]>;
@@ -38,10 +38,10 @@ function userLabel(row: Pick<MemoryUserRecord, 'userKey' | 'userId'>): string {
   return row.userId ? `用户 ${row.userId}` : row.userKey;
 }
 
-function toFactItem(row: MemoryFactV3Record): BotConsoleMemoryFactItem {
+function toFactItem(row: MemoryFactRecord): BotConsoleMemoryFactItem {
   return {
     id: row.id,
-    userKey: row.userKey,
+    userKey: row.ownerUserKey,
     sourceContextKey: row.sourceContextKey,
     kind: row.kind,
     topicKey: row.topicKey,
@@ -60,10 +60,10 @@ function toFactItem(row: MemoryFactV3Record): BotConsoleMemoryFactItem {
   };
 }
 
-function toEpisodeItem(row: MemoryEpisodeV3Record): BotConsoleMemoryEpisodeItem {
+function toEpisodeItem(row: MemoryEpisodeRecord): BotConsoleMemoryEpisodeItem {
   return {
     id: row.id,
-    userKey: row.userKey,
+    userKey: row.ownerUserKey,
     sourceContextKey: row.sourceContextKey,
     title: row.title,
     summary: row.summary,
@@ -83,12 +83,12 @@ function toEpisodeItem(row: MemoryEpisodeV3Record): BotConsoleMemoryEpisodeItem 
   };
 }
 
-function toPendingReviewItem(row: MemoryCandidateV3Record): BotConsoleMemoryPendingReviewItem {
+function toPendingReviewItem(row: MemoryCandidateRecord): BotConsoleMemoryPendingReviewItem {
   return {
     id: row.id,
     batchId: row.batchId,
     candidateType: row.candidateType,
-    userKey: row.userKey,
+    userKey: row.ownerUserKey,
     contextKey: row.contextKey,
     conversationId: row.conversationId,
     payload: row.payload,
@@ -101,7 +101,7 @@ function toPendingReviewItem(row: MemoryCandidateV3Record): BotConsoleMemoryPend
   };
 }
 
-function toJobItem(row: MemoryJobV3Record): BotConsoleMemoryJobItem {
+function toJobItem(row: MemoryJobRecord): BotConsoleMemoryJobItem {
   let userKey: string | null = null;
   let contextKey: string | null = null;
   let conversationId: string | null = null;
@@ -209,7 +209,7 @@ function buildUserItems(input: {
   });
 }
 
-export function createUnavailableMemoryState(status: MemoryV3StatusSnapshot | null = null): BotConsoleMemoryState {
+export function createUnavailableMemoryState(status: MemoryStatusSnapshot | null = null): BotConsoleMemoryState {
   return {
     available: false,
     summary: {
@@ -237,7 +237,7 @@ export function createUnavailableMemoryState(status: MemoryV3StatusSnapshot | nu
 
 export async function buildMemoryState(
   database?: MemoryDatabaseLike | null,
-  status: MemoryV3StatusSnapshot | null = null,
+  status: MemoryStatusSnapshot | null = null,
 ): Promise<BotConsoleMemoryState> {
   if (!database?.get) return createUnavailableMemoryState(status);
 
@@ -253,10 +253,10 @@ export async function buildMemoryState(
   ] = await Promise.all([
     database.get('memory_user', {} as Record<string, never>) as Promise<MemoryUserRecord[]>,
     database.get('memory_context', {} as Record<string, never>) as Promise<MemoryContextRecord[]>,
-    database.get('memory_fact_v3', {} as Record<string, never>) as Promise<MemoryFactV3Record[]>,
-    database.get('memory_episode_v3', {} as Record<string, never>) as Promise<MemoryEpisodeV3Record[]>,
-    database.get('memory_candidate_v3', {} as Record<string, never>) as Promise<MemoryCandidateV3Record[]>,
-    database.get('memory_job_v3', {} as Record<string, never>) as Promise<MemoryJobV3Record[]>,
+    database.get('memory_fact', {} as Record<string, never>) as Promise<MemoryFactRecord[]>,
+    database.get('memory_episode', {} as Record<string, never>) as Promise<MemoryEpisodeRecord[]>,
+    database.get('memory_candidate', {} as Record<string, never>) as Promise<MemoryCandidateRecord[]>,
+    database.get('memory_job', {} as Record<string, never>) as Promise<MemoryJobRecord[]>,
     database.get('memory_audit_event', {} as Record<string, never>) as Promise<MemoryAuditEventRecord[]>,
     database.get('memory_provenance', {} as Record<string, never>) as Promise<MemoryProvenanceRecord[]>,
   ]);

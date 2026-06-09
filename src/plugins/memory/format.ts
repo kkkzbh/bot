@@ -1,8 +1,9 @@
 import type {
-  MemoryEpisodeV3Record,
-  MemoryFactV3Record,
+  MemoryEpisodeRecord,
+  MemoryFactRecord,
   MemoryProfileKind,
-} from '../../types/memory-v3.js';
+  MemoryProfileRecord,
+} from '../../types/memory.js';
 
 export function clampScore(value: unknown, fallback: number): number {
   const parsed = Number(value);
@@ -99,6 +100,8 @@ export function formatProfileKind(kind: MemoryProfileKind): string {
       return '计划';
     case 'relationship':
       return '关系';
+    case 'response_policy':
+      return '回答策略';
     default:
       return '画像';
   }
@@ -106,25 +109,36 @@ export function formatProfileKind(kind: MemoryProfileKind): string {
 
 export function buildRetrievalText(
   type: 'fact' | 'episode',
-  record: MemoryFactV3Record | MemoryEpisodeV3Record,
+  record: MemoryFactRecord | MemoryEpisodeRecord,
 ): string {
   if (type === 'fact') {
-    const fact = record as MemoryFactV3Record;
+    const fact = record as MemoryFactRecord;
     return `${fact.kind}:${fact.topicKey}\n${fact.content}`.trim();
   }
-  const episode = record as MemoryEpisodeV3Record;
+  const episode = record as MemoryEpisodeRecord;
   return `${episode.title}\n${episode.summary}`.trim();
 }
 
 export function buildMemoryContextBlock(
-  facts: MemoryFactV3Record[],
-  episodes: MemoryEpisodeV3Record[],
+  facts: MemoryFactRecord[],
+  episodes: MemoryEpisodeRecord[],
   promptBudgetTokens: number,
+  profiles: MemoryProfileRecord[] = [],
+  currentSpeakerId: string | null = null,
 ): string | null {
-  if (!facts.length && !episodes.length) return null;
-  const lines = ['Relevant Long-Term Memory'];
-  const charBudget = Math.max(400, Math.floor(promptBudgetTokens * 2));
-  let used = lines[0].length;
+  if (!profiles.length && !facts.length && !episodes.length) return null;
+  const lines = [
+    `<kbot_user_memory scope="current_user_only" current_speaker_id=${JSON.stringify(currentSpeakerId ?? '')} trust="untrusted_reference">`,
+    'Rules:',
+    '- These memories belong only to the current user.',
+    '- In group chat, apply these memories only to the current speaker_id.',
+    '- Use them only when relevant.',
+    '- Never reveal dm_only/private memories in group chats.',
+    '- Do not say "I remember from private chat" in a group.',
+    "- If memory conflicts with the user's current message, trust the current message.",
+  ];
+  const charBudget = Math.max(800, Math.floor(promptBudgetTokens * 2));
+  let used = lines.reduce((sum, line) => sum + line.length + 1, 0);
 
   const append = (line: string): boolean => {
     if (used + line.length + 1 > charBudget) return false;
@@ -133,23 +147,41 @@ export function buildMemoryContextBlock(
     return true;
   };
 
+  const activeProfiles = [...profiles].sort((left, right) => {
+    const importanceDelta = Number(right.importance ?? 0) - Number(left.importance ?? 0);
+    if (importanceDelta !== 0) return importanceDelta;
+    return Number(right.lastSeenAt ?? 0) - Number(left.lastSeenAt ?? 0);
+  });
+
+  if (activeProfiles.length && append('')) {
+    append('Profile:');
+    for (const profile of activeProfiles) {
+      if (!append(`- [P${profile.id}] ${profile.content} confidence=${Number(profile.confidence ?? 0).toFixed(2)}`)) break;
+    }
+  }
+
   const activeFacts = [...facts].sort((left, right) => {
     const importanceDelta = Number(right.importance ?? 0) - Number(left.importance ?? 0);
     if (importanceDelta !== 0) return importanceDelta;
     return Number(right.lastSeenAt ?? 0) - Number(left.lastSeenAt ?? 0);
   });
 
-  if (activeFacts.length && append('User Profile:')) {
+  if (activeFacts.length && append('')) {
+    append('Relevant facts:');
     for (const fact of activeFacts) {
-      if (!append(`- ${formatProfileKind(fact.kind)}: ${fact.content}`)) break;
+      if (!append(`- [F${fact.id}] ${fact.content} confidence=${Number(fact.confidence ?? 0).toFixed(2)}`)) break;
     }
   }
 
-  if (episodes.length && append('Relevant Past Episodes:')) {
+  if (episodes.length && append('')) {
+    append('Past episodes:');
     for (const episode of episodes) {
-      if (!append(`- ${episode.title}: ${episode.summary}`)) break;
+      if (!append(`- [E${episode.id}] ${episode.title}: ${episode.summary} confidence=${Number(episode.confidence ?? 0).toFixed(2)}`)) break;
     }
   }
 
-  return lines.length > 1 ? lines.join('\n') : null;
+  if (!append('</kbot_user_memory>')) lines.push('</kbot_user_memory>');
+  return lines.some((line) => line.startsWith('- [P') || line.startsWith('- [F') || line.startsWith('- [E'))
+    ? lines.join('\n')
+    : null;
 }

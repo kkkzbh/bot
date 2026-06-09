@@ -1,6 +1,12 @@
 import type { ExtractedMemoryCandidate } from '../gates.js';
 import type { MemoryProviderProfile } from './router.js';
-import { MEMORY_CANDIDATE_JSON_SCHEMA, buildMemoryExtractionPrompt, parseMemoryExtractionJson, type MemoryConversationTurn } from './schemas.js';
+import {
+  MEMORY_CANDIDATE_JSON_SCHEMA,
+  buildMemoryExtractionPrompt,
+  parseMemoryExtractionJson,
+  type MemoryConversationTurn,
+  type MemoryExtractionTarget,
+} from './schemas.js';
 
 interface ResponsesApiResponse {
   output_text?: unknown;
@@ -26,6 +32,7 @@ function extractResponsesText(payload: ResponsesApiResponse): string {
 export async function requestResponsesMemoryJson(
   profile: MemoryProviderProfile,
   turns: MemoryConversationTurn[],
+  target: MemoryExtractionTarget,
 ): Promise<{ candidates: ExtractedMemoryCandidate[]; rawText: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), profile.timeoutMs);
@@ -42,11 +49,11 @@ export async function requestResponsesMemoryJson(
         input: [
           {
             role: 'system',
-            content: [{ type: 'input_text', text: '按 memory_extraction_v3 schema 提取长期记忆候选。' }],
+            content: [{ type: 'input_text', text: '按 memory_extraction schema 提取长期记忆候选。' }],
           },
           {
             role: 'user',
-            content: [{ type: 'input_text', text: buildMemoryExtractionPrompt(turns, 'native_responses_json_schema') }],
+            content: [{ type: 'input_text', text: buildMemoryExtractionPrompt(turns, 'native_responses_json_schema', target) }],
           },
         ],
         text: {

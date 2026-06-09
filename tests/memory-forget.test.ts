@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { MemoryV3Store } from '../src/plugins/memory/store.js';
+import { MemoryStore } from '../src/plugins/memory/store.js';
 
 class MemoryDbMock {
   tables: Record<string, any[]> = {
-    memory_fact_v3: [],
-    memory_episode_v3: [],
+    memory_fact: [],
+    memory_episode: [],
     memory_provenance: [],
     memory_tombstone: [],
-    memory_job_v3: [],
+    memory_job: [],
     memory_audit_event: [],
   };
 
@@ -32,38 +32,38 @@ class MemoryDbMock {
   }
 }
 
-describe('memory-v3 forget', () => {
+describe('memory forget', () => {
   it('removes final memory, provenance, pending embed job and writes memory/source tombstones', async () => {
     const db = new MemoryDbMock();
-    db.tables.memory_fact_v3.push({
+    db.tables.memory_fact.push({
       id: 7,
-      userKey: 'onebot:user:10001',
+      ownerUserKey: 'onebot:user:10001',
       sourceContextKey: 'onebot:bot:20001:group:g1',
       topicKey: 'answer-style',
     });
     db.tables.memory_provenance.push({
       id: 1,
-      userKey: 'onebot:user:10001',
+      ownerUserKey: 'onebot:user:10001',
       contextKey: 'onebot:bot:20001:group:g1',
       memoryType: 'fact',
       memoryId: 7,
       messageIds: '["m1","m2"]',
     });
-    db.tables.memory_job_v3.push({
+    db.tables.memory_job.push({
       id: 5,
       payload: '{"recordType":"fact","recordId":7}',
     });
 
-    const ok = await new MemoryV3Store(db as any).forgetMemory({
+    const ok = await new MemoryStore(db as any).forgetMemory({
       userKey: 'onebot:user:10001',
       type: 'fact',
       id: 7,
     });
 
     expect(ok).toBe(true);
-    expect(db.tables.memory_fact_v3).toEqual([]);
+    expect(db.tables.memory_fact).toEqual([]);
     expect(db.tables.memory_provenance).toEqual([]);
-    expect(db.tables.memory_job_v3).toEqual([]);
+    expect(db.tables.memory_job).toEqual([]);
     expect(db.tables.memory_tombstone).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ memoryType: 'fact', memoryId: 7, topicKey: 'answer-style' }),

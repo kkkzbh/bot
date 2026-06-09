@@ -14,7 +14,7 @@ function profile(overrides: Partial<MemoryProviderProfile>): MemoryProviderProfi
   };
 }
 
-describe('memory-v3 provider router', () => {
+describe('memory provider router', () => {
   it('maps main structured output protocol to memory-specific routes', () => {
     expect(resolveMemoryOutputProtocol(profile({ structuredOutputProtocol: 'native_responses_json_schema' }))).toBe('native_responses_json_schema');
     expect(resolveMemoryOutputProtocol(profile({ structuredOutputProtocol: 'native_chat_json_schema' }))).toBe('native_chat_json_schema');

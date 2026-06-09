@@ -1,14 +1,18 @@
 import type {
   MemoryAddress,
+  MemoryCandidateSubject,
   MemoryCandidateReviewStatus,
+  MemoryScopeType,
   MemorySensitivity,
   MemoryVisibility,
-} from '../../types/memory-v3.js';
+} from '../../types/memory.js';
+import { isMemoryScopeType, resolveRecordScopeKey, scopeTypeFromVisibility } from './scope.js';
 
 export interface ExtractedMemoryCandidate {
   candidateType: 'fact' | 'episode' | 'drop';
-  subject: 'user';
-  kind?: 'identity' | 'preference' | 'trait' | 'boundary' | 'plan' | 'relationship';
+  subject: MemoryCandidateSubject;
+  ownerSpeakerId?: string | null;
+  kind?: 'identity' | 'preference' | 'trait' | 'boundary' | 'plan' | 'relationship' | 'response_policy';
   topicKey?: string;
   content?: string;
   title?: string;
@@ -18,8 +22,11 @@ export interface ExtractedMemoryCandidate {
   confidence: number;
   sensitivity: MemorySensitivity;
   suggestedVisibility: MemoryVisibility;
+  scopeType?: MemoryScopeType | null;
   applicability?: string | null;
   evidence?: string | null;
+  evidenceMessageIds?: string[];
+  evidenceSpeakerIds?: string[];
   conflictHint?: string | null;
   periodStart?: string | number | null;
   periodEnd?: string | number | null;
@@ -33,6 +40,7 @@ export interface PrivacyDecision {
   status: MemoryCandidateReviewStatus;
   sensitivity: MemorySensitivity;
   visibility: MemoryVisibility;
+  scopeType?: MemoryScopeType | null;
   reason: string | null;
 }
 
@@ -141,12 +149,15 @@ export function runDeterministicPrivacyGuard(
     status,
     sensitivity,
     visibility,
+    scopeType: scopeTypeFromVisibility(visibility),
     reason,
   };
 }
 
 export function isMemoryVisibleInContext(input: {
   visibility: MemoryVisibility;
+  scopeType?: MemoryScopeType | string | null;
+  scopeKey?: string | null;
   sensitivity: MemorySensitivity;
   archived: number;
   sourceContextKey: string;
@@ -155,15 +166,44 @@ export function isMemoryVisibleInContext(input: {
   address: MemoryAddress;
   now: number;
   validUntil?: number | null;
+  expiresAt?: number | null;
+  invalidatedAt?: number | null;
 }): boolean {
+  const scopeType = isMemoryScopeType(input.scopeType)
+    ? input.scopeType
+    : scopeTypeFromVisibility(input.visibility);
+  const scopeKey = resolveRecordScopeKey({
+    visibility: input.visibility,
+    scopeType,
+    scopeKey: input.scopeKey ?? null,
+    sourceContextKey: input.sourceContextKey,
+  });
+
   if (input.archived === 1) return false;
+  if (scopeType === 'archived' || scopeType === 'pending_review') return false;
   if (input.visibility === 'archived' || input.visibility === 'pending_review') return false;
   if (input.sensitivity === 'secret') return false;
+  if (input.invalidatedAt != null && input.invalidatedAt <= input.now) return false;
   if (input.validUntil != null && input.validUntil < input.now) return false;
+  if (input.expiresAt != null && input.expiresAt < input.now) return false;
   if (input.address.channelType === 'group' && input.sensitivity === 'sensitive') return false;
   if (input.address.channelType === 'group' && input.visibility === 'private_only') return false;
   if (input.visibility === 'source_context_only' && input.sourceContextKey !== input.address.contextKey) return false;
   if (input.visibility === 'allowed_contexts' && !(input.allowedContextKeys ?? []).includes(input.address.contextKey)) return false;
   if (input.visibility === 'denied_contexts' && (input.deniedContextKeys ?? []).includes(input.address.contextKey)) return false;
+  if (input.address.channelType === 'group' && scopeType === 'dm_only') return false;
+  if (
+    input.address.channelType === 'group' &&
+    input.sensitivity === 'personal' &&
+    !(scopeType === 'source_context_only' && scopeKey === input.address.contextKey)
+  ) {
+    return false;
+  }
+
+  if (scopeType === 'owner_all_contexts') return true;
+  if (scopeType === 'dm_only') return input.address.channelType === 'direct';
+  if (scopeType === 'source_context_only') return scopeKey === input.address.contextKey;
+  if (scopeType === 'allowed_contexts') return (input.allowedContextKeys ?? []).includes(input.address.contextKey);
+  if (scopeType === 'denied_contexts') return !(input.deniedContextKeys ?? []).includes(input.address.contextKey);
   return true;
 }

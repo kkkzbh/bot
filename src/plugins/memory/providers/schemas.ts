@@ -1,9 +1,10 @@
 import type {
+  MemoryCandidateSubject,
   MemoryOutputProtocolId,
   MemoryProfileKind,
   MemorySensitivity,
   MemoryVisibility,
-} from '../../../types/memory-v3.js';
+} from '../../../types/memory.js';
 import type { ExtractedMemoryCandidate } from '../gates.js';
 import { clampScore, uniqueKeywords } from '../format.js';
 
@@ -11,9 +12,14 @@ export interface MemoryConversationTurn {
   id: string;
   role: 'human' | 'ai';
   text: string;
+  speakerId: string | null;
+  speakerName: string | null;
+  ownerUserKey: string | null;
+  isTarget: boolean;
+  attributionSource: 'additional_kwargs' | 'speaker_tag' | 'direct_fallback' | 'assistant' | 'unknown';
 }
 
-const PROFILE_KINDS = new Set<MemoryProfileKind>(['identity', 'preference', 'trait', 'boundary', 'plan', 'relationship']);
+const PROFILE_KINDS = new Set<MemoryProfileKind>(['identity', 'preference', 'trait', 'boundary', 'plan', 'relationship', 'response_policy']);
 const VISIBILITIES = new Set<MemoryVisibility>([
   'global',
   'private_only',
@@ -24,9 +30,16 @@ const VISIBILITIES = new Set<MemoryVisibility>([
   'archived',
 ]);
 const SENSITIVITIES = new Set<MemorySensitivity>(['low', 'personal', 'sensitive', 'secret']);
+const SUBJECTS = new Set<MemoryCandidateSubject>(['target_user', 'other_speaker', 'group_shared', 'assistant', 'unknown']);
+const SUBJECT_SCHEMA = { type: 'string', enum: ['target_user', 'other_speaker', 'group_shared', 'assistant', 'unknown'] } as const;
+const OWNER_AND_EVIDENCE_SCHEMA = {
+  ownerSpeakerId: { type: 'string' },
+  evidenceMessageIds: { type: 'array', items: { type: 'string' }, maxItems: 12 },
+  evidenceSpeakerIds: { type: 'array', items: { type: 'string' }, maxItems: 12 },
+} as const;
 
 export const MEMORY_CANDIDATE_JSON_SCHEMA = {
-  name: 'memory_extraction_v3',
+  name: 'memory_extraction',
   strict: true,
   schema: {
     type: 'object',
@@ -39,8 +52,9 @@ export const MEMORY_CANDIDATE_JSON_SCHEMA = {
           type: 'object',
           additionalProperties: false,
           properties: {
-            subject: { type: 'string', enum: ['user'] },
-            kind: { type: 'string', enum: ['identity', 'preference', 'trait', 'boundary', 'plan', 'relationship'] },
+            subject: SUBJECT_SCHEMA,
+            ...OWNER_AND_EVIDENCE_SCHEMA,
+            kind: { type: 'string', enum: ['identity', 'preference', 'trait', 'boundary', 'plan', 'relationship', 'response_policy'] },
             topicKey: { type: 'string' },
             content: { type: 'string' },
             keywords: { type: 'array', items: { type: 'string' }, maxItems: 12 },
@@ -60,6 +74,7 @@ export const MEMORY_CANDIDATE_JSON_SCHEMA = {
           },
           required: [
             'subject',
+            'ownerSpeakerId',
             'kind',
             'topicKey',
             'content',
@@ -70,6 +85,8 @@ export const MEMORY_CANDIDATE_JSON_SCHEMA = {
             'suggestedVisibility',
             'applicability',
             'evidence',
+            'evidenceMessageIds',
+            'evidenceSpeakerIds',
             'conflictHint',
             'validFrom',
             'validUntil',
@@ -84,7 +101,8 @@ export const MEMORY_CANDIDATE_JSON_SCHEMA = {
           type: 'object',
           additionalProperties: false,
           properties: {
-            subject: { type: 'string', enum: ['user'] },
+            subject: SUBJECT_SCHEMA,
+            ...OWNER_AND_EVIDENCE_SCHEMA,
             title: { type: 'string' },
             summary: { type: 'string' },
             keywords: { type: 'array', items: { type: 'string' }, maxItems: 12 },
@@ -105,6 +123,7 @@ export const MEMORY_CANDIDATE_JSON_SCHEMA = {
           },
           required: [
             'subject',
+            'ownerSpeakerId',
             'title',
             'summary',
             'keywords',
@@ -116,6 +135,8 @@ export const MEMORY_CANDIDATE_JSON_SCHEMA = {
             'suggestedVisibility',
             'applicability',
             'evidence',
+            'evidenceMessageIds',
+            'evidenceSpeakerIds',
             'validFrom',
             'validUntil',
             'expiresAt',
@@ -132,22 +153,55 @@ export const MEMORY_CANDIDATE_JSON_SCHEMA = {
   },
 } as const;
 
-export function buildMemoryExtractionPrompt(turns: MemoryConversationTurn[], protocol: MemoryOutputProtocolId): string {
-  const transcript = turns.map((turn) => `${turn.role === 'human' ? '用户' : '助手'}: ${turn.text}`).join('\n');
+export interface MemoryExtractionTarget {
+  speakerId: string;
+  speakerName: string | null;
+}
+
+function quoteAttr(value: string | null | undefined): string {
+  return JSON.stringify(value ?? '');
+}
+
+function quoteContent(value: string): string {
+  return JSON.stringify(value);
+}
+
+function isTrustedTargetTurn(turn: MemoryConversationTurn): boolean {
+  return turn.isTarget && (turn.attributionSource === 'additional_kwargs' || turn.attributionSource === 'direct_fallback');
+}
+
+function renderTranscriptLine(turn: MemoryConversationTurn): string {
+  if (turn.role === 'ai') {
+    return `[assistant message_id=${turn.id} content=${quoteContent(turn.text)}]`;
+  }
+  const speakerKind = isTrustedTargetTurn(turn) ? 'target' : turn.speakerId ? 'other' : 'unknown_speaker';
+  const speakerId = turn.speakerId ?? 'unknown';
+  return `[${speakerKind} speaker_id=${speakerId} speaker_name=${quoteAttr(turn.speakerName)} message_id=${turn.id} content=${quoteContent(turn.text)}]`;
+}
+
+export function buildMemoryExtractionPrompt(
+  turns: MemoryConversationTurn[],
+  protocol: MemoryOutputProtocolId,
+  target: MemoryExtractionTarget,
+): string {
+  const transcript = turns.map(renderTranscriptLine).join('\n');
   const base = [
-    '提取“助手对这个用户的长期记忆候选”，不要记录只关于助手 persona、设定、口头禅、兴趣或角色扮演的内容。',
+    `提取“助手对目标 speaker 的长期记忆候选”。目标 speaker_id=${target.speakerId} speaker_name=${quoteAttr(target.speakerName)}。`,
+    '只允许把 [target ...] 行作为自动写入证据；[other ...]、[unknown_speaker ...]、[assistant ...] 只能作上下文。',
+    '不要记录其他群友的信息，也不要把群共享知识库当作个人记忆。',
     '长期记忆候选分为 fact 和 episode。fact 用于稳定身份、偏好、特点、边界、长期计划、关系；episode 用于将来值得回忆的用户相关事件。',
     '不要把群聊玩笑、外号、梗、第三方隐私、API key、token、password 写成长期记忆。',
-    'visibility 建议：低风险稳定用户偏好可 global；私密信息 private_only；群聊来源默认 source_context_only；不确定则 pending_review。',
+    'visibility 建议：私聊中的低风险稳定用户偏好可 global；私密信息 private_only；群聊来源默认 source_context_only；只有用户明确要求“所有地方都记住”且低风险，群聊记忆才可 global；不确定则 pending_review。',
     'sensitivity 建议：普通偏好 low，个人信息 personal，隐私/健康/账号 sensitive，密钥 secret。',
+    '每个 fact/episode 必须设置 subject、ownerSpeakerId、evidenceMessageIds、evidenceSpeakerIds；自动写入候选必须 subject=target_user、ownerSpeakerId 等于目标 speaker_id，证据消息必须来自 target 行。',
   ];
 
   if (protocol === 'plain_text_memory_v1') {
     base.push(
-      '只输出一个 <memory_extraction_v3> bounded block，不要输出解释。',
+      '只输出一个 <memory_extraction> bounded block，不要输出解释。',
       '每行格式只能是：',
-      'FACT|kind=preference|topic=answer-style|visibility=global|sensitivity=low|confidence=0.82|importance=0.70|用户喜欢简洁直接的技术回答',
-      'EPISODE|title=重构 memory-v3|date=2026-06-09|visibility=private_only|sensitivity=personal|confidence=0.80|importance=0.70|用户正在重构 kbot 的长期记忆系统',
+      `FACT|subject=target_user|owner=${target.speakerId}|evidenceMessages=<message_id>|evidenceSpeakers=${target.speakerId}|kind=preference|topic=answer-style|visibility=global|sensitivity=low|confidence=0.82|importance=0.70|用户喜欢简洁直接的技术回答`,
+      `EPISODE|subject=target_user|owner=${target.speakerId}|evidenceMessages=<message_id>|evidenceSpeakers=${target.speakerId}|title=重构 memory|date=2026-06-09|visibility=private_only|sensitivity=personal|confidence=0.80|importance=0.70|用户正在重构 kbot 的长期记忆系统`,
       'DROP|群聊玩笑，不应泛化为全局偏好',
     );
   } else {
@@ -165,6 +219,14 @@ function normalizeSensitivity(value: unknown): MemorySensitivity | null {
   return typeof value === 'string' && SENSITIVITIES.has(value as MemorySensitivity) ? value as MemorySensitivity : null;
 }
 
+function normalizeSubject(value: unknown): MemoryCandidateSubject {
+  return typeof value === 'string' && SUBJECTS.has(value as MemoryCandidateSubject) ? value as MemoryCandidateSubject : 'unknown';
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  return uniqueKeywords(Array.isArray(value) ? value.map(String) : []);
+}
+
 function normalizeFact(raw: unknown): ExtractedMemoryCandidate | null {
   if (!raw || typeof raw !== 'object') return null;
   const item = raw as Record<string, unknown>;
@@ -175,10 +237,11 @@ function normalizeFact(raw: unknown): ExtractedMemoryCandidate | null {
   const topicKey = typeof item.topicKey === 'string' ? item.topicKey.trim() : '';
   const visibility = normalizeVisibility(item.suggestedVisibility);
   const sensitivity = normalizeSensitivity(item.sensitivity);
-  if (item.subject !== 'user' || !kind || !content || !topicKey || !visibility || !sensitivity) return null;
+  if (!kind || !content || !topicKey || !visibility || !sensitivity) return null;
   return {
     candidateType: 'fact',
-    subject: 'user',
+    subject: normalizeSubject(item.subject),
+    ownerSpeakerId: typeof item.ownerSpeakerId === 'string' ? item.ownerSpeakerId.trim() : null,
     kind,
     topicKey,
     content,
@@ -189,6 +252,8 @@ function normalizeFact(raw: unknown): ExtractedMemoryCandidate | null {
     suggestedVisibility: visibility,
     applicability: typeof item.applicability === 'string' ? item.applicability : null,
     evidence: typeof item.evidence === 'string' ? item.evidence : null,
+    evidenceMessageIds: normalizeStringArray(item.evidenceMessageIds),
+    evidenceSpeakerIds: normalizeStringArray(item.evidenceSpeakerIds),
     conflictHint: typeof item.conflictHint === 'string' ? item.conflictHint : null,
     validFrom: typeof item.validFrom === 'string' || typeof item.validFrom === 'number' ? item.validFrom : null,
     validUntil: typeof item.validUntil === 'string' || typeof item.validUntil === 'number' ? item.validUntil : null,
@@ -203,10 +268,11 @@ function normalizeEpisode(raw: unknown): ExtractedMemoryCandidate | null {
   const summary = typeof item.summary === 'string' ? item.summary.trim() : '';
   const visibility = normalizeVisibility(item.suggestedVisibility);
   const sensitivity = normalizeSensitivity(item.sensitivity);
-  if (item.subject !== 'user' || !title || !summary || !visibility || !sensitivity) return null;
+  if (!title || !summary || !visibility || !sensitivity) return null;
   return {
     candidateType: 'episode',
-    subject: 'user',
+    subject: normalizeSubject(item.subject),
+    ownerSpeakerId: typeof item.ownerSpeakerId === 'string' ? item.ownerSpeakerId.trim() : null,
     title,
     summary,
     keywords: uniqueKeywords(Array.isArray(item.keywords) ? item.keywords.map(String) : []),
@@ -218,6 +284,8 @@ function normalizeEpisode(raw: unknown): ExtractedMemoryCandidate | null {
     periodEnd: typeof item.periodEnd === 'string' || typeof item.periodEnd === 'number' ? item.periodEnd : null,
     applicability: typeof item.applicability === 'string' ? item.applicability : null,
     evidence: typeof item.evidence === 'string' ? item.evidence : null,
+    evidenceMessageIds: normalizeStringArray(item.evidenceMessageIds),
+    evidenceSpeakerIds: normalizeStringArray(item.evidenceSpeakerIds),
     validFrom: typeof item.validFrom === 'string' || typeof item.validFrom === 'number' ? item.validFrom : null,
     validUntil: typeof item.validUntil === 'string' || typeof item.validUntil === 'number' ? item.validUntil : null,
     expiresAt: typeof item.expiresAt === 'string' || typeof item.expiresAt === 'number' ? item.expiresAt : null,
@@ -232,10 +300,10 @@ export function parseMemoryExtractionJson(text: string): ExtractedMemoryCandidat
     ? parsed.drops.map((item): ExtractedMemoryCandidate | null => {
       const reason = typeof item === 'string' ? item.trim() : '';
       return reason
-        ? {
-            candidateType: 'drop',
-            subject: 'user',
-            dropReason: reason,
+          ? {
+              candidateType: 'drop',
+              subject: 'unknown',
+              dropReason: reason,
             keywords: [],
             importance: 0,
             confidence: 1,

@@ -1,5 +1,5 @@
 import type { Session } from 'koishi';
-import type { MemoryAddress } from '../../types/memory-v3.js';
+import type { MemoryAddress } from '../../types/memory.js';
 
 type RoomLike = {
   conversationId?: string;

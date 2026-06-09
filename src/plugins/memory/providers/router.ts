@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import type { MainChatRuntimeProfile } from '../../shared/llm/main-chat-tabs.js';
-import type { MemoryAddress, MemoryOutputProtocolId } from '../../../types/memory-v3.js';
+import type { MemoryAddress, MemoryOutputProtocolId } from '../../../types/memory.js';
 import type { ExtractedMemoryCandidate } from '../gates.js';
 import { requestChatMemoryJson, requestChatMemoryPlainText } from './chat-client.js';
 import { requestJsonModeMemoryWithRepair } from './json-mode-repair.js';
 import { parsePlainTextMemoryV1 } from './plain-text-memory-v1.js';
 import { requestResponsesMemoryJson } from './responses-client.js';
-import type { MemoryConversationTurn } from './schemas.js';
+import type { MemoryConversationTurn, MemoryExtractionTarget } from './schemas.js';
 
 export interface MemoryProviderProfile {
   routeId: string;
@@ -25,6 +25,7 @@ export interface MemoryProviderProfile {
 
 export interface MemoryExtractInput {
   address: MemoryAddress;
+  target: MemoryExtractionTarget;
   turns: MemoryConversationTurn[];
   providerProfile: MemoryProviderProfile;
   maxFacts: number;
@@ -100,19 +101,19 @@ export async function extractMemoryCandidates(input: MemoryExtractInput): Promis
     let candidates: ExtractedMemoryCandidate[] = [];
     let rawText = '';
     if (route === 'native_responses_json_schema') {
-      const result = await requestResponsesMemoryJson(input.providerProfile, input.turns);
+      const result = await requestResponsesMemoryJson(input.providerProfile, input.turns, input.target);
       candidates = result.candidates;
       rawText = result.rawText;
     } else if (route === 'native_chat_json_schema') {
-      const result = await requestChatMemoryJson(input.providerProfile, input.turns);
+      const result = await requestChatMemoryJson(input.providerProfile, input.turns, input.target);
       candidates = result.candidates;
       rawText = result.rawText;
     } else if (route === 'json_mode_with_repair') {
-      const result = await requestJsonModeMemoryWithRepair(input.providerProfile, input.turns);
+      const result = await requestJsonModeMemoryWithRepair(input.providerProfile, input.turns, input.target);
       candidates = result.candidates;
       rawText = result.rawText;
     } else {
-      rawText = await requestChatMemoryPlainText(input.providerProfile, input.turns);
+      rawText = await requestChatMemoryPlainText(input.providerProfile, input.turns, input.target);
       candidates = parsePlainTextMemoryV1(rawText);
     }
 

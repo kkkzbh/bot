@@ -1,4 +1,10 @@
-import { MEMORY_CANDIDATE_JSON_SCHEMA, buildMemoryExtractionPrompt, parseMemoryExtractionJson, type MemoryConversationTurn } from './schemas.js';
+import {
+  MEMORY_CANDIDATE_JSON_SCHEMA,
+  buildMemoryExtractionPrompt,
+  parseMemoryExtractionJson,
+  type MemoryConversationTurn,
+  type MemoryExtractionTarget,
+} from './schemas.js';
 import type { ExtractedMemoryCandidate } from '../gates.js';
 import type { MemoryProviderProfile } from './router.js';
 
@@ -31,6 +37,7 @@ export function extractResponseText(raw: unknown): string {
 export async function requestChatMemoryJson(
   profile: MemoryProviderProfile,
   turns: MemoryConversationTurn[],
+  target: MemoryExtractionTarget,
 ): Promise<{ candidates: ExtractedMemoryCandidate[]; rawText: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), profile.timeoutMs);
@@ -49,8 +56,8 @@ export async function requestChatMemoryJson(
           json_schema: MEMORY_CANDIDATE_JSON_SCHEMA,
         },
         messages: [
-          { role: 'system', content: '按 memory_extraction_v3 schema 提取长期记忆候选。' },
-          { role: 'user', content: buildMemoryExtractionPrompt(turns, 'native_chat_json_schema') },
+          { role: 'system', content: '按 memory_extraction schema 提取长期记忆候选。' },
+          { role: 'user', content: buildMemoryExtractionPrompt(turns, 'native_chat_json_schema', target) },
         ],
       }),
       signal: controller.signal,
@@ -67,6 +74,7 @@ export async function requestChatMemoryJson(
 export async function requestChatMemoryPlainText(
   profile: MemoryProviderProfile,
   turns: MemoryConversationTurn[],
+  target: MemoryExtractionTarget,
 ): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), profile.timeoutMs);
@@ -81,8 +89,8 @@ export async function requestChatMemoryPlainText(
         model: profile.model,
         temperature: 0.1,
         messages: [
-          { role: 'system', content: '只输出 memory_extraction_v3 bounded block。' },
-          { role: 'user', content: buildMemoryExtractionPrompt(turns, 'plain_text_memory_v1') },
+          { role: 'system', content: '只输出 memory_extraction bounded block。' },
+          { role: 'user', content: buildMemoryExtractionPrompt(turns, 'plain_text_memory_v1', target) },
         ],
       }),
       signal: controller.signal,

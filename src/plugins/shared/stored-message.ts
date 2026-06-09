@@ -1,4 +1,7 @@
-import { gzipDecode } from 'koishi-plugin-chatluna/utils/string';
+import { gunzip } from 'node:zlib';
+import { promisify } from 'node:util';
+
+const gunzipAsync = promisify(gunzip);
 
 export function extractPlainText(raw: unknown): string {
   if (typeof raw === 'string') return raw.trim();
@@ -28,9 +31,13 @@ function toStoredArrayBuffer(raw: unknown): ArrayBuffer | null {
   return raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
 }
 
-export async function decodeStoredMessageText(content: unknown): Promise<string> {
+export async function decodeStoredMessageJson<T = unknown>(content: unknown): Promise<T | null> {
   const buffer = toStoredArrayBuffer(content);
-  if (!buffer) return '';
-  const payload = await gzipDecode(buffer);
-  return extractPlainText(JSON.parse(payload));
+  if (!buffer) return null;
+  const payload = (await gunzipAsync(Buffer.from(buffer))).toString('utf8');
+  return JSON.parse(payload) as T;
+}
+
+export async function decodeStoredMessageText(content: unknown): Promise<string> {
+  return extractPlainText(await decodeStoredMessageJson(content));
 }

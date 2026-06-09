@@ -1,8 +1,8 @@
-import type { MemoryProfileKind, MemorySensitivity, MemoryVisibility } from '../../../types/memory-v3.js';
+import type { MemoryProfileKind, MemorySensitivity, MemoryVisibility } from '../../../types/memory.js';
 import type { ExtractedMemoryCandidate } from '../gates.js';
 import { uniqueKeywords } from '../format.js';
 
-const PROFILE_KINDS = new Set<MemoryProfileKind>(['identity', 'preference', 'trait', 'boundary', 'plan', 'relationship']);
+const PROFILE_KINDS = new Set<MemoryProfileKind>(['identity', 'preference', 'trait', 'boundary', 'plan', 'relationship', 'response_policy']);
 const VISIBILITIES = new Set<MemoryVisibility>([
   'global',
   'private_only',
@@ -55,6 +55,23 @@ function parseVisibility(value: string | undefined): MemoryVisibility {
   throw new Error(`invalid_visibility:${value ?? ''}`);
 }
 
+function parseList(value: string | undefined): string[] {
+  return uniqueKeywords((value ?? '').split(',').map((item) => item.trim()));
+}
+
+function parseSubject(value: string | undefined): ExtractedMemoryCandidate['subject'] {
+  if (
+    value === 'target_user' ||
+    value === 'other_speaker' ||
+    value === 'group_shared' ||
+    value === 'assistant' ||
+    value === 'unknown'
+  ) {
+    return value;
+  }
+  return 'unknown';
+}
+
 function parseSensitivity(value: string | undefined): MemorySensitivity {
   if (value && SENSITIVITIES.has(value as MemorySensitivity)) return value as MemorySensitivity;
   throw new Error(`invalid_sensitivity:${value ?? ''}`);
@@ -76,7 +93,8 @@ function parseFact(fields: string[]): ExtractedMemoryCandidate {
   if (!kv.topic?.trim() || !content) throw new Error('missing_fact_required_field');
   return {
     candidateType: 'fact',
-    subject: 'user',
+    subject: parseSubject(kv.subject),
+    ownerSpeakerId: kv.owner?.trim() || null,
     kind,
     topicKey: kv.topic.trim(),
     content,
@@ -86,6 +104,8 @@ function parseFact(fields: string[]): ExtractedMemoryCandidate {
     suggestedVisibility: parseVisibility(kv.visibility),
     sensitivity: parseSensitivity(kv.sensitivity),
     applicability: kv.applicability || null,
+    evidenceMessageIds: parseList(kv.evidenceMessages),
+    evidenceSpeakerIds: parseList(kv.evidenceSpeakers),
   };
 }
 
@@ -96,7 +116,8 @@ function parseEpisode(fields: string[]): ExtractedMemoryCandidate {
   if (!kv.title?.trim() || !summary) throw new Error('missing_episode_required_field');
   return {
     candidateType: 'episode',
-    subject: 'user',
+    subject: parseSubject(kv.subject),
+    ownerSpeakerId: kv.owner?.trim() || null,
     title: kv.title.trim(),
     summary,
     keywords: uniqueKeywords((kv.keywords ?? '').split(',').map((item) => item.trim())),
@@ -107,6 +128,8 @@ function parseEpisode(fields: string[]): ExtractedMemoryCandidate {
     periodStart: kv.date || kv.periodStart || null,
     periodEnd: kv.periodEnd || null,
     applicability: kv.applicability || null,
+    evidenceMessageIds: parseList(kv.evidenceMessages),
+    evidenceSpeakerIds: parseList(kv.evidenceSpeakers),
   };
 }
 
@@ -114,7 +137,7 @@ function parseDrop(fields: string[]): ExtractedMemoryCandidate {
   if (fields.length !== 2 || !fields[1]?.trim()) throw new Error('malformed_drop');
   return {
     candidateType: 'drop',
-    subject: 'user',
+    subject: 'unknown',
     dropReason: fields[1].trim(),
     keywords: [],
     importance: 0,
@@ -125,7 +148,7 @@ function parseDrop(fields: string[]): ExtractedMemoryCandidate {
 }
 
 export function parsePlainTextMemoryV1(text: string): ExtractedMemoryCandidate[] {
-  const matches = [...text.matchAll(/<memory_extraction_v3>\s*([\s\S]*?)\s*<\/memory_extraction_v3>/g)];
+  const matches = [...text.matchAll(/<memory_extraction>\s*([\s\S]*?)\s*<\/memory_extraction>/g)];
   if (matches.length !== 1) throw new Error(matches.length === 0 ? 'missing_memory_block' : 'multiple_memory_blocks');
   const body = matches[0]?.[1] ?? '';
   const candidates: ExtractedMemoryCandidate[] = [];

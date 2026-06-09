@@ -194,7 +194,7 @@ describe('prompt assembly', () => {
   it('consumes a turn envelope exactly once', () => {
     beginPromptAssemblyTurn('conv-1');
     registerPromptFragment('conv-1', {
-      source: 'qqbot_memory_v3',
+      source: 'qqbot_memory',
       title: 'Long-Term Memory Reference',
       authority: 'reference',
       trust: 'untrusted',

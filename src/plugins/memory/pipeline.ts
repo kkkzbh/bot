@@ -1,26 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import { Logger } from 'koishi';
-import type { MemoryJobV3Record, MemoryJobV3Type } from '../../types/memory-v3.js';
+import type { MemoryJobRecord, MemoryJobType } from '../../types/memory.js';
 import type { MemoryRuntimeConfig } from './config.js';
 import { runDeterministicPrivacyGuard } from './gates.js';
 import { embedTexts, isEmbedRuntimeConfigured } from './providers/embedding-client.js';
 import { extractMemoryCandidates, isMemoryProviderConfigured } from './providers/router.js';
-import type { MemoryV3StatusService } from './status.js';
+import type { MemoryStatusService } from './status.js';
 import type {
   ConsolidateJobPayload,
   EmbedJobPayload,
   ExtractJobPayload,
-  MemoryV3Store,
+  MemoryStore,
   PrivacyReviewJobPayload,
 } from './store.js';
 
-const logger = new Logger('memory-v3');
+const logger = new Logger('memory');
 
 export async function processExtractJob(
-  store: MemoryV3Store,
+  store: MemoryStore,
   runtime: MemoryRuntimeConfig,
-  status: MemoryV3StatusService,
-  job: MemoryJobV3Record,
+  status: MemoryStatusService,
+  job: MemoryJobRecord,
 ): Promise<void> {
   const payload = store.parseJobPayload<ExtractJobPayload>(job);
   if (!payload?.address?.conversationId) {
@@ -40,16 +40,21 @@ export async function processExtractJob(
   }
 
   const turns = await store.filterTombstonedTurns(
-    payload.address.userKey,
-    await store.readConversationWindow(payload.address.conversationId, payload.maxMessages),
+    payload.ownerUserKey,
+    await store.readConversationWindow(payload),
   );
-  if (turns.length < 2) {
+  if (!turns.some((turn) => turn.role === 'human' && turn.isTarget)) {
+    await store.updateExtractCursor(payload);
     await store.completeJob(job);
     return;
   }
 
   const output = await extractMemoryCandidates({
     address: payload.address,
+    target: {
+      speakerId: payload.targetSpeakerId,
+      speakerName: payload.targetSpeakerName,
+    },
     turns,
     providerProfile: runtime.extract,
     maxFacts: runtime.maxFacts,
@@ -60,26 +65,32 @@ export async function processExtractJob(
     throw new Error(output.error ?? 'memory_extract_failed');
   }
   if (!output.candidates.length) {
+    await store.updateExtractCursor(payload);
     await store.completeJob(job);
     return;
   }
 
   const batchId = randomUUID();
-  await store.writeCandidateBatch({
+  const pendingCount = await store.writeCandidateBatch({
     address: payload.address,
+    payload,
     batchId,
     candidates: output.candidates,
+    turns,
     messageIds: turns.map((turn) => turn.id),
     providerRoute: output.route,
     rawTextHash: output.rawTextHash,
   });
-  await store.queueJob('privacy_review', { batchId, address: payload.address });
+  if (pendingCount > 0) {
+    await store.queueJob('privacy_review', { batchId, address: payload.address });
+  }
+  await store.updateExtractCursor(payload);
   await store.completeJob(job);
 }
 
 export async function processPrivacyReviewJob(
-  store: MemoryV3Store,
-  job: MemoryJobV3Record,
+  store: MemoryStore,
+  job: MemoryJobRecord,
 ): Promise<void> {
   const payload = store.parseJobPayload<PrivacyReviewJobPayload>(job);
   if (!payload?.batchId || !payload.address) {
@@ -100,8 +111,8 @@ export async function processPrivacyReviewJob(
 }
 
 export async function processConsolidateJob(
-  store: MemoryV3Store,
-  job: MemoryJobV3Record,
+  store: MemoryStore,
+  job: MemoryJobRecord,
 ): Promise<void> {
   const payload = store.parseJobPayload<ConsolidateJobPayload>(job);
   if (!payload?.candidateId || !payload.address) {
@@ -118,9 +129,9 @@ export async function processConsolidateJob(
 }
 
 export async function processEmbedJobs(
-  store: MemoryV3Store,
+  store: MemoryStore,
   runtime: MemoryRuntimeConfig,
-  jobs: MemoryJobV3Record[],
+  jobs: MemoryJobRecord[],
 ): Promise<void> {
   if (!jobs.length) return;
   if (!isEmbedRuntimeConfigured(runtime.embed)) {
@@ -128,7 +139,7 @@ export async function processEmbedJobs(
     return;
   }
 
-  const resolved: Array<{ job: MemoryJobV3Record; payload: EmbedJobPayload; text: string }> = [];
+  const resolved: Array<{ job: MemoryJobRecord; payload: EmbedJobPayload; text: string }> = [];
   for (const job of jobs) {
     const item = await store.resolveEmbedJob(job);
     if (!item || !item.text.trim()) {
@@ -151,10 +162,10 @@ export async function processEmbedJobs(
 }
 
 export async function processMaintenanceJob(
-  store: MemoryV3Store,
+  store: MemoryStore,
   runtime: MemoryRuntimeConfig,
-  status: MemoryV3StatusService,
-  job?: MemoryJobV3Record,
+  status: MemoryStatusService,
+  job?: MemoryJobRecord,
 ): Promise<void> {
   await store.requeueStaleProcessingJobs(runtime.jobLockTimeoutMs);
   await store.archiveExpired();
@@ -164,12 +175,12 @@ export async function processMaintenanceJob(
 }
 
 export async function runMemoryJobTick(
-  store: MemoryV3Store,
+  store: MemoryStore,
   runtime: MemoryRuntimeConfig,
-  status: MemoryV3StatusService,
+  status: MemoryStatusService,
 ): Promise<void> {
   const now = Date.now();
-  const jobTypes: MemoryJobV3Type[] = ['extract', 'privacy_review', 'consolidate', 'embed', 'reembed', 'maintenance'];
+  const jobTypes: MemoryJobType[] = ['extract', 'privacy_review', 'consolidate', 'embed', 'reembed', 'maintenance'];
   for (const jobType of jobTypes) {
     const jobs = await store.listDueJobs(jobType, now);
     if (!jobs.length) continue;

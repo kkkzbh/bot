@@ -1,5 +1,5 @@
 // Client-side type definitions
-// Mirrors src/types/bot-console.ts + src/types/memory-v3.ts without koishi dependency
+// Mirrors src/types/bot-console.ts + src/types/memory.ts without koishi dependency
 
 export type ServiceAction = "start" | "stop" | "restart" | "enable";
 
@@ -157,7 +157,7 @@ export type MemoryOutputProtocolId =
   | "json_mode_with_repair"
   | "plain_text_memory_v1"
   | "no_write_fallback";
-export type MemoryJobV3Type =
+export type MemoryJobType =
   | "extract"
   | "privacy_review"
   | "consolidate"
@@ -167,9 +167,9 @@ export type MemoryJobV3Type =
   | "forget"
   | "migration_backfill"
   | "eval_probe";
-export type MemoryJobV3Status = "pending" | "processing" | "done" | "failed" | "dead_letter";
+export type MemoryJobStatus = "pending" | "processing" | "done" | "failed" | "dead_letter";
 
-export interface MemoryV3QueueSummary {
+export interface MemoryQueueSummary {
   extractPending: number;
   extractProcessing: number;
   privacyReviewPending: number;
@@ -179,7 +179,7 @@ export interface MemoryV3QueueSummary {
   deadLetter: number;
 }
 
-export interface MemoryV3OperationSnapshot {
+export interface MemoryOperationSnapshot {
   configured: boolean;
   state: MemoryStatusState;
   lastSource: MemoryStatusSource;
@@ -191,14 +191,14 @@ export interface MemoryV3OperationSnapshot {
   consecutiveFailures: number;
 }
 
-export interface MemoryV3ProviderRouteStats {
+export interface MemoryProviderRouteStats {
   route: MemoryOutputProtocolId;
   success: number;
   failure: number;
   lastError: string | null;
 }
 
-export interface MemoryV3StatusSnapshot {
+export interface MemoryStatusSnapshot {
   available: boolean;
   enabled: boolean;
   readEnabled: boolean;
@@ -208,20 +208,20 @@ export interface MemoryV3StatusSnapshot {
   extractModel: string;
   embedBaseUrl: string;
   embedModel: string;
-  jobs: MemoryV3QueueSummary;
-  providerRoutes: MemoryV3ProviderRouteStats[];
+  jobs: MemoryQueueSummary;
+  providerRoutes: MemoryProviderRouteStats[];
   lastMaintenanceAt: number | null;
-  extract: MemoryV3OperationSnapshot;
-  embed: MemoryV3OperationSnapshot;
+  extract: MemoryOperationSnapshot;
+  embed: MemoryOperationSnapshot;
 }
 
-export interface MemoryV3ProbeResult {
+export interface MemoryProbeResult {
   target: "embedding" | "extraction" | "provider";
   ok: boolean;
   checkedAt: number;
   latencyMs: number | null;
   error: string | null;
-  snapshot: MemoryV3StatusSnapshot;
+  snapshot: MemoryStatusSnapshot;
 }
 
 // ─── Scoped Feature Policy ────────────────────────────────────────────────────
@@ -384,7 +384,7 @@ export interface BotConsoleState {
   toolPolicy?: BotConsoleToolPolicyState | null;
   modelTabs: BotConsoleModelTabsState;
   runtimeStatus: {
-    memoryV3: MemoryV3StatusSnapshot;
+    memory: MemoryStatusSnapshot;
   };
 }
 
@@ -460,8 +460,8 @@ export interface BotConsoleMemoryPendingReviewItem {
 
 export interface BotConsoleMemoryJobItem {
   id: number;
-  jobType: MemoryJobV3Type;
-  status: MemoryJobV3Status;
+  jobType: MemoryJobType;
+  status: MemoryJobStatus;
   userKey: string | null;
   contextKey: string | null;
   conversationId: string | null;
@@ -507,14 +507,14 @@ export interface BotConsoleMemoryState {
   jobs: BotConsoleMemoryJobItem[];
   audit: BotConsoleMemoryAuditItem[];
   provenanceCount: number;
-  status: MemoryV3StatusSnapshot | null;
-  providerRoutes: MemoryV3ProviderRouteStats[];
+  status: MemoryStatusSnapshot | null;
+  providerRoutes: MemoryProviderRouteStats[];
   recentFailures: string[];
 }
 
 export interface BotConsoleProbeResponse {
   target: "embedding" | "extraction" | "provider";
-  memoryV3: MemoryV3ProbeResult;
+  memory: MemoryProbeResult;
 }
 
 export interface GetMemoryStateResponse extends BotConsoleMemoryState {}

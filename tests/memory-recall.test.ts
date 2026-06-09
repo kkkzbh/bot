@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { retrieveMemoryForContext } from '../src/plugins/memory/recall.js';
-import { MemoryV3Store } from '../src/plugins/memory/store.js';
-import type { MemoryAddress, MemoryEpisodeV3Record, MemoryFactV3Record } from '../src/types/memory-v3.js';
+import { MemoryStore } from '../src/plugins/memory/store.js';
+import type { MemoryAddress, MemoryEpisodeRecord, MemoryFactRecord } from '../src/types/memory.js';
 
 class MemoryDbMock {
   tables: Record<string, any[]> = {
-    memory_fact_v3: [],
-    memory_episode_v3: [],
+    memory_fact: [],
+    memory_episode: [],
     memory_audit_event: [],
   };
 
@@ -45,10 +45,16 @@ const groupA: MemoryAddress = {
   observedAt: 1,
 };
 
-function fact(overrides: Partial<MemoryFactV3Record>): MemoryFactV3Record {
+const groupAForB: MemoryAddress = {
+  ...groupA,
+  userKey: 'onebot:user:10002',
+  userId: '10002',
+};
+
+function fact(overrides: Partial<MemoryFactRecord>): MemoryFactRecord {
   return {
     id: 1,
-    userKey: groupA.userKey,
+    ownerUserKey: groupA.userKey,
     kind: 'preference',
     topicKey: 'answer-style',
     content: '用户喜欢简洁直接的技术回答',
@@ -57,13 +63,25 @@ function fact(overrides: Partial<MemoryFactV3Record>): MemoryFactV3Record {
     confidence: 0.9,
     sensitivity: 'low',
     visibility: 'global',
+    scopeType: 'owner_all_contexts',
+    scopeKey: null,
+    memoryKey: null,
+    sourceKind: 'group',
     sourceContextKey: groupA.contextKey,
+    targetSpeakerId: '10001',
+    targetSpeakerName: null,
+    evidenceMessageIds: '["m-1"]',
+    evidenceSpeakerIds: '["10001"]',
+    attributionStatus: 'verified',
     allowedContextKeys: null,
     deniedContextKeys: null,
     applicability: null,
     validFrom: null,
     validUntil: null,
     expiresAt: null,
+    invalidatedAt: null,
+    retrievalText: null,
+    lastUsedReason: null,
     firstSeenAt: 1,
     lastSeenAt: 10,
     lastAccessedAt: null,
@@ -77,18 +95,27 @@ function fact(overrides: Partial<MemoryFactV3Record>): MemoryFactV3Record {
   };
 }
 
-function episode(overrides: Partial<MemoryEpisodeV3Record>): MemoryEpisodeV3Record {
+function episode(overrides: Partial<MemoryEpisodeRecord>): MemoryEpisodeRecord {
   return {
     id: 1,
-    userKey: groupA.userKey,
+    ownerUserKey: groupA.userKey,
     title: 'A 群偏好',
-    summary: '用户在 A 群讨论 memory-v3',
-    keywords: '["memory-v3"]',
+    summary: '用户在 A 群讨论 memory',
+    keywords: '["memory"]',
     importance: 0.9,
     confidence: 0.9,
     sensitivity: 'low',
     visibility: 'source_context_only',
+    scopeType: 'source_context_only',
+    scopeKey: groupA.contextKey,
+    memoryKey: null,
+    sourceKind: 'group',
     sourceContextKey: groupA.contextKey,
+    targetSpeakerId: '10001',
+    targetSpeakerName: null,
+    evidenceMessageIds: '["m-1"]',
+    evidenceSpeakerIds: '["10001"]',
+    attributionStatus: 'verified',
     allowedContextKeys: null,
     deniedContextKeys: null,
     applicability: null,
@@ -97,6 +124,9 @@ function episode(overrides: Partial<MemoryEpisodeV3Record>): MemoryEpisodeV3Reco
     validFrom: null,
     validUntil: null,
     expiresAt: null,
+    invalidatedAt: null,
+    retrievalText: null,
+    lastUsedReason: null,
     firstSeenAt: 1,
     lastSeenAt: 10,
     lastAccessedAt: null,
@@ -110,19 +140,19 @@ function episode(overrides: Partial<MemoryEpisodeV3Record>): MemoryEpisodeV3Reco
   };
 }
 
-describe('memory-v3 recall', () => {
+describe('memory recall', () => {
   it('recalls global facts and same-context episodes but not private or other-context memory in groups', async () => {
     const db = new MemoryDbMock();
-    db.tables.memory_fact_v3.push(
+    db.tables.memory_fact.push(
       fact({ id: 1, visibility: 'global', content: '用户喜欢简洁直接的技术回答' }),
       fact({ id: 2, visibility: 'private_only', content: '用户的私密计划' }),
     );
-    db.tables.memory_episode_v3.push(
-      episode({ id: 1, sourceContextKey: groupA.contextKey, summary: '用户在 A 群讨论 memory-v3' }),
+    db.tables.memory_episode.push(
+      episode({ id: 1, sourceContextKey: groupA.contextKey, summary: '用户在 A 群讨论 memory' }),
       episode({ id: 2, sourceContextKey: 'onebot:bot:20001:group:g-b', summary: '用户在 B 群说了一个梗' }),
     );
 
-    const result = await retrieveMemoryForContext(new MemoryV3Store(db as any), groupA, '你还记得 memory-v3 吗', {
+    const result = await retrieveMemoryForContext(new MemoryStore(db as any), groupA, '你还记得 memory 吗', {
       topK: 8,
       promptBudgetTokens: 1200,
       now: 100,
@@ -135,5 +165,29 @@ describe('memory-v3 recall', () => {
     expect(db.tables.memory_audit_event).toEqual([
       expect.objectContaining({ eventType: 'recall_selected', userKey: groupA.userKey }),
     ]);
+  });
+
+  it('isolates recalled group memory by current speaker owner key', async () => {
+    const db = new MemoryDbMock();
+    db.tables.memory_fact.push(
+      fact({ id: 1, ownerUserKey: groupA.userKey, content: 'A 喜欢简洁直接的技术回答' }),
+      fact({ id: 2, ownerUserKey: groupAForB.userKey, content: 'B 喜欢铺开解释技术细节' }),
+    );
+
+    const resultA = await retrieveMemoryForContext(new MemoryStore(db as any), groupA, '怎么回答', {
+      topK: 8,
+      promptBudgetTokens: 1200,
+      now: 100,
+    });
+    const resultB = await retrieveMemoryForContext(new MemoryStore(db as any), groupAForB, '怎么回答', {
+      topK: 8,
+      promptBudgetTokens: 1200,
+      now: 100,
+    });
+
+    expect(resultA.prompt).toContain('A 喜欢简洁直接');
+    expect(resultA.prompt).not.toContain('B 喜欢铺开解释');
+    expect(resultB.prompt).toContain('B 喜欢铺开解释');
+    expect(resultB.prompt).not.toContain('A 喜欢简洁直接');
   });
 });

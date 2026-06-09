@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isMemoryVisibleInContext, runDeterministicPrivacyGuard, type ExtractedMemoryCandidate } from '../src/plugins/memory/gates.js';
-import type { MemoryAddress } from '../src/types/memory-v3.js';
+import type { MemoryAddress } from '../src/types/memory.js';
 
 const groupAddress: MemoryAddress = {
   userKey: 'onebot:user:10001',
@@ -16,11 +16,11 @@ const groupAddress: MemoryAddress = {
   observedAt: 1,
 };
 
-describe('memory-v3 privacy and recall gates', () => {
+describe('memory privacy and recall gates', () => {
   it('drops secrets before LLM review', () => {
     const candidate: ExtractedMemoryCandidate = {
       candidateType: 'fact',
-      subject: 'user',
+      subject: 'target_user',
       kind: 'preference',
       topicKey: 'api-key',
       content: '用户的 token: sk-abcdefghijklmnopqrstuvwxyz123456',

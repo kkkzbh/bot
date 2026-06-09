@@ -1,8 +1,8 @@
-import type { MemoryFactV3Record } from '../../types/memory-v3.js';
+import type { MemoryFactRecord } from '../../types/memory.js';
 
-export function resolveFactConflictSet(facts: readonly MemoryFactV3Record[]): MemoryFactV3Record[] {
-  const byConflict = new Map<string, MemoryFactV3Record>();
-  const passthrough: MemoryFactV3Record[] = [];
+export function resolveFactConflictSet(facts: readonly MemoryFactRecord[]): MemoryFactRecord[] {
+  const byConflict = new Map<string, MemoryFactRecord>();
+  const passthrough: MemoryFactRecord[] = [];
   for (const fact of facts) {
     if (!fact.conflictSetId) {
       passthrough.push(fact);

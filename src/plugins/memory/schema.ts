@@ -1,6 +1,9 @@
 import type { Context } from 'koishi';
+import { ensureLegacyMemoryMigrationTables } from './migration.js';
 
-export function ensureMemoryV3Tables(ctx: Context): void {
+export function ensureMemoryTables(ctx: Context): void {
+  ensureLegacyMemoryMigrationTables(ctx);
+
   ctx.model.extend(
     'memory_user',
     {
@@ -30,6 +33,9 @@ export function ensureMemoryV3Tables(ctx: Context): void {
       groupId: { type: 'string', nullable: true },
       channelId: { type: 'string', nullable: true },
       rawContextId: { type: 'string', nullable: true },
+      lastExtractedMessageId: { type: 'string', nullable: true },
+      lastExtractedAt: { type: 'double', nullable: true },
+      lastExtractedHash: { type: 'string', nullable: true },
       firstSeenAt: 'double',
       lastSeenAt: 'double',
     },
@@ -40,15 +46,38 @@ export function ensureMemoryV3Tables(ctx: Context): void {
   );
 
   ctx.model.extend(
-    'memory_candidate_v3',
+    'memory_extract_cursor',
+    {
+      id: 'unsigned',
+      ownerUserKey: 'string',
+      contextKey: 'string',
+      conversationId: 'string',
+      lastExtractedMessageId: { type: 'string', nullable: true },
+      lastExtractedAt: { type: 'double', nullable: true },
+      firstSeenAt: 'double',
+      updatedAt: 'double',
+    },
+    {
+      autoInc: true,
+      indexes: [['ownerUserKey', 'contextKey'], ['conversationId']],
+    },
+  );
+
+  ctx.model.extend(
+    'memory_candidate',
     {
       id: 'unsigned',
       batchId: 'string',
       candidateType: 'string',
-      userKey: 'string',
+      ownerUserKey: 'string',
       contextKey: 'string',
       conversationId: 'string',
+      targetSpeakerId: 'string',
+      targetSpeakerName: { type: 'string', nullable: true },
       messageIds: { type: 'text', nullable: true },
+      evidenceMessageIds: { type: 'text', nullable: true },
+      evidenceSpeakerIds: { type: 'text', nullable: true },
+      attributionStatus: 'string',
       payload: 'text',
       reviewStatus: 'string',
       sensitivity: 'string',
@@ -63,15 +92,15 @@ export function ensureMemoryV3Tables(ctx: Context): void {
     },
     {
       autoInc: true,
-      indexes: [['userKey', 'reviewStatus', 'createdAt'], ['batchId'], ['contextKey', 'reviewStatus']],
+      indexes: [['ownerUserKey', 'reviewStatus', 'createdAt'], ['batchId'], ['contextKey', 'reviewStatus']],
     },
   );
 
   ctx.model.extend(
-    'memory_fact_v3',
+    'memory_fact',
     {
       id: 'unsigned',
-      userKey: 'string',
+      ownerUserKey: 'string',
       kind: 'string',
       topicKey: 'string',
       content: 'text',
@@ -80,13 +109,25 @@ export function ensureMemoryV3Tables(ctx: Context): void {
       confidence: 'double',
       sensitivity: 'string',
       visibility: 'string',
+      scopeType: { type: 'string', nullable: true },
+      scopeKey: { type: 'string', nullable: true },
+      memoryKey: { type: 'string', nullable: true },
+      sourceKind: { type: 'string', nullable: true },
       sourceContextKey: 'string',
+      targetSpeakerId: { type: 'string', nullable: true },
+      targetSpeakerName: { type: 'string', nullable: true },
+      evidenceMessageIds: { type: 'text', nullable: true },
+      evidenceSpeakerIds: { type: 'text', nullable: true },
+      attributionStatus: 'string',
       allowedContextKeys: { type: 'text', nullable: true },
       deniedContextKeys: { type: 'text', nullable: true },
       applicability: { type: 'text', nullable: true },
       validFrom: { type: 'double', nullable: true },
       validUntil: { type: 'double', nullable: true },
       expiresAt: { type: 'double', nullable: true },
+      invalidatedAt: { type: 'double', nullable: true },
+      retrievalText: { type: 'text', nullable: true },
+      lastUsedReason: { type: 'text', nullable: true },
       firstSeenAt: 'double',
       lastSeenAt: 'double',
       lastAccessedAt: { type: 'double', nullable: true },
@@ -100,9 +141,12 @@ export function ensureMemoryV3Tables(ctx: Context): void {
     {
       autoInc: true,
       indexes: [
-        ['userKey', 'archived'],
-        ['userKey', 'kind', 'topicKey', 'archived'],
-        ['userKey', 'visibility', 'sensitivity', 'archived'],
+        ['ownerUserKey', 'archived'],
+        ['ownerUserKey', 'scopeType', 'scopeKey', 'archived'],
+        ['ownerUserKey', 'kind', 'topicKey', 'archived'],
+        ['ownerUserKey', 'kind', 'topicKey', 'scopeType', 'scopeKey', 'archived'],
+        ['ownerUserKey', 'visibility', 'sensitivity', 'archived'],
+        ['memoryKey'],
         ['conflictSetId'],
         ['lastAccessedAt'],
       ],
@@ -110,10 +154,10 @@ export function ensureMemoryV3Tables(ctx: Context): void {
   );
 
   ctx.model.extend(
-    'memory_episode_v3',
+    'memory_episode',
     {
       id: 'unsigned',
-      userKey: 'string',
+      ownerUserKey: 'string',
       title: 'string',
       summary: 'text',
       keywords: { type: 'text', nullable: true },
@@ -121,7 +165,16 @@ export function ensureMemoryV3Tables(ctx: Context): void {
       confidence: 'double',
       sensitivity: 'string',
       visibility: 'string',
+      scopeType: { type: 'string', nullable: true },
+      scopeKey: { type: 'string', nullable: true },
+      memoryKey: { type: 'string', nullable: true },
+      sourceKind: { type: 'string', nullable: true },
       sourceContextKey: 'string',
+      targetSpeakerId: { type: 'string', nullable: true },
+      targetSpeakerName: { type: 'string', nullable: true },
+      evidenceMessageIds: { type: 'text', nullable: true },
+      evidenceSpeakerIds: { type: 'text', nullable: true },
+      attributionStatus: 'string',
       allowedContextKeys: { type: 'text', nullable: true },
       deniedContextKeys: { type: 'text', nullable: true },
       applicability: { type: 'text', nullable: true },
@@ -130,6 +183,9 @@ export function ensureMemoryV3Tables(ctx: Context): void {
       validFrom: { type: 'double', nullable: true },
       validUntil: { type: 'double', nullable: true },
       expiresAt: { type: 'double', nullable: true },
+      invalidatedAt: { type: 'double', nullable: true },
+      retrievalText: { type: 'text', nullable: true },
+      lastUsedReason: { type: 'text', nullable: true },
       firstSeenAt: 'double',
       lastSeenAt: 'double',
       lastAccessedAt: { type: 'double', nullable: true },
@@ -143,9 +199,11 @@ export function ensureMemoryV3Tables(ctx: Context): void {
     {
       autoInc: true,
       indexes: [
-        ['userKey', 'archived'],
-        ['userKey', 'sourceContextKey', 'archived'],
-        ['userKey', 'visibility', 'sensitivity', 'archived'],
+        ['ownerUserKey', 'archived'],
+        ['ownerUserKey', 'scopeType', 'scopeKey', 'archived'],
+        ['ownerUserKey', 'sourceContextKey', 'archived'],
+        ['ownerUserKey', 'visibility', 'sensitivity', 'archived'],
+        ['memoryKey'],
         ['periodStart'],
         ['lastAccessedAt'],
       ],
@@ -153,27 +211,119 @@ export function ensureMemoryV3Tables(ctx: Context): void {
   );
 
   ctx.model.extend(
+    'memory_profile',
+    {
+      id: 'unsigned',
+      ownerUserKey: 'string',
+      profileKey: 'string',
+      kind: 'string',
+      content: 'text',
+      valueJson: { type: 'text', nullable: true },
+      importance: 'double',
+      confidence: 'double',
+      sensitivity: 'string',
+      scopeType: 'string',
+      scopeKey: { type: 'string', nullable: true },
+      sourceContextKey: 'string',
+      targetSpeakerId: { type: 'string', nullable: true },
+      targetSpeakerName: { type: 'string', nullable: true },
+      evidenceMessageIds: { type: 'text', nullable: true },
+      evidenceSpeakerIds: { type: 'text', nullable: true },
+      attributionStatus: 'string',
+      allowedContextKeys: { type: 'text', nullable: true },
+      deniedContextKeys: { type: 'text', nullable: true },
+      validFrom: { type: 'double', nullable: true },
+      validUntil: { type: 'double', nullable: true },
+      expiresAt: { type: 'double', nullable: true },
+      firstSeenAt: 'double',
+      lastSeenAt: 'double',
+      lastAccessedAt: { type: 'double', nullable: true },
+      version: 'unsigned',
+      archived: 'unsigned',
+      supersedesId: { type: 'unsigned', nullable: true },
+      conflictSetId: { type: 'string', nullable: true },
+    },
+    {
+      autoInc: true,
+      indexes: [
+        ['ownerUserKey', 'archived'],
+        ['ownerUserKey', 'kind', 'profileKey', 'archived'],
+        ['ownerUserKey', 'scopeType', 'scopeKey', 'archived'],
+      ],
+    },
+  );
+
+  ctx.model.extend(
+    'memory_session',
+    {
+      id: 'unsigned',
+      sessionKey: 'string',
+      ownerUserKey: 'string',
+      contextKey: 'string',
+      channelType: 'string',
+      summary: 'text',
+      workingStateJson: { type: 'text', nullable: true },
+      startedAt: 'double',
+      updatedAt: 'double',
+      expiresAt: 'double',
+      archived: 'unsigned',
+    },
+    {
+      autoInc: true,
+      indexes: [['sessionKey'], ['ownerUserKey', 'contextKey', 'archived'], ['expiresAt']],
+    },
+  );
+
+  ctx.model.extend(
+    'memory_source',
+    {
+      id: 'unsigned',
+      sourceId: 'string',
+      ownerUserKey: 'string',
+      contextKey: 'string',
+      conversationId: 'string',
+      targetSpeakerId: 'string',
+      targetSpeakerName: { type: 'string', nullable: true },
+      messageIds: 'text',
+      evidenceMessageIds: 'text',
+      evidenceSpeakerIds: 'text',
+      attributionStatus: 'string',
+      roleWindowHash: 'string',
+      excerpt: { type: 'text', nullable: true },
+      redactedExcerpt: { type: 'text', nullable: true },
+      createdAt: 'double',
+    },
+    {
+      autoInc: true,
+      indexes: [['sourceId'], ['ownerUserKey', 'contextKey'], ['conversationId']],
+    },
+  );
+
+  ctx.model.extend(
     'memory_provenance',
     {
       id: 'unsigned',
-      userKey: 'string',
+      ownerUserKey: 'string',
       contextKey: 'string',
       memoryType: 'string',
       memoryId: 'unsigned',
       candidateId: { type: 'unsigned', nullable: true },
       conversationId: { type: 'string', nullable: true },
       messageIds: { type: 'text', nullable: true },
+      evidenceMessageIds: { type: 'text', nullable: true },
+      evidenceSpeakerIds: { type: 'text', nullable: true },
+      attributionStatus: 'string',
       source: 'string',
       createdAt: 'double',
     },
     {
       autoInc: true,
-      indexes: [['memoryType', 'memoryId'], ['userKey', 'contextKey'], ['conversationId']],
+      indexes: [['memoryType', 'memoryId'], ['ownerUserKey', 'contextKey'], ['conversationId']],
     },
   );
 
   ctx.model.extend(
-    'memory_job_v3',
+    'memory_job',
     {
       id: 'unsigned',
       jobKey: 'string',

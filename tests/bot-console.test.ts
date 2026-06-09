@@ -410,7 +410,7 @@ describe('bot-console plugin', () => {
     const addListener = vi.fn();
     apply({
       baseDir: dir,
-      memoryV3Status: {
+      memoryStatus: {
         getSnapshot: vi.fn().mockResolvedValue({
           available: true,
           enabled: true,
@@ -498,8 +498,8 @@ describe('bot-console plugin', () => {
 
     const getStateListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/get-state')?.[1];
     const state = await getStateListener();
-    expect(state.runtimeStatus.memoryV3.embedModel).toBe('Qwen/Qwen3-Embedding-8B');
-    expect(state.runtimeStatus.memoryV3.jobs.embedPending).toBe(2);
+    expect(state.runtimeStatus.memory.embedModel).toBe('Qwen/Qwen3-Embedding-8B');
+    expect(state.runtimeStatus.memory.jobs.embedPending).toBe(2);
     expect(state.featureScopes).toEqual([
       expect.objectContaining({ scopeKind: 'private_default', scopeId: 'private-default' }),
     ]);
@@ -508,7 +508,7 @@ describe('bot-console plugin', () => {
     ]);
   });
 
-  it('routes manual probe requests to memory-v3 status service', async () => {
+  it('routes manual probe requests to memory status service', async () => {
     const dir = createTempDir();
     mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
     writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
@@ -565,7 +565,7 @@ describe('bot-console plugin', () => {
     const addListener = vi.fn();
     apply({
       baseDir: dir,
-      memoryV3Status: {
+      memoryStatus: {
         getSnapshot: vi.fn(),
         probeEmbedding,
       },
@@ -578,8 +578,8 @@ describe('bot-console plugin', () => {
     const probeListener = addListener.mock.calls.find((call) => call[0] === 'bot-console/run-status-probe')?.[1];
     const result = await probeListener('embedding');
     expect(probeEmbedding).toHaveBeenCalledTimes(1);
-    expect(result.memoryV3.ok).toBe(true);
-    expect(result.memoryV3.snapshot.embed.lastSource).toBe('probe');
+    expect(result.memory.ok).toBe(true);
+    expect(result.memory.snapshot.embed.lastSource).toBe('probe');
   });
 
   it('exposes memory explorer data through a protected listener', async () => {
@@ -614,11 +614,11 @@ describe('bot-console plugin', () => {
           if (table === 'memory_context') {
             return [];
           }
-          if (table === 'memory_fact_v3') {
+          if (table === 'memory_fact') {
             return [
               {
                 id: 1,
-                userKey: 'onebot:user:10001',
+                ownerUserKey: 'onebot:user:10001',
                 kind: 'preference',
                 topicKey: 'nickname',
                 content: '用户更喜欢被叫小嘉。',
@@ -646,11 +646,11 @@ describe('bot-console plugin', () => {
               },
             ];
           }
-          if (table === 'memory_episode_v3') {
+          if (table === 'memory_episode') {
             return [
               {
                 id: 2,
-                userKey: 'onebot:user:10001',
+                ownerUserKey: 'onebot:user:10001',
                 title: '第一次晚安语音',
                 summary: '用户第一次主动索要晚安语音。',
                 keywords: '["晚安","语音"]',
@@ -679,10 +679,10 @@ describe('bot-console plugin', () => {
               },
             ];
           }
-          if (table === 'memory_candidate_v3') {
+          if (table === 'memory_candidate') {
             return [];
           }
-          if (table === 'memory_job_v3') {
+          if (table === 'memory_job') {
             return [
               {
                 id: 9,
@@ -703,6 +703,9 @@ describe('bot-console plugin', () => {
           if (table === 'memory_provenance') return [{ id: 1 }];
           return [];
         }),
+        set: vi.fn(),
+        create: vi.fn(async (_table: string, row: Record<string, unknown>) => ({ id: 1, ...row })),
+        remove: vi.fn(),
       },
       console: {
         addEntry: vi.fn(),

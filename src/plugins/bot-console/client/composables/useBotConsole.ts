@@ -123,29 +123,29 @@ export const BASIC_KEYS = [
   'CHATLUNA_MAX_CONTEXT_RATIO',
 ] as const
 
-export const MEMORY_V3_KEYS = [
-  'MEMORY_V3_ENABLED',
-  'MEMORY_V3_READ_ENABLED',
-  'MEMORY_V3_WRITE_ENABLED',
-  'MEMORY_V3_EXTRACT_BASE_URL',
-  'MEMORY_V3_EXTRACT_API_KEY',
-  'MEMORY_V3_EXTRACT_MODEL',
-  'MEMORY_V3_EXTRACT_TIMEOUT_MS',
-  'MEMORY_V3_EXTRACT_REQUEST_MODE',
-  'MEMORY_V3_EXTRACT_STRUCTURED_OUTPUT_PROTOCOL',
-  'MEMORY_V3_EXTRACT_SUPPORTS_JSON_MODE',
-  'MEMORY_V3_EMBED_BASE_URL',
-  'MEMORY_V3_EMBED_API_KEY',
-  'MEMORY_V3_EMBED_MODEL',
-  'MEMORY_V3_EMBED_TIMEOUT_MS',
-  'MEMORY_V3_QUERY_TOPK',
-  'MEMORY_V3_PROMPT_BUDGET_TOKENS',
-  'MEMORY_V3_EMBED_BATCH_SIZE',
-  'MEMORY_V3_EXTRACT_IDLE_MS',
-  'MEMORY_V3_EXTRACT_MESSAGE_BATCH',
-  'MEMORY_V3_ARCHIVE_DAYS',
-  'MEMORY_V3_MAX_JOB_RETRIES',
-  'MEMORY_V3_JOB_LOCK_TIMEOUT_MS',
+export const MEMORY_KEYS = [
+  'MEMORY_ENABLED',
+  'MEMORY_READ_ENABLED',
+  'MEMORY_WRITE_ENABLED',
+  'MEMORY_EXTRACT_BASE_URL',
+  'MEMORY_EXTRACT_API_KEY',
+  'MEMORY_EXTRACT_MODEL',
+  'MEMORY_EXTRACT_TIMEOUT_MS',
+  'MEMORY_EXTRACT_REQUEST_MODE',
+  'MEMORY_EXTRACT_STRUCTURED_OUTPUT_PROTOCOL',
+  'MEMORY_EXTRACT_SUPPORTS_JSON_MODE',
+  'MEMORY_EMBED_BASE_URL',
+  'MEMORY_EMBED_API_KEY',
+  'MEMORY_EMBED_MODEL',
+  'MEMORY_EMBED_TIMEOUT_MS',
+  'MEMORY_QUERY_TOPK',
+  'MEMORY_PROMPT_BUDGET_TOKENS',
+  'MEMORY_EMBED_BATCH_SIZE',
+  'MEMORY_EXTRACT_IDLE_MS',
+  'MEMORY_EXTRACT_MESSAGE_BATCH',
+  'MEMORY_ARCHIVE_DAYS',
+  'MEMORY_MAX_JOB_RETRIES',
+  'MEMORY_JOB_LOCK_TIMEOUT_MS',
 ] as const
 
 export const ALL_ENV_KEYS = [
@@ -155,7 +155,7 @@ export const ALL_ENV_KEYS = [
   ...FILE_SYSTEM_CONTROL_KEYS,
   ...PRESET_SCOPE_KEYS,
   ...BASIC_KEYS,
-  ...MEMORY_V3_KEYS,
+  ...MEMORY_KEYS,
 ] as const
 const BOT_RUNTIME_UNIT = 'qqbot-koishi.service'
 
@@ -1269,7 +1269,7 @@ export function useBotConsole() {
   }
 
   /**
-   * Runs a memory health probe, updates the in-memory memoryV3 snapshot,
+   * Runs a memory health probe, updates the in-memory memory snapshot,
    * and returns the full probe result for callers to handle toasts / feedback.
    */
   async function probeEmbedding(target: BotConsoleProbeResponse['target'] = 'embedding'): Promise<BotConsoleProbeResponse> {
@@ -1281,12 +1281,12 @@ export function useBotConsole() {
       )
 
       // Patch the in-memory snapshot so the Overview panel updates without a full refresh
-      if (result?.memoryV3?.snapshot && botState.value) {
+      if (result?.memory?.snapshot && botState.value) {
         botState.value = {
           ...botState.value,
           runtimeStatus: {
             ...botState.value.runtimeStatus,
-            memoryV3: result.memoryV3.snapshot,
+            memory: result.memory.snapshot,
           },
         }
       }

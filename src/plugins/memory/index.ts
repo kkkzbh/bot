@@ -2,25 +2,26 @@ import { Context, Logger, Schema, type Session } from 'koishi';
 import type { MainChatRuntimeProfile } from '../shared/llm/main-chat-tabs.js';
 import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
 import { consumePromptEnvelope, registerPromptFragment } from '../shared/prompt-context/index.js';
+import { resolveSessionDisplayName } from '../shared/session/index.js';
 import { buildMemoryAddress, type MemoryMiddlewareContextLike } from './address.js';
 import { DEFAULT_EMBED_BASE_URL, type MemoryRuntimeConfig } from './config.js';
 import { registerMemoryCommands } from './commands.js';
-import { hasRecallCue } from './ranking.js';
 import { retrieveMemoryForContext } from './recall.js';
-import { ensureMemoryV3Tables } from './schema.js';
-import { MemoryV3StatusService } from './status.js';
-export { MemoryV3StatusService, createUnavailableMemoryV3StatusSnapshot } from './status.js';
+import { ensureMemoryTables } from './schema.js';
+import { runLegacyMemoryMigration } from './migration.js';
+import { MemoryStatusService } from './status.js';
+export { MemoryStatusService, createUnavailableMemoryStatusSnapshot } from './status.js';
 import { embedTexts, isEmbedRuntimeConfigured } from './providers/embedding-client.js';
 import { buildMemoryProviderProfile } from './providers/router.js';
 import { runMemoryJobTick, processMaintenanceJob } from './pipeline.js';
-import { extractPlainText, MemoryV3Store } from './store.js';
-export { MemoryV3Store } from './store.js';
+import { extractPlainText, MemoryStore } from './store.js';
+export { MemoryStore } from './store.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
 };
 
-export const name = 'memory-v3';
+export const name = 'memory';
 export const inject = ['chatluna', 'database'];
 
 const logger = new Logger(name);
@@ -53,7 +54,7 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  enabled: Schema.boolean().default(true).description('是否启用本地长期记忆 v3。'),
+  enabled: Schema.boolean().default(true).description('是否启用本地长期记忆。'),
   readEnabled: Schema.boolean().default(true).description('是否启用长期记忆召回。'),
   writeEnabled: Schema.boolean().default(true).description('是否启用长期记忆提炼写入。'),
   extractBaseUrl: Schema.string().description('长期记忆提炼用 OpenAI 兼容 Base URL；留空时使用主聊天 provider。'),
@@ -152,7 +153,7 @@ function toRuntimeConfig(config: Config): MemoryRuntimeConfig {
     readEnabled: config.readEnabled !== false,
     writeEnabled: config.writeEnabled !== false,
     extract: buildMemoryProviderProfile(mainProfile, {
-      routeId: 'memory-v3-extract',
+      routeId: 'memory-extract',
       baseUrl: String(config.extractBaseUrl ?? '').trim() || mainProfile.baseUrl,
       apiKey: String(config.extractApiKey ?? '').trim() || mainProfile.apiKey,
       model: String(config.extractModel ?? '').trim() || mainProfile.transportModel,
@@ -188,13 +189,13 @@ function resolveInputText(session: Session, context: MemoryMiddlewareContextLike
 }
 
 async function injectMemoryContext(
-  store: MemoryV3Store,
+  store: MemoryStore,
   runtime: MemoryRuntimeConfig,
   address: ReturnType<typeof buildMemoryAddress> extends infer T ? NonNullable<T> : never,
   query: string,
 ): Promise<void> {
   let queryEmbedding: number[] | null = null;
-  if (hasRecallCue(query) && isEmbedRuntimeConfigured(runtime.embed)) {
+  if (query.trim() && isEmbedRuntimeConfigured(runtime.embed)) {
     const [vector] = await embedTexts(runtime.embed, [query]);
     queryEmbedding = vector;
   }
@@ -205,7 +206,7 @@ async function injectMemoryContext(
   });
   if (!result.prompt) return;
   registerPromptFragment(address.conversationId, {
-    source: 'qqbot_memory_v3',
+    source: 'qqbot_memory',
     title: 'Long-Term Memory Reference',
     authority: 'reference',
     trust: 'untrusted',
@@ -223,9 +224,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
   if (!runtime.enabled || !database) return;
 
-  ensureMemoryV3Tables(ctx);
-  const store = new MemoryV3Store(database);
-  const statusService = new MemoryV3StatusService(
+  ensureMemoryTables(ctx);
+  const store = new MemoryStore(database);
+  const statusService = new MemoryStatusService(
     runtime,
     store,
     async () => {
@@ -236,8 +237,8 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (!runtime.extract.baseUrl || !runtime.extract.model) throw new Error('memory_provider_unconfigured');
     },
   );
-  ctx.provide('memoryV3Status');
-  ctx.set('memoryV3Status', statusService);
+  ctx.provide('memoryStatus');
+  ctx.set('memoryStatus', statusService);
   registerMemoryCommands(ctx, store, statusService);
 
   let processing = false;
@@ -262,12 +263,12 @@ export function apply(ctx: Context, config: Config = {}): void {
     const chain = chatluna?.chatChain;
     const contextManager = chatluna?.contextManager;
     if (!chain || !contextManager) {
-      logger.warn('chatluna service is unavailable, skip memory-v3 middleware registration.');
+      logger.warn('chatluna service is unavailable, skip memory middleware registration.');
       return;
     }
 
     chain
-      .middleware('qqbot_memory_v3', async (rawSession, rawContext) => {
+      .middleware('qqbot_memory', async (rawSession, rawContext) => {
         const session = rawSession as Session;
         const context = rawContext as MemoryMiddlewareContextLike;
         if (!session.userId || session.userId === session.bot?.selfId) {
@@ -283,14 +284,13 @@ export function apply(ctx: Context, config: Config = {}): void {
         await store.upsertAddress(address);
         const flags = await store.getUserFlags(address.userKey);
         if (runtime.writeEnabled && flags.writeEnabled) {
-          await store.queueJob(
-            'extract',
-            {
-              address,
-              maxMessages: runtime.extractMessageBatch,
-            },
-            Date.now() + runtime.extractIdleMs,
-          );
+          await store.queueExtractJob({
+            address,
+            targetSpeakerId: address.userId,
+            targetSpeakerName: resolveSessionDisplayName(session),
+            maxMessages: runtime.extractMessageBatch,
+            nextRunAt: Date.now() + runtime.extractIdleMs,
+          });
         }
 
         if (runtime.readEnabled && flags.readEnabled) {
@@ -331,13 +331,22 @@ export function apply(ctx: Context, config: Config = {}): void {
         });
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
-      .after('qqbot_memory_v3')
+      .after('qqbot_memory')
       .after('qqbot_sticker_policy')
       .after('qqbot_reply_transport_policy')
       .after('chatluna_time_context')
       .before('lifecycle-handle_command');
 
     void (async () => {
+      const migrated = await runLegacyMemoryMigration(database);
+      const migratedCount = migrated.factsMigrated + migrated.episodesMigrated + migrated.profilesMigrated;
+      if (migratedCount > 0 || migrated.groupRowsDiscarded > 0) {
+        logger.info(
+          'memory migration imported %d direct rows and discarded %d legacy group rows',
+          migratedCount,
+          migrated.groupRowsDiscarded,
+        );
+      }
       const recovered = await store.requeueStaleProcessingJobs(runtime.jobLockTimeoutMs);
       if (recovered > 0) {
         logger.warn('memory recovered %d stale processing jobs after startup', recovered);

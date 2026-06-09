@@ -12,7 +12,7 @@ import {
   getStatusDotClass,
 } from '../../utils/constants'
 import { formatDateTime, formatLatency } from '../../utils/format'
-import type { MemoryV3StatusSnapshot } from '../../types'
+import type { MemoryStatusSnapshot } from '../../types'
 
 const bc = inject<ReturnType<typeof useBotConsole>>('bc')!
 const { add: toastAdd } = useToast()
@@ -29,8 +29,8 @@ const modelTabs = computed(() => botState.value?.modelTabs)
 const activeModelProfile = computed(() =>
   modelTabs.value?.tabs?.find(tab => tab.id === modelTabs.value?.activeTab) ?? null,
 )
-const memory    = computed<MemoryV3StatusSnapshot | undefined>(
-  () => botState.value?.runtimeStatus?.memoryV3,
+const memory    = computed<MemoryStatusSnapshot | undefined>(
+  () => botState.value?.runtimeStatus?.memory,
 )
 
 const targetActiveState = computed(
@@ -80,13 +80,13 @@ function getServiceByUnit(unit: string) {
 async function handleProbe() {
   try {
     const result = await bc.probeEmbedding()
-    if (result?.memoryV3?.ok) {
+    if (result?.memory?.ok) {
       toastAdd(
-        `Embedding 检测成功，耗时 ${formatLatency(result.memoryV3.latencyMs)}`,
+        `Embedding 检测成功，耗时 ${formatLatency(result.memory.latencyMs)}`,
         'success',
       )
     } else {
-      toastAdd(result?.memoryV3?.error || 'Embedding 检测失败', 'error')
+      toastAdd(result?.memory?.error || 'Embedding 检测失败', 'error')
     }
   } catch (e: unknown) {
     toastAdd(e instanceof Error ? e.message : '检测失败', 'error')
@@ -209,7 +209,7 @@ async function handleProbe() {
         </div>
 
         <div class="bc-overview-kv">
-          <span>memory-v3</span>
+          <span>memory</span>
           <strong>{{ memory?.enabled ? '已启用' : '未启用' }}</strong>
         </div>
         <div class="bc-overview-kv">

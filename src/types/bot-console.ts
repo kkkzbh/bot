@@ -1,14 +1,14 @@
 import type {
-  MemoryJobV3Status,
-  MemoryJobV3Type,
+  MemoryJobStatus,
+  MemoryJobType,
   MemoryOutputProtocolId,
   MemoryProfileKind,
   MemoryRecordType,
   MemorySensitivity,
-  MemoryV3ProbeResult,
-  MemoryV3StatusSnapshot,
+  MemoryProbeResult,
+  MemoryStatusSnapshot,
   MemoryVisibility,
-} from './memory-v3.js';
+} from './memory.js';
 import type {
   ClearConversationHistoryResult,
   ClearConversationHistoryTarget,
@@ -175,7 +175,7 @@ export interface BotConsoleState {
   toolPolicy: BotConsoleToolPolicyState;
   modelTabs: BotConsoleModelTabsState;
   runtimeStatus: {
-    memoryV3: MemoryV3StatusSnapshot;
+    memory: MemoryStatusSnapshot;
   };
 }
 
@@ -251,8 +251,8 @@ export interface BotConsoleMemoryPendingReviewItem {
 
 export interface BotConsoleMemoryJobItem {
   id: number;
-  jobType: MemoryJobV3Type;
-  status: MemoryJobV3Status;
+  jobType: MemoryJobType;
+  status: MemoryJobStatus;
   userKey: string | null;
   contextKey: string | null;
   conversationId: string | null;
@@ -298,8 +298,8 @@ export interface BotConsoleMemoryState {
   jobs: BotConsoleMemoryJobItem[];
   audit: BotConsoleMemoryAuditItem[];
   provenanceCount: number;
-  status: MemoryV3StatusSnapshot | null;
-  providerRoutes: MemoryV3StatusSnapshot['providerRoutes'];
+  status: MemoryStatusSnapshot | null;
+  providerRoutes: MemoryStatusSnapshot['providerRoutes'];
   recentFailures: string[];
 }
 
@@ -313,7 +313,7 @@ export interface BotConsoleBaseState {
 
 export interface BotConsoleProbeResult {
   target: 'embedding' | 'extraction' | 'provider';
-  memoryV3: MemoryV3ProbeResult;
+  memory: MemoryProbeResult;
 }
 
 export interface GetMemoryStateResponse extends BotConsoleMemoryState {}

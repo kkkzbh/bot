@@ -169,7 +169,7 @@ onMounted(() => {
     <div class="bc-panel-head">
       <div>
         <p class="bc-eyebrow">长期记忆</p>
-        <h2>memory-v3</h2>
+        <h2>memory</h2>
         <p class="bc-muted">按用户查看 facts、episodes、审核队列、任务与审计。</p>
       </div>
 
@@ -217,7 +217,7 @@ onMounted(() => {
     </div>
 
     <div v-else-if="!memoryState?.available" class="bc-memory-empty">
-      当前运行时未提供 memory-v3 数据。
+      当前运行时未提供 memory 数据。
     </div>
 
     <div v-else class="bc-memory-main">

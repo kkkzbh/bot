@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildMemoryAddress } from '../src/plugins/memory/address.js';
 
-describe('memory-v3 address', () => {
+describe('memory address', () => {
   it('builds direct address by userKey and dm contextKey', () => {
     const address = buildMemoryAddress(
       {

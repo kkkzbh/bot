@@ -41,7 +41,7 @@ Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime.
 - `OPENAI_BASE_URL`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
-- `MEMORY_V3_EMBED_API_KEY`
+- `MEMORY_EMBED_API_KEY`
 - `CHATLUNA_COMMAND_AUTHORITY`
 
 Main chat provider selection is fixed to five built-in tabs:
@@ -110,7 +110,7 @@ Koishi uses **OneBot WebSocket 正向连接** to LLBot:
 - `ONEBOT_WS_ENDPOINT=ws://127.0.0.1:3001`
 - Only OneBot protocol is supported in this project.
 
-Memory-v3 stores user-scoped long-term facts and episode summaries in local SQLite.
+Memory stores user-scoped long-term facts and episode summaries in local SQLite.
 Embeddings are only used for long-memory recall/writeback and are expected to come from SiliconFlow (`Qwen/Qwen3-Embedding-8B` by default).
 
 ## 4. Start PMHQ + host LLBot

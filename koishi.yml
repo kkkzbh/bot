@@ -251,31 +251,31 @@ plugins:
       servers: '{"mcpServers":{}}'
       tools: {}
     ./dist/plugins/model-guard:mjddgg: {}
-    ./dist/plugins/memory:memory-v3:
-      enabled: ${{ env.MEMORY_V3_ENABLED !== 'false' }}
-      readEnabled: ${{ env.MEMORY_V3_READ_ENABLED !== 'false' }}
-      writeEnabled: ${{ env.MEMORY_V3_WRITE_ENABLED !== 'false' }}
-      extractBaseUrl: ${{ env.MEMORY_V3_EXTRACT_BASE_URL || 'https://api.siliconflow.cn/v1' }}
-      extractApiKey: ${{ env.MEMORY_V3_EXTRACT_API_KEY || '' }}
-      extractModel: ${{ env.MEMORY_V3_EXTRACT_MODEL || 'Qwen/Qwen3.5-35B-A3B' }}
-      extractTimeoutMs: ${{ +env.MEMORY_V3_EXTRACT_TIMEOUT_MS || 60000 }}
-      extractRequestMode: ${{ env.MEMORY_V3_EXTRACT_REQUEST_MODE || 'chat_completions' }}
+    ./dist/plugins/memory:memory:
+      enabled: ${{ env.MEMORY_ENABLED !== 'false' }}
+      readEnabled: ${{ env.MEMORY_READ_ENABLED !== 'false' }}
+      writeEnabled: ${{ env.MEMORY_WRITE_ENABLED !== 'false' }}
+      extractBaseUrl: ${{ env.MEMORY_EXTRACT_BASE_URL || 'https://api.siliconflow.cn/v1' }}
+      extractApiKey: ${{ env.MEMORY_EXTRACT_API_KEY || '' }}
+      extractModel: ${{ env.MEMORY_EXTRACT_MODEL || 'Qwen/Qwen3.5-35B-A3B' }}
+      extractTimeoutMs: ${{ +env.MEMORY_EXTRACT_TIMEOUT_MS || 60000 }}
+      extractRequestMode: ${{ env.MEMORY_EXTRACT_REQUEST_MODE || 'chat_completions' }}
       extractStructuredOutputProtocol: >-
-        ${{ env.MEMORY_V3_EXTRACT_STRUCTURED_OUTPUT_PROTOCOL ||
+        ${{ env.MEMORY_EXTRACT_STRUCTURED_OUTPUT_PROTOCOL ||
         'native_chat_json_schema' }}
-      extractSupportsJsonMode: ${{ env.MEMORY_V3_EXTRACT_SUPPORTS_JSON_MODE === 'true' }}
-      embedBaseUrl: ${{ env.MEMORY_V3_EMBED_BASE_URL || 'https://api.siliconflow.cn/v1' }}
-      embedApiKey: ${{ env.MEMORY_V3_EMBED_API_KEY || '' }}
-      embedModel: ${{ env.MEMORY_V3_EMBED_MODEL || 'Qwen/Qwen3-Embedding-8B' }}
-      embedTimeoutMs: ${{ +env.MEMORY_V3_EMBED_TIMEOUT_MS || 12000 }}
-      queryTopK: ${{ +env.MEMORY_V3_QUERY_TOPK || 8 }}
-      promptBudgetTokens: ${{ +env.MEMORY_V3_PROMPT_BUDGET_TOKENS || 1200 }}
-      embedBatchSize: ${{ +env.MEMORY_V3_EMBED_BATCH_SIZE || 16 }}
-      extractIdleMs: ${{ +env.MEMORY_V3_EXTRACT_IDLE_MS || 90000 }}
-      extractMessageBatch: ${{ +env.MEMORY_V3_EXTRACT_MESSAGE_BATCH || 12 }}
-      archiveDays: ${{ +env.MEMORY_V3_ARCHIVE_DAYS || 90 }}
-      maxJobRetries: ${{ +env.MEMORY_V3_MAX_JOB_RETRIES || 5 }}
-      jobLockTimeoutMs: ${{ +env.MEMORY_V3_JOB_LOCK_TIMEOUT_MS || 300000 }}
+      extractSupportsJsonMode: ${{ env.MEMORY_EXTRACT_SUPPORTS_JSON_MODE === 'true' }}
+      embedBaseUrl: ${{ env.MEMORY_EMBED_BASE_URL || 'https://api.siliconflow.cn/v1' }}
+      embedApiKey: ${{ env.MEMORY_EMBED_API_KEY || '' }}
+      embedModel: ${{ env.MEMORY_EMBED_MODEL || 'Qwen/Qwen3-Embedding-8B' }}
+      embedTimeoutMs: ${{ +env.MEMORY_EMBED_TIMEOUT_MS || 12000 }}
+      queryTopK: ${{ +env.MEMORY_QUERY_TOPK || 8 }}
+      promptBudgetTokens: ${{ +env.MEMORY_PROMPT_BUDGET_TOKENS || 1200 }}
+      embedBatchSize: ${{ +env.MEMORY_EMBED_BATCH_SIZE || 16 }}
+      extractIdleMs: ${{ +env.MEMORY_EXTRACT_IDLE_MS || 90000 }}
+      extractMessageBatch: ${{ +env.MEMORY_EXTRACT_MESSAGE_BATCH || 12 }}
+      archiveDays: ${{ +env.MEMORY_ARCHIVE_DAYS || 90 }}
+      maxJobRetries: ${{ +env.MEMORY_MAX_JOB_RETRIES || 5 }}
+      jobLockTimeoutMs: ${{ +env.MEMORY_JOB_LOCK_TIMEOUT_MS || 300000 }}
     commands:qp6oxu:
       chatluna:
         config:

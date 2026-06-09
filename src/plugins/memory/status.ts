@@ -1,20 +1,20 @@
 import type {
   MemoryOutputProtocolId,
   MemoryStatusSource,
-  MemoryV3OperationSnapshot,
-  MemoryV3ProbeResult,
-  MemoryV3ProviderRouteStats,
-  MemoryV3QueueSummary,
-  MemoryV3StatusServiceLike,
-  MemoryV3StatusSnapshot,
-} from '../../types/memory-v3.js';
-import { createUnavailableMemoryV3StatusSnapshot } from '../shared/memory-v3-status.js';
+  MemoryOperationSnapshot,
+  MemoryProbeResult,
+  MemoryProviderRouteStats,
+  MemoryQueueSummary,
+  MemoryStatusServiceLike,
+  MemoryStatusSnapshot,
+} from '../../types/memory.js';
+import { createUnavailableMemoryStatusSnapshot } from '../shared/memory-status.js';
 import type { MemoryEmbedRuntime } from './providers/embedding-client.js';
 import { isEmbedRuntimeConfigured } from './providers/embedding-client.js';
 import type { MemoryProviderProfile } from './providers/router.js';
 import { isMemoryProviderConfigured } from './providers/router.js';
 
-export { createUnavailableMemoryV3StatusSnapshot };
+export { createUnavailableMemoryStatusSnapshot };
 
 interface OperationStatusDraft {
   state: 'never' | 'success' | 'failed';
@@ -27,7 +27,7 @@ interface OperationStatusDraft {
   consecutiveFailures: number;
 }
 
-export interface MemoryV3StatusRuntimeLike {
+export interface MemoryStatusRuntimeLike {
   enabled: boolean;
   readEnabled: boolean;
   writeEnabled: boolean;
@@ -53,7 +53,7 @@ function toErrorSummary(error: unknown): string {
   return String(error);
 }
 
-function toOperationSnapshot(draft: OperationStatusDraft, configured: boolean): MemoryV3OperationSnapshot {
+function toOperationSnapshot(draft: OperationStatusDraft, configured: boolean): MemoryOperationSnapshot {
   return {
     configured,
     state: draft.state,
@@ -67,15 +67,15 @@ function toOperationSnapshot(draft: OperationStatusDraft, configured: boolean): 
   };
 }
 
-export class MemoryV3StatusService implements MemoryV3StatusServiceLike {
+export class MemoryStatusService implements MemoryStatusServiceLike {
   private readonly extract = createEmptyOperationStatus();
   private readonly embed = createEmptyOperationStatus();
   private lastMaintenanceAt: number | null = null;
-  private readonly routeStats = new Map<MemoryOutputProtocolId, MemoryV3ProviderRouteStats>();
+  private readonly routeStats = new Map<MemoryOutputProtocolId, MemoryProviderRouteStats>();
 
   constructor(
-    private readonly runtime: MemoryV3StatusRuntimeLike,
-    private readonly store: { getJobSummary: () => Promise<MemoryV3QueueSummary> },
+    private readonly runtime: MemoryStatusRuntimeLike,
+    private readonly store: { getJobSummary: () => Promise<MemoryQueueSummary> },
     private readonly embedProbe: () => Promise<void>,
     private readonly extractionProbe?: () => Promise<void>,
   ) {}
@@ -124,7 +124,7 @@ export class MemoryV3StatusService implements MemoryV3StatusServiceLike {
     this.lastMaintenanceAt = at;
   }
 
-  async getSnapshot(): Promise<MemoryV3StatusSnapshot> {
+  async getSnapshot(): Promise<MemoryStatusSnapshot> {
     const jobs = await this.store.getJobSummary();
     return {
       available: true,
@@ -144,11 +144,11 @@ export class MemoryV3StatusService implements MemoryV3StatusServiceLike {
     };
   }
 
-  async probeEmbedding(): Promise<MemoryV3ProbeResult> {
+  async probeEmbedding(): Promise<MemoryProbeResult> {
     return this.runProbe('embedding', 'embed', this.embedProbe, isEmbedRuntimeConfigured(this.runtime.embed));
   }
 
-  async probeExtraction(): Promise<MemoryV3ProbeResult> {
+  async probeExtraction(): Promise<MemoryProbeResult> {
     return this.runProbe(
       'extraction',
       'extract',
@@ -157,16 +157,16 @@ export class MemoryV3StatusService implements MemoryV3StatusServiceLike {
     );
   }
 
-  async probeProvider(): Promise<MemoryV3ProbeResult> {
+  async probeProvider(): Promise<MemoryProbeResult> {
     return this.probeExtraction();
   }
 
   private async runProbe(
-    target: MemoryV3ProbeResult['target'],
+    target: MemoryProbeResult['target'],
     kind: 'extract' | 'embed',
     probe: () => Promise<void>,
     configured: boolean,
-  ): Promise<MemoryV3ProbeResult> {
+  ): Promise<MemoryProbeResult> {
     const checkedAt = Date.now();
     if (!this.runtime.enabled) {
       return {
@@ -174,7 +174,7 @@ export class MemoryV3StatusService implements MemoryV3StatusServiceLike {
         ok: false,
         checkedAt,
         latencyMs: null,
-        error: 'memory-v3 disabled',
+        error: 'memory disabled',
         snapshot: await this.getSnapshot(),
       };
     }

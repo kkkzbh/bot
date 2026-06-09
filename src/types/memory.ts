@@ -11,6 +11,15 @@ export type MemoryVisibility =
   | 'pending_review'
   | 'archived';
 
+export type MemoryScopeType =
+  | 'owner_all_contexts'
+  | 'dm_only'
+  | 'source_context_only'
+  | 'allowed_contexts'
+  | 'denied_contexts'
+  | 'pending_review'
+  | 'archived';
+
 export type MemorySensitivity = 'low' | 'personal' | 'sensitive' | 'secret';
 
 export type MemoryProfileKind =
@@ -19,13 +28,16 @@ export type MemoryProfileKind =
   | 'trait'
   | 'boundary'
   | 'plan'
-  | 'relationship';
+  | 'relationship'
+  | 'response_policy';
 
 export type MemoryCandidateType = 'fact' | 'episode' | 'drop';
 export type MemoryCandidateReviewStatus = 'pending' | 'approved' | 'rejected' | 'pending_review';
 export type MemoryRecordType = 'fact' | 'episode';
+export type MemoryCandidateSubject = 'target_user' | 'other_speaker' | 'group_shared' | 'assistant' | 'unknown';
+export type MemoryAttributionStatus = 'verified' | 'rejected' | 'unknown';
 
-export type MemoryJobV3Type =
+export type MemoryJobType =
   | 'extract'
   | 'privacy_review'
   | 'consolidate'
@@ -36,7 +48,7 @@ export type MemoryJobV3Type =
   | 'migration_backfill'
   | 'eval_probe';
 
-export type MemoryJobV3Status = 'pending' | 'processing' | 'done' | 'failed' | 'dead_letter';
+export type MemoryJobStatus = 'pending' | 'processing' | 'done' | 'failed' | 'dead_letter';
 export type MemoryStatusSource = 'runtime' | 'probe' | null;
 export type MemoryStatusState = 'never' | 'success' | 'failed';
 
@@ -81,18 +93,37 @@ export interface MemoryContextRecord {
   groupId: string | null;
   channelId: string | null;
   rawContextId: string | null;
+  lastExtractedMessageId: string | null;
+  lastExtractedAt: number | null;
+  lastExtractedHash: string | null;
   firstSeenAt: number;
   lastSeenAt: number;
 }
 
-export interface MemoryCandidateV3Record {
+export interface MemoryExtractCursorRecord {
+  id: number;
+  ownerUserKey: string;
+  contextKey: string;
+  conversationId: string;
+  lastExtractedMessageId: string | null;
+  lastExtractedAt: number | null;
+  firstSeenAt: number;
+  updatedAt: number;
+}
+
+export interface MemoryCandidateRecord {
   id: number;
   batchId: string;
   candidateType: MemoryCandidateType;
-  userKey: string;
+  ownerUserKey: string;
   contextKey: string;
   conversationId: string;
+  targetSpeakerId: string;
+  targetSpeakerName: string | null;
   messageIds: string | null;
+  evidenceMessageIds: string | null;
+  evidenceSpeakerIds: string | null;
+  attributionStatus: MemoryAttributionStatus;
   payload: string;
   reviewStatus: MemoryCandidateReviewStatus;
   sensitivity: MemorySensitivity;
@@ -106,9 +137,9 @@ export interface MemoryCandidateV3Record {
   consolidatedAt: number | null;
 }
 
-export interface MemoryFactV3Record {
+export interface MemoryFactRecord {
   id: number;
-  userKey: string;
+  ownerUserKey: string;
   kind: MemoryProfileKind;
   topicKey: string;
   content: string;
@@ -117,13 +148,25 @@ export interface MemoryFactV3Record {
   confidence: number;
   sensitivity: MemorySensitivity;
   visibility: MemoryVisibility;
+  scopeType: MemoryScopeType | null;
+  scopeKey: string | null;
+  memoryKey: string | null;
+  sourceKind: MemoryChannelType | null;
   sourceContextKey: string;
+  targetSpeakerId: string | null;
+  targetSpeakerName: string | null;
+  evidenceMessageIds: string | null;
+  evidenceSpeakerIds: string | null;
+  attributionStatus: MemoryAttributionStatus;
   allowedContextKeys: string | null;
   deniedContextKeys: string | null;
   applicability: string | null;
   validFrom: number | null;
   validUntil: number | null;
   expiresAt: number | null;
+  invalidatedAt: number | null;
+  retrievalText: string | null;
+  lastUsedReason: string | null;
   firstSeenAt: number;
   lastSeenAt: number;
   lastAccessedAt: number | null;
@@ -135,9 +178,9 @@ export interface MemoryFactV3Record {
   conflictSetId: string | null;
 }
 
-export interface MemoryEpisodeV3Record {
+export interface MemoryEpisodeRecord {
   id: number;
-  userKey: string;
+  ownerUserKey: string;
   title: string;
   summary: string;
   keywords: string | null;
@@ -145,7 +188,16 @@ export interface MemoryEpisodeV3Record {
   confidence: number;
   sensitivity: MemorySensitivity;
   visibility: MemoryVisibility;
+  scopeType: MemoryScopeType | null;
+  scopeKey: string | null;
+  memoryKey: string | null;
+  sourceKind: MemoryChannelType | null;
   sourceContextKey: string;
+  targetSpeakerId: string | null;
+  targetSpeakerName: string | null;
+  evidenceMessageIds: string | null;
+  evidenceSpeakerIds: string | null;
+  attributionStatus: MemoryAttributionStatus;
   allowedContextKeys: string | null;
   deniedContextKeys: string | null;
   applicability: string | null;
@@ -154,6 +206,9 @@ export interface MemoryEpisodeV3Record {
   validFrom: number | null;
   validUntil: number | null;
   expiresAt: number | null;
+  invalidatedAt: number | null;
+  retrievalText: string | null;
+  lastUsedReason: string | null;
   firstSeenAt: number;
   lastSeenAt: number;
   lastAccessedAt: number | null;
@@ -165,24 +220,91 @@ export interface MemoryEpisodeV3Record {
   conflictSetId: string | null;
 }
 
+export interface MemoryProfileRecord {
+  id: number;
+  ownerUserKey: string;
+  profileKey: string;
+  kind: MemoryProfileKind;
+  content: string;
+  valueJson: string | null;
+  importance: number;
+  confidence: number;
+  sensitivity: MemorySensitivity;
+  scopeType: MemoryScopeType;
+  scopeKey: string | null;
+  sourceContextKey: string;
+  targetSpeakerId: string | null;
+  targetSpeakerName: string | null;
+  evidenceMessageIds: string | null;
+  evidenceSpeakerIds: string | null;
+  attributionStatus: MemoryAttributionStatus;
+  allowedContextKeys: string | null;
+  deniedContextKeys: string | null;
+  validFrom: number | null;
+  validUntil: number | null;
+  expiresAt: number | null;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  lastAccessedAt: number | null;
+  version: number;
+  archived: number;
+  supersedesId: number | null;
+  conflictSetId: string | null;
+}
+
+export interface MemorySessionRecord {
+  id: number;
+  sessionKey: string;
+  ownerUserKey: string;
+  contextKey: string;
+  channelType: MemoryChannelType;
+  summary: string;
+  workingStateJson: string | null;
+  startedAt: number;
+  updatedAt: number;
+  expiresAt: number;
+  archived: number;
+}
+
+export interface MemorySourceRecord {
+  id: number;
+  sourceId: string;
+  ownerUserKey: string;
+  contextKey: string;
+  conversationId: string;
+  targetSpeakerId: string;
+  targetSpeakerName: string | null;
+  messageIds: string;
+  evidenceMessageIds: string;
+  evidenceSpeakerIds: string;
+  attributionStatus: MemoryAttributionStatus;
+  roleWindowHash: string;
+  excerpt: string | null;
+  redactedExcerpt: string | null;
+  createdAt: number;
+}
+
 export interface MemoryProvenanceRecord {
   id: number;
-  userKey: string;
+  ownerUserKey: string;
   contextKey: string;
   memoryType: MemoryRecordType;
   memoryId: number;
   candidateId: number | null;
   conversationId: string | null;
   messageIds: string | null;
+  evidenceMessageIds: string | null;
+  evidenceSpeakerIds: string | null;
+  attributionStatus: MemoryAttributionStatus;
   source: string;
   createdAt: number;
 }
 
-export interface MemoryJobV3Record {
+export interface MemoryJobRecord {
   id: number;
   jobKey: string;
-  jobType: MemoryJobV3Type;
-  status: MemoryJobV3Status;
+  jobType: MemoryJobType;
+  status: MemoryJobStatus;
   payload: string;
   retryCount: number;
   nextRunAt: number;
@@ -217,7 +339,7 @@ export interface MemoryTombstoneRecord {
   createdAt: number;
 }
 
-export interface MemoryV3QueueSummary {
+export interface MemoryQueueSummary {
   extractPending: number;
   extractProcessing: number;
   privacyReviewPending: number;
@@ -227,7 +349,7 @@ export interface MemoryV3QueueSummary {
   deadLetter: number;
 }
 
-export interface MemoryV3OperationSnapshot {
+export interface MemoryOperationSnapshot {
   configured: boolean;
   state: MemoryStatusState;
   lastSource: MemoryStatusSource;
@@ -239,14 +361,14 @@ export interface MemoryV3OperationSnapshot {
   consecutiveFailures: number;
 }
 
-export interface MemoryV3ProviderRouteStats {
+export interface MemoryProviderRouteStats {
   route: MemoryOutputProtocolId;
   success: number;
   failure: number;
   lastError: string | null;
 }
 
-export interface MemoryV3StatusSnapshot {
+export interface MemoryStatusSnapshot {
   available: boolean;
   enabled: boolean;
   readEnabled: boolean;
@@ -256,43 +378,47 @@ export interface MemoryV3StatusSnapshot {
   extractModel: string;
   embedBaseUrl: string;
   embedModel: string;
-  jobs: MemoryV3QueueSummary;
-  providerRoutes: MemoryV3ProviderRouteStats[];
+  jobs: MemoryQueueSummary;
+  providerRoutes: MemoryProviderRouteStats[];
   lastMaintenanceAt: number | null;
-  extract: MemoryV3OperationSnapshot;
-  embed: MemoryV3OperationSnapshot;
+  extract: MemoryOperationSnapshot;
+  embed: MemoryOperationSnapshot;
 }
 
-export interface MemoryV3ProbeResult {
+export interface MemoryProbeResult {
   target: 'embedding' | 'extraction' | 'provider';
   ok: boolean;
   checkedAt: number;
   latencyMs: number | null;
   error: string | null;
-  snapshot: MemoryV3StatusSnapshot;
+  snapshot: MemoryStatusSnapshot;
 }
 
-export interface MemoryV3StatusServiceLike {
-  getSnapshot(): Promise<MemoryV3StatusSnapshot>;
-  probeEmbedding(): Promise<MemoryV3ProbeResult>;
-  probeExtraction?(): Promise<MemoryV3ProbeResult>;
-  probeProvider?(): Promise<MemoryV3ProbeResult>;
+export interface MemoryStatusServiceLike {
+  getSnapshot(): Promise<MemoryStatusSnapshot>;
+  probeEmbedding(): Promise<MemoryProbeResult>;
+  probeExtraction?(): Promise<MemoryProbeResult>;
+  probeProvider?(): Promise<MemoryProbeResult>;
 }
 
 declare module 'koishi' {
   interface Tables {
     memory_user: MemoryUserRecord;
     memory_context: MemoryContextRecord;
-    memory_candidate_v3: MemoryCandidateV3Record;
-    memory_fact_v3: MemoryFactV3Record;
-    memory_episode_v3: MemoryEpisodeV3Record;
+    memory_extract_cursor: MemoryExtractCursorRecord;
+    memory_candidate: MemoryCandidateRecord;
+    memory_fact: MemoryFactRecord;
+    memory_episode: MemoryEpisodeRecord;
+    memory_profile: MemoryProfileRecord;
+    memory_session: MemorySessionRecord;
+    memory_source: MemorySourceRecord;
     memory_provenance: MemoryProvenanceRecord;
-    memory_job_v3: MemoryJobV3Record;
+    memory_job: MemoryJobRecord;
     memory_audit_event: MemoryAuditEventRecord;
     memory_tombstone: MemoryTombstoneRecord;
   }
 
   interface Context {
-    memoryV3Status?: MemoryV3StatusServiceLike;
+    memoryStatus?: MemoryStatusServiceLike;
   }
 }

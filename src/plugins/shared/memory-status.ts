@@ -1,8 +1,8 @@
-import type { MemoryV3StatusSnapshot } from '../../types/memory-v3.js';
+import type { MemoryStatusSnapshot } from '../../types/memory.js';
 
-export function createUnavailableMemoryV3StatusSnapshot(
-  overrides: Partial<MemoryV3StatusSnapshot> = {},
-): MemoryV3StatusSnapshot {
+export function createUnavailableMemoryStatusSnapshot(
+  overrides: Partial<MemoryStatusSnapshot> = {},
+): MemoryStatusSnapshot {
   return {
     available: false,
     enabled: false,

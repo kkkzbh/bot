@@ -45,9 +45,9 @@ import type {
   ServiceAction,
 } from '../../types/bot-console.js';
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
-import type { MemoryV3StatusServiceLike } from '../../types/memory-v3.js';
+import type { MemoryStatusServiceLike } from '../../types/memory.js';
 import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
-import { createUnavailableMemoryV3StatusSnapshot } from '../shared/memory-v3-status.js';
+import { createUnavailableMemoryStatusSnapshot } from '../shared/memory-status.js';
 import { buildMemoryState, createUnavailableMemoryState } from './memory.js';
 import {
   parseQqVoiceBridgeRequest,
@@ -59,7 +59,7 @@ import {
 const logger = new Logger('bot-console');
 
 export const name = 'bot-console';
-export const inject = { required: ['console'], optional: ['server', 'memoryV3Status', 'featurePolicy', 'toolPolicy', 'database'] } as const;
+export const inject = { required: ['console'], optional: ['server', 'memoryStatus', 'featurePolicy', 'toolPolicy', 'database'] } as const;
 
 const LISTENER_AUTHORITY = 4;
 
@@ -71,7 +71,7 @@ function ensureRecord(value: unknown): Record<string, unknown> {
 }
 
 type RuntimeServiceContext = {
-  memoryV3Status?: MemoryV3StatusServiceLike;
+  memoryStatus?: MemoryStatusServiceLike;
   featurePolicy?: FeaturePolicyServiceLike;
   toolPolicy?: ToolPolicyServiceLike;
   database?: {
@@ -95,12 +95,12 @@ function resolveDirtyModelTabIds(input: unknown): Set<SaveModelTabsRequest['acti
 
 async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager): Promise<BotConsoleState> {
   const statePromise = manager.getState();
-  let memoryV3 = createUnavailableMemoryV3StatusSnapshot();
-  if (ctx.memoryV3Status) {
+  let memory = createUnavailableMemoryStatusSnapshot();
+  if (ctx.memoryStatus) {
     try {
-      memoryV3 = await ctx.memoryV3Status.getSnapshot();
+      memory = await ctx.memoryStatus.getSnapshot();
     } catch {
-      memoryV3 = createUnavailableMemoryV3StatusSnapshot();
+      memory = createUnavailableMemoryStatusSnapshot();
     }
   }
   const featureScopesPromise = ctx.featurePolicy?.listConsoleFeatureScopes?.() ?? Promise.resolve([]);
@@ -134,7 +134,7 @@ async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager
       conversationTargets: toolPolicy.conversationTargets.length > 0 ? toolPolicy.conversationTargets : conversationTargets,
     },
     runtimeStatus: {
-      memoryV3,
+      memory,
     },
   };
 }
@@ -183,25 +183,25 @@ export function apply(ctx: Context): void {
 
       const probe =
         normalizedTarget === 'embedding'
-          ? runtimeCtx.memoryV3Status?.probeEmbedding
+          ? runtimeCtx.memoryStatus?.probeEmbedding
           : normalizedTarget === 'extraction'
-            ? runtimeCtx.memoryV3Status?.probeExtraction
-            : runtimeCtx.memoryV3Status?.probeProvider;
-      const memoryV3 =
+            ? runtimeCtx.memoryStatus?.probeExtraction
+            : runtimeCtx.memoryStatus?.probeProvider;
+      const memory =
         probe != null
-          ? await probe.call(runtimeCtx.memoryV3Status)
+          ? await probe.call(runtimeCtx.memoryStatus)
           : {
               target: normalizedTarget as BotConsoleProbeResult['target'],
               ok: false,
               checkedAt: Date.now(),
               latencyMs: null,
-              error: 'memory-v3 status service unavailable',
-              snapshot: createUnavailableMemoryV3StatusSnapshot(),
+              error: 'memory status service unavailable',
+              snapshot: createUnavailableMemoryStatusSnapshot(),
             };
 
       return {
         target: normalizedTarget as BotConsoleProbeResult['target'],
-        memoryV3,
+        memory,
       };
     },
     { authority: LISTENER_AUTHORITY },
@@ -211,26 +211,26 @@ export function apply(ctx: Context): void {
     'bot-console/get-memory-state',
     async (): Promise<BotConsoleMemoryState> => {
       try {
-        const status = runtimeCtx.memoryV3Status ? await runtimeCtx.memoryV3Status.getSnapshot() : createUnavailableMemoryV3StatusSnapshot();
+        const status = runtimeCtx.memoryStatus ? await runtimeCtx.memoryStatus.getSnapshot() : createUnavailableMemoryStatusSnapshot();
         return await buildMemoryState(runtimeCtx.database, status);
       } catch (error) {
         logger.warn('failed to build memory console state: %s', error instanceof Error ? error.message : String(error));
-        return createUnavailableMemoryState(createUnavailableMemoryV3StatusSnapshot());
+        return createUnavailableMemoryState(createUnavailableMemoryStatusSnapshot());
       }
     },
     { authority: LISTENER_AUTHORITY },
   );
 
   async function mutateMemoryState(
-    handler: (store: import('../memory/store.js').MemoryV3Store) => Promise<boolean>,
+    handler: (store: import('../memory/store.js').MemoryStore) => Promise<boolean>,
   ): Promise<BotConsoleMemoryMutationResponse> {
     if (!runtimeCtx.database?.get || !runtimeCtx.database.set || !runtimeCtx.database.create || !runtimeCtx.database.remove) {
-      throw new Error('memory-v3 database service unavailable');
+      throw new Error('memory database service unavailable');
     }
-    const { MemoryV3Store } = await import('../memory/store.js');
-    const store = new MemoryV3Store(runtimeCtx.database as any);
+    const { MemoryStore } = await import('../memory/store.js');
+    const store = new MemoryStore(runtimeCtx.database as any);
     const ok = await handler(store);
-    const status = runtimeCtx.memoryV3Status ? await runtimeCtx.memoryV3Status.getSnapshot() : createUnavailableMemoryV3StatusSnapshot();
+    const status = runtimeCtx.memoryStatus ? await runtimeCtx.memoryStatus.getSnapshot() : createUnavailableMemoryStatusSnapshot();
     return {
       ok,
       memory: await buildMemoryState(runtimeCtx.database, status),
@@ -303,11 +303,11 @@ export function apply(ctx: Context): void {
   consoleService.addListener(
     'bot-console/memory/export',
     async (userKey: string) => {
-      if (!runtimeCtx.database?.get) throw new Error('memory-v3 database service unavailable');
+      if (!runtimeCtx.database?.get) throw new Error('memory database service unavailable');
       const [facts, episodes, provenance] = await Promise.all([
-        runtimeCtx.database.get('memory_fact_v3', { userKey: String(userKey ?? '') }),
-        runtimeCtx.database.get('memory_episode_v3', { userKey: String(userKey ?? '') }),
-        runtimeCtx.database.get('memory_provenance', { userKey: String(userKey ?? '') }),
+        runtimeCtx.database.get('memory_fact', { ownerUserKey: String(userKey ?? '') }),
+        runtimeCtx.database.get('memory_episode', { ownerUserKey: String(userKey ?? '') }),
+        runtimeCtx.database.get('memory_provenance', { ownerUserKey: String(userKey ?? '') }),
       ]);
       return { userKey, facts, episodes, provenance };
     },

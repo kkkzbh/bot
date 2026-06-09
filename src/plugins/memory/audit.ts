@@ -1,8 +1,8 @@
-import type { MemoryRecordType } from '../../types/memory-v3.js';
-import type { MemoryV3Store } from './store.js';
+import type { MemoryRecordType } from '../../types/memory.js';
+import type { MemoryStore } from './store.js';
 
 export async function recordMemoryAudit(
-  store: MemoryV3Store,
+  store: MemoryStore,
   input: {
     userKey?: string | null;
     contextKey?: string | null;
