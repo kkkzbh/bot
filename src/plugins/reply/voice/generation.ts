@@ -272,6 +272,7 @@ type ReplyPlanDeliveryResult =
   | { status: 'delivered'; historyText: string }
   | { status: 'failed_before_send'; fallbackText: string; historyText: string }
   | { status: 'failed_after_partial_send'; historyText: string }
+  | { status: 'transport_unavailable'; historyText: string }
   | { status: 'interrupted'; historyText: string };
 
 type ChatLunaLike = {
@@ -524,6 +525,11 @@ function isOneBotContentBlockedError(error: unknown): boolean {
 
   const message = error instanceof Error ? error.message : String(error);
   return /\bretcode:\s*1200\b/.test(message);
+}
+
+function isOneBotRpcTransportUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b_request is not a function\b/i.test(message);
 }
 
 function buildContentBlockedFallbackText(session: SessionWithVoiceState): string {
@@ -1074,27 +1080,6 @@ function registerReplyTurnStateFragment(
   });
 }
 
-function registerReplyDeliverySafetyFragment(conversationId: string, session: SessionWithVoiceState): void {
-  if (session.isDirect) return;
-
-  registerPromptFragment(conversationId, {
-    source: 'qqbot_reply_delivery_safety',
-    title: 'Reply Delivery Safety',
-    authority: 'runtime_contract',
-    trust: 'trusted',
-    ttl: 'turn',
-    payload: {
-      kind: 'text',
-      value: [
-        '群聊平台发送安全规则：',
-        '- 涉及中国大陆现实政治、群体性事件、示威抗议、维权运动、敏感公共事件等话题时，不要展开事实细节、案例、时间线、评价或外链。',
-        '- 这类话题统一改为一句简短婉拒，例如：这个话题我不方便在群里展开，换个别的吧。',
-        '- 不要把敏感内容拆成多条消息、列表、引用或“仅供参考”的转述继续发送。',
-      ].join('\n'),
-    },
-  });
-}
-
 function injectReplyPromptEnvelope(args: {
   chatluna: ChatLunaLike;
   conversationId: string;
@@ -1566,11 +1551,18 @@ async function deliverReplyPlanCore(args: {
       await sendTask();
     }
   } catch (error) {
-    logger.warn('reply plan delivery failed: %s', (error as Error).message);
+    const errorMessage = (error as Error).message;
     const committedHistoryText = committedHistoryLines.join('\n').trim();
     if (wasSendAborted() || wasInterrupted?.()) {
       return { status: 'interrupted', historyText: committedHistoryText };
     }
+    if (isOneBotRpcTransportUnavailableError(error)) {
+      logger.warn('reply plan delivery skipped because onebot rpc transport is unavailable: %s', errorMessage);
+      return beganSending
+        ? { status: 'failed_after_partial_send', historyText: committedHistoryText }
+        : { status: 'transport_unavailable', historyText: committedHistoryText };
+    }
+    logger.warn('reply plan delivery failed: %s', errorMessage);
     if (beganSending) {
       return { status: 'failed_after_partial_send', historyText: committedHistoryText };
     }
@@ -1880,7 +1872,6 @@ export function apply(ctx: Context, config: Config = {}): void {
             voiceOutputEnabled: voiceFeatureState.outputEnabled,
           }));
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
-        registerReplyDeliverySafetyFragment(conversationId, session);
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       }) as ChatLunaChainBuilderLike;
     policyBuilder.after('qqbot_reply_tool_memory_state');
@@ -2112,18 +2103,27 @@ export function apply(ctx: Context, config: Config = {}): void {
             if (responseMessage) {
               responseMessage.content = result.fallbackText;
             }
+          } else if (result.status === 'transport_unavailable') {
+            if (context.options) {
+              context.options.responseMessage = null;
+            }
           } else if (context.options) {
             context.options.responseMessage = null;
           }
 
-          try {
-            await normalizeResearchReplyHistory(ctx, room, result.historyText);
-          } catch (error) {
-            logger.warn('research reply history normalization failed: %s', (error as Error).message);
+          if (result.status !== 'transport_unavailable') {
+            try {
+              await normalizeResearchReplyHistory(ctx, room, result.historyText);
+            } catch (error) {
+              logger.warn('research reply history normalization failed: %s', (error as Error).message);
+            }
           }
 
           if (result.status === 'failed_before_send') {
             return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+          }
+          if (result.status === 'transport_unavailable') {
+            return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
           }
 
           return result.status === 'failed_after_partial_send'

@@ -1097,6 +1097,9 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
     if (delivery.status === 'interrupted') {
       throw new Error('automation structured reply delivery interrupted');
     }
+    if (delivery.status === 'transport_unavailable') {
+      throw new Error('automation structured reply delivery failed because onebot rpc transport is unavailable');
+    }
     if (delivery.status === 'failed_after_partial_send') {
       throw new Error('automation structured reply delivery failed after partial send');
     }

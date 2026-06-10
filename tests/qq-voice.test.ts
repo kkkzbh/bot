@@ -1098,15 +1098,9 @@ describe('qq voice plugin', () => {
       'conv-1',
       expect.objectContaining({ source: 'qqbot_reply_transport_execution_rules' }),
     );
-    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
+    expect(promptAssemblyMocks.registerPromptFragment).not.toHaveBeenCalledWith(
       'conv-1',
-      expect.objectContaining({
-        source: 'qqbot_reply_delivery_safety',
-        payload: expect.objectContaining({
-          kind: 'text',
-          value: expect.stringContaining('群聊平台发送安全规则'),
-        }),
-      }),
+      expect.objectContaining({ source: 'qqbot_reply_delivery_safety' }),
     );
     expect(promptAssemblyMocks.clearPromptAssemblyTurn).toHaveBeenCalledWith('conv-1');
     expect(inject).toHaveBeenCalledWith(
@@ -1384,6 +1378,48 @@ describe('qq voice plugin', () => {
       expect.objectContaining({ conversationId: 'conv-text' }),
       '今晚先这样吧',
     );
+  });
+
+  it('stops chatluna fallback when onebot rpc transport is unavailable during executor send', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    bot.sendMessage.mockRejectedValueOnce(new TypeError('this._request is not a function'));
+    const session = createSession(bot, {
+      content: '普通聊聊',
+      strippedContent: '普通聊聊',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-transport-down'),
+        responseMessage: createReplyV2Response('今晚先这样吧'),
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(result).toBe(1);
+    expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+    expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeResearchReplyHistory).not.toHaveBeenCalled();
+    expect(
+      loggerMocks.warn.mock.calls.some(([message]) =>
+        String(message).includes('reply plan delivery skipped because onebot rpc transport is unavailable'),
+      ),
+    ).toBe(true);
   });
 
   it('executes a mention structured reply through the executor as one atomic mention message', async () => {

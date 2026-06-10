@@ -83,6 +83,7 @@ plugins:
         - 小祥
       isNickNameWithContent: true
       sendThinkingMessage: false
+      defaultModel: openai/gemini-3.1-pro-preview
       defaultPreset: sakiko
       isLog: true
     chatluna-storage-service:attachment-storage:
@@ -131,9 +132,9 @@ plugins:
       recentCatalogSize: ${{ +env.QQBOT_ATTACHMENT_RECENT_CATALOG_SIZE || 12 }}
     chatluna-plugin-common:qf1a6x:
       think: ${{ env.CHATLUNA_COMMON_THINK === 'true' }}
-      send: ${{ env.CHATLUNA_COMMON_SEND !== 'false' }}
-      todos: ${{ env.CHATLUNA_COMMON_TODOS !== 'false' }}
-      chat: ${{ env.CHATLUNA_COMMON_CHAT !== 'false' }}
+      send: ${{ env.CHATLUNA_COMMON_SEND === 'true' }}
+      todos: ${{ env.CHATLUNA_COMMON_TODOS === 'true' }}
+      chat: ${{ env.CHATLUNA_COMMON_CHAT === 'true' }}
       request: ${{ env.CHATLUNA_COMMON_REQUEST !== 'false' }}
       requestMaxOutputLength: ${{ +env.CHATLUNA_COMMON_REQUEST_MAX_OUTPUT_LENGTH || 58600 }}
       fs: ${{ env.CHATLUNA_COMMON_FS === 'true' }}
