@@ -7,6 +7,7 @@ import {
   type MemoryConversationTurn,
   type MemoryExtractionTarget,
 } from './schemas.js';
+import { throwMemoryProviderHttpError } from './http-error.js';
 
 interface ChatCompletionResponse {
   choices?: Array<{
@@ -49,7 +50,7 @@ async function requestJsonMode(
       }),
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`extract_http_${response.status}`);
+    if (!response.ok) await throwMemoryProviderHttpError(response, 'extract');
     const payload = await response.json() as ChatCompletionResponse;
     return extractText(payload.choices?.[0]?.message?.content);
   } finally {

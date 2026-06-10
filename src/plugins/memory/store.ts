@@ -626,6 +626,17 @@ export class MemoryStore {
     });
   }
 
+  async deadLetterJob(job: MemoryJobRecord, error: unknown): Promise<void> {
+    await this.database.set('memory_job', { id: job.id }, {
+      status: 'dead_letter',
+      retryCount: Number(job.retryCount ?? 0) + 1,
+      nextRunAt: Date.now(),
+      lockedAt: null,
+      lastError: error instanceof Error ? error.message : String(error),
+      updatedAt: Date.now(),
+    });
+  }
+
   async requeueStaleProcessingJobs(lockTimeoutMs: number): Promise<number> {
     const rows = await this.database.get('memory_job', { status: 'processing' }) as MemoryJobRecord[];
     const threshold = Date.now() - lockTimeoutMs;

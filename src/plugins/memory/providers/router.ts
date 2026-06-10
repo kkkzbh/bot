@@ -3,6 +3,7 @@ import type { MainChatRuntimeProfile } from '../../shared/llm/main-chat-tabs.js'
 import type { MemoryAddress, MemoryOutputProtocolId } from '../../../types/memory.js';
 import type { ExtractedMemoryCandidate } from '../gates.js';
 import { requestChatMemoryJson, requestChatMemoryPlainText } from './chat-client.js';
+import { MemoryProviderHttpError } from './http-error.js';
 import { requestJsonModeMemoryWithRepair } from './json-mode-repair.js';
 import { parsePlainTextMemoryV1 } from './plain-text-memory-v1.js';
 import { requestResponsesMemoryJson } from './responses-client.js';
@@ -101,16 +102,12 @@ export function buildMemoryExtractProviderProfile(
   const hasDedicatedProvider = Boolean(baseUrl || apiKey || model);
   return buildMemoryProviderProfile(mainProfile, {
     routeId: overrides.routeId ?? 'memory-extract',
-    baseUrl: hasDedicatedProvider ? baseUrl : mainProfile.baseUrl,
-    apiKey: hasDedicatedProvider ? apiKey : mainProfile.apiKey,
-    model: hasDedicatedProvider ? model : mainProfile.transportModel,
+    baseUrl: hasDedicatedProvider ? baseUrl : '',
+    apiKey: hasDedicatedProvider ? apiKey : '',
+    model: hasDedicatedProvider ? model : '',
     timeoutMs: overrides.timeoutMs ?? 60_000,
-    requestMode: hasDedicatedProvider
-      ? normalizeRequestMode(overrides.requestMode, 'chat_completions')
-      : normalizeRequestMode(overrides.requestMode, mainProfile.requestMode),
-    structuredOutputProtocol: hasDedicatedProvider
-      ? normalizeStructuredOutputProtocol(overrides.structuredOutputProtocol, 'chat_reply_v1')
-      : normalizeStructuredOutputProtocol(overrides.structuredOutputProtocol, mainProfile.structuredOutputProtocol),
+    requestMode: normalizeRequestMode(overrides.requestMode, 'chat_completions'),
+    structuredOutputProtocol: normalizeStructuredOutputProtocol(overrides.structuredOutputProtocol, 'chat_reply_v1'),
     supportsJsonMode: overrides.supportsJsonMode ?? false,
   });
 }
@@ -120,7 +117,7 @@ export function resolveMemoryOutputProtocol(profile: MemoryProviderProfile | Mai
   if (profile.structuredOutputProtocol === 'native_chat_json_schema') return 'native_chat_json_schema';
   if ('supportsJsonMode' in profile && profile.supportsJsonMode) return 'json_mode_with_repair';
   if (profile.structuredOutputProtocol === 'chat_reply_v1') return 'plain_text_memory_v1';
-  return 'no_write_fallback';
+  return 'unsupported_protocol';
 }
 
 function hashText(text: string): string {
@@ -140,14 +137,14 @@ export async function extractMemoryCandidates(input: MemoryExtractInput): Promis
     };
   }
 
-  if (route === 'no_write_fallback') {
+  if (route === 'unsupported_protocol') {
     return {
       route,
       ok: false,
       candidates: [],
-      drops: ['memory_provider_no_write_fallback'],
+      drops: ['memory_provider_unsupported_protocol'],
       rawTextHash: null,
-      error: 'memory_provider_no_write_fallback',
+      error: 'memory_provider_unsupported_protocol',
     };
   }
 
@@ -185,6 +182,7 @@ export async function extractMemoryCandidates(input: MemoryExtractInput): Promis
       error: null,
     };
   } catch (error) {
+    if (error instanceof MemoryProviderHttpError) throw error;
     return {
       route,
       ok: false,

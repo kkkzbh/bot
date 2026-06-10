@@ -7,6 +7,7 @@ import {
 } from './schemas.js';
 import type { ExtractedMemoryCandidate } from '../gates.js';
 import type { MemoryProviderProfile } from './router.js';
+import { throwMemoryProviderHttpError } from './http-error.js';
 
 interface ChatCompletionResponse {
   choices?: Array<{
@@ -62,7 +63,7 @@ export async function requestChatMemoryJson(
       }),
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`extract_http_${response.status}`);
+    if (!response.ok) await throwMemoryProviderHttpError(response, 'extract');
     const payload = await response.json() as ChatCompletionResponse;
     const rawText = extractResponseText(payload.choices?.[0]?.message?.content);
     return { candidates: parseMemoryExtractionJson(rawText), rawText };
@@ -95,7 +96,7 @@ export async function requestChatMemoryPlainText(
       }),
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`extract_http_${response.status}`);
+    if (!response.ok) await throwMemoryProviderHttpError(response, 'extract');
     const payload = await response.json() as ChatCompletionResponse;
     return extractResponseText(payload.choices?.[0]?.message?.content);
   } finally {

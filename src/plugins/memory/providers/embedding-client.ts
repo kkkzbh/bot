@@ -1,3 +1,5 @@
+import { throwMemoryProviderHttpError } from './http-error.js';
+
 export interface MemoryEmbedRuntime {
   baseUrl: string;
   apiKey: string;
@@ -37,7 +39,7 @@ export async function embedTexts(runtime: MemoryEmbedRuntime, inputs: readonly s
       }),
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`embed_http_${response.status}`);
+    if (!response.ok) await throwMemoryProviderHttpError(response, 'embed');
 
     const payload = await response.json() as EmbeddingResponse;
     const rows = Array.isArray(payload.data) ? payload.data : [];

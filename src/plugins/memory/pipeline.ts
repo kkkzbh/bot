@@ -4,6 +4,7 @@ import type { MemoryJobRecord, MemoryJobType } from '../../types/memory.js';
 import type { MemoryRuntimeConfig } from './config.js';
 import { runDeterministicPrivacyGuard } from './gates.js';
 import { embedTexts, isEmbedRuntimeConfigured } from './providers/embedding-client.js';
+import { isNonRetryableMemoryProviderError } from './providers/http-error.js';
 import { extractMemoryCandidates, isMemoryProviderConfigured } from './providers/router.js';
 import type { MemoryStatusService } from './status.js';
 import type {
@@ -194,7 +195,11 @@ export async function runMemoryJobTick(
         status.recordSuccess('embed', 'runtime', Math.max(0, Date.now() - startedAt), Date.now());
       } catch (error) {
         status.recordFailure('embed', 'runtime', error, Math.max(0, Date.now() - startedAt), Date.now());
-        for (const job of batch) await store.retryJob(job, error, 60_000, runtime.maxJobRetries);
+        if (isNonRetryableMemoryProviderError(error)) {
+          for (const job of batch) await store.deadLetterJob(job, error);
+        } else {
+          for (const job of batch) await store.retryJob(job, error, 60_000, runtime.maxJobRetries);
+        }
       }
       continue;
     }
@@ -219,7 +224,11 @@ export async function runMemoryJobTick(
         status.recordFailure('extract', 'runtime', error, Math.max(0, Date.now() - startedAt), Date.now());
       }
       logger.warn('memory %s job failed: %s', jobType, error instanceof Error ? error.message : String(error));
-      await store.retryJob(job, error, 60_000, runtime.maxJobRetries);
+      if (isNonRetryableMemoryProviderError(error)) {
+        await store.deadLetterJob(job, error);
+      } else {
+        await store.retryJob(job, error, 60_000, runtime.maxJobRetries);
+      }
     }
   }
 }

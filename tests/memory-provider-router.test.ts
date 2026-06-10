@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { requestChatMemoryPlainText } from '../src/plugins/memory/providers/chat-client.js';
+import { isNonRetryableMemoryProviderError } from '../src/plugins/memory/providers/http-error.js';
 import { parseMemoryExtractionJson } from '../src/plugins/memory/providers/schemas.js';
 import { resolveMemoryOutputProtocol, type MemoryProviderProfile } from '../src/plugins/memory/providers/router.js';
 
@@ -21,7 +23,40 @@ describe('memory provider router', () => {
     expect(resolveMemoryOutputProtocol(profile({ structuredOutputProtocol: 'native_chat_json_schema' }))).toBe('native_chat_json_schema');
     expect(resolveMemoryOutputProtocol(profile({ structuredOutputProtocol: 'chat_reply_v1' }))).toBe('plain_text_memory_v1');
     expect(resolveMemoryOutputProtocol(profile({ structuredOutputProtocol: 'json_mode', supportsJsonMode: true }))).toBe('json_mode_with_repair');
-    expect(resolveMemoryOutputProtocol(profile({ structuredOutputProtocol: 'json_mode', supportsJsonMode: false }))).toBe('no_write_fallback');
+    expect(resolveMemoryOutputProtocol(profile({ structuredOutputProtocol: 'json_mode', supportsJsonMode: false }))).toBe('unsupported_protocol');
+  });
+
+  it('preserves provider error details for non-retryable extract HTTP failures', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({ code: 30001, message: 'Sorry, your account balance is insufficient', data: null }),
+      { status: 403, statusText: 'Forbidden' },
+    );
+    try {
+      let caught: unknown = null;
+      await requestChatMemoryPlainText(
+        profile({ structuredOutputProtocol: 'chat_reply_v1' }),
+        [{
+          id: 'm1',
+          role: 'human',
+          text: 'hello',
+          speakerId: '10001',
+          speakerName: 'Alice',
+          ownerUserKey: 'onebot:10001',
+          isTarget: true,
+          attributionSource: 'direct_fallback',
+        }],
+        { speakerId: '10001', speakerName: 'Alice' },
+      ).catch((error: unknown) => {
+        caught = error;
+      });
+
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe('extract_http_403: Sorry, your account balance is insufficient (code 30001)');
+      expect(isNonRetryableMemoryProviderError(caught)).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('normalizes JSON fact kind aliases from provider output', () => {

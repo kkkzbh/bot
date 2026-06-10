@@ -57,7 +57,7 @@ export type MemoryOutputProtocolId =
   | 'native_chat_json_schema'
   | 'json_mode_with_repair'
   | 'plain_text_memory_v1'
-  | 'no_write_fallback';
+  | 'unsupported_protocol';
 
 export interface MemoryAddress {
   userKey: string;

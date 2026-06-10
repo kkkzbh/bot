@@ -11,7 +11,7 @@ import { runLegacyMemoryMigration } from './migration.js';
 import { MemoryStatusService } from './status.js';
 export { MemoryStatusService, createUnavailableMemoryStatusSnapshot } from './status.js';
 import { embedTexts, isEmbedRuntimeConfigured } from './providers/embedding-client.js';
-import { buildMemoryExtractProviderProfile } from './providers/router.js';
+import { buildMemoryExtractProviderProfile, extractMemoryCandidates, isMemoryProviderConfigured } from './providers/router.js';
 import { runMemoryJobTick, processMaintenanceJob } from './pipeline.js';
 import { extractPlainText, MemoryStore } from './store.js';
 export { MemoryStore } from './store.js';
@@ -56,12 +56,12 @@ export const Config: Schema<Config> = Schema.object({
   enabled: Schema.boolean().default(true).description('是否启用本地长期记忆。'),
   readEnabled: Schema.boolean().default(true).description('是否启用长期记忆召回。'),
   writeEnabled: Schema.boolean().default(true).description('是否启用长期记忆提炼写入。'),
-  extractBaseUrl: Schema.string().description('长期记忆提炼用 OpenAI 兼容 Base URL；Base URL/API Key/模型三项全空时才整体使用主聊天 provider。'),
-  extractApiKey: Schema.string().role('secret').description('长期记忆提炼用 API Key；不要和主聊天 provider 混用。'),
-  extractModel: Schema.string().description('长期记忆提炼模型；不要和主聊天 API Key 混用。'),
+  extractBaseUrl: Schema.string().description('长期记忆提炼用 OpenAI 兼容 Base URL；必须和 API Key、模型一起显式配置。'),
+  extractApiKey: Schema.string().role('secret').description('长期记忆提炼用 API Key；缺失时不会写入长期记忆。'),
+  extractModel: Schema.string().description('长期记忆提炼模型；缺失时不会写入长期记忆。'),
   extractTimeoutMs: Schema.natural().role('time').default(60000).description('长期记忆提炼请求超时（毫秒）。'),
-  extractRequestMode: Schema.string().default('').description('提炼请求模式：chat_completions / responses；留空跟随主聊天。'),
-  extractStructuredOutputProtocol: Schema.string().default('').description('提炼输出协议；留空跟随主聊天。'),
+  extractRequestMode: Schema.string().default('').description('提炼请求模式：chat_completions / responses；留空默认 chat_completions。'),
+  extractStructuredOutputProtocol: Schema.string().default('').description('提炼输出协议；留空默认 chat_reply_v1。'),
   extractSupportsJsonMode: Schema.boolean().default(false).description('提炼 provider 是否支持 JSON mode + repair。'),
   embedBaseUrl: Schema.string().role('link').default(DEFAULT_EMBED_BASE_URL).description('embedding 服务 Base URL。'),
   embedApiKey: Schema.string().role('secret').description('embedding 服务 API Key。'),
@@ -211,7 +211,40 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (!vector) throw new Error('empty_embedding_vector');
     },
     async () => {
-      if (!runtime.extract.baseUrl || !runtime.extract.model) throw new Error('memory_provider_unconfigured');
+      if (!isMemoryProviderConfigured(runtime.extract)) throw new Error('memory_provider_unconfigured');
+      const output = await extractMemoryCandidates({
+        address: {
+          userKey: 'probe:memory',
+          contextKey: 'probe:memory',
+          channelType: 'direct',
+          platform: 'probe',
+          botSelfId: 'probe-bot',
+          userId: 'probe-user',
+          conversationId: 'probe-memory-extract',
+          observedAt: Date.now(),
+        },
+        target: {
+          speakerId: 'probe-user',
+          speakerName: 'probe',
+        },
+        turns: [
+          {
+            id: 'probe-message',
+            role: 'human',
+            text: '记忆提炼健康检查，不需要写入任何长期记忆。',
+            speakerId: 'probe-user',
+            speakerName: 'probe',
+            ownerUserKey: 'probe:memory',
+            isTarget: true,
+            attributionSource: 'direct_fallback',
+          },
+        ],
+        providerProfile: runtime.extract,
+        maxFacts: 1,
+        maxEpisodes: 1,
+      });
+      statusService.recordRoute(output.route, output.ok, output.error);
+      if (!output.ok) throw new Error(output.error ?? 'memory_extract_failed');
     },
   );
   ctx.provide('memoryStatus');

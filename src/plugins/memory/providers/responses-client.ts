@@ -7,6 +7,7 @@ import {
   type MemoryConversationTurn,
   type MemoryExtractionTarget,
 } from './schemas.js';
+import { throwMemoryProviderHttpError } from './http-error.js';
 
 interface ResponsesApiResponse {
   output_text?: unknown;
@@ -65,7 +66,7 @@ export async function requestResponsesMemoryJson(
       }),
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`extract_http_${response.status}`);
+    if (!response.ok) await throwMemoryProviderHttpError(response, 'extract');
     const payload = await response.json() as ResponsesApiResponse;
     const rawText = extractResponsesText(payload);
     return { candidates: parseMemoryExtractionJson(rawText), rawText };
