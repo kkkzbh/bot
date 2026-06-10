@@ -61,6 +61,7 @@ const logger = new Logger('bot-console');
 export const name = 'bot-console';
 export const inject = { required: ['console'], optional: ['server', 'memoryStatus', 'featurePolicy', 'toolPolicy', 'database'] } as const;
 
+const CONSOLE_CLIENT_ASSET_DIR = 'dist/node_modules/@qqbot/bot-console-client';
 const LISTENER_AUTHORITY = 4;
 
 function ensureRecord(value: unknown): Record<string, unknown> {
@@ -147,7 +148,8 @@ export function apply(ctx: Context): void {
   const manager = new BotConsoleManager({ rootDir: ctx.baseDir, copilotBridge });
   const consoleService = ctx.console as any;
   const runtimeCtx = ctx as unknown as RuntimeServiceContext;
-  const entryDir = join(ctx.baseDir, 'dist/plugins/bot-console/client');
+  // Koishi console production asset serving rejects local plugin client files outside node_modules.
+  const entryDir = join(ctx.baseDir, CONSOLE_CLIENT_ASSET_DIR);
 
   try {
     manager.syncManagedChatLunaAgentConfig();

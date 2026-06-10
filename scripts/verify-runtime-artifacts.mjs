@@ -88,8 +88,8 @@ function main() {
 
   if (specs.some((spec) => spec.split(':')[0] === './dist/plugins/bot-console')) {
     for (const assetPath of [
-      join(distDir, 'plugins/bot-console/client/index.js'),
-      join(distDir, 'plugins/bot-console/client/style.css'),
+      join(distDir, 'node_modules/@qqbot/bot-console-client/index.js'),
+      join(distDir, 'node_modules/@qqbot/bot-console-client/style.css'),
     ]) {
       if (!fileExists(assetPath)) {
         missing.push(assetPath);

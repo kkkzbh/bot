@@ -60,8 +60,8 @@ describe('runtime startup contract', () => {
     expect(buildScript).not.toMatch(/rm -rf\s+"\$DIST_DIR"/);
 
     expect(viteConfig).toContain('process.env.QQBOT_CONSOLE_OUT_DIR');
-    expect(viteConfig).toContain('../../../../dist/plugins/bot-console/client');
-    expect(botConsolePlugin).toContain("join(ctx.baseDir, 'dist/plugins/bot-console/client')");
+    expect(viteConfig).toContain('../../../../dist/node_modules/@qqbot/bot-console-client');
+    expect(botConsolePlugin).toContain("CONSOLE_CLIENT_ASSET_DIR = 'dist/node_modules/@qqbot/bot-console-client'");
     expect(botConsolePlugin).not.toContain('node_modules/.cache/qqbot-bot-console');
   });
 
@@ -103,12 +103,12 @@ describe('runtime startup contract', () => {
 
     expect(missingClient.status).toBe(1);
     expect(missingClient.stderr).toContain('Runtime artifacts are missing');
-    expect(missingClient.stderr).toContain('plugins/bot-console/client/index.js');
+    expect(missingClient.stderr).toContain('node_modules/@qqbot/bot-console-client/index.js');
     expect(missingClient.stderr).toContain('Run: pnpm build');
 
-    mkdirSync(join(distDir, 'plugins/bot-console/client'), { recursive: true });
-    writeFileSync(join(distDir, 'plugins/bot-console/client/index.js'), 'export {}\n', 'utf8');
-    writeFileSync(join(distDir, 'plugins/bot-console/client/style.css'), 'body{}\n', 'utf8');
+    mkdirSync(join(distDir, 'node_modules/@qqbot/bot-console-client'), { recursive: true });
+    writeFileSync(join(distDir, 'node_modules/@qqbot/bot-console-client/index.js'), 'export {}\n', 'utf8');
+    writeFileSync(join(distDir, 'node_modules/@qqbot/bot-console-client/style.css'), 'body{}\n', 'utf8');
 
     const ok = spawnSync(process.execPath, [scriptPath, '--config', configPath, '--dist', distDir], {
       cwd: dir,

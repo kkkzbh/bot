@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 
 const outDir = process.env.QQBOT_CONSOLE_OUT_DIR
   ? resolve(process.env.QQBOT_CONSOLE_OUT_DIR)
-  : resolve(__dirname, '../../../../dist/plugins/bot-console/client')
+  : resolve(__dirname, '../../../../dist/node_modules/@qqbot/bot-console-client')
 
 export default defineConfig({
   plugins: [vue({})],

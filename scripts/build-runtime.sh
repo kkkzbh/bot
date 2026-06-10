@@ -9,7 +9,7 @@ mkdir -p "$TMP_ROOT"
 
 BUILD_ROOT="$(mktemp -d "${TMP_ROOT}/runtime-build-XXXXXX")"
 STAGE_DIST="${BUILD_ROOT}/dist"
-STAGE_CONSOLE_DIR="${STAGE_DIST}/plugins/bot-console/client"
+STAGE_CONSOLE_DIR="${STAGE_DIST}/node_modules/@qqbot/bot-console-client"
 NEXT_DIST="${TMP_ROOT}/dist-next-$$"
 PREVIOUS_DIST="${TMP_ROOT}/dist-previous-$$"
 SWAP_STARTED=0
