@@ -627,10 +627,12 @@ describe('bot-console manager', () => {
       manager.saveEnv({
         CHATLUNA_COMMON_FS: 'true',
         CHATLUNA_COMMON_FS_SCOPE_PATH: '/tmp/qqbot-scope',
+        CHATLUNA_COMMON_FS_ALLOWED_GROUPS: '829573670,921554872',
       }),
     ).resolves.toMatchObject({
       CHATLUNA_COMMON_FS: 'true',
       CHATLUNA_COMMON_FS_SCOPE_PATH: '/tmp/qqbot-scope',
+      CHATLUNA_COMMON_FS_ALLOWED_GROUPS: '829573670,921554872',
     });
   });
 

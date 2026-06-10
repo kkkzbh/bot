@@ -123,6 +123,10 @@ const fileSystemScopeSummary = computed(() =>
   (envDraft.CHATLUNA_COMMON_FS_SCOPE_PATH ?? '').trim() || '留空，跟随 Koishi 启动目录',
 )
 
+const fileSystemAllowedGroupsSummary = computed(() =>
+  (envDraft.CHATLUNA_COMMON_FS_ALLOWED_GROUPS ?? '').trim() || '留空，群聊不暴露文件系统工具',
+)
+
 function scopeKey(scope: Pick<ToolPolicyScope, 'scopeKind' | 'scopeId'>): string {
   return `${scope.scopeKind}:${scope.scopeId}`
 }
@@ -347,7 +351,7 @@ function effectiveStatusLabel(toolName: string): string {
           </div>
 
           <p class="bc-tool-card-desc">
-            控制是否向 ChatLuna 注入整组文件系统工具和 bash，并设置它们的默认工作目录。
+            控制是否向 ChatLuna 注入整组文件系统工具和 bash，并设置它们的默认工作目录与群聊白名单。
           </p>
           <p class="bc-tool-card-note">
             这张卡是进程级配置，不受左侧作用域切换影响；当前模式下 bash 以宿主机高权限运行且允许联网，这里的目录只作为默认工作目录展示，不构成强隔离边界。
@@ -389,10 +393,47 @@ function effectiveStatusLabel(toolName: string): string {
             </em>
           </label>
 
+          <label class="bc-field bc-tool-config-field">
+            <span class="bc-field-label">
+              {{ getFieldLabel('CHATLUNA_COMMON_FS_ALLOWED_GROUPS') }}
+              <span
+                v-if="getFieldHint('CHATLUNA_COMMON_FS_ALLOWED_GROUPS')"
+                class="bc-field-help"
+                tabindex="0"
+                role="note"
+                :aria-label="getFieldHint('CHATLUNA_COMMON_FS_ALLOWED_GROUPS')"
+              >
+                <span aria-hidden="true">!</span>
+                <span class="bc-field-tooltip" role="tooltip">{{ getFieldHint('CHATLUNA_COMMON_FS_ALLOWED_GROUPS') }}</span>
+              </span>
+              <span
+                v-if="changedKeys.has('CHATLUNA_COMMON_FS_ALLOWED_GROUPS')"
+                class="bc-field-modified"
+              >已修改</span>
+            </span>
+            <input
+              :value="envDraft.CHATLUNA_COMMON_FS_ALLOWED_GROUPS ?? ''"
+              type="text"
+              spellcheck="false"
+              placeholder="829573670,921554872"
+              @input="(e) => { envDraft.CHATLUNA_COMMON_FS_ALLOWED_GROUPS = (e.target as HTMLInputElement).value }"
+            />
+            <em class="bc-field-note">
+              非白名单群不会把 file_*、grep、glob、bash 暴露给模型；私聊不受这条群聊白名单限制。
+            </em>
+          </label>
+
           <div class="bc-tool-card-meta bc-tool-card-meta-stack">
             <span>当前作用域</span>
             <div class="bc-tool-card-tags">
               <span class="bc-badge bc-badge-sm bc-badge-muted">{{ fileSystemScopeSummary }}</span>
+            </div>
+          </div>
+
+          <div class="bc-tool-card-meta bc-tool-card-meta-stack">
+            <span>群聊白名单</span>
+            <div class="bc-tool-card-tags">
+              <span class="bc-badge bc-badge-sm bc-badge-muted">{{ fileSystemAllowedGroupsSummary }}</span>
             </div>
           </div>
 

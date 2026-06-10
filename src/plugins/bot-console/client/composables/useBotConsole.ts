@@ -94,6 +94,7 @@ export const FEATURE_NUMBER_KEYS = [
 export const FILE_SYSTEM_CONTROL_KEYS = [
   'CHATLUNA_COMMON_FS',
   'CHATLUNA_COMMON_FS_SCOPE_PATH',
+  'CHATLUNA_COMMON_FS_ALLOWED_GROUPS',
 ] as const
 
 export const PRIVATE_DEFAULT_SCOPE_ID = 'private-default'

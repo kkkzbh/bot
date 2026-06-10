@@ -66,6 +66,7 @@ function createHarness(
   seed: Record<string, Row[]> = {},
   options: {
     initialChatLunaAvailable?: boolean;
+    fileToolAllowedGroups?: string | null;
   } = {},
 ) {
   const database = createDatabase(seed);
@@ -133,7 +134,27 @@ function createHarness(
     toolPolicy: undefined,
   };
 
-  apply(ctx);
+  const previousFileToolAllowedGroups = process.env.CHATLUNA_COMMON_FS_ALLOWED_GROUPS;
+  const hasFileToolAllowedGroupsOverride = Object.prototype.hasOwnProperty.call(options, 'fileToolAllowedGroups');
+  if (hasFileToolAllowedGroupsOverride) {
+    if (options.fileToolAllowedGroups == null) {
+      delete process.env.CHATLUNA_COMMON_FS_ALLOWED_GROUPS;
+    } else {
+      process.env.CHATLUNA_COMMON_FS_ALLOWED_GROUPS = options.fileToolAllowedGroups;
+    }
+  }
+
+  try {
+    apply(ctx);
+  } finally {
+    if (hasFileToolAllowedGroupsOverride) {
+      if (previousFileToolAllowedGroups == null) {
+        delete process.env.CHATLUNA_COMMON_FS_ALLOWED_GROUPS;
+      } else {
+        process.env.CHATLUNA_COMMON_FS_ALLOWED_GROUPS = previousFileToolAllowedGroups;
+      }
+    }
+  }
 
   return {
     ctx,
@@ -253,7 +274,9 @@ describe('tool policy service', () => {
   });
 
   it('registers a route-aware tool-mask resolver and filters agent/tools separately', async () => {
-    const { ctx, registerToolMaskResolver, runReady } = createHarness();
+    const { ctx, registerToolMaskResolver, runReady } = createHarness({}, {
+      fileToolAllowedGroups: '1091330365',
+    });
     const service = ctx.toolPolicy!;
     await service.saveToolOverrides([
       {
@@ -309,6 +332,54 @@ describe('tool policy service', () => {
         deny: [],
       },
     });
+  });
+
+  it('hides file system tools from model masks outside the group allowlist', async () => {
+    const { ctx } = createHarness({}, {
+      fileToolAllowedGroups: '829573670, guild:921554872',
+    });
+    const service = ctx.toolPolicy!;
+    const restrictedTools = ['bash', 'file_edit', 'file_publish', 'file_read', 'file_write', 'glob', 'grep'];
+
+    const allowedGroupMask = await service.resolveToolMask(
+      { isDirect: false, userId: 'u1', guildId: '829573670', channelId: '829573670' } as any,
+      'agent',
+      { roomId: 111, conversationId: 'conv-allowed' },
+    );
+    expect(allowedGroupMask.allow).toEqual([
+      'bash',
+      'file_edit',
+      'file_publish',
+      'file_read',
+      'file_write',
+      'glob',
+      'grep',
+      'web_fetch',
+      'web_post',
+      'web_search',
+    ]);
+    expect(allowedGroupMask.toolCallMask?.allow).toEqual(allowedGroupMask.allow);
+
+    const blockedGroupMask = await service.resolveToolMask(
+      { isDirect: false, userId: 'u1', guildId: '1091330365', channelId: '1091330365' } as any,
+      'agent',
+      { roomId: 115, conversationId: 'conv-blocked' },
+    );
+    expect(blockedGroupMask.allow).toEqual(['web_fetch', 'web_post', 'web_search']);
+    for (const toolName of restrictedTools) {
+      expect(blockedGroupMask.allow).not.toContain(toolName);
+      expect(blockedGroupMask.toolCallMask?.allow).not.toContain(toolName);
+    }
+
+    const privateMask = await service.resolveToolMask(
+      { isDirect: true, userId: 'u1', channelId: 'private-1' } as any,
+      'agent',
+      { roomId: 7, conversationId: 'conv-private' },
+    );
+    for (const toolName of restrictedTools) {
+      expect(privateMask.allow).toContain(toolName);
+      expect(privateMask.toolCallMask?.allow).toContain(toolName);
+    }
   });
 
   it('fails closed at ready when chatluna runtime registry is unavailable', async () => {

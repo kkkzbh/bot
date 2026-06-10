@@ -9,6 +9,7 @@ export const FIELD_LABELS: Record<string, string> = {
   QQBOT_REPLY_INTERRUPT_ENABLED: '回复期中断',
   CHATLUNA_COMMON_FS: '文件系统工具总开关',
   CHATLUNA_COMMON_FS_SCOPE_PATH: '文件系统作用域目录',
+  CHATLUNA_COMMON_FS_ALLOWED_GROUPS: '文件系统工具白名单群',
   CHATLUNA_ACTIVE_TAB: '当前对话模型 Tab',
   CHATLUNA_PLATFORM: '当前对话模型平台',
   CHATLUNA_BASE_URL: '对话模型接口地址',
@@ -48,6 +49,8 @@ export const FIELD_HINTS: Record<string, string> = {
     '控制是否向 ChatLuna 注入整组 file_* 与 bash 工具。当前模式下 bash 以宿主机高权限运行且允许联网，关闭后这些工具不会真正提供给模型。',
   CHATLUNA_COMMON_FS_SCOPE_PATH:
     '作为文件工具与 bash 的默认工作目录。当前高权限模式下它不再是强隔离边界；支持填写 ~/...，保存时会展开成当前运行用户的 home 绝对路径。',
+  CHATLUNA_COMMON_FS_ALLOWED_GROUPS:
+    '只有填在这里的群号才会在群聊里向模型暴露 file_*、grep、glob、bash。多个群号用英文逗号分隔；留空时群聊不暴露这些工具。',
   CHATLUNA_DEFAULT_MODEL:
     '普通聊天默认走这里配置的模型。硅基流动当前固定使用 Pro/moonshotai/Kimi-K2.5。',
   CHATLUNA_MAX_CONTEXT_RATIO:

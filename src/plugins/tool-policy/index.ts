@@ -23,11 +23,22 @@ import {
   TOOL_ROUTE_PROFILES,
 } from './catalog.js';
 import { normalizeReplyChatMode } from '../shared/reply-chat-mode.js';
+import { normalizeGroupId, parseGroupSet } from '../shared/group-id.js';
 
 export const name = 'tool-policy';
 export const inject = { required: ['database', 'chatluna'], optional: ['featurePolicy'] } as const;
 
 const logger = new Logger(name);
+const FILE_SYSTEM_GROUP_RESTRICTED_TOOLS = new Set([
+  'bash',
+  'file_edit',
+  'file_publish',
+  'file_read',
+  'file_write',
+  'glob',
+  'grep',
+]);
+const FILE_SYSTEM_ALLOWED_GROUPS_ENV = 'CHATLUNA_COMMON_FS_ALLOWED_GROUPS';
 
 type DatabaseRow = Record<string, unknown>;
 
@@ -152,6 +163,7 @@ export class ToolPolicyService implements ToolPolicyServiceLike {
     private readonly database: DatabaseLike,
     private readonly featurePolicy?: FeaturePolicyServiceLike,
     private readonly resolveChatLuna?: () => ChatLunaLike | undefined,
+    private readonly fileSystemAllowedGroupIds = parseGroupSet(process.env[FILE_SYSTEM_ALLOWED_GROUPS_ENV]),
   ) {}
 
   async getToolPolicyState(): Promise<BotConsoleToolPolicyState> {
@@ -274,7 +286,10 @@ export class ToolPolicyService implements ToolPolicyServiceLike {
       return enabled;
     });
 
-    return { allowed, unknown };
+    return {
+      allowed: this.filterGroupRestrictedTools(allowed, options.session, scopeIds.groupScopeId),
+      unknown,
+    };
   }
 
   async resolveToolMask(
@@ -370,7 +385,9 @@ export class ToolPolicyService implements ToolPolicyServiceLike {
   }
 
   private async resolveScopeIds(session: Session, room: ResolveAllowedToolsOptions['room']) {
-    const groupScopeId = session.isDirect ? null : normalizeText(session.guildId) || normalizeText(session.channelId) || null;
+    const groupScopeId = session.isDirect
+      ? null
+      : normalizeGroupId(normalizeText(session.guildId)) ?? normalizeGroupId(normalizeText(session.channelId)) ?? null;
 
     let privateConversationScopeId: string | null = null;
     if (session.isDirect) {
@@ -384,6 +401,12 @@ export class ToolPolicyService implements ToolPolicyServiceLike {
     }
 
     return { groupScopeId, privateConversationScopeId };
+  }
+
+  private filterGroupRestrictedTools(toolNames: string[], session: Session, groupScopeId: string | null): string[] {
+    if (session.isDirect) return toolNames;
+    if (groupScopeId && this.fileSystemAllowedGroupIds.has(groupScopeId)) return toolNames;
+    return toolNames.filter((toolName) => !FILE_SYSTEM_GROUP_RESTRICTED_TOOLS.has(toolName));
   }
 
   private validateDependencies(overrides: ToolOverrideInput[]): void {
