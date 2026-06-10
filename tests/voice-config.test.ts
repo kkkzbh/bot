@@ -93,12 +93,14 @@ describe('qq voice config wiring', () => {
     expect(llbotService).toContain('After=network-online.target qqbot-pmhq.service');
     expect(koishiService).toContain('After=network-online.target qqbot-llbot.service');
     expect(koishiService).toContain('Wants=network-online.target qqbot-llbot.service');
+    expect(koishiService).toContain('PartOf=qqbot.target qqbot-llbot.service');
   });
 
   it('bridges llbot home to the pmhq qq mount and removes legacy cni artifacts before pmhq startup', () => {
     const llbotScript = readFileSync(resolve(process.cwd(), 'scripts/run-llbot-host.sh'), 'utf8');
     const pmhqScript = readFileSync(resolve(process.cwd(), 'scripts/podman-pmhq-service.sh'), 'utf8');
 
+    expect(llbotScript).toContain('export QQBOT_HOST_HOME="${HOST_HOME}"');
     expect(llbotScript).toContain('export HOME="${LLBOT_RUNTIME_DIR}/.host-home"');
     expect(pmhqScript).toContain('remove_legacy_cni_artifacts');
     expect(pmhqScript).toContain('podman network rm qqbot-stack_default qqbot-stack_app_network');
@@ -184,6 +186,7 @@ describe('qq voice config wiring', () => {
     expect(renderer).toContain('Environment=QQBOT_ENV_BASE_FILE=${envServer}');
     expect(renderer).toContain('Environment=QQBOT_ENV_OVERRIDE_FILE=${envRuntime}');
     expect(renderer).toContain('Environment=CHATLUNA_PRESET_DIRS=${shared}/presets:${app}/data/chathub/presets');
+    expect(renderer).toContain('PartOf=qqbot.target qqbot-llbot.service');
     expect(renderer).toContain('podman rm -f qqbot-voice-asr >/dev/null 2>&1 || true');
     expect(renderer).toContain('./scripts/podman-pmhq-service.sh up');
     expect(renderer).toContain('./scripts/run-llbot-host.sh');

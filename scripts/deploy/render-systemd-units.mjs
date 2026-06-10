@@ -106,7 +106,7 @@ writeUnit(
 Description=QQBot Koishi Service
 After=network-online.target qqbot-llbot.service
 Wants=network-online.target qqbot-llbot.service
-PartOf=qqbot.target
+PartOf=qqbot.target qqbot-llbot.service
 
 [Service]
 Type=simple

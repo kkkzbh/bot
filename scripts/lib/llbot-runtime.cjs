@@ -86,10 +86,20 @@ function rewritePmhqMediaPath(mediaPath, qqConfigMountSource) {
   return suffix ? path.join(sourceDir, suffix) : sourceDir;
 }
 
+function requiredPmhqMountSourceError() {
+  return new Error(
+    [
+      'PMHQ QQ config mount source is required for managed host LLBot runtime.',
+      `Set QQBOT_QQ_CONFIG_MOUNT_SOURCE or make podman inspect resolve ${PMHQ_QQ_CONFIG_DESTINATION}.`,
+      'When LLBot HOME is isolated, QQBOT_HOST_HOME must point to the real host user home for rootless Podman.',
+    ].join(' '),
+  );
+}
+
 function patchLlbotMediaPathResolution({ runtimeDir, qqConfigMountSource }) {
   const sourceDir = String(qqConfigMountSource || '').trim();
   if (!sourceDir) {
-    return false;
+    throw requiredPmhqMountSourceError();
   }
 
   const entrypointPath = path.join(runtimeDir, ENTRYPOINT_FILE);
@@ -200,11 +210,18 @@ function disableWebUIAuthMiddleware({ runtimeDir, dataDir, disableAuth }) {
 function resolvePmhqQqConfigMountSource({
   containerName = process.env.QQBOT_PMHQ_CONTAINER_NAME || 'pmhq',
   spawnImpl = spawnSync,
+  env = process.env,
 } = {}) {
+  const podmanEnv = { ...env };
+  const hostHome = String(env.QQBOT_HOST_HOME || '').trim();
+  if (hostHome) {
+    podmanEnv.HOME = hostHome;
+  }
+
   const inspect = spawnImpl(
     'podman',
     ['inspect', containerName, '--format', '{{json .Mounts}}'],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', env: podmanEnv },
   );
 
   if (inspect.status !== 0 || !inspect.stdout.trim()) {
@@ -220,18 +237,43 @@ function resolvePmhqQqConfigMountSource({
   }
 }
 
+function resolveRequiredPmhqQqConfigMountSource(
+  env = process.env,
+  options = {},
+) {
+  const explicitSource = String(env.QQBOT_QQ_CONFIG_MOUNT_SOURCE || '').trim();
+  const resolvedSource = explicitSource || resolvePmhqQqConfigMountSource({
+    ...options,
+    containerName: options.containerName || env.QQBOT_PMHQ_CONTAINER_NAME || 'pmhq',
+    env,
+  });
+  const sourceDir = String(resolvedSource || '').trim();
+  if (!sourceDir) {
+    throw requiredPmhqMountSourceError();
+  }
+
+  const absoluteSourceDir = path.resolve(sourceDir);
+  if (!fs.existsSync(absoluteSourceDir)) {
+    throw new Error(`PMHQ QQ config mount source does not exist: ${absoluteSourceDir}`);
+  }
+  return absoluteSourceDir;
+}
+
 async function ensureQqConfigBridge({
   runtimeDir,
   homeDir = path.join(runtimeDir, '.host-home'),
   qqConfigMountSource = '',
   now = new Date(),
 } = {}) {
-  const sourceInput = String(qqConfigMountSource || '').trim() || resolvePmhqQqConfigMountSource();
-  const sourceDir = sourceInput ? path.resolve(sourceInput) : '';
+  const sourceInput = String(qqConfigMountSource || '').trim();
+  if (!sourceInput) {
+    throw requiredPmhqMountSourceError();
+  }
+  const sourceDir = path.resolve(sourceInput);
   const bridgeHomeDir = path.resolve(homeDir);
 
-  if (!sourceDir || !fs.existsSync(sourceDir)) {
-    return { bridgeHomeDir, qqConfigMountSource: '', linked: false };
+  if (!fs.existsSync(sourceDir)) {
+    throw new Error(`PMHQ QQ config mount source does not exist: ${sourceDir}`);
   }
 
   const configDir = path.join(bridgeHomeDir, '.config');
@@ -371,9 +413,7 @@ async function prepareManagedRuntime(env = process.env) {
 
   await prepareRuntimeVersion({ runtimeDir, version });
   await ensureRuntimeDataLink(runtimeDir, dataDir);
-  const qqConfigMountSource = String(
-    env.QQBOT_QQ_CONFIG_MOUNT_SOURCE || resolvePmhqQqConfigMountSource(),
-  ).trim();
+  const qqConfigMountSource = resolveRequiredPmhqQqConfigMountSource(env);
   patchLlbotMediaPathResolution({
     runtimeDir,
     qqConfigMountSource,
@@ -432,6 +472,7 @@ module.exports = {
   fetchReleaseZip,
   patchLlbotMediaPathResolution,
   resolvePmhqQqConfigMountSource,
+  resolveRequiredPmhqQqConfigMountSource,
   normalizeTruthy,
   prepareManagedRuntime,
   prepareRuntimeVersion,

@@ -12,6 +12,8 @@ const {
   patchLlbotMediaPathResolution,
   prepareManagedRuntime,
   prepareRuntimeVersion,
+  resolvePmhqQqConfigMountSource,
+  resolveRequiredPmhqQqConfigMountSource,
   rewritePmhqMediaPath,
 } = require('../scripts/lib/llbot-runtime.cjs');
 
@@ -45,6 +47,50 @@ describe('llbot host runtime helpers', () => {
         '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
       ),
     ).toBe('/tmp/not-qq/test.png');
+  });
+
+  it('inspects pmhq through the real host home when llbot home is isolated', () => {
+    const spawnImpl = vi.fn((_command: string, _args: string[], options: { env: NodeJS.ProcessEnv }) => {
+      expect(options.env.HOME).toBe('/home/qqbot');
+      return {
+        status: 0,
+        stdout: JSON.stringify([
+          {
+            Destination: '/root/.config/QQ',
+            Source: '/home/qqbot/.local/share/containers/storage/volumes/qqbot-stack_qq_volume/_data',
+          },
+        ]),
+      };
+    });
+
+    expect(
+      resolvePmhqQqConfigMountSource({
+        spawnImpl,
+        env: {
+          HOME: '/opt/qqbot/shared/llbot-runtime/.host-home',
+          QQBOT_HOST_HOME: '/home/qqbot',
+        },
+      }),
+    ).toBe('/home/qqbot/.local/share/containers/storage/volumes/qqbot-stack_qq_volume/_data');
+    expect(spawnImpl).toHaveBeenCalledWith(
+      'podman',
+      ['inspect', 'pmhq', '--format', '{{json .Mounts}}'],
+      expect.objectContaining({
+        env: expect.objectContaining({ HOME: '/home/qqbot' }),
+      }),
+    );
+  });
+
+  it('fails fast when the pmhq qq volume cannot be resolved', () => {
+    const spawnImpl = vi.fn(() => ({ status: 125, stdout: '' }));
+
+    expect(() => resolveRequiredPmhqQqConfigMountSource(
+      {
+        HOME: '/opt/qqbot/shared/llbot-runtime/.host-home',
+        QQBOT_HOST_HOME: '/home/qqbot',
+      },
+      { spawnImpl },
+    )).toThrow(/PMHQ QQ config mount source is required/);
   });
 
   it('downloads and extracts the requested llbot version on first prepare', async () => {

@@ -23,6 +23,12 @@ export LLONEBOT_WEBUI_PORT="${LLONEBOT_WEBUI_PORT:-3080}"
 export LLONEBOT_WS_PORT="${LLONEBOT_WS_PORT:-3001}"
 export LLONEBOT_DISABLE_WEBUI_AUTH="${LLONEBOT_DISABLE_WEBUI_AUTH:-true}"
 export PMHQ_PORT="${PMHQ_PORT:-13000}"
+
+HOST_HOME="${QQBOT_HOST_HOME:-${HOME:-}}"
+if [ -z "${HOST_HOME}" ]; then
+  HOST_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
+fi
+export QQBOT_HOST_HOME="${HOST_HOME}"
 export HOME="${LLBOT_RUNTIME_DIR}/.host-home"
 
 node "${ROOT_DIR}/scripts/lib/llbot-runtime.cjs" prepare

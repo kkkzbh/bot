@@ -399,7 +399,8 @@ pnpm runtime:check
 - `llonebot` runtime data must live in an environment-specific directory (`LLONEBOT_DATA_DIR`), not in the deploy payload. Local default is `./.runtime/llonebot`; server default is `/opt/qqbot/shared/llonebot`.
 - Extracted LLBot program files must live in `LLBOT_RUNTIME_DIR`. Local default is `./.runtime/llbot`; server default is `/opt/qqbot/shared/llbot-runtime`.
 - On every boot, `scripts/run-llbot-host.sh` prepares the upstream release, rewrites the managed transport fields in both `default_config.json` and each `config_*.json`, patches LLBot media-path resolution from `/root/.config/QQ/...` into the host PMHQ QQ volume, and keeps WebUI / forward-WS / token repo-controlled while account login state remains environment-local.
-- `QQBOT_QQ_CONFIG_MOUNT_SOURCE` is an optional override for the PMHQ QQ volume path when `podman inspect pmhq` cannot be used to resolve it automatically.
+- `scripts/run-llbot-host.sh` captures the real host home in `QQBOT_HOST_HOME` before isolating LLBot `HOME`; rootless Podman inspection must use the real host home so local and server deployments resolve the same PMHQ QQ volume contract.
+- `QQBOT_QQ_CONFIG_MOUNT_SOURCE` is the explicit PMHQ QQ volume path override when `podman inspect pmhq` cannot resolve it automatically. Managed LLBot startup fails fast if neither path can be resolved.
 - `PMHQ_BIND_HOST` only controls how `pmhq` is exposed to the host; it does not participate in container-to-container addressing.
 - Server runtime may keep `AUTO_LOGIN_QQ` enabled for normal quick-login boot.
 - One QQ account should have exactly one active quick-login edge at a time. If laptop-local and server both set the same `AUTO_LOGIN_QQ`, expect one side to wedge into `登录系统连接异常`, stale QR state, or broken quick-login.
@@ -524,7 +525,7 @@ Common issues:
 - Image sends fail with `reply plan delivery failed ... retcode: 1200`:
   - Check `/opt/qqbot/shared/llonebot/logs/llbot-*.log` for `copyfile ... -> /root/.config/QQ/... ENOENT`.
   - If present, PMHQ returned a container-internal QQ media path that was not rewritten to the host PMHQ volume path before `llbot` copied the file.
-  - The managed host runtime is expected to rewrite `/root/.config/QQ/...` into the resolved Podman QQ volume source; if that rewrite is missing or the bundle patch fails, treat it as a runtime prepare regression instead of a Koishi/CF/image-generation problem.
+  - The managed host runtime must rewrite `/root/.config/QQ/...` into the resolved Podman QQ volume source during LLBot prepare; if that rewrite is missing or the bundle patch fails, treat it as a runtime prepare regression instead of a Koishi/CF/image-generation problem.
 - Service not started after reboot: confirm `systemctl --user is-enabled qqbot.target` and `loginctl show-user kkkzbh | grep Linger`.
 - Host logs grow too quickly:
   - deploy installs `/etc/systemd/journald.conf.d/qqbot.conf` plus a root timer `qqbot-log-maintenance.timer` when `sudo -n` is available
