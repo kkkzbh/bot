@@ -192,6 +192,42 @@ describe('research reply history compatibility', () => {
     ]);
   });
 
+  it('strips legacy qqbot assistant control headers from loaded ai history', async () => {
+    const { history } = await createChatHistory({
+      conversationId: 'conv-legacy-assistant-marker',
+      latestId: 'msg-ai-legacy',
+      messages: [
+        {
+          id: 'msg-human-legacy',
+          role: 'human',
+          parent: null,
+          conversation: 'conv-legacy-assistant-marker',
+          content: encodeStoredContent('你之前是怎么回复的'),
+        },
+        {
+          id: 'msg-ai-legacy',
+          role: 'ai',
+          parent: 'msg-human-legacy',
+          conversation: 'conv-legacy-assistant-marker',
+          content: encodeStoredContent('[assistant_message mentions=["1405359129"]] [mention:1405359129] 查到了。'),
+        },
+      ],
+    });
+
+    await history.loadConversation();
+    const visibleMessages = await history.getMessages();
+
+    expect(
+      visibleMessages.map((message: { getType: () => string; content: unknown }) => ({
+        role: message.getType(),
+        content: message.content,
+      })),
+    ).toEqual([
+      { role: 'human', content: '你之前是怎么回复的' },
+      { role: 'ai', content: '查到了。' },
+    ]);
+  });
+
   it('appends the next human message to the normalized ai tail instead of the deleted tool chain', async () => {
     const { history, database } = await createChatHistory({
       conversationId: 'conv-2',

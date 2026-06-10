@@ -189,7 +189,7 @@ describe('buildReplyOutputContract', () => {
     );
   });
 
-  it('routes siliconflow and non-responses Copilot models to chat completions json_schema', () => {
+  it('routes schema-capable providers to json_schema and text-only Copilot models to CHAT_REPLY_V1', () => {
     expect(
       buildReplyOutputContract({
         model: 'Pro/moonshotai/Kimi-K2.5',
@@ -257,6 +257,24 @@ describe('buildReplyOutputContract', () => {
       overrideRequestParams: {
         qqbot_canonical_model: 'openai/gemini-3.1-pro-preview',
         qqbot_transport_model: 'gemini-3.1-pro-preview',
+      },
+    });
+  });
+
+  it('routes DeepSeek chat completions through the plain text reply protocol', () => {
+    expect(
+      buildReplyOutputContract({
+        model: 'deepseek/deepseek-v4-flash',
+      }),
+    ).toMatchObject({
+      requestMode: 'chat_completions',
+      protocol: 'chat_reply_v1',
+      schema: null,
+      instruction: expect.stringContaining('CHAT_REPLY_V1 <nonce>'),
+      overrideRequestParams: {
+        qqbot_canonical_model: 'deepseek/deepseek-v4-flash',
+        qqbot_transport_model: 'deepseek-v4-flash',
+        qqbot_tool_profile: 'qqbot_openai_main_chat',
       },
     });
   });
@@ -492,7 +510,7 @@ describe('resolveMainChatRuntimeProfileFromEnv', () => {
       provider: 'deepseek',
       strategyId: 'deepseek-official-main-chat',
       requestMode: 'chat_completions',
-      structuredOutputProtocol: 'native_chat_json_schema',
+      structuredOutputProtocol: 'chat_reply_v1',
       baseUrl: 'https://api.deepseek.com',
       defaultModel: 'deepseek/deepseek-v4-pro',
       canonicalModel: 'deepseek/deepseek-v4-pro',
@@ -555,6 +573,7 @@ describe('syncRoomModelToMainChatRuntime', () => {
       transportModel: 'claude-haiku-4.5',
       strategyId: 'copilot-github-oauth-main-chat',
       requestMode: 'chat_completions',
+      outputProtocol: 'chat_reply_v1',
     });
     expect(room.model).toBe('openai/claude-haiku-4.5');
     expect(clearCache).toHaveBeenCalledWith(room);

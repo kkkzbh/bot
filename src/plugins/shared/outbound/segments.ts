@@ -365,11 +365,10 @@ export function renderMessageVisibleText(message: { content: string; mentions?: 
 export function renderModelFacingMessageText(message: { content: string; mentions?: string[] }): string {
   const mentions = normalizeMessageMentionIds(message.mentions);
   const content = sanitizeStructuredReplyText(message.content, 'message');
-  if (!mentions.length) {
+  if (content || !mentions.length) {
     return content;
   }
-  const prefix = `[assistant_message mentions=${JSON.stringify(mentions)}]`;
-  return content ? `${prefix} ${content}` : prefix;
+  return `（提及用户：${mentions.join('、')}）`;
 }
 
 export function createMentionMessageContent(

@@ -414,9 +414,12 @@ describe('message send utils', () => {
     ]);
   });
 
-  it('renders model-facing mention history as structured metadata instead of @ text', () => {
+  it('renders model-facing mention history without protocol-looking control tags', () => {
     expect(renderModelFacingMessageText({ content: '现在有 4 条任务。', mentions: ['123456', '234567'] })).toBe(
-      '[assistant_message mentions=["123456","234567"]] 现在有 4 条任务。',
+      '现在有 4 条任务。',
+    );
+    expect(renderModelFacingMessageText({ content: '', mentions: ['123456', '234567'] })).toBe(
+      '（提及用户：123456、234567）',
     );
     expect(renderModelFacingMessageText({ content: '今晚先这样吧', mentions: [] })).toBe('今晚先这样吧');
   });
@@ -427,7 +430,7 @@ describe('message send utils', () => {
       expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: ' 先问下这件事。' }) }),
     ]);
     expect(renderModelFacingMessageText({ content: '先问下这件事。', mentions: ['123456', '123456'] })).toBe(
-      '[assistant_message mentions=["123456"]] 先问下这件事。',
+      '先问下这件事。',
     );
   });
 

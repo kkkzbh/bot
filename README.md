@@ -62,7 +62,7 @@ endpoint preset:
 - `siliconflow` uses the existing `chat/completions` main-chat path, locks the official SiliconFlow endpoint, and applies the Kimi-specific non-thinking override
 - `openai` uses the OpenAI-compatible GPT-5.4 strategy, currently pinned to `chat/completions` + `response_format` structured output for provider compatibility
 - `copilot` uses GitHub device-flow OAuth, exchanges GitHub token into a short-lived Copilot session token at runtime, and routes ChatLuna through the local bridge to either `responses` or `chat/completions` based on the selected Copilot model
-- `deepseek` uses DeepSeek's official `/models` endpoint for its dropdown when a key is available, then falls back to the official static model list without adding local variants
+- `deepseek` uses DeepSeek's official `/models` endpoint for its dropdown and routes replies through `chat/completions` + the `CHAT_REPLY_V1` plain-text protocol, because DeepSeek does not support this bot's native `response_format` JSON schema contract
 - `mimo` uses the MIMO `/models` endpoint when a key is available, then filters the result to the verified chat/completions allowlist so TTS models never become main-chat options
 
 ## Developer docs (web)

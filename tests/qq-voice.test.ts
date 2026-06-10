@@ -1435,7 +1435,7 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-mention' }),
-      '[assistant_message mentions=["123456"]] 先问下这件事。',
+      '先问下这件事。',
     );
   });
 
@@ -1487,7 +1487,7 @@ describe('qq voice plugin', () => {
     ]);
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-handwritten-mention' }),
-      '[assistant_message mentions=["123456"]] 先问下这件事。',
+      '先问下这件事。',
     );
   });
 
@@ -1538,7 +1538,7 @@ describe('qq voice plugin', () => {
     ]);
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-mention-only' }),
-      '[assistant_message mentions=["123456"]]',
+      '（提及用户：123456）',
     );
   });
 

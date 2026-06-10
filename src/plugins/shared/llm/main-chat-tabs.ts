@@ -501,15 +501,15 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       return 'chat_completions';
     },
     resolveStructuredOutputProtocol() {
-      return 'native_chat_json_schema';
+      return 'chat_reply_v1';
     },
     describeForConsole(model) {
       const option = getDeepSeekOfficialModelOption(model);
       return {
-        description: '当前按 DeepSeek 官方 OpenAI 兼容接口接入，模型下拉优先从官方 /models 动态拉取，失败时使用官方文档兜底列表。',
+        description: '当前按 DeepSeek 官方 OpenAI 兼容接口接入，走 chat/completions + CHAT_REPLY_V1 纯文本结构化协议。',
         modelHint: option
-          ? `当前选择 ${formatDeepSeekModelOptionLabel(option)}。`
-          : '当前固定从 DeepSeek 官方模型列表选择，发给 provider 的模型 ID 保持官方原始字符串。',
+          ? `当前选择 ${formatDeepSeekModelOptionLabel(option)}；DeepSeek 不使用 response_format/json_schema。`
+          : '当前固定从 DeepSeek 官方模型列表选择，发给 provider 的模型 ID 保持官方原始字符串；输出走纯文本协议。',
       };
     },
   },
