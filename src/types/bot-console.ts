@@ -183,6 +183,8 @@ export interface BotConsoleMemoryUserItem {
   userKey: string;
   platform: string | null;
   userId: string | null;
+  qqNick: string | null;
+  avatarUrl: string | null;
   label: string;
   factCount: number;
   episodeCount: number;

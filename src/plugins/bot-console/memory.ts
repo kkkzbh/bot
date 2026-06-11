@@ -34,8 +34,14 @@ function parseJsonArray(raw: string | null | undefined): string[] {
   }
 }
 
-function userLabel(row: Pick<MemoryUserRecord, 'userKey' | 'userId'>): string {
-  return row.userId ? `用户 ${row.userId}` : row.userKey;
+function normalizeOptionalText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function userLabel(row: Pick<MemoryUserRecord, 'userKey' | 'userId' | 'qqNick'>): string {
+  return normalizeOptionalText(row.qqNick) ?? (row.userId ? `用户 ${row.userId}` : row.userKey || '未知用户');
 }
 
 function toFactItem(row: MemoryFactRecord): BotConsoleMemoryFactItem {
@@ -159,6 +165,8 @@ function buildUserItems(input: {
       userKey: user.userKey,
       platform: user.platform ?? null,
       userId: user.userId ?? null,
+      qqNick: normalizeOptionalText(user.qqNick),
+      avatarUrl: normalizeOptionalText(user.avatarUrl),
       label: userLabel(user),
       factCount: 0,
       episodeCount: 0,
@@ -176,7 +184,9 @@ function buildUserItems(input: {
       userKey,
       platform: userKey.split(':')[0] || null,
       userId: userKey.split(':').at(-1) ?? null,
-      label: userKey,
+      qqNick: null,
+      avatarUrl: null,
+      label: userKey || '未知用户',
       factCount: 0,
       episodeCount: 0,
       pendingReviewCount: 0,

@@ -102,6 +102,12 @@ export interface MemoryDatabaseLike {
   remove(table: string, query: Record<string, unknown>): Promise<unknown>;
 }
 
+export interface MemoryUserProfilePatch {
+  qqNick?: string | null;
+  avatarUrl?: string | null;
+  profileUpdatedAt?: number | null;
+}
+
 const logger = {
   warn: (...args: unknown[]) => {
     void args;
@@ -426,15 +432,22 @@ function jobKey(jobType: MemoryJobType, payload: MemoryJobPayload): string {
 export class MemoryStore {
   constructor(private readonly database: MemoryDatabaseLike) {}
 
-  async upsertAddress(address: MemoryAddress): Promise<void> {
+  async upsertAddress(address: MemoryAddress, profile: MemoryUserProfilePatch | null = null): Promise<void> {
     const [user] = await this.database.get('memory_user', { userKey: address.userKey });
+    const profilePatch: Record<string, unknown> = {};
+    if (profile?.qqNick != null) profilePatch.qqNick = profile.qqNick;
+    if (profile?.avatarUrl != null) profilePatch.avatarUrl = profile.avatarUrl;
+    if (profile?.profileUpdatedAt != null) profilePatch.profileUpdatedAt = profile.profileUpdatedAt;
     if (user?.id) {
-      await this.database.set('memory_user', { id: user.id }, { lastSeenAt: address.observedAt });
+      await this.database.set('memory_user', { id: user.id }, { lastSeenAt: address.observedAt, ...profilePatch });
     } else {
       await this.database.create('memory_user', {
         userKey: address.userKey,
         platform: address.platform,
         userId: address.userId,
+        qqNick: profile?.qqNick ?? null,
+        avatarUrl: profile?.avatarUrl ?? null,
+        profileUpdatedAt: profile?.profileUpdatedAt ?? null,
         firstSeenAt: address.observedAt,
         lastSeenAt: address.observedAt,
         readEnabled: 1,

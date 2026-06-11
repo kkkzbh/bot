@@ -604,6 +604,9 @@ describe('bot-console plugin', () => {
                 userKey: 'onebot:user:10001',
                 platform: 'onebot',
                 userId: '10001',
+                qqNick: '小嘉',
+                avatarUrl: 'https://q.qlogo.cn/headimg_dl?dst_uin=10001&spec=100',
+                profileUpdatedAt: 11,
                 firstSeenAt: 1,
                 lastSeenAt: 12,
                 readEnabled: 1,
@@ -729,7 +732,9 @@ describe('bot-console plugin', () => {
     expect(result.users).toEqual([
       expect.objectContaining({
         userKey: 'onebot:user:10001',
-        label: '用户 10001',
+        label: '小嘉',
+        qqNick: '小嘉',
+        avatarUrl: 'https://q.qlogo.cn/headimg_dl?dst_uin=10001&spec=100',
       }),
     ]);
     expect(result.jobs).toEqual([

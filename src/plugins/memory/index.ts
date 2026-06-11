@@ -1,7 +1,7 @@
 import { Context, Logger, Schema, type Session } from 'koishi';
 import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
 import { consumePromptEnvelope, registerPromptFragment } from '../shared/prompt-context/index.js';
-import { resolveSessionDisplayName } from '../shared/session/index.js';
+import { resolveSessionAvatarUrl, resolveSessionDisplayName, resolveSessionQqNick } from '../shared/session/index.js';
 import { buildMemoryAddress, type MemoryMiddlewareContextLike } from './address.js';
 import { DEFAULT_EMBED_BASE_URL, type MemoryRuntimeConfig } from './config.js';
 import { registerMemoryCommands } from './commands.js';
@@ -291,7 +291,11 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
 
-        await store.upsertAddress(address);
+        await store.upsertAddress(address, {
+          qqNick: resolveSessionQqNick(session),
+          avatarUrl: resolveSessionAvatarUrl(session),
+          profileUpdatedAt: address.observedAt,
+        });
         const flags = await store.getUserFlags(address.userKey);
         if (runtime.writeEnabled && flags.writeEnabled) {
           await store.queueExtractJob({

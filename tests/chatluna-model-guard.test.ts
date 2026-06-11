@@ -21,7 +21,7 @@ import {
 } from '../src/plugins/shared/llm/reply-output-contract.js';
 import { mainChatRuntimeState } from '../src/plugins/shared/llm/main-chat-runtime.js';
 import { syncRoomModelToMainChatRuntime } from '../src/plugins/model-guard/hot-switch.js';
-import { resolveSessionDisplayName } from '../src/plugins/shared/session/index.js';
+import { deriveOneBotAvatarUrl, resolveSessionAvatarUrl, resolveSessionDisplayName, resolveSessionQqNick } from '../src/plugins/shared/session/index.js';
 
 afterEach(() => {
   mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({}));
@@ -653,6 +653,48 @@ describe('chatluna user turn handling', () => {
         userId: '123456',
       }),
     ).toBe('123456');
+  });
+
+  it('resolves QQ nickname without letting group card override it', () => {
+    expect(
+      resolveSessionQqNick({
+        author: { nick: '群名片', name: 'QQ昵称' },
+        username: '平台昵称',
+        userId: '123456',
+      }),
+    ).toBe('QQ昵称');
+    expect(
+      resolveSessionQqNick({
+        author: { nick: '群名片', name: '' },
+        username: '平台昵称',
+        userId: '123456',
+      }),
+    ).toBe('平台昵称');
+    expect(
+      resolveSessionQqNick({
+        author: { nick: '群名片', name: '' },
+        username: '',
+        userId: '123456',
+      }),
+    ).toBe('123456');
+  });
+
+  it('resolves onebot avatar from session and falls back to qlogo', () => {
+    expect(resolveSessionAvatarUrl({
+      platform: 'onebot',
+      userId: '123456',
+      event: { user: { avatar: 'https://example.com/event.png' } },
+      author: { avatar: 'https://example.com/author.png' },
+    })).toBe('https://example.com/event.png');
+    expect(resolveSessionAvatarUrl({
+      platform: 'onebot',
+      userId: '123456',
+      author: { avatar: 'https://example.com/author.png' },
+    })).toBe('https://example.com/author.png');
+    expect(resolveSessionAvatarUrl({ platform: 'onebot', userId: '123456' })).toBe(
+      'https://q.qlogo.cn/headimg_dl?dst_uin=123456&spec=100',
+    );
+    expect(deriveOneBotAvatarUrl('abc')).toBeNull();
   });
 
   it('treats mention-only or punctuation-only turns as proactive openings', () => {

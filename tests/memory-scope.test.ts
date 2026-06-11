@@ -268,4 +268,32 @@ describe('memory scoped memory behavior', () => {
     await store.setUserFlags(directAddress.userKey, { readEnabled: false, writeEnabled: true });
     expect(await store.getUserFlags(directAddress.userKey)).toEqual({ readEnabled: false, writeEnabled: true });
   });
+
+  it('upserts per-user QQ profile fields without disturbing flags', async () => {
+    const db = new MemoryDbMock();
+    const store = new MemoryStore(db as any);
+
+    await store.upsertAddress(directAddress, {
+      qqNick: '旧昵称',
+      avatarUrl: 'https://q.qlogo.cn/headimg_dl?dst_uin=10001&spec=100',
+      profileUpdatedAt: 1,
+    });
+    await store.setUserFlags(directAddress.userKey, { writeEnabled: false });
+    await store.upsertAddress({ ...directAddress, observedAt: 20 }, {
+      qqNick: '新昵称',
+      avatarUrl: 'https://example.com/avatar.png',
+      profileUpdatedAt: 20,
+    });
+
+    expect(db.tables.memory_user).toHaveLength(1);
+    expect(db.tables.memory_user[0]).toMatchObject({
+      userKey: directAddress.userKey,
+      qqNick: '新昵称',
+      avatarUrl: 'https://example.com/avatar.png',
+      profileUpdatedAt: 20,
+      lastSeenAt: 20,
+      readEnabled: 1,
+      writeEnabled: 0,
+    });
+  });
 });

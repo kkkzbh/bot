@@ -7,7 +7,21 @@ describe('bot-console memory state', () => {
     const database = {
       get: async (table: string) => {
         if (table === 'memory_user') {
-          return [{ id: 1, userKey: 'onebot:user:10001', platform: 'onebot', userId: '10001', firstSeenAt: 1, lastSeenAt: 10, readEnabled: 1, writeEnabled: 1 }];
+          return [
+            {
+              id: 1,
+              userKey: 'onebot:user:10001',
+              platform: 'onebot',
+              userId: '10001',
+              qqNick: '小嘉',
+              avatarUrl: 'https://q.qlogo.cn/headimg_dl?dst_uin=10001&spec=100',
+              profileUpdatedAt: 9,
+              firstSeenAt: 1,
+              lastSeenAt: 10,
+              readEnabled: 1,
+              writeEnabled: 1,
+            },
+          ];
         }
         if (table === 'memory_context') return [];
         if (table === 'memory_fact') {
@@ -68,9 +82,38 @@ describe('bot-console memory state', () => {
     });
     expect(state.users[0]).toMatchObject({
       userKey: 'onebot:user:10001',
+      label: '小嘉',
+      qqNick: '小嘉',
+      avatarUrl: 'https://q.qlogo.cn/headimg_dl?dst_uin=10001&spec=100',
       factCount: 1,
       pendingReviewCount: 1,
     });
     expect(state.recentFailures).toEqual(['extract: boom']);
+  });
+
+  it('falls back for legacy memory users without profile fields', async () => {
+    const database = {
+      get: async (table: string) => {
+        if (table === 'memory_user') {
+          return [{ id: 1, userKey: 'onebot:user:10002', platform: 'onebot', userId: '10002', firstSeenAt: 1, lastSeenAt: 10, readEnabled: 1, writeEnabled: 1 }];
+        }
+        if (table === 'memory_context') return [];
+        if (table === 'memory_fact') return [];
+        if (table === 'memory_episode') return [];
+        if (table === 'memory_candidate') return [];
+        if (table === 'memory_job') return [];
+        if (table === 'memory_audit_event') return [];
+        if (table === 'memory_provenance') return [];
+        return [];
+      },
+    };
+
+    const state = await buildMemoryState(database, createUnavailableMemoryStatusSnapshot({ available: true }));
+    expect(state.users[0]).toMatchObject({
+      userKey: 'onebot:user:10002',
+      label: '用户 10002',
+      qqNick: null,
+      avatarUrl: null,
+    });
   });
 });

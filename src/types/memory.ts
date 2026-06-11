@@ -78,6 +78,9 @@ export interface MemoryUserRecord {
   userKey: string;
   platform: string;
   userId: string;
+  qqNick?: string | null;
+  avatarUrl?: string | null;
+  profileUpdatedAt?: number | null;
   firstSeenAt: number;
   lastSeenAt: number;
   readEnabled: number;
