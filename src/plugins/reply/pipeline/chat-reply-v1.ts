@@ -169,10 +169,16 @@ export class ChatReplyV1Parser {
           block = null;
           continue;
         }
-        if (!line.startsWith('|')) {
-          throw parseError('PAYLOAD_LINE_WITHOUT_PIPE', lineNumber, line, 'Payload lines must start with |.');
+        if (isBlank(line)) {
+          block.payloads.get(block.activePayload)!.push('');
+          continue;
         }
-        block.payloads.get(block.activePayload)!.push(line.slice(1));
+        if (line.startsWith('|')) {
+          block.payloads.get(block.activePayload)!.push(line.slice(1));
+          continue;
+        }
+
+        block.payloads.get(block.activePayload)!.push(line);
         continue;
       }
 

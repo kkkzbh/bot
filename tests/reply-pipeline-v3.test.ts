@@ -566,19 +566,133 @@ describe('reply pipeline v3', () => {
         outbound_messages: [{ type: 'message', content: '收到。', mentions: [] }],
       },
       actions: [{ kind: 'message', content: '收到。', mentions: [] }],
-    });
-  });
-
-  it('classifies invalid CHAT_REPLY_V1 output separately from invalid JSON', () => {
-    const compiler = new StructuredReplyCompilerService(
-      [
-        'CHAT_REPLY_V1 abc12345',
+      assistantHistoryText: [
+        'CHAT_REPLY_V1 history',
         'DECISION reply',
         'BEGIN message',
         'MENTIONS none',
         'CONTENT',
-        'missing pipe',
+        '|收到。',
         'END',
+        'DONE history',
+      ].join('\n'),
+    });
+  });
+
+  it('compiles CHAT_REPLY_V1 text protocol with bare blank payload lines from chat models', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+
+    await expect(
+      orchestrator.handle(createTurnInput('我的性格是怎样的？'), {} as never, {
+        routeHint: 'agent',
+        outputProtocol: 'chat_reply_v1',
+        responseMessage: {
+          content: [
+            'CHAT_REPLY_V1 a1b2c3d4',
+            'DECISION reply',
+            'BEGIN message',
+            'MENTIONS none',
+            'CONTENT',
+            '|你——急性子，嘴快，爱挑刺，但也知道什么时候该收手。',
+            '',
+            '|对技术话题有热情，喜欢刨根问底，不会满足于敷衍的答案。',
+            '',
+            '|不算坏人。',
+            'END',
+            'DONE a1b2c3d4',
+          ].join('\n'),
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: 'ready',
+      reply: {
+        decision: 'reply',
+        outbound_messages: [
+          {
+            type: 'message',
+            content: [
+              '你——急性子，嘴快，爱挑刺，但也知道什么时候该收手。',
+              '',
+              '对技术话题有热情，喜欢刨根问底，不会满足于敷衍的答案。',
+              '',
+              '不算坏人。',
+            ].join('\n'),
+            mentions: [],
+          },
+        ],
+      },
+    });
+  });
+
+  it('rejects plain-text CHAT_REPLY_V1 misses instead of repairing them into natural-language history', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+    const plainText = [
+      '就是日语里的"你好"。最简单的打招呼。',
+      '',
+      '她大概是因为我刚说了偶尔会说日语，就用日语打了声招呼。',
+    ].join('\n');
+
+    await expect(
+      orchestrator.handle(createTurnInput('他说那句话是什么意思啊'), {} as never, {
+        routeHint: 'agent',
+        outputProtocol: 'chat_reply_v1',
+        responseMessage: {
+          content: plainText,
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: 'StructuredReplyCompilerError',
+      diagnostic: expect.objectContaining({
+        failureKind: 'invalid_text_protocol',
+        outputProtocol: 'chat_reply_v1',
+        protocolErrorCode: 'MISSING_HEADER',
+      }),
+    });
+  });
+
+  it('compiles CHAT_REPLY_V1 output even when payload paragraph lines are not pipe-prefixed', () => {
+    const compiler = new StructuredReplyCompilerService(
+      [
+        'CHAT_REPLY_V1 history',
+        'DECISION reply',
+        'BEGIN message',
+        'MENTIONS none',
+        'CONTENT',
+        '|篮球……国一？',
+        '',
+        '这问题问得没头没脑的。我对篮球没什么兴趣，也不清楚你指的是哪个所谓"国一"。',
+        '',
+        '如果你是想讨论体育话题，建议你找别人。不过如果是和音乐或演出相关的事，我倒可以听听。',
+        'END',
+        'DONE history',
+      ].join('\n'),
+      { outputProtocol: 'chat_reply_v1' },
+    );
+
+    expect(compiler.compile()).toEqual({
+      decision: 'reply',
+      outbound_messages: [
+        {
+          type: 'message',
+          mentions: [],
+          content: [
+            '篮球……国一？',
+            '',
+            '这问题问得没头没脑的。我对篮球没什么兴趣，也不清楚你指的是哪个所谓"国一"。',
+            '',
+            '如果你是想讨论体育话题，建议你找别人。不过如果是和音乐或演出相关的事，我倒可以听听。',
+          ].join('\n'),
+        },
+      ],
+    });
+  });
+
+  it('does not repair partial CHAT_REPLY_V1 protocol fragments as plain text', () => {
+    const compiler = new StructuredReplyCompilerService(
+      [
+        'hello',
+        'CHAT_REPLY_V1 abc12345',
+        'DECISION no_reply',
         'DONE abc12345',
       ].join('\n'),
       { outputProtocol: 'chat_reply_v1' },
@@ -591,7 +705,7 @@ describe('reply pipeline v3', () => {
       expect((error as StructuredReplyCompilerError).diagnostic).toMatchObject({
         failureKind: 'invalid_text_protocol',
         outputProtocol: 'chat_reply_v1',
-        protocolErrorCode: 'PAYLOAD_LINE_WITHOUT_PIPE',
+        protocolErrorCode: 'MISSING_HEADER',
       });
     }
   });

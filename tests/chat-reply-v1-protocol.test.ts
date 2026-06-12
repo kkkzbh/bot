@@ -80,6 +80,60 @@ describe('CHAT_REPLY_V1 protocol', () => {
     });
   });
 
+  it('tolerates bare blank payload lines as empty content lines', () => {
+    expect(parser.parse([
+      'CHAT_REPLY_V1 abc12345',
+      'DECISION reply',
+      'BEGIN message',
+      'MENTIONS none',
+      'CONTENT',
+      '|第一段',
+      '',
+      '|第二段',
+      '   ',
+      '|第三段',
+      'END',
+      'DONE abc12345',
+    ].join('\n'))).toEqual({
+      decision: 'reply',
+      outbound_messages: [
+        { type: 'message', mentions: [], content: '第一段\n\n第二段\n\n第三段' },
+      ],
+    });
+  });
+
+  it('treats bare non-control payload lines as content so model paragraph slips do not break a turn', () => {
+    expect(parser.parse([
+      'CHAT_REPLY_V1 history',
+      'DECISION reply',
+      'BEGIN message',
+      'MENTIONS none',
+      'CONTENT',
+      '|篮球……国一？',
+      '',
+      '这问题问得没头没脑的。我对篮球没什么兴趣，也不清楚你指的是哪个所谓"国一"。',
+      '',
+      '如果你是想讨论体育话题，建议你找别人。不过如果是和音乐或演出相关的事，我倒可以听听。',
+      'END',
+      'DONE history',
+    ].join('\n'))).toEqual({
+      decision: 'reply',
+      outbound_messages: [
+        {
+          type: 'message',
+          mentions: [],
+          content: [
+            '篮球……国一？',
+            '',
+            '这问题问得没头没脑的。我对篮球没什么兴趣，也不清楚你指的是哪个所谓"国一"。',
+            '',
+            '如果你是想讨论体育话题，建议你找别人。不过如果是和音乐或演出相关的事，我倒可以听听。',
+          ].join('\n'),
+        },
+      ],
+    });
+  });
+
   it('round-trips generated protocol text', () => {
     const original = {
       decision: 'reply' as const,
@@ -118,7 +172,6 @@ describe('CHAT_REPLY_V1 protocol', () => {
     ['NONCE_MISMATCH', 'CHAT_REPLY_V1 abc12345\nDECISION no_reply\nDONE zzz99999'],
     ['UNKNOWN_COMMAND', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nhello\nDONE abc12345'],
     ['UNKNOWN_BLOCK_TYPE', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nBEGIN poll\nEND\nDONE abc12345'],
-    ['PAYLOAD_LINE_WITHOUT_PIPE', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nBEGIN message\nMENTIONS none\nCONTENT\nhello\nEND\nDONE abc12345'],
     ['DUPLICATE_FIELD', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nBEGIN message\nMENTIONS none\nMENTIONS none\nCONTENT\n|hi\nEND\nDONE abc12345'],
     ['UNTERMINATED_BLOCK', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nBEGIN message\nMENTIONS none\nDONE abc12345'],
     ['TRAILING_TEXT_AFTER_DONE', 'CHAT_REPLY_V1 abc12345\nDECISION no_reply\nDONE abc12345\nextra'],

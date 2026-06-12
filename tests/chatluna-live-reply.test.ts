@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { describe, expect, it, vi } from 'vitest';
+import { ChatReplyV1Parser } from '../src/plugins/reply/pipeline/chat-reply-v1.js';
 import { resolveChatlunaCoreImportUrl, resolveChatlunaSourceRoot } from './helpers/chatluna-paths.js';
 
 vi.mock('koishi-plugin-chatluna', () => ({
@@ -31,6 +32,7 @@ vi.mock('koishi-plugin-chatluna/utils/string', async () => {
 
 type TableName = 'chathub_conversation' | 'chathub_message';
 type Row = Record<string, any>;
+type SimplifiedHistoryMessage = { role: string; content: string };
 
 function encodeStoredContent(text: string): ArrayBuffer {
   const buffer = gzipSync(Buffer.from(JSON.stringify(text), 'utf8'));
@@ -92,7 +94,7 @@ class MemoryDatabase {
   }
 }
 
-function createHistory(args: { conversationId: string; latestId: string; messages: Row[] }) {
+function createHistory(args: { conversationId: string; latestId: string | null; messages: Row[] }) {
   const database = new MemoryDatabase({
     conversations: [{ id: args.conversationId, latestId: args.latestId, updatedAt: new Date(0) }],
     messages: args.messages,
@@ -104,7 +106,7 @@ function createHistory(args: { conversationId: string; latestId: string; message
   return { ctx, database };
 }
 
-async function createChatHistory(args: { conversationId: string; latestId: string; messages: Row[] }) {
+async function createChatHistory(args: { conversationId: string; latestId: string | null; messages: Row[] }) {
   const { ctx, database } = createHistory(args);
   const historyModule = (await import(resolveChatlunaCoreImportUrl('lib/llm-core/memory/message/index.cjs'))) as {
     KoishiChatMessageHistory: new (ctx: unknown, conversationId: string, maxMessagesCount: number) => any;
@@ -127,7 +129,117 @@ function normalizeHistory(history: {
   return normalize(finalVisibleText, updatedAt);
 }
 
+function encodeChatReplyV1History(content: string): string {
+  return [
+    'CHAT_REPLY_V1 history',
+    'DECISION reply',
+    'BEGIN message',
+    'MENTIONS none',
+    'CONTENT',
+    ...content.split('\n').map((line) => `|${line}`),
+    'END',
+    'DONE history',
+  ].join('\n');
+}
+
 describe('research reply history compatibility', () => {
+  it('keeps assistant history protocol-shaped across five consecutive reply turns', async () => {
+    const { history } = await createChatHistory({
+      conversationId: 'conv-five-chat-reply-v1-turns',
+      latestId: null,
+      messages: [],
+    });
+
+    for (let turn = 1; turn <= 5; turn += 1) {
+      await history.addUserMessage(`第 ${turn} 轮用户消息`);
+      const assistantHistoryText = encodeChatReplyV1History(`第 ${turn} 轮回复\n继续保持协议历史`);
+      const result = await normalizeHistory(
+        history,
+        assistantHistoryText,
+        new Date(`2026-06-12T09:2${turn}:00.000Z`),
+      );
+
+      expect(result.normalizedText).toBe(assistantHistoryText);
+    }
+
+    const messages = await history.getMessages();
+    const simplified: SimplifiedHistoryMessage[] = messages.map((message: { getType: () => string; content: unknown }) => ({
+      role: message.getType(),
+      content: String(message.content),
+    }));
+
+    expect(simplified).toHaveLength(10);
+    expect(simplified.map((message) => message.role)).toEqual([
+      'human',
+      'ai',
+      'human',
+      'ai',
+      'human',
+      'ai',
+      'human',
+      'ai',
+      'human',
+      'ai',
+    ]);
+
+    const assistantMessages = simplified.filter((message) => message.role === 'ai');
+    expect(assistantMessages).toHaveLength(5);
+    expect(assistantMessages.every((message) => message.content.startsWith('CHAT_REPLY_V1 history\n'))).toBe(true);
+    expect(assistantMessages.some((message) => /^第 \d+ 轮回复$/u.test(message.content.trim()))).toBe(false);
+  });
+
+  it('keeps real chat history protocol-shaped when the third of five CHAT_REPLY_V1 turns has bare payload paragraphs', async () => {
+    const { history } = await createChatHistory({
+      conversationId: 'conv-five-chat-reply-v1-turns-with-payload-slip',
+      latestId: null,
+      messages: [],
+    });
+    const rawOutputs = [
+      ['CHAT_REPLY_V1 abc12341', 'DECISION reply', 'BEGIN message', 'MENTIONS none', 'CONTENT', '|第 1 轮回复', 'END', 'DONE abc12341'].join('\n'),
+      ['CHAT_REPLY_V1 abc12342', 'DECISION reply', 'BEGIN message', 'MENTIONS none', 'CONTENT', '|第 2 轮回复', 'END', 'DONE abc12342'].join('\n'),
+      [
+        'CHAT_REPLY_V1 history',
+        'DECISION reply',
+        'BEGIN message',
+        'MENTIONS none',
+        'CONTENT',
+        '|篮球……国一？',
+        '',
+        '这问题问得没头没脑的。我对篮球没什么兴趣，也不清楚你指的是哪个所谓"国一"。',
+        '',
+        '如果你是想讨论体育话题，建议你找别人。不过如果是和音乐或演出相关的事，我倒可以听听。',
+        'END',
+        'DONE history',
+      ].join('\n'),
+      ['CHAT_REPLY_V1 abc12344', 'DECISION reply', 'BEGIN message', 'MENTIONS none', 'CONTENT', '|第 4 轮回复', 'END', 'DONE abc12344'].join('\n'),
+      ['CHAT_REPLY_V1 abc12345', 'DECISION reply', 'BEGIN message', 'MENTIONS none', 'CONTENT', '|第 5 轮回复', 'END', 'DONE abc12345'].join('\n'),
+    ];
+
+    for (let turn = 1; turn <= rawOutputs.length; turn += 1) {
+      await history.addUserMessage(`第 ${turn} 轮用户消息`);
+      const reply = new ChatReplyV1Parser().parse(rawOutputs[turn - 1]!);
+      const content = reply.outbound_messages?.map((message) => {
+        if (message.type === 'image') return message.alt;
+        return message.content;
+      }).join('\n') ?? '';
+      await normalizeHistory(
+        history,
+        encodeChatReplyV1History(content),
+        new Date(`2026-06-12T09:3${turn}:00.000Z`),
+      );
+    }
+
+    const messages = await history.getMessages();
+    const assistantMessages = messages
+      .filter((message: { getType: () => string }) => message.getType() === 'ai')
+      .map((message: { content: unknown }) => String(message.content));
+
+    expect(assistantMessages).toHaveLength(5);
+    expect(assistantMessages.every((content: string) => content.startsWith('CHAT_REPLY_V1 history\n'))).toBe(true);
+    expect(assistantMessages[2]).toContain('|篮球……国一？\n|\n|这问题问得没头没脑的。');
+    expect(assistantMessages.some((content: string) => content.includes('\n这问题问得没头没脑的。'))).toBe(false);
+  });
+
   it('collapses a legacy ai tool-call tail into one normalized ai message', async () => {
     const { history, database } = await createChatHistory({
       conversationId: 'conv-1',

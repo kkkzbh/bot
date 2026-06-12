@@ -451,6 +451,53 @@ function createReplyV2Response(input: string | Record<string, unknown>) {
   };
 }
 
+function encodeExpectedChatReplyV1History(content: string): string {
+  return [
+    'CHAT_REPLY_V1 history',
+    'DECISION reply',
+    'BEGIN message',
+    'MENTIONS none',
+    'CONTENT',
+    ...content.split('\n').map((line) => `|${line}`),
+    'END',
+    'DONE history',
+  ].join('\n');
+}
+
+function createChatReplyV1Response(content: string, nonce: string) {
+  return {
+    content: [
+      `CHAT_REPLY_V1 ${nonce}`,
+      'DECISION reply',
+      'BEGIN message',
+      'MENTIONS none',
+      'CONTENT',
+      ...content.split('\n').map((line) => `|${line}`),
+      'END',
+      `DONE ${nonce}`,
+    ].join('\n'),
+    additional_kwargs: {},
+  };
+}
+
+function createRawChatReplyV1Response(lines: string[]) {
+  return {
+    content: lines.join('\n'),
+    additional_kwargs: {},
+  };
+}
+
+function expectedStructuredAssistantHistory(input: string | Record<string, unknown>): string {
+  const reply =
+    typeof input === 'string'
+      ? {
+          decision: 'reply',
+          outbound_messages: [{ type: 'message', content: input, mentions: [] }],
+        }
+      : input;
+  return JSON.stringify(reply);
+}
+
 function extractSchemaMessageTitles(schema: Record<string, any> | undefined): string[] {
   const rawMessageSchemas = schema?.properties?.outbound_messages?.anyOf?.find((item: any) => item.items?.anyOf)?.items?.anyOf ?? [];
   return rawMessageSchemas.flatMap((item: any) => (Array.isArray(item.anyOf) ? item.anyOf : [item])).map((item: any) => item.title).filter(Boolean);
@@ -1142,6 +1189,63 @@ describe('qq voice plugin', () => {
     expect(extractSchemaMessageTitles(groupSchema)).toContain('MessageItem');
   });
 
+  it('keeps CHAT_REPLY_V1 rules in the agent system envelope and final response contract', async () => {
+    const profile = resolveMainChatRuntimeProfileFromEnv({
+      CHATLUNA_ACTIVE_TAB: 'deepseek',
+      CHATLUNA_DEEPSEEK_DEFAULT_MODEL: 'deepseek-v4-pro',
+    });
+    mainChatRuntimeState.initialize(profile);
+    const { ready, getPrepare, getPolicy, getPromptCompiler, bot, inject } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const prepare = getPrepare();
+    const policy = getPolicy();
+    const promptCompiler = getPromptCompiler();
+    const session = createSession(bot, {
+      content: '我的性格是怎样的？',
+      strippedContent: '我的性格是怎样的？',
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-chat-reply-v1', { model: 'deepseek/deepseek-v4-pro' }),
+        inputMessage: {
+          content: '我的性格是怎样的？',
+          additional_kwargs: {},
+        },
+      },
+    };
+
+    await prepare?.(session, context);
+    await policy?.(session, context);
+    await promptCompiler?.(session, context);
+
+    expect(inject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'qqbot_reply_prompt_envelope',
+        conversationId: 'conv-chat-reply-v1',
+        value: expect.arrayContaining([
+          expect.objectContaining({
+            role: 'system',
+            content: expect.stringContaining('CHAT_REPLY_V1 <nonce>'),
+          }),
+        ]),
+      }),
+    );
+    expect(context.options.inputMessage.additional_kwargs).toEqual(
+      expect.objectContaining({
+        qqbot_reply_mode: 'agent',
+        qqbot_final_response_contract: expect.objectContaining({
+          protocol: 'chat_reply_v1',
+          schema: null,
+          instruction: expect.stringContaining('CHAT_REPLY_V1 <nonce>'),
+        }),
+      }),
+    );
+  });
+
   it('removes mention modality from the injected schema for private chats', async () => {
     const { ready, getPrepare, getPolicy, getPromptCompiler, bot } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
@@ -1341,7 +1445,7 @@ describe('qq voice plugin', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('executes a text structured reply through the executor and normalizes the tail to visible text', async () => {
+  it('executes a text structured reply through the executor and normalizes the tail to structured history', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -1376,8 +1480,186 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-text' }),
-      '今晚先这样吧',
+      expectedStructuredAssistantHistory('今晚先这样吧'),
     );
+  });
+
+  it('keeps CHAT_REPLY_V1 assistant history as protocol text after executor delivery', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '普通聊聊',
+      strippedContent: '普通聊聊',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-chat-reply-v1'),
+        inputMessage: {
+          content: '普通聊聊',
+          additional_kwargs: {
+            qqbot_final_response_contract: {
+              protocol: 'chat_reply_v1',
+            },
+          },
+        },
+        responseMessage: {
+          content: [
+            'CHAT_REPLY_V1 abc12345',
+            'DECISION reply',
+            'BEGIN message',
+            'MENTIONS none',
+            'CONTENT',
+            '|今晚先这样吧',
+            'END',
+            'DONE abc12345',
+          ].join('\n'),
+          additional_kwargs: {},
+        },
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(typeof result).toBe('number');
+    expect(extractSentMessagePayloads(bot)).toEqual(['今晚先这样吧']);
+    expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-chat-reply-v1' }),
+      [
+        'CHAT_REPLY_V1 history',
+        'DECISION reply',
+        'BEGIN message',
+        'MENTIONS none',
+        'CONTENT',
+        '|今晚先这样吧',
+        'END',
+        'DONE history',
+      ].join('\n'),
+    );
+  });
+
+  it('keeps CHAT_REPLY_V1 assistant history protocol-shaped across five consecutive executor turns', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+    vi.useFakeTimers();
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const turnResponses = [
+      {
+        visible: '第 1 轮回复',
+        response: createChatReplyV1Response('第 1 轮回复', 'abc12341'),
+      },
+      {
+        visible: '第 2 轮回复',
+        response: createChatReplyV1Response('第 2 轮回复', 'abc12342'),
+      },
+      {
+        visible: [
+          '篮球……国一？',
+          '',
+          '这问题问得没头没脑的。我对篮球没什么兴趣，也不清楚你指的是哪个所谓"国一"。',
+          '',
+          '如果你是想讨论体育话题，建议你找别人。不过如果是和音乐或演出相关的事，我倒可以听听。',
+        ].join('\n'),
+        response: createRawChatReplyV1Response([
+          'CHAT_REPLY_V1 history',
+          'DECISION reply',
+          'BEGIN message',
+          'MENTIONS none',
+          'CONTENT',
+          '|篮球……国一？',
+          '',
+          '这问题问得没头没脑的。我对篮球没什么兴趣，也不清楚你指的是哪个所谓"国一"。',
+          '',
+          '如果你是想讨论体育话题，建议你找别人。不过如果是和音乐或演出相关的事，我倒可以听听。',
+          'END',
+          'DONE history',
+        ]),
+      },
+      {
+        visible: '第 4 轮回复',
+        response: createChatReplyV1Response('第 4 轮回复', 'abc12344'),
+      },
+      {
+        visible: '第 5 轮回复',
+        response: createChatReplyV1Response('第 5 轮回复', 'abc12345'),
+      },
+    ];
+
+    for (let turn = 1; turn <= 5; turn += 1) {
+      const current = turnResponses[turn - 1]!;
+      const session = createSession(bot, {
+        content: `第 ${turn} 轮用户消息`,
+        strippedContent: `第 ${turn} 轮用户消息`,
+        messageId: `msg-${turn}`,
+        state: {
+          qqReplyTransport: {
+            capabilitySnapshot: {
+              canMultiline: true,
+              canVoice: false,
+              source: 'cached',
+              refreshedAt: Date.now(),
+            },
+          },
+        },
+      });
+      const context = {
+        options: {
+          room: createPluginRoom('conv-five-executor-chat-reply-v1-turns'),
+          inputMessage: {
+            content: `第 ${turn} 轮用户消息`,
+            additional_kwargs: {
+              qqbot_final_response_contract: {
+                protocol: 'chat_reply_v1',
+              },
+            },
+          },
+          responseMessage: current.response,
+        },
+      };
+
+      const pending = executor?.(session, context);
+      await vi.runAllTimersAsync();
+      const result = await pending;
+      expect(typeof result).toBe('number');
+      expect(context.options.responseMessage).toBeNull();
+    }
+
+    expect(extractSentMessagePayloads(bot)).toEqual([
+      '第 1 轮回复',
+      '第 2 轮回复',
+      '篮球……国一？',
+      '这问题问得没头没脑的。我对篮球没什么兴趣，也不清楚你指的是哪个所谓"国一"。',
+      '如果你是想讨论体育话题，建议你找别人。不过如果是和音乐或演出相关的事，我倒可以听听。',
+      '第 4 轮回复',
+      '第 5 轮回复',
+    ]);
+    expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledTimes(5);
+    for (let turn = 1; turn <= 5; turn += 1) {
+      expect(chatluna.normalizeResearchReplyHistory).toHaveBeenNthCalledWith(
+        turn,
+        expect.objectContaining({ conversationId: 'conv-five-executor-chat-reply-v1-turns' }),
+        encodeExpectedChatReplyV1History(turnResponses[turn - 1]!.visible),
+      );
+    }
+    expect(loggerMocks.error.mock.calls.some(([message]) => String(message).includes('reply plan executor suppressed structured model failure'))).toBe(false);
   });
 
   it('stops chatluna fallback when onebot rpc transport is unavailable during executor send', async () => {
@@ -1471,7 +1753,16 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-mention' }),
-      '先问下这件事。',
+      expectedStructuredAssistantHistory({
+        decision: 'reply',
+        outbound_messages: [
+          {
+            type: 'message',
+            content: '先问下这件事。',
+            mentions: ['123456'],
+          },
+        ],
+      }),
     );
   });
 
@@ -1523,7 +1814,16 @@ describe('qq voice plugin', () => {
     ]);
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-handwritten-mention' }),
-      '先问下这件事。',
+      expectedStructuredAssistantHistory({
+        decision: 'reply',
+        outbound_messages: [
+          {
+            type: 'message',
+            content: '先问下这件事。',
+            mentions: ['123456'],
+          },
+        ],
+      }),
     );
   });
 
@@ -1574,7 +1874,16 @@ describe('qq voice plugin', () => {
     ]);
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-mention-only' }),
-      '（提及用户：123456）',
+      expectedStructuredAssistantHistory({
+        decision: 'reply',
+        outbound_messages: [
+          {
+            type: 'message',
+            content: '',
+            mentions: ['123456'],
+          },
+        ],
+      }),
     );
   });
 
@@ -1739,7 +2048,7 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage.content).toBe('这个话题我不方便在群里展开，换个别的吧。');
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-sensitive' }),
-      '这个话题我不方便在群里展开，换个别的吧。',
+      expectedStructuredAssistantHistory('这个话题我不方便在群里展开，换个别的吧。'),
     );
   });
 
@@ -1795,7 +2104,10 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-voice' }),
-      '（发送语音：收到。）',
+      expectedStructuredAssistantHistory({
+        decision: 'reply',
+        outbound_messages: [{ type: 'voice', content: '收到。' }],
+      }),
     );
   });
 
@@ -1946,7 +2258,13 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-sticker' }),
-      '……随你\n（发送表情包：无语少女）',
+      expectedStructuredAssistantHistory({
+        decision: 'reply',
+        outbound_messages: [
+          { type: 'message', content: '……随你', mentions: [] },
+          { type: 'meme', content: '无语地看对方一眼' },
+        ],
+      }),
     );
   });
 
@@ -2079,7 +2397,7 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-1' }),
-      'echo hi\npwd',
+      expectedStructuredAssistantHistory('echo hi\npwd'),
     );
   });
 
@@ -2132,7 +2450,14 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-structured-multiline' }),
-      '先看这个清单。\n- 牛奶\n- 面包\n照着买。',
+      expectedStructuredAssistantHistory({
+        decision: 'reply',
+        outbound_messages: [
+          { type: 'message', content: '先看这个清单。', mentions: [] },
+          { type: 'structured_block', content: '- 牛奶\n- 面包' },
+          { type: 'message', content: '照着买。', mentions: [] },
+        ],
+      }),
     );
   });
 
@@ -2223,7 +2548,7 @@ describe('qq voice plugin', () => {
   });
 
   it('silently suppresses plain-text outputs and logs the invalid JSON classification', async () => {
-    const { ready, getExecutor, bot } = createHarness();
+    const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
     await ready();
@@ -2256,12 +2581,72 @@ describe('qq voice plugin', () => {
     expect(typeof result).toBe('number');
     expect(bot.sendMessage).not.toHaveBeenCalled();
     expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-rerun' }),
+      '',
+    );
     expect(loggerMocks.warn.mock.calls.some(([message]) => String(message).includes('reply-plan-debug'))).toBe(false);
     expect(
       hasStructuredFailureLog({
         conversationId: 'conv-rerun',
         messageId: 'msg-invalid-json',
         failureKind: 'invalid_structured_json',
+      }),
+    ).toBe(true);
+  });
+
+  it('cleans the saved raw AI tail when CHAT_REPLY_V1 models answer in plain text', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '祥 评价一下刘若希',
+      strippedContent: '祥 评价一下刘若希',
+      messageId: 'msg-chat-reply-v1-plain-text',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-chat-reply-v1-plain-text'),
+        inputMessage: {
+          content: '祥 评价一下刘若希',
+          additional_kwargs: {
+            qqbot_final_response_contract: {
+              protocol: 'chat_reply_v1',
+            },
+          },
+        },
+        responseMessage: createRawReplyResponse('我印象里没见过这个人。附件记录里倒是有她的几张图片，但没跟她说过话，无从评价。'),
+      },
+    };
+
+    const result = await executor?.(session, context);
+
+    expect(typeof result).toBe('number');
+    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-chat-reply-v1-plain-text' }),
+      '',
+    );
+    expect(
+      hasStructuredFailureLog({
+        conversationId: 'conv-chat-reply-v1-plain-text',
+        messageId: 'msg-chat-reply-v1-plain-text',
+        failureKind: 'invalid_text_protocol',
       }),
     ).toBe(true);
   });

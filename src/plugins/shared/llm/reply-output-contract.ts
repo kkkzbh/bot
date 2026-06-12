@@ -58,7 +58,7 @@ export function buildChatReplyV1OutputContractLines(): string[] {
     '- `DECISION no_reply` 后只能输出 `DONE <nonce>`。',
     '- `DECISION reply` 必须至少输出一个 `BEGIN ... END` block。',
     '- `BEGIN message` 后推荐立刻写 `MENTIONS none`；只有确实需要 @ 用户时才写数字 ID 列表。若省略 `MENTIONS`，系统会按 `none` 处理。',
-    '- payload 内容行必须以 `|` 开头；裸 `END` 才结束 block。内容里需要写 END/DONE/BEGIN 时也必须写成 `|END`、`|DONE ...`、`|BEGIN ...`。',
+    '- payload 内容行必须以 `|` 开头；空行也写成单独的 `|`，不要输出裸空行。裸 `END` 才结束 block。内容里需要写 END/DONE/BEGIN 时也必须写成 `|END`、`|DONE ...`、`|BEGIN ...`。',
     'no_reply 示例：',
     ['CHAT_REPLY_V1 abc12345', 'DECISION no_reply', 'DONE abc12345'].join('\n'),
     'message 示例：',

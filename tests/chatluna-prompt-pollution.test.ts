@@ -129,6 +129,7 @@ describe('chatluna prompt pollution regression', () => {
     expect(executorSource).toContain("type: 'json_schema'");
     expect(executorSource).toContain('buildFinalResponseOverrideRequestParams');
     expect(executorSource).toContain('mergeFinalResponseInstructionAfterUserMessage');
+    expect(executorSource).toContain('new SystemMessage(normalizedInstruction)');
     expect(executorSource).not.toContain('buildFinalResponseMessage');
     expect(executorSource).not.toContain("tool_choice: 'none'");
     expect(executorSource).not.toContain('finalResponseMode');
