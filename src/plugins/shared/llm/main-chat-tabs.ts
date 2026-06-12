@@ -747,6 +747,7 @@ export function buildReplyOutputContract(args: {
   canMention?: boolean;
   canVoice?: boolean;
   canMeme?: boolean;
+  voiceOutputLanguage?: import('../voice/language.js').VoiceOutputLanguage;
 }): MainChatReplyOutputContract {
   const strategy = args.profile
     ? getMainChatProviderStrategy(args.profile.strategyId)
@@ -761,6 +762,7 @@ export function buildReplyOutputContract(args: {
     canMention: args.canMention,
     canVoice: args.canVoice,
     canMeme: args.canMeme,
+    voiceOutputLanguage: args.voiceOutputLanguage,
   });
 }
 

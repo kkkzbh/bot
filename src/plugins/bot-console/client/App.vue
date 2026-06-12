@@ -11,6 +11,7 @@ import FeaturesPanel from './components/panels/FeaturesPanel.vue'
 import ToolPolicyPanel from './components/panels/ToolPolicyPanel.vue'
 import MemoryPanel from './components/panels/MemoryPanel.vue'
 import ModelsPanel from './components/panels/ModelsPanel.vue'
+import TtsPanel from './components/panels/TtsPanel.vue'
 import BasicPanel from './components/panels/BasicPanel.vue'
 import PresetsPanel from './components/panels/PresetsPanel.vue'
 
@@ -40,6 +41,7 @@ const TABS = [
   { id: 'tools', label: '工具控制' },
   { id: 'memory', label: '长期记忆' },
   { id: 'models',   label: '模型接口' },
+  { id: 'tts',      label: 'TTS 语音' },
   { id: 'basic',    label: '基础配置' },
   { id: 'presets',  label: '角色预设' },
 ] as const
@@ -52,6 +54,7 @@ const panelMap: Record<string, Component> = {
   tools: ToolPolicyPanel,
   memory: MemoryPanel,
   models:   ModelsPanel,
+  tts:      TtsPanel,
   basic:    BasicPanel,
   presets:  PresetsPanel,
 }

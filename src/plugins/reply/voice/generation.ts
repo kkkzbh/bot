@@ -18,7 +18,9 @@ import {
   extractTextContentWithoutVoice,
   isVoiceInputRuntimeAvailable,
   mergeVoiceInputText,
+  normalizeVoiceOutputLanguage,
   transcribeAudio,
+  type VoiceOutputLanguage,
 } from '../../shared/voice/index.js';
 import {
   buildOutboundMessagePlanFromReplyPlan,
@@ -114,6 +116,7 @@ export interface Config {
   inputMaxSeconds?: number;
   outputMaxWords?: number;
   outputMaxSeconds?: number;
+  voiceOutputLanguage?: string;
   transcribeTimeoutMs?: number;
   synthTimeoutMs?: number;
   replyInterruptCollectWindowMs?: number;
@@ -130,6 +133,7 @@ export const Config: Schema<Config> = Schema.object({
   inputMaxSeconds: Schema.natural().default(60).description('单条入站语音最大时长（秒）。'),
   outputMaxWords: Schema.natural().default(80).description('单个语音段最大词数。'),
   outputMaxSeconds: Schema.natural().default(45).description('单个语音段最大时长（秒）。'),
+  voiceOutputLanguage: Schema.string().default('zh').description('模型生成语音回复文本的目标语言：zh、ja、en 或 auto。'),
   transcribeTimeoutMs: Schema.natural().role('time').default(30000).description('ASR 请求超时（毫秒）。'),
   synthTimeoutMs: Schema.natural().role('time').default(300000).description('TTS 请求超时（毫秒）。'),
   replyInterruptCollectWindowMs: Schema.natural().role('time').default(400).description('回复中断聚合窗口（毫秒）。'),
@@ -146,6 +150,7 @@ export interface RuntimeConfig {
   inputMaxSeconds: number;
   outputMaxWords: number;
   outputMaxSeconds: number;
+  voiceOutputLanguage: VoiceOutputLanguage;
   transcribeTimeoutMs: number;
   synthTimeoutMs: number;
   replyInterruptCollectWindowMs: number;
@@ -163,6 +168,7 @@ type ReplyCapabilitySource = 'cached' | 'probed';
 export interface ReplyCapabilitySnapshot {
   canMultiline: true;
   canVoice: boolean;
+  voiceOutputLanguage: VoiceOutputLanguage;
   source: ReplyCapabilitySource;
   refreshedAt: number;
 }
@@ -367,6 +373,7 @@ function toRuntimeConfig(config: Config): RuntimeConfig {
     inputMaxSeconds: clampNatural(config.inputMaxSeconds ?? process.env.QQ_VOICE_INPUT_MAX_SECONDS, 60),
     outputMaxWords: clampNatural(config.outputMaxWords ?? process.env.QQ_VOICE_OUTPUT_MAX_WORDS, 80),
     outputMaxSeconds: clampNatural(config.outputMaxSeconds ?? process.env.QQ_VOICE_OUTPUT_MAX_SECONDS, 45),
+    voiceOutputLanguage: normalizeVoiceOutputLanguage(config.voiceOutputLanguage ?? process.env.QQ_VOICE_OUTPUT_LANGUAGE),
     transcribeTimeoutMs: clampNatural(
       config.transcribeTimeoutMs ?? process.env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS,
       30_000,
@@ -893,6 +900,7 @@ export function buildTurnCapabilitySnapshot(session: SessionWithVoiceState, snap
     canMultiline: snapshot.canMultiline,
     canMention: canSessionUseMention(session),
     canVoice: snapshot.canVoice,
+    voiceOutputLanguage: snapshot.voiceOutputLanguage,
     canSticker: stickerAvailableCount > 0,
     stickerAvailableCount,
     source: snapshot.source,
@@ -927,7 +935,7 @@ export function applyReplyOutputContract(
   inputMessage: NonNullable<MiddlewareContextLike['options']>['inputMessage'] | undefined,
   options: {
     replyMode?: 'agent' | 'automation';
-    capabilitySnapshot?: Pick<NonNullable<TurnContext['capabilitySnapshot']>, 'canMention' | 'canVoice' | 'canSticker'> | null;
+    capabilitySnapshot?: Pick<NonNullable<TurnContext['capabilitySnapshot']>, 'canMention' | 'canVoice' | 'canSticker' | 'voiceOutputLanguage'> | null;
     replyOutputContract?: MainChatReplyOutputContract;
   } = {},
 ): MainChatReplyOutputContract | null {
@@ -940,6 +948,7 @@ export function applyReplyOutputContract(
     canMention: options.capabilitySnapshot?.canMention !== false,
     canVoice: options.capabilitySnapshot?.canVoice !== false,
     canMeme: options.capabilitySnapshot?.canSticker === true,
+    voiceOutputLanguage: options.capabilitySnapshot?.voiceOutputLanguage,
   });
   const overrideRequestParams = mergeReplyOverrideRequestParams(inputMessage.additional_kwargs, replyOutputContract.overrideRequestParams);
   const replyMode = options.replyMode ?? 'agent';
@@ -1254,6 +1263,7 @@ export async function resolveReplyCapabilitySnapshot(args: {
   const snapshot: ReplyCapabilitySnapshot = {
     canMultiline: true,
     canVoice: false,
+    voiceOutputLanguage: runtime.voiceOutputLanguage,
     source: 'cached',
     refreshedAt: Date.now(),
   };
@@ -1935,6 +1945,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const schemaCapabilitySnapshot = {
           canMention: canSessionUseMention(session),
           canVoice: turnCapabilitySnapshot?.canVoice ?? false,
+          voiceOutputLanguage: runtime.voiceOutputLanguage,
           canSticker: turnCapabilitySnapshot?.canSticker ?? false,
         };
         const replyOutputContract = buildReplyOutputContract({
@@ -1943,6 +1954,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           canMention: schemaCapabilitySnapshot.canMention,
           canVoice: schemaCapabilitySnapshot.canVoice,
           canMeme: schemaCapabilitySnapshot.canSticker,
+          voiceOutputLanguage: schemaCapabilitySnapshot.voiceOutputLanguage,
         });
         injectReplyPromptEnvelope({
           chatluna: chatlunaService,

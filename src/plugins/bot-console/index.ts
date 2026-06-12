@@ -40,9 +40,13 @@ import type {
   SaveFeatureOverridesResponse,
   SaveModelTabsRequest,
   SaveModelTabsResponse,
+  SaveTtsSettingsRequest,
+  SaveTtsSettingsResponse,
   SaveToolOverridesRequest,
   SaveToolOverridesResponse,
   ServiceAction,
+  SynthesizeTtsSampleRequest,
+  SynthesizeTtsSampleResponse,
 } from '../../types/bot-console.js';
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
 import type { MemoryStatusServiceLike } from '../../types/memory.js';
@@ -136,6 +140,7 @@ async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager
     },
     runtimeStatus: {
       memory,
+      tts: state.tts.health,
     },
   };
 }
@@ -334,6 +339,42 @@ export function apply(ctx: Context): void {
       }
       const env = await manager.saveEnv(patch);
       return { env, restartRequired: true };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/save-tts-settings',
+    async (payload: SaveTtsSettingsRequest): Promise<SaveTtsSettingsResponse> => {
+      const record = ensureRecord(payload);
+      return manager.saveTtsSettings({
+        botEnv: record.botEnv && typeof record.botEnv === 'object' && !Array.isArray(record.botEnv)
+          ? record.botEnv as SaveTtsSettingsRequest['botEnv']
+          : {},
+        localEnv: record.localEnv && typeof record.localEnv === 'object' && !Array.isArray(record.localEnv)
+          ? record.localEnv as SaveTtsSettingsRequest['localEnv']
+          : {},
+      });
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/probe-tts-health',
+    async () => {
+      return { health: await manager.probeTtsHealth() };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/synthesize-tts-sample',
+    async (payload: SynthesizeTtsSampleRequest): Promise<SynthesizeTtsSampleResponse> => {
+      const record = ensureRecord(payload);
+      return manager.synthesizeTtsSample({
+        text: String(record.text ?? ''),
+        style: record.style === 'black' ? 'black' : 'white',
+      });
     },
     { authority: LISTENER_AUTHORITY },
   );

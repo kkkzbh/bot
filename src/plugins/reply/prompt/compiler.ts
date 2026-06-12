@@ -9,6 +9,7 @@ import {
   buildReplySemanticContractLines,
   type ReplyOutputProtocol,
 } from '../../shared/llm/reply-output-contract.js';
+import type { VoiceOutputLanguage } from '../../shared/voice/language.js';
 import { type TurnContext } from '../pipeline/types.js';
 
 export interface ReplyPromptCompilerInput {
@@ -86,11 +87,12 @@ const CONTEXT_INTERPRETATION_FRAGMENT = createPromptTextFragment(
 
 export function buildReplyStructuredReplyContractFragments(options: {
   outputProtocol?: ReplyOutputProtocol;
+  voiceOutputLanguage?: VoiceOutputLanguage;
 } = {}): PromptFragment[] {
   const outputProtocol = options.outputProtocol ?? 'native_chat_json_schema';
   const outputLines = outputProtocol === 'chat_reply_v1'
-    ? buildChatReplyV1OutputContractLines()
-    : buildNativeJsonOutputContractLines();
+    ? buildChatReplyV1OutputContractLines({ voiceOutputLanguage: options.voiceOutputLanguage })
+    : buildNativeJsonOutputContractLines({ voiceOutputLanguage: options.voiceOutputLanguage });
 
   return [
     createPromptTextFragment(
@@ -99,7 +101,7 @@ export function buildReplyStructuredReplyContractFragments(options: {
       'runtime_contract',
       'sticky',
       [
-        ...buildReplySemanticContractLines(),
+        ...buildReplySemanticContractLines({ voiceOutputLanguage: options.voiceOutputLanguage }),
         '',
         ...outputLines,
       ].join('\n'),
@@ -109,6 +111,7 @@ export function buildReplyStructuredReplyContractFragments(options: {
 
 export function buildReplyRuntimeContractFragments(options: {
   outputProtocol?: ReplyOutputProtocol;
+  voiceOutputLanguage?: VoiceOutputLanguage;
 } = {}): PromptFragment[] {
   return [
     CONTEXT_INTERPRETATION_FRAGMENT,
@@ -142,9 +145,13 @@ export function buildReplyPromptCompilerInput(
   workingContext: PromptFragment[],
   options: { outputProtocol?: ReplyOutputProtocol } = {},
 ): ReplyPromptCompilerInput {
+  const voiceOutputLanguage = turnContext.capabilitySnapshot?.voiceOutputLanguage;
   return {
     persona: [PERSONA_INVARIANT_FRAGMENT],
-    runtimeContract: buildReplyRuntimeContractFragments(options),
+    runtimeContract: buildReplyRuntimeContractFragments({
+      ...options,
+      voiceOutputLanguage,
+    }),
     workingContext: [
       ...workingContext,
       ...buildReplyCapabilityPromptFragments(turnContext),

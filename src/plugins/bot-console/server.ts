@@ -22,6 +22,9 @@ import type {
   BotConsoleModelOption,
   BotConsoleModelTabId,
   BotConsoleModelTabsState,
+  BotConsoleTtsHealthSnapshot,
+  BotConsoleTtsState,
+  BotConsoleTtsStyleId,
   BotServiceStatus,
   BotServiceUnit,
   CopilotModelListResponse,
@@ -34,6 +37,10 @@ import type {
   PresetSource,
   PresetSummary,
   SaveModelTabsRequest,
+  SaveTtsSettingsRequest,
+  SaveTtsSettingsResponse,
+  SynthesizeTtsSampleRequest,
+  SynthesizeTtsSampleResponse,
   ServiceAction,
 } from '../../types/bot-console.js';
 import {
@@ -57,6 +64,18 @@ import {
   type MainChatRequestMode,
   type OutputProtocolId,
 } from '../shared/llm/index.js';
+import {
+  applyTtsLocalEnvPatchToContent,
+  buildTtsLocalGatewayState,
+  createUnknownTtsHealth,
+  createUnreachableTtsHealth,
+  mergeTtsLocalEnvRecords,
+  parseTtsHealthPayload,
+  parseWavInfo,
+  readTtsLocalEnvPatchFromContent,
+  resolveConfiguredTtsBaseUrl,
+  resolveTtsEnvFilePath,
+} from './tts.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -89,6 +108,7 @@ type BotConsoleManagerOptions = {
   envFilePath?: string;
   envBaseFilePath?: string;
   envOverrideFilePath?: string;
+  ttsEnvFilePath?: string;
   presetDirPath?: string;
   runtimePresetDirPath?: string;
   bundledPresetDirPaths?: string[];
@@ -108,6 +128,7 @@ type BotConsoleStaticState = {
   presets: PresetSummary[];
   defaultPreset: string;
   modelTabs: BotConsoleModelTabsState;
+  tts: BotConsoleTtsState;
 };
 
 type CopilotBridgeRuntimeConfig = {
@@ -162,6 +183,12 @@ export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
   { key: 'QQBOT_REALTIME_MESSAGE_ENABLED', label: '实时消息', type: 'toggle', section: 'features' },
   { key: 'QQ_VOICE_INPUT_ENABLED', label: '语音转文字', type: 'toggle', section: 'features' },
   { key: 'QQ_VOICE_OUTPUT_ENABLED', label: '语音回复', type: 'toggle', section: 'features' },
+  { key: 'QQ_VOICE_TTS_BASE_URL', label: 'TTS 服务地址', type: 'text', section: 'features' },
+  { key: 'QQ_VOICE_TTS_API_KEY', label: 'TTS 服务密钥', type: 'secret', section: 'features' },
+  { key: 'QQ_VOICE_OUTPUT_LANGUAGE', label: '语音文本语言', type: 'text', section: 'features' },
+  { key: 'QQ_VOICE_OUTPUT_MAX_WORDS', label: '语音单段字数上限', type: 'number', section: 'features' },
+  { key: 'QQ_VOICE_OUTPUT_MAX_SECONDS', label: '语音单段最长秒数', type: 'number', section: 'features' },
+  { key: 'QQ_VOICE_SYNTH_TIMEOUT_MS', label: '语音合成超时', type: 'number', section: 'features' },
   { key: 'CHAT_NATURAL_TRIGGER_ENABLED', label: '群聊自然触发', type: 'toggle', section: 'features' },
   { key: 'CHAT_NATURAL_TRIGGER_GROUPS', label: '自然触发白名单群', type: 'text', section: 'features' },
   { key: 'CHATLUNA_COMMON_FS_ALLOWED_GROUPS', label: '文件系统工具白名单群', type: 'text', section: 'features' },
@@ -1165,9 +1192,11 @@ export class BotConsoleManager {
   readonly runtimePresetDirPath: string;
   readonly bundledPresetDirPaths: string[];
   readonly allPresetDirPaths: string[];
+  readonly ttsEnvFilePath: string;
   readonly fs: FsLike;
   readonly execFile: (file: string, args: string[], options?: { cwd?: string; timeout?: number }) => Promise<ExecResult>;
   readonly copilotBridge?: CopilotBridgeStateProvider;
+  private ttsHealth: BotConsoleTtsHealthSnapshot | null = null;
 
   constructor(options: BotConsoleManagerOptions = {}) {
     this.rootDir = options.rootDir ? resolve(options.rootDir) : DEFAULT_ROOT_DIR;
@@ -1209,6 +1238,9 @@ export class BotConsoleManager {
       this.bundledPresetDirPaths = presetPaths.bundledDirPaths;
       this.allPresetDirPaths = presetPaths.allDirPaths;
     }
+    this.ttsEnvFilePath = options.ttsEnvFilePath
+      ? resolve(this.rootDir, options.ttsEnvFilePath)
+      : resolveTtsEnvFilePath(this.rootDir);
     this.fs = options.fs ?? defaultFs();
     this.execFile = options.execFile ?? defaultExec;
     this.copilotBridge = options.copilotBridge;
@@ -1216,6 +1248,68 @@ export class BotConsoleManager {
 
   get managedServiceUnits(): readonly BotServiceUnit[] {
     return resolveManagedServiceUnits(this.envFiles.baseFilePath);
+  }
+
+  private get canManageLocalTtsGateway(): boolean {
+    return this.managedServiceUnits.includes('qqbot-voice-tts.service');
+  }
+
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      await this.fs.access(filePath, fsConstants.F_OK);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private async readTtsLocalEnvState(): Promise<{
+    content: string;
+    envFileExists: boolean;
+    env: Record<string, string>;
+  }> {
+    const [content, envFileExists] = await Promise.all([
+      readFileIfExists(this.fs, this.ttsEnvFilePath),
+      this.fileExists(this.ttsEnvFilePath),
+    ]);
+    return {
+      content,
+      envFileExists,
+      env: mergeTtsLocalEnvRecords(this.rootDir, readTtsLocalEnvPatchFromContent(content)),
+    };
+  }
+
+  private async readCurrentBotEnv(): Promise<Record<string, string>> {
+    const [baseEnvContent, overrideEnvContent] = await Promise.all([
+      readFileIfExists(this.fs, this.envFiles.baseFilePath),
+      readFileIfExists(this.fs, this.envFiles.overrideFilePath),
+    ]);
+    return mergeManagedEnvRecords(
+      readManagedEnvPatchFromContent(baseEnvContent),
+      readManagedEnvPatchFromContent(overrideEnvContent),
+    );
+  }
+
+  private async buildTtsState(botEnv: Record<string, string>): Promise<BotConsoleTtsState> {
+    const local = await this.readTtsLocalEnvState();
+    const localGateway = buildTtsLocalGatewayState({
+      rootDir: this.rootDir,
+      envFile: this.ttsEnvFilePath,
+      envFileExists: local.envFileExists,
+      manageable: this.canManageLocalTtsGateway,
+      env: local.env,
+    });
+    const targetBaseUrl = resolveConfiguredTtsBaseUrl(botEnv, localGateway);
+    const health = this.ttsHealth?.targetBaseUrl === targetBaseUrl
+      ? this.ttsHealth
+      : createUnknownTtsHealth(targetBaseUrl);
+    return {
+      localGateway,
+      health,
+    };
   }
 
   async getState(): Promise<BotConsoleStaticState> {
@@ -1231,6 +1325,7 @@ export class BotConsoleManager {
       readManagedEnvPatchFromContent(overrideEnvContent),
     );
     const modelTabs = await this.decorateModelTabsState(buildModelTabsStateFromEnv(env));
+    const tts = await this.buildTtsState(env);
     return {
       env,
       envFiles: {
@@ -1243,6 +1338,7 @@ export class BotConsoleManager {
       presets,
       defaultPreset: env.CHATLUNA_DEFAULT_PRESET || 'sakiko',
       modelTabs,
+      tts,
     };
   }
 
@@ -1280,6 +1376,169 @@ export class BotConsoleManager {
     );
     this.syncManagedChatLunaAgentConfig(env);
     return env;
+  }
+
+  async saveTtsSettings(input: SaveTtsSettingsRequest): Promise<SaveTtsSettingsResponse> {
+    const botEnvPatch = input.botEnv ?? {};
+    const localEnvPatch = input.localEnv ?? {};
+    const hasBotEnvPatch = Object.keys(botEnvPatch).length > 0;
+    const hasLocalEnvPatch = Object.keys(localEnvPatch).length > 0;
+
+    let env: Record<string, string>;
+    if (hasBotEnvPatch) {
+      env = await this.saveEnv(botEnvPatch);
+    } else {
+      const [baseEnvContent, overrideEnvContent] = await Promise.all([
+        readFileIfExists(this.fs, this.envFiles.baseFilePath),
+        readFileIfExists(this.fs, this.envFiles.overrideFilePath),
+      ]);
+      env = mergeManagedEnvRecords(
+        readManagedEnvPatchFromContent(baseEnvContent),
+        readManagedEnvPatchFromContent(overrideEnvContent),
+      );
+    }
+
+    if (hasLocalEnvPatch) {
+      if (!this.canManageLocalTtsGateway) {
+        throw new Error('当前运行角色不管理本机 TTS 网关配置。');
+      }
+      const local = await this.readTtsLocalEnvState();
+      const nextContent = applyTtsLocalEnvPatchToContent(local.content, localEnvPatch);
+      await writeFileAtomicWithBackup(this.ttsEnvFilePath, nextContent, this.fs);
+      this.ttsHealth = null;
+    }
+
+    return {
+      env,
+      tts: await this.buildTtsState(env),
+      restartRequired: {
+        bot: hasBotEnvPatch,
+        tts: hasLocalEnvPatch,
+      },
+    };
+  }
+
+  private async resolveTtsHttpTarget(): Promise<{
+    botEnv: Record<string, string>;
+    localGateway: BotConsoleTtsState['localGateway'];
+    baseUrl: string;
+    apiKey: string;
+    timeoutMs: number;
+  }> {
+    const botEnv = await this.readCurrentBotEnv();
+    const tts = await this.buildTtsState(botEnv);
+    const baseUrl = resolveConfiguredTtsBaseUrl(botEnv, tts.localGateway);
+    const apiKey = botEnv.QQ_VOICE_TTS_API_KEY || tts.localGateway.env.VOICE_TTS_API_KEY || '';
+    const timeoutMs = Number(botEnv.QQ_VOICE_SYNTH_TIMEOUT_MS || '') || tts.localGateway.resolved.requestTimeoutSeconds * 1000;
+    if (!baseUrl) {
+      throw new Error('TTS 服务地址未配置。');
+    }
+    return {
+      botEnv,
+      localGateway: tts.localGateway,
+      baseUrl,
+      apiKey,
+      timeoutMs,
+    };
+  }
+
+  async probeTtsHealth(): Promise<BotConsoleTtsHealthSnapshot> {
+    const target = await this.resolveTtsHttpTarget();
+    const checkedAt = Date.now();
+    const startedAt = performance.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.min(target.timeoutMs, 10_000));
+    try {
+      const response = await fetch(`${target.baseUrl}/healthz`, {
+        headers: target.apiKey ? { Authorization: `Bearer ${target.apiKey}` } : {},
+        signal: controller.signal,
+      });
+      const latencyMs = Math.round(performance.now() - startedAt);
+      const text = await response.text();
+      let payload: unknown = {};
+      try {
+        payload = text ? JSON.parse(text) as unknown : {};
+      } catch {
+        payload = { status: response.ok ? 'ok' : 'degraded', lastError: text.slice(0, 240) };
+      }
+      const health = parseTtsHealthPayload(target.baseUrl, checkedAt, latencyMs, payload);
+      this.ttsHealth = response.ok
+        ? health
+        : {
+            ...health,
+            status: 'degraded',
+            error: health.error ?? `TTS health returned HTTP ${response.status}`,
+          };
+      return this.ttsHealth;
+    } catch (error) {
+      const latencyMs = Math.round(performance.now() - startedAt);
+      this.ttsHealth = createUnreachableTtsHealth(
+        target.baseUrl,
+        checkedAt,
+        latencyMs,
+        error instanceof Error ? error.message : String(error),
+      );
+      return this.ttsHealth;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async synthesizeTtsSample(input: SynthesizeTtsSampleRequest): Promise<SynthesizeTtsSampleResponse> {
+    const text = String(input.text ?? '').trim();
+    const style: BotConsoleTtsStyleId = input.style === 'black' ? 'black' : 'white';
+    if (!text) {
+      throw new Error('试听文本不能为空。');
+    }
+    if (text.length > 500) {
+      throw new Error('试听文本不能超过 500 字符。');
+    }
+
+    const target = await this.resolveTtsHttpTarget();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), target.timeoutMs);
+    const startedAt = performance.now();
+    try {
+      const response = await fetch(`${target.baseUrl}/synthesize`, {
+        method: 'POST',
+        headers: {
+          ...(target.apiKey ? { Authorization: `Bearer ${target.apiKey}` } : {}),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text,
+          speaker: 'sakiko',
+          style,
+          format: 'wav',
+        }),
+        signal: controller.signal,
+      });
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (!response.ok) {
+        const detail = Buffer.from(bytes).toString('utf8').slice(0, 240);
+        throw new Error(detail || `TTS synthesize returned HTTP ${response.status}`);
+      }
+      const audio = parseWavInfo(bytes);
+      const contentType = response.headers.get('content-type') || 'audio/wav';
+      return {
+        ok: true,
+        text,
+        style,
+        elapsedMs,
+        bytes: bytes.byteLength,
+        contentType,
+        dataUri: `data:${contentType};base64,${Buffer.from(bytes).toString('base64')}`,
+        audio: {
+          format: 'wav',
+          durationSeconds: audio.durationSeconds,
+          sampleRate: audio.sampleRate,
+          channels: audio.channels,
+        },
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async saveModelTabs(input: SaveModelTabsRequest): Promise<{ env: Record<string, string>; modelTabs: BotConsoleModelTabsState }> {

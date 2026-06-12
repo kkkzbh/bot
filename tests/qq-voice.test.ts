@@ -1190,6 +1190,7 @@ describe('qq voice plugin', () => {
   });
 
   it('keeps CHAT_REPLY_V1 rules in the agent system envelope and final response contract', async () => {
+    vi.stubEnv('QQ_VOICE_OUTPUT_LANGUAGE', 'ja');
     const profile = resolveMainChatRuntimeProfileFromEnv({
       CHATLUNA_ACTIVE_TAB: 'deepseek',
       CHATLUNA_DEEPSEEK_DEFAULT_MODEL: 'deepseek-v4-pro',
@@ -1222,6 +1223,14 @@ describe('qq voice plugin', () => {
     await policy?.(session, context);
     await promptCompiler?.(session, context);
 
+    const injectedEnvelope = inject.mock.calls.find((call) => {
+      const payload = call[0] as Record<string, any> | undefined;
+      return payload?.name === 'qqbot_reply_prompt_envelope';
+    })?.[0];
+    const envelopeText = (injectedEnvelope?.value ?? [])
+      .map((message: { content?: unknown }) => String(message?.content ?? ''))
+      .join('\n\n');
+
     expect(inject).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'qqbot_reply_prompt_envelope',
@@ -1234,6 +1243,7 @@ describe('qq voice plugin', () => {
         ]),
       }),
     );
+    expect(envelopeText).toContain('当前语音输出目标语言：日语');
     expect(context.options.inputMessage.additional_kwargs).toEqual(
       expect.objectContaining({
         qqbot_reply_mode: 'agent',
@@ -1244,6 +1254,8 @@ describe('qq voice plugin', () => {
         }),
       }),
     );
+    const finalContract = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_contract;
+    expect(finalContract.instruction).toContain('当前语音输出目标语言：日语');
   });
 
   it('removes mention modality from the injected schema for private chats', async () => {

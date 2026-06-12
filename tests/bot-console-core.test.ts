@@ -57,6 +57,43 @@ function createCopilotBridgeWithModels(models: unknown[]) {
   };
 }
 
+function createSystemdShowExec(activeState = 'inactive') {
+  return async (_file: string, args: string[]) => ({
+    stdout: [
+      `Description=${args[2] ?? 'qqbot.service'}`,
+      'LoadState=loaded',
+      `ActiveState=${activeState}`,
+      `SubState=${activeState === 'active' ? 'running' : 'dead'}`,
+      'UnitFileState=disabled',
+    ].join('\n'),
+    stderr: '',
+  });
+}
+
+function createMinimalWav(): Uint8Array {
+  const sampleRate = 32000;
+  const channels = 1;
+  const bitsPerSample = 16;
+  const dataBytes = 64;
+  const byteRate = sampleRate * channels * bitsPerSample / 8;
+  const blockAlign = channels * bitsPerSample / 8;
+  const buffer = Buffer.alloc(44 + dataBytes);
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + dataBytes, 4);
+  buffer.write('WAVE', 8);
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(channels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataBytes, 40);
+  return new Uint8Array(buffer);
+}
+
 const COPILOT_ENABLED_MODEL_PAYLOAD = [
   {
     id: 'gpt-5.4-mini',
@@ -764,6 +801,198 @@ describe('bot-console manager', () => {
     });
     expect(readFileSync(baseEnvFilePath, 'utf8')).toContain('CHATLUNA_DEFAULT_MODEL=base-model');
     expect(readFileSync(overrideEnvFilePath, 'utf8')).toContain('CHATLUNA_DEFAULT_MODEL=runtime-model');
+  });
+
+  it('loads TTS state from bot env and the local GPT-SoVITS env file', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    const ttsEnvFilePath = join(dir, 'config/voice-tts.local.env');
+    mkdirSync(join(dir, 'config'), { recursive: true });
+    writeFileSync(
+      envFilePath,
+      [
+        'QQ_VOICE_OUTPUT_ENABLED=true',
+        'QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162',
+        'QQ_VOICE_TTS_API_KEY=secret',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      ttsEnvFilePath,
+      [
+        'VOICE_TTS_HOST=127.0.0.1',
+        'VOICE_TTS_PORT=5162',
+        'VOICE_TTS_INTERNAL_HOST=127.0.0.1',
+        'VOICE_TTS_INTERNAL_PORT=9880',
+        'VOICE_TTS_DEVICE=cuda',
+        'VOICE_TTS_IS_HALF=true',
+        'VOICE_TTS_TEXT_LANG=all_zh',
+        'VOICE_TTS_PROMPT_LANG=all_ja',
+        'VOICE_TTS_VERSION=v2ProPlus',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const manager = new BotConsoleManager({
+      rootDir: dir,
+      envFilePath,
+      ttsEnvFilePath,
+      execFile: createSystemdShowExec('active'),
+    });
+
+    await expect(manager.getState()).resolves.toMatchObject({
+      env: expect.objectContaining({
+        QQ_VOICE_TTS_BASE_URL: 'http://127.0.0.1:5162',
+        QQ_VOICE_TTS_API_KEY: 'secret',
+      }),
+      tts: {
+        localGateway: expect.objectContaining({
+          provider: 'gpt-sovits',
+          manageable: true,
+          envFile: ttsEnvFilePath,
+          envFileExists: true,
+          resolved: expect.objectContaining({
+            baseUrl: 'http://127.0.0.1:5162',
+            upstreamBaseUrl: 'http://127.0.0.1:9880',
+            device: 'cuda',
+            isHalf: true,
+            textLang: 'all_zh',
+            promptLang: 'all_ja',
+            version: 'v2ProPlus',
+          }),
+        }),
+        health: expect.objectContaining({
+          status: 'unknown',
+          targetBaseUrl: 'http://127.0.0.1:5162',
+        }),
+      },
+    });
+  });
+
+  it('saves TTS bot env separately from local gateway env', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    const ttsEnvFilePath = join(dir, 'config/voice-tts.local.env');
+    mkdirSync(join(dir, 'config'), { recursive: true });
+    writeFileSync(envFilePath, 'QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162\n', 'utf8');
+    writeFileSync(ttsEnvFilePath, 'VOICE_TTS_TEXT_LANG=all_zh\n', 'utf8');
+
+    const manager = new BotConsoleManager({
+      rootDir: dir,
+      envFilePath,
+      ttsEnvFilePath,
+      execFile: createSystemdShowExec('active'),
+    });
+    const result = await manager.saveTtsSettings({
+      botEnv: {
+        QQ_VOICE_OUTPUT_MAX_WORDS: '96',
+        QQ_VOICE_OUTPUT_LANGUAGE: 'ja',
+      },
+      localEnv: {
+        VOICE_TTS_TEXT_LANG: 'auto',
+      },
+    });
+
+    expect(result.restartRequired).toEqual({ bot: true, tts: true });
+    expect(result.env.QQ_VOICE_OUTPUT_MAX_WORDS).toBe('96');
+    expect(result.env.QQ_VOICE_OUTPUT_LANGUAGE).toBe('ja');
+    expect(readFileSync(envFilePath, 'utf8')).toContain('QQ_VOICE_OUTPUT_MAX_WORDS=96');
+    expect(readFileSync(envFilePath, 'utf8')).toContain('QQ_VOICE_OUTPUT_LANGUAGE=ja');
+    expect(readFileSync(ttsEnvFilePath, 'utf8')).toContain('VOICE_TTS_TEXT_LANG=auto');
+    expect(readFileSync(ttsEnvFilePath, 'utf8')).not.toContain('QQ_VOICE_OUTPUT_LANGUAGE');
+  });
+
+  it('rejects local TTS env writes from a server runtime manager', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.server');
+    writeFileSync(envFilePath, 'QQ_VOICE_TTS_BASE_URL=http://100.64.0.1:5162\n', 'utf8');
+
+    const manager = new BotConsoleManager({
+      rootDir: dir,
+      envFilePath,
+      ttsEnvFilePath: join(dir, 'config/voice-tts.local.env'),
+      execFile: createSystemdShowExec('active'),
+    });
+
+    await expect(
+      manager.saveTtsSettings({
+        localEnv: {
+          VOICE_TTS_TEXT_LANG: 'auto',
+        },
+      }),
+    ).rejects.toThrow('当前运行角色不管理本机 TTS 网关配置');
+  });
+
+  it('probes TTS health and synthesizes a WAV sample through the configured gateway', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(
+      envFilePath,
+      [
+        'QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162',
+        'QQ_VOICE_TTS_API_KEY=secret',
+        'QQ_VOICE_SYNTH_TIMEOUT_MS=300000',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const wav = createMinimalWav();
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ Authorization: 'Bearer secret' });
+      if (url === 'http://127.0.0.1:5162/healthz') {
+        return new Response(JSON.stringify({
+          status: 'ok',
+          running: true,
+          upstreamHost: '127.0.0.1',
+          upstreamPort: 9880,
+          device: 'cuda',
+          isHalf: true,
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url === 'http://127.0.0.1:5162/synthesize') {
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          text: '你好',
+          speaker: 'sakiko',
+          style: 'black',
+          format: 'wav',
+        });
+        const body = new ArrayBuffer(wav.byteLength);
+        new Uint8Array(body).set(wav);
+        return new Response(body, { status: 200, headers: { 'content-type': 'audio/wav' } });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const manager = new BotConsoleManager({
+      rootDir: dir,
+      envFilePath,
+      execFile: createSystemdShowExec('active'),
+    });
+
+    await expect(manager.probeTtsHealth()).resolves.toMatchObject({
+      status: 'ok',
+      running: true,
+      upstreamHost: '127.0.0.1',
+      upstreamPort: 9880,
+      device: 'cuda',
+      isHalf: true,
+    });
+
+    await expect(manager.synthesizeTtsSample({ text: '你好', style: 'black' })).resolves.toMatchObject({
+      ok: true,
+      style: 'black',
+      bytes: wav.byteLength,
+      contentType: 'audio/wav',
+      audio: {
+        format: 'wav',
+        sampleRate: 32000,
+        channels: 1,
+      },
+    });
   });
 
   it('mirrors the active built-in tab into runtime chatluna env keys', async () => {

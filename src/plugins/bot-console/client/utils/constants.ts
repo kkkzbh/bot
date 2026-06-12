@@ -4,6 +4,12 @@ export const FIELD_LABELS: Record<string, string> = {
   QQBOT_REALTIME_MESSAGE_ENABLED: '实时消息',
   QQ_VOICE_INPUT_ENABLED: '语音转文字',
   QQ_VOICE_OUTPUT_ENABLED: '语音回复',
+  QQ_VOICE_TTS_BASE_URL: 'TTS 地址',
+  QQ_VOICE_TTS_API_KEY: 'TTS API Key',
+  QQ_VOICE_OUTPUT_LANGUAGE: '语音文本语言',
+  QQ_VOICE_OUTPUT_MAX_WORDS: '单段字数上限',
+  QQ_VOICE_OUTPUT_MAX_SECONDS: '单段最长秒数',
+  QQ_VOICE_SYNTH_TIMEOUT_MS: '合成超时时间',
   CHAT_NATURAL_TRIGGER_ENABLED: '群聊自然触发',
   QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT: '实时消息注入条数上限',
   QQBOT_REPLY_INTERRUPT_ENABLED: '回复期中断',
@@ -63,6 +69,12 @@ export const FIELD_HINTS: Record<string, string> = {
     '只有填在这里的群号才会命中群聊自然触发。多个群号用英文逗号分隔；留空时不会在任何群自动触发。',
   QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT:
     '每次主链路触发时，最多注入这么多条尚未写入会话历史的实时消息；注入后旧缓存会整体清空。',
+  QQ_VOICE_TTS_BASE_URL:
+    '主机器人调用的 TTS 网关地址。本地通常是 127.0.0.1:5162，服务器应填写笔记本 Tailnet 地址。',
+  QQ_VOICE_OUTPUT_LANGUAGE:
+    '模型生成 voice.content 的目标语言。TTS 只朗读这段文本，不负责翻译；建议和 TTS 输入语言保持一致。',
+  QQ_VOICE_SYNTH_TIMEOUT_MS:
+    '主机器人等待整次 TTS 请求的最长时间，单位毫秒。',
 }
 
 export const ROLE_LABELS: Record<string, string> = {

@@ -79,7 +79,7 @@ describe('bot-console plugin', () => {
     apply(ctx as any);
 
     expect(addEntry).toHaveBeenCalledTimes(1);
-    expect(addListener).toHaveBeenCalledTimes(28);
+    expect(addListener).toHaveBeenCalledTimes(31);
     expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/list-copilot-models');
     for (const call of addListener.mock.calls) {
       expect(call[2]).toEqual({ authority: 4 });

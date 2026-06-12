@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { sanitizeStructuredReplyText } from '../../shared/outbound/index.js';
 import type { PromptFragment } from '../../shared/prompt-context/types.js';
 import { STRUCTURED_REPLY_JSON_SCHEMA } from '../../shared/llm/structured-reply-schema.js';
+import type { VoiceOutputLanguage } from '../../shared/voice/language.js';
 
 export const REPLY_ROUTES = [
   'no_reply',
@@ -39,6 +40,7 @@ export interface TurnContext {
     canMultiline: boolean;
     canMention?: boolean;
     canVoice: boolean;
+    voiceOutputLanguage?: VoiceOutputLanguage;
     canSticker: boolean;
     stickerAvailableCount: number;
     source: string;

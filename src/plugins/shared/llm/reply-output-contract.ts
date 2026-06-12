@@ -1,4 +1,10 @@
 import { buildStructuredReplyJsonSchema } from './structured-reply-schema.js';
+import {
+  buildVoiceOutputLanguageContractLines,
+  normalizeVoiceOutputLanguage,
+  VOICE_OUTPUT_LANGUAGE_EXAMPLES,
+  type VoiceOutputLanguage,
+} from '../voice/language.js';
 
 export type ReplyOutputRequestMode = 'chat_completions' | 'responses';
 export type ReplyOutputProtocol = 'native_chat_json_schema' | 'native_responses_json_schema' | 'chat_reply_v1';
@@ -12,7 +18,12 @@ export interface ReplyOutputContract {
   overrideRequestParams: Record<string, unknown> | null;
 }
 
-export function buildReplySemanticContractLines(): string[] {
+export interface ReplyOutputLanguageOptions {
+  voiceOutputLanguage?: VoiceOutputLanguage;
+}
+
+export function buildReplySemanticContractLines(options: ReplyOutputLanguageOptions = {}): string[] {
+  const voiceOutputLanguage = normalizeVoiceOutputLanguage(options.voiceOutputLanguage);
   return [
     '结构化回复语义规则：',
     '- 普通聊天文本用 `message`。',
@@ -25,12 +36,14 @@ export function buildReplySemanticContractLines(): string[] {
     '- 当用户要求查询 Codeforces/CF 信息时，必须先调用 Codeforces 查询工具；工具会返回本地生成的卡片/曲线图 `image.assetRef`，最终回复先发该图，再用简短中文评价具体信息。',
     '- 需要表达情绪时可使用 `meme`，并用自然意图描述。',
     '- 只有在情绪明显非常强烈，且属于“非常生气”或“非常高兴”时，才使用 `voice`。',
+    ...buildVoiceOutputLanguageContractLines(voiceOutputLanguage),
     '- `message.content` 不要手写 `@昵称`、`@QQ号`、`[CQ:at]`、`<at ...>`。',
     '- `decision=no_reply` 表示本轮不发送消息；`decision=reply` 必须至少给出一条 outbound message。',
   ];
 }
 
-export function buildNativeJsonOutputContractLines(): string[] {
+export function buildNativeJsonOutputContractLines(options: ReplyOutputLanguageOptions = {}): string[] {
+  const voiceOutputLanguage = normalizeVoiceOutputLanguage(options.voiceOutputLanguage);
   const example = {
     decision: 'reply',
     outbound_messages: [
@@ -39,7 +52,7 @@ export function buildNativeJsonOutputContractLines(): string[] {
       { type: 'structured_block', content: '1. 第一项\n2. 第二项' },
       { type: 'image', assetRef: 'https://example.com/image.png', alt: '图像说明' },
       { type: 'meme', content: '无语地看对方一眼' },
-      { type: 'voice', content: '太好了，我现在真的很高兴。' },
+      { type: 'voice', content: VOICE_OUTPUT_LANGUAGE_EXAMPLES[voiceOutputLanguage] },
     ],
   };
 
@@ -51,7 +64,8 @@ export function buildNativeJsonOutputContractLines(): string[] {
   ];
 }
 
-export function buildChatReplyV1OutputContractLines(): string[] {
+export function buildChatReplyV1OutputContractLines(options: ReplyOutputLanguageOptions = {}): string[] {
+  const voiceOutputLanguage = normalizeVoiceOutputLanguage(options.voiceOutputLanguage);
   return [
     '输出格式规则：',
     '- 最终回复必须严格使用 CHAT_REPLY_V1 文本协议，不要包裹 markdown fence，不要输出解释文字。',
@@ -71,18 +85,21 @@ export function buildChatReplyV1OutputContractLines(): string[] {
     'meme 示例：',
     ['BEGIN meme', 'CONTENT', '|无语地看对方一眼', 'END'].join('\n'),
     'voice 示例：',
-    ['BEGIN voice', 'CONTENT', '|太好了，我现在真的很高兴。', 'END'].join('\n'),
+    ['BEGIN voice', 'CONTENT', `|${VOICE_OUTPUT_LANGUAGE_EXAMPLES[voiceOutputLanguage]}`, 'END'].join('\n'),
   ];
 }
 
-export function buildReplyOutputInstruction(protocol: ReplyOutputProtocol): string | null {
+export function buildReplyOutputInstruction(
+  protocol: ReplyOutputProtocol,
+  options: ReplyOutputLanguageOptions = {},
+): string | null {
   if (protocol !== 'chat_reply_v1') return null;
 
   return [
     '最终回复格式强制规则：',
-    ...buildReplySemanticContractLines(),
+    ...buildReplySemanticContractLines(options),
     '',
-    ...buildChatReplyV1OutputContractLines(),
+    ...buildChatReplyV1OutputContractLines(options),
   ].join('\n');
 }
 
@@ -94,6 +111,7 @@ export function createReplyOutputContract(args: {
   canMention?: boolean;
   canVoice?: boolean;
   canMeme?: boolean;
+  voiceOutputLanguage?: VoiceOutputLanguage;
 }): ReplyOutputContract {
   const schema = args.protocol === 'chat_reply_v1'
     ? null
@@ -101,6 +119,7 @@ export function createReplyOutputContract(args: {
       canMention: args.canMention,
       canVoice: args.canVoice,
       canMeme: args.canMeme,
+      voiceOutputLanguage: args.voiceOutputLanguage,
     });
 
   return {
@@ -108,7 +127,9 @@ export function createReplyOutputContract(args: {
     protocol: args.protocol,
     requestMode: args.requestMode,
     schema,
-    instruction: buildReplyOutputInstruction(args.protocol),
+    instruction: buildReplyOutputInstruction(args.protocol, {
+      voiceOutputLanguage: args.voiceOutputLanguage,
+    }),
     overrideRequestParams: args.overrideRequestParams,
   };
 }

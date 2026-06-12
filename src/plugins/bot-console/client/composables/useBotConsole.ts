@@ -8,6 +8,8 @@ import type {
   BotConsoleModelTabsState,
   BotConsoleToolPolicyState,
   BotConsoleState,
+  BotConsoleTtsStyleId,
+  BotConsoleTtsState,
   ClearConversationHistoryResponse,
   ConversationTarget,
   DeleteConversationRoomResponse,
@@ -26,8 +28,11 @@ import type {
   SaveModelTabsRequest,
   SaveModelTabsResponse,
   SavePresetResponse,
+  SaveTtsSettingsResponse,
   SaveToolOverridesResponse,
   ServiceActionResponse,
+  ProbeTtsHealthResponse,
+  SynthesizeTtsSampleResponse,
   BotConsoleProbeResponse,
   CopilotAuthAttempt,
   CopilotAuthCancelResponse,
@@ -89,6 +94,50 @@ export const FEATURE_TEXT_KEYS = [
 
 export const FEATURE_NUMBER_KEYS = [
   'QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT',
+] as const
+
+export const TTS_BOT_ENV_KEYS = [
+  'QQ_VOICE_OUTPUT_ENABLED',
+  'QQ_VOICE_TTS_BASE_URL',
+  'QQ_VOICE_TTS_API_KEY',
+  'QQ_VOICE_OUTPUT_LANGUAGE',
+  'QQ_VOICE_OUTPUT_MAX_WORDS',
+  'QQ_VOICE_OUTPUT_MAX_SECONDS',
+  'QQ_VOICE_SYNTH_TIMEOUT_MS',
+] as const
+
+export const TTS_LOCAL_ENV_KEYS = [
+  'VOICE_TTS_HOST',
+  'VOICE_TTS_PORT',
+  'VOICE_TTS_API_KEY',
+  'VOICE_TTS_DEVICE',
+  'VOICE_TTS_IS_HALF',
+  'VOICE_TTS_VERSION',
+  'VOICE_TTS_INTERNAL_HOST',
+  'VOICE_TTS_INTERNAL_PORT',
+  'VOICE_TTS_LAUNCH_TIMEOUT_SECONDS',
+  'VOICE_TTS_REQUEST_TIMEOUT_SECONDS',
+  'VOICE_TTS_MAX_TEXT_CHARS',
+  'VOICE_TTS_UPSTREAM_ROOT',
+  'VOICE_TTS_PRETRAINED_ROOT',
+  'VOICE_TTS_MODEL_ROOT',
+  'VOICE_TTS_REFERENCE_ROOT',
+  'VOICE_TTS_GPT_WEIGHTS',
+  'VOICE_TTS_SOVITS_WEIGHTS',
+  'VOICE_TTS_BERT_BASE',
+  'VOICE_TTS_HUBERT_BASE',
+  'VOICE_TTS_REF_WHITE',
+  'VOICE_TTS_REF_BLACK',
+  'VOICE_TTS_PROMPT_TEXT_WHITE',
+  'VOICE_TTS_PROMPT_TEXT_BLACK',
+  'VOICE_TTS_PROMPT_LANG',
+  'VOICE_TTS_PROMPT_LANG_WHITE',
+  'VOICE_TTS_PROMPT_LANG_BLACK',
+  'VOICE_TTS_TEXT_LANG',
+  'VOICE_TTS_MEDIA_TYPE',
+  'VOICE_TTS_SPLIT_METHOD',
+  'VOICE_TTS_BATCH_SIZE',
+  'VOICE_TTS_PARALLEL_INFER',
 ] as const
 
 export const FILE_SYSTEM_CONTROL_KEYS = [
@@ -153,6 +202,7 @@ export const ALL_ENV_KEYS = [
   ...FEATURE_KEYS,
   ...FEATURE_TEXT_KEYS,
   ...FEATURE_NUMBER_KEYS,
+  ...TTS_BOT_ENV_KEYS,
   ...FILE_SYSTEM_CONTROL_KEYS,
   ...PRESET_SCOPE_KEYS,
   ...BASIC_KEYS,
@@ -468,6 +518,12 @@ export function useBotConsole() {
   /** Last successfully saved / loaded env values. Used to compute changedKeys. */
   const originalEnv = ref<Record<string, string>>({})
 
+  /** Live-editable laptop-local TTS gateway env values. */
+  const ttsEnvDraft = reactive<Record<string, string>>({})
+
+  /** Last successfully saved / loaded TTS gateway env values. */
+  const originalTtsEnv = ref<Record<string, string>>({})
+
   /** The preset currently open in the editor. */
   const currentPreset = ref<PresetDocument>(createEmptyPreset())
 
@@ -539,6 +595,26 @@ export function useBotConsole() {
   })
 
   const canSaveEnv = computed(() => changedKeys.value.size > 0)
+
+  const changedTtsEnvKeys = computed<Set<string>>(() => {
+    const keys = new Set<string>()
+    for (const key of TTS_LOCAL_ENV_KEYS) {
+      if ((ttsEnvDraft[key] ?? '') !== (originalTtsEnv.value[key] ?? '')) {
+        keys.add(key)
+      }
+    }
+    return keys
+  })
+
+  const changedTtsBotEnvKeys = computed<Set<string>>(() => {
+    const keys = new Set<string>()
+    for (const key of TTS_BOT_ENV_KEYS) {
+      if (changedKeys.value.has(key)) keys.add(key)
+    }
+    return keys
+  })
+
+  const canSaveTtsSettings = computed(() => changedTtsBotEnvKeys.value.size > 0 || changedTtsEnvKeys.value.size > 0)
 
   const dirtyModelTabIds = computed<BotConsoleModelTabId[]>(() => {
     const dirty: BotConsoleModelTabId[] = []
@@ -720,6 +796,13 @@ export function useBotConsole() {
       }
       Object.assign(envDraft, env)
 
+      const ttsEnv = mergedState.tts?.localGateway?.env ?? {}
+      originalTtsEnv.value = { ...ttsEnv }
+      for (const key of Object.keys(ttsEnvDraft)) {
+        delete ttsEnvDraft[key]
+      }
+      Object.assign(ttsEnvDraft, ttsEnv)
+
       const modelTabs = buildModelTabsState(mergedState)
       originalModelTabs.value = modelTabs
       activeModelTab.value = modelTabs.activeTab
@@ -838,6 +921,78 @@ export function useBotConsole() {
 
   async function saveEnv(restartAfter = false): Promise<SaveEnvResponse> {
     return saveEnvPatch(ALL_ENV_KEYS, restartAfter)
+  }
+
+  function syncTtsState(env: Record<string, string>, tts: BotConsoleTtsState): void {
+    originalEnv.value = { ...env }
+    for (const key of Object.keys(envDraft)) {
+      delete envDraft[key]
+    }
+    Object.assign(envDraft, env)
+
+    originalTtsEnv.value = { ...(tts.localGateway.env ?? {}) }
+    for (const key of Object.keys(ttsEnvDraft)) {
+      delete ttsEnvDraft[key]
+    }
+    Object.assign(ttsEnvDraft, tts.localGateway.env ?? {})
+
+    if (botState.value) {
+      botState.value = {
+        ...botState.value,
+        env,
+        tts,
+        runtimeStatus: {
+          ...botState.value.runtimeStatus,
+          tts: tts.health,
+        },
+      }
+    }
+  }
+
+  async function saveTtsSettings(): Promise<SaveTtsSettingsResponse> {
+    const botEnv: Record<string, string> = {}
+    for (const key of TTS_BOT_ENV_KEYS) {
+      if (changedTtsBotEnvKeys.value.has(key)) {
+        botEnv[key] = envDraft[key] ?? ''
+      }
+    }
+
+    const localEnv: Record<string, string> = {}
+    for (const key of TTS_LOCAL_ENV_KEYS) {
+      if (changedTtsEnvKeys.value.has(key)) {
+        localEnv[key] = ttsEnvDraft[key] ?? ''
+      }
+    }
+
+    const result = await send<SaveTtsSettingsResponse>('bot-console/save-tts-settings', {
+      botEnv,
+      localEnv,
+    })
+    syncTtsState(result.env, result.tts)
+    return result
+  }
+
+  async function probeTtsHealth(): Promise<ProbeTtsHealthResponse> {
+    const result = await send<ProbeTtsHealthResponse>('bot-console/probe-tts-health')
+    if (botState.value) {
+      const nextTts = {
+        ...botState.value.tts,
+        health: result.health,
+      }
+      botState.value = {
+        ...botState.value,
+        tts: nextTts,
+        runtimeStatus: {
+          ...botState.value.runtimeStatus,
+          tts: result.health,
+        },
+      }
+    }
+    return result
+  }
+
+  async function synthesizeTtsSample(text: string, style: BotConsoleTtsStyleId): Promise<SynthesizeTtsSampleResponse> {
+    return send<SynthesizeTtsSampleResponse>('bot-console/synthesize-tts-sample', { text, style })
   }
 
   async function saveModelTabs(restartAfter = false): Promise<SaveModelTabsResponse> {
@@ -1352,6 +1507,8 @@ export function useBotConsole() {
     memoryLoading,
     envDraft,
     originalEnv,
+    ttsEnvDraft,
+    originalTtsEnv,
     modelTabsDraft,
     activeModelTab,
     originalModelTabs,
@@ -1371,6 +1528,9 @@ export function useBotConsole() {
     // Computed
     changedKeys,
     canSaveEnv,
+    changedTtsEnvKeys,
+    changedTtsBotEnvKeys,
+    canSaveTtsSettings,
     modelTabsChanged,
     dirtyModelTabIds,
     currentModelValidation,
@@ -1396,6 +1556,9 @@ export function useBotConsole() {
     refreshMemoryState,
     saveEnv,
     saveEnvPatch,
+    saveTtsSettings,
+    probeTtsHealth,
+    synthesizeTtsSample,
     saveModelTabs,
     saveModelSettings,
     selectModelTab,

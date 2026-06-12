@@ -1,7 +1,14 @@
+import {
+  normalizeVoiceOutputLanguage,
+  VOICE_OUTPUT_LANGUAGE_LABELS,
+  type VoiceOutputLanguage,
+} from '../voice/language.js';
+
 export interface StructuredReplySchemaOptions {
   canMention?: boolean;
   canVoice?: boolean;
   canMeme?: boolean;
+  voiceOutputLanguage?: VoiceOutputLanguage;
 }
 
 const QQ_USER_ID_PATTERN = '^\\s*\\d+\\s*$';
@@ -66,26 +73,33 @@ const STRUCTURED_BLOCK_SCHEMA = {
   },
 } as const;
 
-const VOICE_MESSAGE_SCHEMA = {
-  type: 'object',
-  title: 'VoiceItem',
-  description: 'Voice message to send.',
-  additionalProperties: false,
-  required: ['type', 'content'],
-  properties: {
-    type: {
-      title: 'Type',
-      type: 'string',
-      enum: ['voice'],
-      description: 'Voice message to send.',
+function buildVoiceMessageSchema(options: StructuredReplySchemaOptions) {
+  const language = normalizeVoiceOutputLanguage(options.voiceOutputLanguage);
+  const languageDescription = language === 'auto'
+    ? 'Use the most natural spoken language for this turn.'
+    : `Write this content directly in ${VOICE_OUTPUT_LANGUAGE_LABELS[language]}.`;
+
+  return {
+    type: 'object',
+    title: 'VoiceItem',
+    description: 'Voice message to send.',
+    additionalProperties: false,
+    required: ['type', 'content'],
+    properties: {
+      type: {
+        title: 'Type',
+        type: 'string',
+        enum: ['voice'],
+        description: 'Voice message to send.',
+      },
+      content: {
+        title: 'Content',
+        type: 'string',
+        description: `Final text to speak in the voice message. ${languageDescription} TTS reads this text and does not translate it.`,
+      },
     },
-    content: {
-      title: 'Content',
-      type: 'string',
-      description: 'Final text to speak in the voice message.',
-    },
-  },
-} as const;
+  } as const;
+}
 
 const IMAGE_MESSAGE_SCHEMA = {
   type: 'object',
@@ -141,7 +155,7 @@ export function buildStructuredReplyJsonSchema(options: StructuredReplySchemaOpt
   ];
 
   if (options.canVoice !== false) {
-    outboundSchemas.push(VOICE_MESSAGE_SCHEMA);
+    outboundSchemas.push(buildVoiceMessageSchema(options));
   }
 
   outboundSchemas.push(IMAGE_MESSAGE_SCHEMA);

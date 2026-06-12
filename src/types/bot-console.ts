@@ -163,6 +163,107 @@ export interface ReorderPresetsResponse {
   presets: PresetSummary[];
 }
 
+export type BotConsoleTtsHealthStatus = 'unknown' | 'ok' | 'degraded' | 'unreachable';
+export type BotConsoleTtsStyleId = 'white' | 'black';
+
+export interface BotConsoleTtsStyleConfig {
+  id: BotConsoleTtsStyleId;
+  refAudioPath: string;
+  promptText: string;
+  promptLang: string;
+}
+
+export interface BotConsoleTtsLocalGatewayState {
+  provider: 'gpt-sovits';
+  manageable: boolean;
+  envFile: string;
+  envFileExists: boolean;
+  env: Record<string, string>;
+  resolved: {
+    baseUrl: string;
+    upstreamBaseUrl: string;
+    host: string;
+    port: number;
+    internalHost: string;
+    internalPort: number;
+    device: string;
+    isHalf: boolean;
+    version: string;
+    textLang: string;
+    promptLang: string;
+    mediaType: string;
+    splitMethod: string;
+    batchSize: number;
+    parallelInfer: boolean;
+    maxTextChars: number;
+    requestTimeoutSeconds: number;
+    launchTimeoutSeconds: number;
+    gptWeightsPath: string;
+    sovitsWeightsPath: string;
+    bertBasePath: string;
+    hubertBasePath: string;
+    styles: BotConsoleTtsStyleConfig[];
+  };
+}
+
+export interface BotConsoleTtsHealthSnapshot {
+  status: BotConsoleTtsHealthStatus;
+  checkedAt: number | null;
+  latencyMs: number | null;
+  error: string | null;
+  targetBaseUrl: string;
+  running: boolean | null;
+  upstreamHost: string | null;
+  upstreamPort: number | null;
+  device: string | null;
+  isHalf: boolean | null;
+  rawStatus: string | null;
+}
+
+export interface BotConsoleTtsState {
+  localGateway: BotConsoleTtsLocalGatewayState;
+  health: BotConsoleTtsHealthSnapshot;
+}
+
+export interface SaveTtsSettingsRequest {
+  botEnv?: EnvPatch;
+  localEnv?: EnvPatch;
+}
+
+export interface SaveTtsSettingsResponse {
+  env: Record<string, string>;
+  tts: BotConsoleTtsState;
+  restartRequired: {
+    bot: boolean;
+    tts: boolean;
+  };
+}
+
+export interface ProbeTtsHealthResponse {
+  health: BotConsoleTtsHealthSnapshot;
+}
+
+export interface SynthesizeTtsSampleRequest {
+  text: string;
+  style: BotConsoleTtsStyleId;
+}
+
+export interface SynthesizeTtsSampleResponse {
+  ok: true;
+  text: string;
+  style: BotConsoleTtsStyleId;
+  elapsedMs: number;
+  bytes: number;
+  contentType: string;
+  dataUri: string;
+  audio: {
+    format: 'wav';
+    durationSeconds: number | null;
+    sampleRate: number | null;
+    channels: number | null;
+  };
+}
+
 export interface BotConsoleState {
   env: Record<string, string>;
   envFiles: BotConsoleEnvFilesState;
@@ -174,8 +275,10 @@ export interface BotConsoleState {
   conversationTargets: import('./feature-policy.js').ConversationTarget[];
   toolPolicy: BotConsoleToolPolicyState;
   modelTabs: BotConsoleModelTabsState;
+  tts: BotConsoleTtsState;
   runtimeStatus: {
     memory: MemoryStatusSnapshot;
+    tts: BotConsoleTtsHealthSnapshot;
   };
 }
 

@@ -192,6 +192,39 @@ describe('prompt assembly', () => {
     expect(compiledContent).not.toContain('"outbound_messages"');
   });
 
+  it('adds the configured voice output language to reply prompt contracts', () => {
+    const envelope = compileReplyPromptEnvelope(
+      buildReplyPromptCompilerInput(
+        {
+          input: {
+            text: '请发一句语音',
+            hasImageInput: false,
+            imageCount: 0,
+            displayName: '小祥',
+            userId: 'u1',
+            isDirect: true,
+          },
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: true,
+            voiceOutputLanguage: 'ja',
+            canSticker: false,
+            stickerAvailableCount: 0,
+            source: 'cached',
+          },
+          continuationContext: null,
+        },
+        [],
+        { outputProtocol: 'chat_reply_v1' },
+      ),
+    );
+
+    const compiledContent = envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '';
+    expect(compiledContent).toContain('当前语音输出目标语言：日语');
+    expect(compiledContent).toContain('`voice.content` 必须直接写成自然日语');
+    expect(compiledContent).toContain('|本当にうれしいです。');
+  });
+
   it('consumes a turn envelope exactly once', () => {
     beginPromptAssemblyTurn('conv-1');
     registerPromptFragment('conv-1', {

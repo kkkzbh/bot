@@ -190,6 +190,23 @@ describe('buildReplyOutputContract', () => {
     expect(buildReplySemanticContractLines().join('\n')).not.toContain('cf_user_profile');
   });
 
+  it('injects the configured voice output language into json schema and text protocol contracts', () => {
+    const schemaContract = buildReplyOutputContract({
+      model: 'openai/gpt-5.4-medium-thinking',
+      canVoice: true,
+      voiceOutputLanguage: 'ja',
+    });
+    expect(JSON.stringify(schemaContract.schema)).toContain('Write this content directly in 日语');
+
+    const textContract = buildReplyOutputContract({
+      model: 'deepseek/deepseek-v4-flash',
+      canVoice: true,
+      voiceOutputLanguage: 'ja',
+    });
+    expect(textContract.instruction).toContain('当前语音输出目标语言：日语');
+    expect(textContract.instruction).toContain('|本当にうれしいです。');
+  });
+
   it('routes schema-capable providers to json_schema and text-only Copilot models to CHAT_REPLY_V1', () => {
     expect(
       buildReplyOutputContract({
