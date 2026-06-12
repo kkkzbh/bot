@@ -188,6 +188,7 @@ describe('prompt assembly', () => {
     const compiledContent = envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '';
     expect(compiledContent).toContain('CHAT_REPLY_V1 <nonce>');
     expect(compiledContent).toContain('payload 内容行必须以 `|` 开头');
+    expect(compiledContent).toContain('当用户要求查询 Codeforces/CF 信息时，必须先调用 Codeforces 查询工具；工具会返回本地生成的卡片/曲线图 `image.assetRef`，最终回复先发该图，再用简短中文评价具体信息。');
     expect(compiledContent).not.toContain('"outbound_messages"');
   });
 

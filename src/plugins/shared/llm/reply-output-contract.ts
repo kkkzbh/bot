@@ -22,6 +22,7 @@ export function buildReplySemanticContractLines(): string[] {
     '- 代码、列表、引用等需要保留结构的内容用 `structured_block`。',
     '- 发送图片用 `image`，并填写工具返回的 `assetRef` 与 `alt`。',
     '- 如果工具结果里带有 `image.assetRef`，且该图片就是当前答案的一部分，最终回复必须包含对应 `image` 消息，不能只复述文字摘要。',
+    '- 当用户要求查询 Codeforces/CF 信息时，必须先调用 Codeforces 查询工具；工具会返回本地生成的卡片/曲线图 `image.assetRef`，最终回复先发该图，再用简短中文评价具体信息。',
     '- 需要表达情绪时可使用 `meme`，并用自然意图描述。',
     '- 只有在情绪明显非常强烈，且属于“非常生气”或“非常高兴”时，才使用 `voice`。',
     '- `message.content` 不要手写 `@昵称`、`@QQ号`、`[CQ:at]`、`<at ...>`。',
