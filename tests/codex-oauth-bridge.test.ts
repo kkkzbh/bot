@@ -35,11 +35,9 @@ function fakeJwt(payload: Record<string, unknown>): string {
   return `${base64url({ alg: 'none', typ: 'JWT' })}.${base64url(payload)}.sig`;
 }
 
-function createService(dir: string, modelsCacheDir = join(dir, '.codex'), execFile = async () => ({ stdout: '{"models":[]}', stderr: '' })) {
+function createService(dir: string) {
   return new CodexOAuthBridgeService({
     rootDir: dir,
-    modelsCacheDir,
-    execFile,
     envFiles: {
       mode: 'single',
       baseFilePath: join(dir, '.env.local'),
@@ -125,6 +123,10 @@ describe('codex oauth bridge helpers', () => {
       exp: Math.floor(Date.now() / 1000) + 3600,
       aud: ['codex-client'],
       email: 'managed@example.test',
+      'https://api.openai.com/auth': {
+        chatgpt_account_id: 'acct-managed',
+        chatgpt_plan_type: 'pro',
+      },
     });
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === 'https://auth.openai.com/api/accounts/deviceauth/usercode') {
@@ -191,6 +193,7 @@ describe('codex oauth bridge helpers', () => {
     });
     expect(persisted.tokens.access_token).toBe(accessToken);
     expect(persisted.tokens.refresh_token).toBe('managed-refresh');
+    expect(persisted.tokens.account_id).toBe('acct-managed');
     expect(JSON.stringify(polled)).not.toContain(accessToken);
     expect(JSON.stringify(polled)).not.toContain('managed-refresh');
   });
@@ -257,7 +260,14 @@ describe('codex oauth bridge helpers', () => {
     });
     const oldRefresh = 'old-refresh-token';
     const newAccess = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, client_id: 'codex-client' });
-    const newIdToken = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, aud: ['codex-client'], email: 'tester@example.test' });
+    const newIdToken = fakeJwt({
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      aud: ['codex-client'],
+      email: 'tester@example.test',
+      'https://api.openai.com/auth': {
+        chatgpt_account_id: 'acct_123',
+      },
+    });
     writeCodexAuth(dir, {
       auth_mode: 'chatgpt',
       tokens: {
@@ -293,35 +303,161 @@ describe('codex oauth bridge helpers', () => {
     });
     expect(persisted.tokens.access_token).toBe(newAccess);
     expect(persisted.tokens.refresh_token).toBe('new-refresh-token');
+    expect(persisted.tokens.account_id).toBe('acct_123');
     expect(JSON.stringify(status)).not.toContain(oldAccess);
     expect(JSON.stringify(status)).not.toContain(newAccess);
     expect(JSON.stringify(status)).not.toContain(oldRefresh);
   });
 
+  it('refreshes Codex OAuth tokens and retries ChatGPT backend responses after upstream 401', async () => {
+    const dir = createTempDir();
+    const oldAccess = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, client_id: 'codex-client' });
+    const oldRefresh = 'old-refresh-token';
+    const newAccess = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 7200, client_id: 'codex-client' });
+    const newIdToken = fakeJwt({
+      exp: Math.floor(Date.now() / 1000) + 7200,
+      aud: ['codex-client'],
+      email: 'retry@example.test',
+      'https://api.openai.com/auth': {
+        chatgpt_account_id: 'acct-retry',
+      },
+    });
+    writeCodexAuth(dir, {
+      auth_mode: 'chatgpt',
+      tokens: {
+        access_token: oldAccess,
+        refresh_token: oldRefresh,
+        account_id: 'acct-retry',
+      },
+    });
+
+    let responseCalls = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === 'https://chatgpt.com/backend-api/codex/responses') {
+        responseCalls += 1;
+        expect(init?.headers).toMatchObject({
+          Authorization: `Bearer ${responseCalls === 1 ? oldAccess : newAccess}`,
+          'ChatGPT-Account-ID': 'acct-retry',
+        });
+        return new Response(responseCalls === 1 ? '{"error":{"message":"expired"}}' : '{"ok":true}', {
+          status: responseCalls === 1 ? 401 : 200,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        });
+      }
+      if (url === 'https://auth.openai.com/oauth/token') {
+        expect(String(init?.body)).toContain('grant_type=refresh_token');
+        expect(String(init?.body)).toContain(`refresh_token=${oldRefresh}`);
+        return new Response(JSON.stringify({
+          access_token: newAccess,
+          refresh_token: 'new-refresh-token',
+          id_token: newIdToken,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const result = await createService(dir).proxyResponses({
+      model: 'openai/gpt-5.5',
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
+    });
+    const persisted = readCodexAuth(dir);
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: '{"ok":true}',
+    });
+    expect(responseCalls).toBe(2);
+    expect(persisted.tokens.access_token).toBe(newAccess);
+    expect(persisted.tokens.refresh_token).toBe('new-refresh-token');
+    expect(result.body).not.toContain(oldAccess);
+    expect(result.body).not.toContain(newAccess);
+  });
+
   it('serves models from Codex catalog and proxies responses with stripped model ids', async () => {
     const dir = createTempDir();
+    vi.stubEnv('CODEX_CLIENT_VERSION', '0.139.0-test');
     const accessToken = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, client_id: 'codex-client' });
     writeCodexAuth(dir, {
       auth_mode: 'chatgpt',
       tokens: {
         access_token: accessToken,
         refresh_token: 'refresh-token',
+        account_id: 'acct-managed',
       },
     });
 
-    const service = createService(
-      dir,
-      join(dir, '.codex'),
-      async () => ({
-        stdout: JSON.stringify({
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === 'https://chatgpt.com/backend-api/codex/models?client_version=0.139.0-test') {
+        expect(init).toMatchObject({ method: 'GET' });
+        expect(init?.headers).toMatchObject({
+          Accept: 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+          'ChatGPT-Account-ID': 'acct-managed',
+          originator: 'codex_cli_rs',
+          'User-Agent': 'codex_cli_rs/0.139.0-test',
+          version: '0.139.0-test',
+        });
+        return new Response(JSON.stringify({
           models: [
             { slug: 'gpt-5.5', display_name: 'GPT-5.5', visibility: 'list', supported_in_api: true },
             { slug: 'gpt-5.3-codex-spark', display_name: 'Spark', visibility: 'list', supported_in_api: false },
           ],
-        }),
-        stderr: '',
-      }),
-    );
+        }), { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
+      }
+      if (url === 'https://chatgpt.com/backend-api/codex/responses') {
+        const body = JSON.parse(String(init?.body)) as Record<string, any>;
+        expect(init).toMatchObject({ method: 'POST' });
+        expect(init?.headers).toMatchObject({
+          Authorization: `Bearer ${accessToken}`,
+          'ChatGPT-Account-ID': 'acct-managed',
+          originator: 'codex_cli_rs',
+          'Content-Type': 'application/json',
+          'User-Agent': 'codex_cli_rs/0.139.0-test',
+          version: '0.139.0-test',
+        });
+        expect(init?.headers).toEqual(expect.objectContaining({
+          'session-id': expect.any(String),
+          'thread-id': expect.any(String),
+        }));
+        expect(body).toMatchObject({
+          model: 'gpt-5.5',
+          input: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
+          store: false,
+          stream: true,
+          prompt_cache_key: expect.any(String),
+          client_metadata: {
+            'x-codex-installation-id': expect.any(String),
+            session_id: expect.any(String),
+            thread_id: expect.any(String),
+            turn_id: expect.any(String),
+            'x-codex-window-id': 'qqbot-koishi-codex-bridge',
+            'x-codex-turn-metadata': expect.any(String),
+          },
+        });
+        expect(body).not.toHaveProperty('temperature');
+        expect(body).not.toHaveProperty('top_p');
+        expect(body).not.toHaveProperty('stop');
+        expect(body).not.toHaveProperty('max_output_tokens');
+        expect(body.client_metadata.thread_id).toBe((init?.headers as Record<string, string>)['thread-id']);
+        expect(body.client_metadata.session_id).toBe((init?.headers as Record<string, string>)['session-id']);
+        expect(JSON.parse(body.client_metadata['x-codex-turn-metadata'])).toMatchObject({
+          installation_id: body.client_metadata['x-codex-installation-id'],
+          session_id: body.client_metadata.session_id,
+          thread_id: body.client_metadata.thread_id,
+          turn_id: body.client_metadata.turn_id,
+          window_id: 'qqbot-koishi-codex-bridge',
+        });
+        return new Response('{"ok":true}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const service = createService(dir);
     const models = await service.proxyModels();
     expect(models.status).toBe(200);
     expect(JSON.parse(models.body)).toMatchObject({
@@ -335,14 +471,12 @@ describe('codex oauth bridge helpers', () => {
     });
     expect(models.body).not.toContain(accessToken);
 
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', {
-      status: 200,
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
-    }));
-    globalThis.fetch = fetchMock as typeof fetch;
-
     const result = await service.proxyResponses({
       model: 'openai/gpt-5.5',
+      temperature: 0.8,
+      top_p: 0.95,
+      stop: ['END'],
+      max_output_tokens: 512,
       input: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
     });
 
@@ -350,18 +484,223 @@ describe('codex oauth bridge helpers', () => {
       status: 200,
       body: '{"ok":true}',
     });
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.openai.com/v1/responses',
-      expect.objectContaining({
-        method: 'POST',
-        headers: expect.objectContaining({
-          Authorization: `Bearer ${accessToken}`,
-        }),
-        body: JSON.stringify({
-          model: 'gpt-5.5',
-          input: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
-        }),
-      }),
-    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('lifts ChatLuna system inputs into top-level Codex instructions before proxying responses', async () => {
+    const dir = createTempDir();
+    const accessToken = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, client_id: 'codex-client' });
+    writeCodexAuth(dir, {
+      auth_mode: 'chatgpt',
+      tokens: {
+        access_token: accessToken,
+        refresh_token: 'refresh-token',
+        account_id: 'acct-managed',
+      },
+    });
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe('https://chatgpt.com/backend-api/codex/responses');
+      const body = JSON.parse(String(init?.body)) as Record<string, any>;
+      expect(body.instructions).toBe('preexisting instructions\n\npersona instructions\n\nruntime contract');
+      expect(body.input).toEqual([
+        { role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+        { role: 'assistant', content: [{ type: 'output_text', text: 'hi' }] },
+      ]);
+      expect(body.store).toBe(false);
+      expect(body.stream).toBe(true);
+      return new Response('{"ok":true}', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const result = await createService(dir).proxyResponses({
+      model: 'openai/gpt-5.5',
+      instructions: 'preexisting instructions',
+      input: [
+        { role: 'system', content: 'persona instructions' },
+        { role: 'developer', content: [{ type: 'input_text', text: 'runtime contract' }] },
+        { role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+        { role: 'assistant', content: [{ type: 'output_text', text: 'hi' }] },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: '{"ok":true}',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('converts Codex SSE response streams into Responses JSON for ChatLuna', async () => {
+    const dir = createTempDir();
+    const accessToken = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, client_id: 'codex-client' });
+    writeCodexAuth(dir, {
+      auth_mode: 'chatgpt',
+      tokens: {
+        access_token: accessToken,
+        refresh_token: 'refresh-token',
+        account_id: 'acct-managed',
+      },
+    });
+    const sse = [
+      'event: response.created',
+      'data: {"type":"response.created","response":{"id":"resp_sse","status":"in_progress","output":[]}}',
+      '',
+      'event: response.output_text.delta',
+      'data: {"type":"response.output_text.delta","delta":"hello","output_index":1,"content_index":0}',
+      '',
+      'event: response.output_text.done',
+      'data: {"type":"response.output_text.done","text":"hello","output_index":1,"content_index":0}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"id":"resp_sse","status":"completed","output":[],"usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}',
+      '',
+    ].join('\n');
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe('https://chatgpt.com/backend-api/codex/responses');
+      return new Response(sse, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const result = await createService(dir).proxyResponses({
+      model: 'openai/gpt-5.5',
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.headers['content-type']).toContain('application/json');
+    expect(result.body).not.toContain('event:');
+    expect(JSON.parse(result.body)).toMatchObject({
+      id: 'resp_sse',
+      status: 'completed',
+      output: [
+        {
+          type: 'message',
+          content: [{ type: 'output_text', text: 'hello' }],
+        },
+      ],
+    });
+  });
+
+  it('repairs partially populated completed output with final Codex SSE text', async () => {
+    const dir = createTempDir();
+    const accessToken = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, client_id: 'codex-client' });
+    writeCodexAuth(dir, {
+      auth_mode: 'chatgpt',
+      tokens: {
+        access_token: accessToken,
+        refresh_token: 'refresh-token',
+        account_id: 'acct-managed',
+      },
+    });
+    const sse = [
+      'event: response.output_text.done',
+      'data: {"type":"response.output_text.done","text":"hello","output_index":0,"content_index":0}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"id":"resp_partial","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hel"}]}]}}',
+      '',
+    ].join('\n');
+    globalThis.fetch = vi.fn(async () => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+    })) as typeof fetch;
+
+    const result = await createService(dir).proxyResponses({
+      model: 'openai/gpt-5.5',
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
+    });
+
+    expect(JSON.parse(result.body)).toMatchObject({
+      id: 'resp_partial',
+      output: [
+        {
+          type: 'message',
+          content: [{ type: 'output_text', text: 'hello' }],
+        },
+      ],
+    });
+  });
+
+  it('preserves streamed Codex function calls when completed output is empty', async () => {
+    const dir = createTempDir();
+    const accessToken = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, client_id: 'codex-client' });
+    writeCodexAuth(dir, {
+      auth_mode: 'chatgpt',
+      tokens: {
+        access_token: accessToken,
+        refresh_token: 'refresh-token',
+        account_id: 'acct-managed',
+      },
+    });
+    const sse = [
+      'event: response.output_item.done',
+      'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"search","arguments":"{\\"q\\":\\"sakiko\\"}","status":"completed"}}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"id":"resp_tool","status":"completed","output":[]}}',
+      '',
+    ].join('\n');
+    globalThis.fetch = vi.fn(async () => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    })) as typeof fetch;
+
+    const result = await createService(dir).proxyResponses({
+      model: 'openai/gpt-5.5',
+      tools: [{ type: 'function', name: 'search', parameters: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] } }],
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'search sakiko' }] }],
+    });
+
+    expect(JSON.parse(result.body)).toMatchObject({
+      id: 'resp_tool',
+      output: [
+        {
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'search',
+          arguments: '{"q":"sakiko"}',
+        },
+      ],
+    });
+  });
+
+  it('rejects old Codex OAuth state without ChatGPT account id before proxying upstream', async () => {
+    const dir = createTempDir();
+    const accessToken = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, client_id: 'codex-client' });
+    writeCodexAuth(dir, {
+      auth_mode: 'chatgpt',
+      tokens: {
+        access_token: accessToken,
+        refresh_token: 'refresh-token',
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response('{"unexpected":true}', {
+      status: 200,
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    }));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const service = createService(dir);
+    const status = await service.getConsoleStatus({ probe: true });
+    const result = await service.proxyResponses({
+      model: 'openai/gpt-5.5',
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
+    });
+
+    expect(status).toMatchObject({
+      authKind: 'codex_oauth',
+      authStatus: 'error',
+    });
+    expect(status.authError).toContain('ChatGPT account id');
+    expect(result.status).toBe(401);
+    expect(result.body).toContain('ChatGPT account id');
+    expect(result.body).not.toContain(accessToken);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

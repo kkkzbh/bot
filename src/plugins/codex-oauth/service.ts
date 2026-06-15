@@ -1,36 +1,30 @@
-import { execFile as execFileCallback } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile, rename, rm, writeFile, mkdir } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
-import { promisify } from 'node:util';
+import { dirname, join } from 'node:path';
 import type {
   BotConsoleAuthStatus,
   CodexAuthAttempt,
   CodexAuthState,
 } from '../../types/bot-console.js';
 
-const execFile = promisify(execFileCallback);
-
 const DEFAULT_KOISHI_PORT = '5140';
-const DEFAULT_OPENAI_API_BASE_URL = 'https://api.openai.com/v1';
+const DEFAULT_CODEX_BACKEND_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 const DEFAULT_CODEX_AUTH_BASE_URL = 'https://auth.openai.com';
 const DEFAULT_CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+const DEFAULT_CODEX_ORIGINATOR = 'codex_cli_rs';
+const DEFAULT_CODEX_CLIENT_VERSION = '0.139.0';
 const TOKEN_EXPIRY_SKEW_MS = 5 * 60 * 1000;
 const CODEX_BRIDGE_PATH = '/api/internal/codex/v1';
 const CODEX_DEVICE_POLL_INTERVAL_SEC = 5;
 const CODEX_DEVICE_EXPIRES_IN_SEC = 15 * 60;
+let cachedInstalledCodexClientVersion: string | null | undefined;
 
 type ResolvedEnvFiles = {
   mode: 'single' | 'layered';
   baseFilePath: string | null;
   overrideFilePath: string | null;
   editTarget: string;
-};
-
-type ExecResult = {
-  stdout: string;
-  stderr: string;
 };
 
 type CodexBridgeRuntimeConfig = {
@@ -99,6 +93,12 @@ type StoredCodexAuthAttempt = CodexAuthAttempt & {
   deviceCode: string;
   codeVerifier: string;
   clientId: string;
+};
+
+type CodexBackendAuthContext = {
+  accessToken: string;
+  accountId: string;
+  isFedrampAccount: boolean;
 };
 
 export interface CodexModelOption {
@@ -177,16 +177,6 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await writeFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function expandHome(value: string): string {
-  if (value === '~') return homedir();
-  if (value.startsWith('~/')) return join(homedir(), value.slice(2));
-  return value;
-}
-
-function resolveCodexCatalogHome(env: NodeJS.ProcessEnv = process.env): string {
-  return resolve(expandHome(trimOptionalText(env.CODEX_HOME) ?? join(homedir(), '.codex')));
-}
-
 export function resolveCodexStateDir(rootDir: string, envFiles: ResolvedEnvFiles): string {
   if (envFiles.mode === 'layered') {
     return dirname(envFiles.editTarget);
@@ -223,6 +213,43 @@ function codexDeviceRedirectUri(): string {
   return `${codexAuthBaseUrl()}/deviceauth/callback`;
 }
 
+function codexBackendBaseUrl(): string {
+  return (trimOptionalText(process.env.CHATLUNA_CODEX_UPSTREAM_BASE_URL) ?? DEFAULT_CODEX_BACKEND_BASE_URL).replace(/\/+$/, '');
+}
+
+function codexBackendUrl(pathname: string): string {
+  const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
+  return `${codexBackendBaseUrl()}${normalizedPath}`;
+}
+
+function codexOriginator(): string {
+  return trimOptionalText(process.env.CODEX_ORIGINATOR) ?? DEFAULT_CODEX_ORIGINATOR;
+}
+
+function parseCodexVersionOutput(output: string): string | null {
+  return trimOptionalText(output.match(/\b(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b/)?.[1]);
+}
+
+function resolveInstalledCodexClientVersion(): string | null {
+  if (cachedInstalledCodexClientVersion !== undefined) return cachedInstalledCodexClientVersion;
+  try {
+    cachedInstalledCodexClientVersion = parseCodexVersionOutput(execFileSync('codex', ['--version'], {
+      encoding: 'utf8',
+      timeout: 1000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }));
+  } catch {
+    cachedInstalledCodexClientVersion = null;
+  }
+  return cachedInstalledCodexClientVersion;
+}
+
+function codexClientVersion(): string {
+  return trimOptionalText(process.env.CODEX_CLIENT_VERSION)
+    ?? resolveInstalledCodexClientVersion()
+    ?? DEFAULT_CODEX_CLIENT_VERSION;
+}
+
 function formatOpenAiErrorPayload(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null;
   const error = (payload as { error?: unknown }).error;
@@ -254,6 +281,43 @@ export function decodeJwtExpiresAtMs(token: string | null | undefined): number |
   return exp * 1000;
 }
 
+function readObjectField(payload: unknown, key: string): Record<string, unknown> | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const value = (payload as Record<string, unknown>)[key];
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function readOpenAiAuthClaims(payload: unknown): Record<string, unknown> | null {
+  return readObjectField(payload, 'https://api.openai.com/auth');
+}
+
+function readOpenAiProfileClaims(payload: unknown): Record<string, unknown> | null {
+  return readObjectField(payload, 'https://api.openai.com/profile');
+}
+
+function resolveChatGptAccountIdFromPayload(payload: unknown): string | null {
+  return readPayloadString(payload, ['chatgpt_account_id', 'account_id'])
+    ?? readPayloadString(readOpenAiAuthClaims(payload), ['chatgpt_account_id', 'account_id']);
+}
+
+function resolveChatGptAccountId(auth?: CodexAuthRecord | null): string | null {
+  return trimOptionalText(auth?.tokens?.account_id)
+    ?? resolveChatGptAccountIdFromPayload(decodeJwtPayload(auth?.tokens?.id_token))
+    ?? resolveChatGptAccountIdFromPayload(decodeJwtPayload(auth?.tokens?.access_token));
+}
+
+function resolveChatGptAccountIsFedrampFromPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  const record = payload as Record<string, unknown>;
+  if (record.chatgpt_account_is_fedramp === true) return true;
+  return readOpenAiAuthClaims(payload)?.chatgpt_account_is_fedramp === true;
+}
+
+function resolveChatGptAccountIsFedramp(auth?: CodexAuthRecord | null): boolean {
+  return resolveChatGptAccountIsFedrampFromPayload(decodeJwtPayload(auth?.tokens?.id_token))
+    || resolveChatGptAccountIsFedrampFromPayload(decodeJwtPayload(auth?.tokens?.access_token));
+}
+
 function resolveClientId(auth?: CodexAuthRecord | null): string {
   const accessPayload = decodeJwtPayload(auth?.tokens?.access_token);
   const idPayload = decodeJwtPayload(auth?.tokens?.id_token);
@@ -272,9 +336,10 @@ function formatAccountLabel(auth: CodexAuthRecord): string | null {
   const accessPayload = decodeJwtPayload(auth.tokens?.access_token);
   const email =
     trimOptionalText(idPayload?.email) ??
-    trimOptionalText((accessPayload?.['https://api.openai.com/profile'] as { email?: unknown } | undefined)?.email);
+    trimOptionalText(readOpenAiProfileClaims(idPayload)?.email) ??
+    trimOptionalText(readOpenAiProfileClaims(accessPayload)?.email);
   if (email) return email;
-  return trimOptionalText(auth.tokens?.account_id) ?? null;
+  return resolveChatGptAccountId(auth);
 }
 
 function assertManagedChatGptAuth(auth: CodexAuthRecord | null): asserts auth is CodexAuthRecord & { tokens: CodexAuthTokens } {
@@ -292,8 +357,17 @@ function assertManagedChatGptAuth(auth: CodexAuthRecord | null): asserts auth is
   }
 }
 
+function assertCodexBackendAccount(auth: CodexAuthRecord): string {
+  const accountId = resolveChatGptAccountId(auth);
+  if (!accountId) {
+    throw new Error('Codex OAuth 状态缺少 ChatGPT account id；请退出登录后在控制台 Codex Tab 重新登录。');
+  }
+  return accountId;
+}
+
 function classifyAuthErrorStatus(error: unknown): BotConsoleAuthStatus {
   const message = error instanceof Error ? error.message : String(error);
+  if (/ChatGPT account id/i.test(message)) return 'error';
   if (/尚未登录|缺少|not found|enoent/i.test(message)) return 'unauthenticated';
   if (/过期|expired|刷新失败|refresh/i.test(message)) return 'expired';
   return 'error';
@@ -351,11 +425,317 @@ function buildOpenAIModelsPayload(models: readonly CodexModelOption[]) {
   };
 }
 
+function withCodexClientMetadata(
+  body: unknown,
+  ids: { installationId: string; sessionId: string; threadId: string; turnId: string; windowId: string },
+): unknown {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+  const source = body as Record<string, unknown>;
+  const existingMetadata =
+    source.client_metadata && typeof source.client_metadata === 'object' && !Array.isArray(source.client_metadata)
+      ? source.client_metadata as Record<string, unknown>
+      : {};
+  const turnMetadata = {
+    installation_id: ids.installationId,
+    session_id: ids.sessionId,
+    thread_id: ids.threadId,
+    turn_id: ids.turnId,
+    window_id: ids.windowId,
+  };
+  return {
+    ...source,
+    prompt_cache_key: trimOptionalText(source.prompt_cache_key) ?? ids.threadId,
+    client_metadata: {
+      ...existingMetadata,
+      'x-codex-installation-id': ids.installationId,
+      session_id: ids.sessionId,
+      thread_id: ids.threadId,
+      turn_id: ids.turnId,
+      'x-codex-window-id': ids.windowId,
+      'x-codex-turn-metadata': JSON.stringify(turnMetadata),
+    },
+  };
+}
+
+function readResponsesTextContent(content: unknown): string | null {
+  if (typeof content === 'string') return trimOptionalText(content);
+  if (!Array.isArray(content)) return null;
+  const parts = content.flatMap((item): string[] => {
+    if (typeof item === 'string') return [item];
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const text = trimOptionalText((item as Record<string, unknown>).text);
+    return text ? [text] : [];
+  });
+  return trimOptionalText(parts.join('\n'));
+}
+
+function liftCodexInstructionsFromInput(input: unknown): { input: unknown; instructions: string | null } {
+  if (!Array.isArray(input)) {
+    return { input, instructions: null };
+  }
+
+  const retained: unknown[] = [];
+  const instructionParts: string[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      retained.push(item);
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const role = trimOptionalText(record.role);
+    if (role === 'system' || role === 'developer') {
+      const content = readResponsesTextContent(record.content);
+      if (content) instructionParts.push(content);
+      continue;
+    }
+    retained.push(item);
+  }
+
+  return {
+    input: retained,
+    instructions: trimOptionalText(instructionParts.join('\n\n')),
+  };
+}
+
 function normalizeCodexRequestBody(body: unknown): unknown {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
   const source = body as Record<string, unknown>;
   const model = normalizeCodexModelId(source.model);
-  return model ? { ...source, model } : { ...source };
+  const { input, instructions: liftedInstructions } = liftCodexInstructionsFromInput(source.input);
+  const existingInstructions = trimOptionalText(source.instructions);
+  const instructions = [existingInstructions, liftedInstructions].filter((value): value is string => Boolean(value)).join('\n\n');
+  const {
+    temperature: _temperature,
+    top_p: _topP,
+    stop: _stop,
+    max_output_tokens: _maxOutputTokens,
+    ...codexBody
+  } = source;
+  return {
+    ...codexBody,
+    ...(model ? { model } : {}),
+    ...(input !== source.input ? { input } : {}),
+    instructions: instructions || 'You are ChatGPT, a helpful assistant.',
+    store: false,
+    stream: true,
+  };
+}
+
+type ServerSentEvent = {
+  event: string | null;
+  data: string;
+};
+
+type NormalizedCodexUpstreamResponse = {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+} | null;
+
+function parseServerSentEvents(raw: string): ServerSentEvent[] {
+  const events: ServerSentEvent[] = [];
+  let event: string | null = null;
+  let dataLines: string[] = [];
+
+  const flush = () => {
+    if (event == null && dataLines.length === 0) return;
+    events.push({ event, data: dataLines.join('\n') });
+    event = null;
+    dataLines = [];
+  };
+
+  for (const line of raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')) {
+    if (line === '') {
+      flush();
+      continue;
+    }
+    if (line.startsWith(':')) continue;
+    const separator = line.indexOf(':');
+    const field = separator === -1 ? line : line.slice(0, separator);
+    let value = separator === -1 ? '' : line.slice(separator + 1);
+    if (value.startsWith(' ')) value = value.slice(1);
+    if (field === 'event') event = value;
+    if (field === 'data') dataLines.push(value);
+  }
+  flush();
+  return events;
+}
+
+function readPayloadObject(payload: unknown, key: string): Record<string, unknown> | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const value = (payload as Record<string, unknown>)[key];
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function readPayloadTextField(payload: unknown, key: string): string | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === 'string' ? value : null;
+}
+
+function readPayloadIndex(payload: unknown, key: string): number | null {
+  const value = readPayloadNumber(payload, [key]);
+  return value == null ? null : Math.max(0, Math.trunc(value));
+}
+
+function readOutputItem(payload: unknown): Record<string, unknown> | null {
+  return readPayloadObject(payload, 'item');
+}
+
+function groupOutputTextParts(partsByIndex: Map<string, string>): Map<number, Map<number, string>> {
+  const grouped = new Map<number, Map<number, string>>();
+  for (const [key, text] of partsByIndex) {
+    if (!text) continue;
+    const [outputIndexText, contentIndexText] = key.split(':');
+    const outputIndex = Number(outputIndexText);
+    const contentIndex = Number(contentIndexText);
+    if (!Number.isInteger(outputIndex) || !Number.isInteger(contentIndex)) continue;
+    const content = grouped.get(outputIndex) ?? new Map<number, string>();
+    content.set(contentIndex, text);
+    grouped.set(outputIndex, content);
+  }
+  return grouped;
+}
+
+function patchMessageOutputText(item: unknown, textByContentIndex: Map<number, string>): Record<string, unknown> {
+  const source = item && typeof item === 'object' && !Array.isArray(item)
+    ? item as Record<string, unknown>
+    : {};
+  const contentByIndex = new Map<number, unknown>();
+  const existingContent = Array.isArray(source.content) ? source.content : [];
+  existingContent.forEach((part, index) => {
+    contentByIndex.set(index, part);
+  });
+  for (const [contentIndex, text] of textByContentIndex) {
+    const existing = contentByIndex.get(contentIndex);
+    const base = existing && typeof existing === 'object' && !Array.isArray(existing)
+      ? existing as Record<string, unknown>
+      : {};
+    contentByIndex.set(contentIndex, {
+      ...base,
+      type: 'output_text',
+      text,
+    });
+  }
+  const content = [...contentByIndex.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, part]) => part);
+  return {
+    ...source,
+    type: 'message',
+    role: trimOptionalText(source.role) ?? 'assistant',
+    content,
+  };
+}
+
+function responseWithStreamedOutput(
+  response: Record<string, unknown>,
+  outputItemsByIndex: Map<number, Record<string, unknown>>,
+  textPartsByIndex: Map<string, string>,
+): Record<string, unknown> {
+  const outputByIndex = new Map<number, unknown>();
+  if (Array.isArray(response.output)) {
+    response.output.forEach((item, index) => {
+      outputByIndex.set(index, item);
+    });
+  }
+  for (const [index, item] of outputItemsByIndex) {
+    outputByIndex.set(index, item);
+  }
+  for (const [outputIndex, textByContentIndex] of groupOutputTextParts(textPartsByIndex)) {
+    const current = outputByIndex.get(outputIndex);
+    outputByIndex.set(outputIndex, patchMessageOutputText(current, textByContentIndex));
+  }
+  const output = [...outputByIndex.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, item]) => item)
+    .filter((item) => item != null);
+  if (output.length === 0 && Array.isArray(response.output)) return response;
+  return {
+    ...response,
+    output,
+  };
+}
+
+function normalizeCodexResponsesSse(raw: string): NormalizedCodexUpstreamResponse {
+  let latestResponse: Record<string, unknown> | null = null;
+  let terminalError: string | null = null;
+  const outputTextParts = new Map<string, string>();
+  const outputItemsByIndex = new Map<number, Record<string, unknown>>();
+
+  for (const event of parseServerSentEvents(raw)) {
+    const data = trimOptionalText(event.data);
+    if (!data || data === '[DONE]') continue;
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      terminalError = `Codex SSE 响应包含非法 JSON：${data.slice(0, 200)}`;
+      continue;
+    }
+
+    const response = readPayloadObject(payload, 'response');
+    if (response) latestResponse = response;
+
+    const type = trimOptionalText((payload as Record<string, unknown> | null)?.type) ?? event.event;
+    if (type === 'response.output_text.delta') {
+      const delta = readPayloadTextField(payload, 'delta');
+      if (delta != null) {
+        const outputIndex = readPayloadIndex(payload, 'output_index') ?? 0;
+        const contentIndex = readPayloadIndex(payload, 'content_index') ?? 0;
+        const key = `${outputIndex}:${contentIndex}`;
+        outputTextParts.set(key, `${outputTextParts.get(key) ?? ''}${delta}`);
+      }
+    }
+    if (type === 'response.output_text.done') {
+      const text = readPayloadTextField(payload, 'text');
+      if (text != null) {
+        const outputIndex = readPayloadIndex(payload, 'output_index') ?? 0;
+        const contentIndex = readPayloadIndex(payload, 'content_index') ?? 0;
+        outputTextParts.set(`${outputIndex}:${contentIndex}`, text);
+      }
+    }
+    if (type === 'response.output_item.done') {
+      const outputIndex = readPayloadIndex(payload, 'output_index');
+      const item = readOutputItem(payload);
+      if (outputIndex != null && item) outputItemsByIndex.set(outputIndex, item);
+    }
+    if (type === 'response.completed' && response) {
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify(responseWithStreamedOutput(response, outputItemsByIndex, outputTextParts)),
+      };
+    }
+
+    if (type === 'response.failed' || type === 'response.incomplete' || type === 'error') {
+      const message = trimOptionalText(readPayloadObject(response, 'error')?.message)
+        ?? trimOptionalText(readPayloadObject(payload, 'error')?.message)
+        ?? readPayloadString(payload, ['message'])
+        ?? `Codex SSE ended with ${type}`;
+      terminalError = message;
+    }
+  }
+
+  if (latestResponse && trimOptionalText(latestResponse.status) === 'completed') {
+    return {
+      status: 200,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify(responseWithStreamedOutput(latestResponse, outputItemsByIndex, outputTextParts)),
+    };
+  }
+  if (!latestResponse && !terminalError) return null;
+  return {
+    status: 502,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify(buildJsonError(terminalError ?? 'Codex SSE 响应没有 completed 事件。')),
+  };
+}
+
+function looksLikeServerSentEvents(raw: string): boolean {
+  const trimmed = raw.replace(/^\uFEFF/, '').trimStart();
+  return trimmed.startsWith('event:') || trimmed.startsWith('data:');
 }
 
 function readPayloadString(payload: unknown, keys: readonly string[]): string | null {
@@ -409,25 +789,22 @@ export class CodexOAuthBridgeService implements CodexBridgeStateProvider {
   readonly envFiles: ResolvedEnvFiles;
   readonly stateDir: string;
   readonly authFilePath: string;
-  readonly modelsCacheFilePath: string;
   readonly secretFilePath: string;
-  private readonly execFile: (file: string, args: string[], options?: { cwd?: string; timeout?: number; maxBuffer?: number }) => Promise<ExecResult>;
   private refreshPromise: Promise<CodexAuthRecord> | null = null;
   private readonly loginAttempts = new Map<string, StoredCodexAuthAttempt>();
+  private readonly installationId = randomUUID();
+  private readonly sessionId = randomUUID();
+  private readonly windowId = 'qqbot-koishi-codex-bridge';
 
   constructor(args: {
     rootDir: string;
     envFiles: ResolvedEnvFiles;
-    modelsCacheDir?: string;
-    execFile?: (file: string, args: string[], options?: { cwd?: string; timeout?: number; maxBuffer?: number }) => Promise<ExecResult>;
   }) {
     this.rootDir = args.rootDir;
     this.envFiles = args.envFiles;
     this.stateDir = resolveCodexStateDir(this.rootDir, this.envFiles);
     this.authFilePath = join(this.stateDir, 'codex-chatgpt.oauth.json');
-    this.modelsCacheFilePath = join(resolve(expandHome(args.modelsCacheDir ?? resolveCodexCatalogHome(process.env))), 'models_cache.json');
     this.secretFilePath = join(this.stateDir, 'codex-oauth.bridge-secret');
-    this.execFile = args.execFile ?? execFile;
   }
 
   async getRuntimeConfig(): Promise<CodexBridgeRuntimeConfig> {
@@ -451,13 +828,15 @@ export class CodexOAuthBridgeService implements CodexBridgeStateProvider {
       const auth = await this.readAuthRecord();
       assertManagedChatGptAuth(auth);
       const expiresAt = decodeJwtExpiresAtMs(auth.tokens.access_token);
-      const accountLabel = formatAccountLabel(auth);
+      const accountId = assertCodexBackendAccount(auth);
+      const accountLabel = formatAccountLabel(auth) ?? accountId;
       if (options.probe) {
         const refreshed = await this.resolveAuthRecord({ forceRefresh: false });
+        const refreshedAccountId = assertCodexBackendAccount(refreshed);
         return {
           authKind: 'codex_oauth',
           authStatus: 'ready',
-          accountLabel: formatAccountLabel(refreshed) ?? accountLabel,
+          accountLabel: formatAccountLabel(refreshed) ?? refreshedAccountId,
           authError: null,
           tokenExpiresAt: decodeJwtExpiresAtMs(refreshed.tokens?.access_token),
           attempt: null,
@@ -559,13 +938,14 @@ export class CodexOAuthBridgeService implements CodexBridgeStateProvider {
           attempt,
         );
       const auth = await this.persistTokenResponse(tokens);
+      const accountId = assertCodexBackendAccount(auth);
       attempt.state = 'authorized';
       attempt.error = null;
       this.loginAttempts.delete(attempt.attemptId);
       return {
         authKind: 'codex_oauth',
         authStatus: 'ready',
-        accountLabel: formatAccountLabel(auth),
+        accountLabel: formatAccountLabel(auth) ?? accountId,
         authError: null,
         tokenExpiresAt: decodeJwtExpiresAtMs(auth.tokens?.access_token),
         attempt: null,
@@ -614,11 +994,8 @@ export class CodexOAuthBridgeService implements CodexBridgeStateProvider {
   }
 
   async listModelOptions(): Promise<CodexModelOption[]> {
-    const fromCli = await this.readModelCatalogFromCli();
-    if (fromCli.length > 0) return fromCli;
-    const cached = await readJsonIfExists<unknown>(this.modelsCacheFilePath);
-    const fromCache = filterCodexModelCatalog(cached);
-    return fromCache.length > 0 ? fromCache : [...STATIC_CODEX_MODEL_OPTIONS];
+    const fromBackend = await this.readModelCatalogFromBackend();
+    return fromBackend.length > 0 ? fromBackend : [...STATIC_CODEX_MODEL_OPTIONS];
   }
 
   private async ensureBridgeSecret(): Promise<string> {
@@ -636,11 +1013,15 @@ export class CodexOAuthBridgeService implements CodexBridgeStateProvider {
     return readJsonIfExists<CodexAuthRecord>(this.authFilePath);
   }
 
-  private async resolveAccessToken(options: { forceRefresh?: boolean }): Promise<string> {
+  private async resolveBackendAuthContext(options: { forceRefresh?: boolean }): Promise<CodexBackendAuthContext> {
     const auth = await this.resolveAuthRecord(options);
     const token = trimOptionalText(auth.tokens?.access_token);
     if (!token) throw new Error('Codex OAuth 状态缺少 access_token；请在控制台 Codex Tab 重新登录。');
-    return token;
+    return {
+      accessToken: token,
+      accountId: assertCodexBackendAccount(auth),
+      isFedrampAccount: resolveChatGptAccountIsFedramp(auth),
+    };
   }
 
   private async resolveAuthRecord(options: { forceRefresh?: boolean }): Promise<CodexAuthRecord> {
@@ -744,6 +1125,12 @@ export class CodexOAuthBridgeService implements CodexBridgeStateProvider {
     if (!accessToken) {
       throw new Error('Codex OAuth token 响应缺少 access_token。');
     }
+    const idToken = trimOptionalText(payload.id_token) ?? previousAuth?.tokens?.id_token ?? null;
+    const accountId = trimOptionalText(payload.account_id)
+      ?? resolveChatGptAccountIdFromPayload(decodeJwtPayload(idToken))
+      ?? resolveChatGptAccountIdFromPayload(decodeJwtPayload(accessToken))
+      ?? previousAuth?.tokens?.account_id
+      ?? null;
     const nextAuth: CodexAuthRecord = {
       ...(previousAuth ?? {}),
       auth_mode: 'chatgpt',
@@ -751,8 +1138,8 @@ export class CodexOAuthBridgeService implements CodexBridgeStateProvider {
         ...(previousAuth?.tokens ?? {}),
         access_token: accessToken,
         refresh_token: trimOptionalText(payload.refresh_token) ?? previousAuth?.tokens?.refresh_token ?? null,
-        id_token: trimOptionalText(payload.id_token) ?? previousAuth?.tokens?.id_token ?? null,
-        account_id: trimOptionalText(payload.account_id) ?? previousAuth?.tokens?.account_id ?? null,
+        id_token: idToken,
+        account_id: accountId,
       },
       last_refresh: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -781,14 +1168,48 @@ export class CodexOAuthBridgeService implements CodexBridgeStateProvider {
     return this.persistTokenResponse((await response.json()) as CodexTokenResponse, auth);
   }
 
-  private async readModelCatalogFromCli(): Promise<CodexModelOption[]> {
+  private buildCodexBackendHeaders(
+    auth: CodexBackendAuthContext,
+    accept: string,
+    requestIds?: { threadId: string },
+  ): Record<string, string> {
+    const version = codexClientVersion();
+    const headers: Record<string, string> = {
+      Accept: accept,
+      Authorization: `Bearer ${auth.accessToken}`,
+      'ChatGPT-Account-ID': auth.accountId,
+      originator: codexOriginator(),
+      'User-Agent': `${codexOriginator()}/${version}`,
+      version,
+    };
+    if (requestIds) {
+      headers['session-id'] = this.sessionId;
+      headers['thread-id'] = requestIds.threadId;
+    }
+    if (auth.isFedrampAccount) {
+      headers['X-OpenAI-Fedramp'] = 'true';
+    }
+    return headers;
+  }
+
+  private async readModelCatalogFromBackend(): Promise<CodexModelOption[]> {
     try {
-      const result = await this.execFile('codex', ['debug', 'models'], {
-        cwd: this.rootDir,
-        timeout: 5000,
-        maxBuffer: 16 * 1024 * 1024,
+      const firstAuth = await this.resolveBackendAuthContext({ forceRefresh: false });
+      const url = new URL(codexBackendUrl('/models'));
+      url.searchParams.set('client_version', codexClientVersion());
+      let response = await fetch(url.toString(), {
+        method: 'GET',
+        headers: this.buildCodexBackendHeaders(firstAuth, 'application/json'),
       });
-      return filterCodexModelCatalog(parseJson<unknown>(result.stdout, 'codex debug models'));
+      if (response.status === 401) {
+        const refreshedAuth = await this.resolveBackendAuthContext({ forceRefresh: true });
+        response = await fetch(url.toString(), {
+          method: 'GET',
+          headers: this.buildCodexBackendHeaders(refreshedAuth, 'application/json'),
+        });
+      }
+      if (!response.ok) return [];
+      return filterCodexModelCatalog(await response.json().catch(() => null));
     } catch {
       return [];
     }
@@ -799,24 +1220,36 @@ export class CodexOAuthBridgeService implements CodexBridgeStateProvider {
     retried: boolean,
   ): Promise<{ status: number; headers: Record<string, string>; body: string }> {
     try {
-      const accessToken = await this.resolveAccessToken({ forceRefresh: retried });
-      const upstreamBaseUrl = trimOptionalText(process.env.CHATLUNA_CODEX_UPSTREAM_BASE_URL) ?? DEFAULT_OPENAI_API_BASE_URL;
-      const response = await fetch(`${upstreamBaseUrl.replace(/\/+$/, '')}/responses`, {
+      const auth = await this.resolveBackendAuthContext({ forceRefresh: retried });
+      const threadId = randomUUID();
+      const turnId = randomUUID();
+      const upstreamBody = withCodexClientMetadata(body ?? {}, {
+        installationId: this.installationId,
+        sessionId: this.sessionId,
+        threadId,
+        turnId,
+        windowId: this.windowId,
+      });
+      const response = await fetch(codexBackendUrl('/responses'), {
         method: 'POST',
         headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${accessToken}`,
+          ...this.buildCodexBackendHeaders(auth, 'text/event-stream, application/json', { threadId }),
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(body ?? {}),
+        body: JSON.stringify(upstreamBody),
       });
       if (response.status === 401 && !retried) {
         return this.proxyUpstreamResponses(body, true);
       }
       const text = await response.text();
+      const contentType = response.headers.get('content-type') ?? 'application/json; charset=utf-8';
+      if (contentType.toLowerCase().includes('text/event-stream') || looksLikeServerSentEvents(text)) {
+        const normalized = normalizeCodexResponsesSse(text);
+        if (normalized) return normalized;
+      }
       return {
         status: response.status,
-        headers: { 'content-type': response.headers.get('content-type') ?? 'application/json; charset=utf-8' },
+        headers: { 'content-type': contentType },
         body: text,
       };
     } catch (error) {
