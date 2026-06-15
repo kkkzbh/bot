@@ -18,7 +18,7 @@ import {
   extractTextContentWithoutVoice,
   isVoiceInputRuntimeAvailable,
   mergeVoiceInputText,
-  normalizeVoiceOutputLanguage,
+  requireVoiceOutputLanguage,
   transcribeAudio,
   type VoiceOutputLanguage,
 } from '../../shared/voice/index.js';
@@ -124,20 +124,20 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  inputEnabled: Schema.boolean().default(true).description('是否启用 QQ 语音转文字。'),
-  outputEnabled: Schema.boolean().default(true).description('是否启用 QQ 文本附带语音回复。'),
-  asrBaseUrl: Schema.string().role('link').description('ASR HTTP 服务地址（默认复用 QQ_VOICE_ASR_BASE_URL）。'),
+  inputEnabled: Schema.boolean().description('是否启用 QQ 语音转文字。'),
+  outputEnabled: Schema.boolean().description('是否启用 QQ 文本附带语音回复。'),
+  asrBaseUrl: Schema.string().role('link').description('ASR HTTP 服务地址。'),
   asrApiKey: Schema.string().role('secret').description('ASR HTTP 服务鉴权 token。'),
-  ttsBaseUrl: Schema.string().role('link').description('TTS HTTP 服务地址（默认复用 QQ_VOICE_TTS_BASE_URL）。'),
+  ttsBaseUrl: Schema.string().role('link').description('TTS HTTP 服务地址。'),
   ttsApiKey: Schema.string().role('secret').description('TTS HTTP 服务鉴权 token。'),
-  inputMaxSeconds: Schema.natural().default(60).description('单条入站语音最大时长（秒）。'),
-  outputMaxWords: Schema.natural().default(80).description('单个语音段最大词数。'),
-  outputMaxSeconds: Schema.natural().default(45).description('单个语音段最大时长（秒）。'),
-  voiceOutputLanguage: Schema.string().default('zh').description('模型生成语音回复文本的目标语言：zh、ja、en 或 auto。'),
-  transcribeTimeoutMs: Schema.natural().role('time').default(30000).description('ASR 请求超时（毫秒）。'),
-  synthTimeoutMs: Schema.natural().role('time').default(300000).description('TTS 请求超时（毫秒）。'),
-  replyInterruptCollectWindowMs: Schema.natural().role('time').default(400).description('回复中断聚合窗口（毫秒）。'),
-  replyInterruptMaxPendingInputs: Schema.natural().default(8).description('回复中断最多暂存的新消息条数。'),
+  inputMaxSeconds: Schema.natural().description('单条入站语音最大时长（秒）。'),
+  outputMaxWords: Schema.natural().description('单个语音段最大词数。'),
+  outputMaxSeconds: Schema.natural().description('单个语音段最大时长（秒）。'),
+  voiceOutputLanguage: Schema.string().description('模型生成语音回复文本的目标语言：zh、ja、en 或 auto。'),
+  transcribeTimeoutMs: Schema.natural().role('time').description('ASR 请求超时（毫秒）。'),
+  synthTimeoutMs: Schema.natural().role('time').description('TTS 请求超时（毫秒）。'),
+  replyInterruptCollectWindowMs: Schema.natural().role('time').description('回复中断聚合窗口（毫秒）。'),
+  replyInterruptMaxPendingInputs: Schema.natural().description('回复中断最多暂存的新消息条数。'),
 });
 
 export interface RuntimeConfig {
@@ -327,9 +327,47 @@ function normalizeBaseUrl(input?: string | null): string {
   return String(input ?? '').trim().replace(/\/+$/, '');
 }
 
-function clampNatural(input: unknown, fallback: number): number {
-  const value = Number(input);
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+function requireConfigValue<T>(config: Config, key: keyof Config): NonNullable<T> {
+  const value = config[key] as T | null | undefined;
+  if (value == null) {
+    throw new Error(`QQ 语音配置缺失：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
+  }
+  return value as NonNullable<T>;
+}
+
+function requireBooleanConfig(config: Config, key: keyof Config): boolean {
+  const value = requireConfigValue<unknown>(config, key);
+  if (typeof value !== 'boolean') {
+    throw new Error(`QQ 语音配置 ${String(key)} 必须是 boolean。`);
+  }
+  return value;
+}
+
+function requireStringConfig(config: Config, key: keyof Config): string {
+  return String(requireConfigValue<unknown>(config, key)).trim();
+}
+
+function requireNaturalConfig(config: Config, key: keyof Config): number {
+  const value = Number(requireConfigValue<unknown>(config, key));
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`QQ 语音配置 ${String(key)} 必须是正整数。`);
+  }
+  return Math.floor(value);
+}
+
+function requireEnvValue(env: NodeJS.ProcessEnv, key: string): string {
+  if (!(key in env)) {
+    throw new Error(`${key} 未配置。默认值必须由 env/koishi.yml 显式提供。`);
+  }
+  return String(env[key] ?? '');
+}
+
+function requireBooleanEnv(env: NodeJS.ProcessEnv, key: string): boolean {
+  const raw = requireEnvValue(env, key).trim().toLowerCase();
+  if (raw !== 'true' && raw !== 'false') {
+    throw new Error(`${key} 必须是 true 或 false。`);
+  }
+  return raw === 'true';
 }
 
 function detectRuntimeRole(): RuntimeRole {
@@ -363,35 +401,44 @@ function isLoopbackUrl(url: string): boolean {
 
 function toRuntimeConfig(config: Config): RuntimeConfig {
   return {
-    inputEnabled: config.inputEnabled ?? String(process.env.QQ_VOICE_INPUT_ENABLED ?? 'true').toLowerCase() !== 'false',
-    outputEnabled:
-      config.outputEnabled ?? String(process.env.QQ_VOICE_OUTPUT_ENABLED ?? 'true').toLowerCase() !== 'false',
-    asrBaseUrl: normalizeBaseUrl(config.asrBaseUrl ?? process.env.QQ_VOICE_ASR_BASE_URL),
-    asrApiKey: config.asrApiKey ?? process.env.QQ_VOICE_ASR_API_KEY ?? '',
-    ttsBaseUrl: normalizeBaseUrl(config.ttsBaseUrl ?? process.env.QQ_VOICE_TTS_BASE_URL),
-    ttsApiKey: config.ttsApiKey ?? process.env.QQ_VOICE_TTS_API_KEY ?? '',
-    inputMaxSeconds: clampNatural(config.inputMaxSeconds ?? process.env.QQ_VOICE_INPUT_MAX_SECONDS, 60),
-    outputMaxWords: clampNatural(config.outputMaxWords ?? process.env.QQ_VOICE_OUTPUT_MAX_WORDS, 80),
-    outputMaxSeconds: clampNatural(config.outputMaxSeconds ?? process.env.QQ_VOICE_OUTPUT_MAX_SECONDS, 45),
-    voiceOutputLanguage: normalizeVoiceOutputLanguage(config.voiceOutputLanguage ?? process.env.QQ_VOICE_OUTPUT_LANGUAGE),
-    transcribeTimeoutMs: clampNatural(
-      config.transcribeTimeoutMs ?? process.env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS,
-      30_000,
-    ),
-    synthTimeoutMs: clampNatural(config.synthTimeoutMs ?? process.env.QQ_VOICE_SYNTH_TIMEOUT_MS, 300_000),
-    replyInterruptCollectWindowMs: clampNatural(
-      config.replyInterruptCollectWindowMs ?? process.env.QQBOT_REPLY_COLLECT_WINDOW_MS,
-      400,
-    ),
-    replyInterruptMaxPendingInputs: clampNatural(
-      config.replyInterruptMaxPendingInputs ?? process.env.QQBOT_REPLY_MAX_PENDING_INPUTS,
-      8,
-    ),
+    inputEnabled: requireBooleanConfig(config, 'inputEnabled'),
+    outputEnabled: requireBooleanConfig(config, 'outputEnabled'),
+    asrBaseUrl: normalizeBaseUrl(requireStringConfig(config, 'asrBaseUrl')),
+    asrApiKey: requireStringConfig(config, 'asrApiKey'),
+    ttsBaseUrl: normalizeBaseUrl(requireStringConfig(config, 'ttsBaseUrl')),
+    ttsApiKey: requireStringConfig(config, 'ttsApiKey'),
+    inputMaxSeconds: requireNaturalConfig(config, 'inputMaxSeconds'),
+    outputMaxWords: requireNaturalConfig(config, 'outputMaxWords'),
+    outputMaxSeconds: requireNaturalConfig(config, 'outputMaxSeconds'),
+    voiceOutputLanguage: requireVoiceOutputLanguage(requireStringConfig(config, 'voiceOutputLanguage')),
+    transcribeTimeoutMs: requireNaturalConfig(config, 'transcribeTimeoutMs'),
+    synthTimeoutMs: requireNaturalConfig(config, 'synthTimeoutMs'),
+    replyInterruptCollectWindowMs: requireNaturalConfig(config, 'replyInterruptCollectWindowMs'),
+    replyInterruptMaxPendingInputs: requireNaturalConfig(config, 'replyInterruptMaxPendingInputs'),
   };
 }
 
-export function createVoiceRuntimeConfig(config: Config = {}): RuntimeConfig {
+export function createVoiceRuntimeConfig(config: Config): RuntimeConfig {
   return toRuntimeConfig(config);
+}
+
+export function createVoiceRuntimeConfigFromEnv(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
+  return createVoiceRuntimeConfig({
+    inputEnabled: requireBooleanEnv(env, 'QQ_VOICE_INPUT_ENABLED'),
+    outputEnabled: requireBooleanEnv(env, 'QQ_VOICE_OUTPUT_ENABLED'),
+    asrBaseUrl: requireEnvValue(env, 'QQ_VOICE_ASR_BASE_URL'),
+    asrApiKey: requireEnvValue(env, 'QQ_VOICE_ASR_API_KEY'),
+    ttsBaseUrl: requireEnvValue(env, 'QQ_VOICE_TTS_BASE_URL'),
+    ttsApiKey: requireEnvValue(env, 'QQ_VOICE_TTS_API_KEY'),
+    inputMaxSeconds: Number(requireEnvValue(env, 'QQ_VOICE_INPUT_MAX_SECONDS')),
+    outputMaxWords: Number(requireEnvValue(env, 'QQ_VOICE_OUTPUT_MAX_WORDS')),
+    outputMaxSeconds: Number(requireEnvValue(env, 'QQ_VOICE_OUTPUT_MAX_SECONDS')),
+    voiceOutputLanguage: requireEnvValue(env, 'QQ_VOICE_OUTPUT_LANGUAGE'),
+    transcribeTimeoutMs: Number(requireEnvValue(env, 'QQ_VOICE_TRANSCRIBE_TIMEOUT_MS')),
+    synthTimeoutMs: Number(requireEnvValue(env, 'QQ_VOICE_SYNTH_TIMEOUT_MS')),
+    replyInterruptCollectWindowMs: Number(requireEnvValue(env, 'QQBOT_REPLY_COLLECT_WINDOW_MS')),
+    replyInterruptMaxPendingInputs: Number(requireEnvValue(env, 'QQBOT_REPLY_MAX_PENDING_INPUTS')),
+  });
 }
 
 function assertVoiceRuntimeConfig(runtime: RuntimeConfig): void {
@@ -905,13 +952,6 @@ export function buildTurnCapabilitySnapshot(session: SessionWithVoiceState, snap
     stickerAvailableCount,
     source: snapshot.source,
   };
-}
-
-function resolveBooleanEnv(value: unknown, fallback = false): boolean {
-  if (typeof value === 'boolean') return value;
-  const normalized = String(value ?? '').trim().toLowerCase();
-  if (!normalized) return fallback;
-  return normalized !== 'false';
 }
 
 function ensureReplyPluginRoom(room: ReplyRuntimeRoomLike | undefined): void {
@@ -1708,7 +1748,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const replyInterruptFeatureKey = 'QQBOT_REPLY_INTERRUPT_ENABLED' as ScopedFeatureKey;
     const replyInterruptEnabled = featurePolicy
       ? await featurePolicy.resolveFeatureEnabled(session, replyInterruptFeatureKey)
-      : resolveBooleanEnv(process.env.QQBOT_REPLY_INTERRUPT_ENABLED, false);
+      : requireBooleanEnv(process.env, 'QQBOT_REPLY_INTERRUPT_ENABLED');
     return replyInterruptEnabled ? 'interrupt' : 'queue';
   };
 

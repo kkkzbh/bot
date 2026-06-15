@@ -1,6 +1,6 @@
 import { Context, Logger, Schema, type Session } from 'koishi';
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
-import { createVoiceRuntimeConfig } from '../reply/index.js';
+import { createVoiceRuntimeConfigFromEnv } from '../reply/index.js';
 import {
   buildGroupScopeKey,
   buildRealtimeModalities,
@@ -29,7 +29,6 @@ import {
 
 const logger = new Logger('realtime-message');
 const CHAT_CHAIN_CONTINUE = 2;
-const DEFAULT_MAX_INJECT_COUNT = 12;
 
 export const name = 'realtime-message';
 export const inject = { required: ['chatluna'], optional: ['featurePolicy'] } as const;
@@ -39,7 +38,7 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  maxInjectCount: Schema.natural().default(DEFAULT_MAX_INJECT_COUNT).description('每轮最多注入多少条实时消息。'),
+  maxInjectCount: Schema.natural().description('每轮最多注入多少条实时消息。'),
 });
 
 interface RuntimeConfig {
@@ -91,24 +90,30 @@ type ContextWithRealtime = Context & {
   };
 };
 
-function normalizeBoolean(value: unknown, fallback = true): boolean {
+function requireBooleanEnv(key: string): boolean {
+  const value = process.env[key];
   const raw = String(value ?? '').trim().toLowerCase();
-  if (!raw) return fallback;
-  return raw !== 'false';
+  if (!raw) {
+    throw new Error(`${key} 未配置。默认值必须由 env/koishi.yml 显式提供。`);
+  }
+  if (raw !== 'true' && raw !== 'false') {
+    throw new Error(`${key} 必须是 true 或 false。`);
+  }
+  return raw === 'true';
 }
 
-function clampNatural(value: unknown, fallback: number): number {
+function requireNaturalConfig(config: Config, key: keyof Config): number {
+  const value = config[key];
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error(`实时消息配置缺失或非法：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
+  }
   return Math.floor(parsed);
 }
 
 function toRuntimeConfig(config: Config): RuntimeConfig {
   return {
-    maxInjectCount: clampNatural(
-      config.maxInjectCount ?? process.env.QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT,
-      DEFAULT_MAX_INJECT_COUNT,
-    ),
+    maxInjectCount: requireNaturalConfig(config, 'maxInjectCount'),
   };
 }
 
@@ -119,7 +124,7 @@ function resolveMessageId(value: unknown): string | null {
 
 function resolveRealtimeEnabledFallback(session: Session): boolean {
   if (session.isDirect) return false;
-  return normalizeBoolean(process.env.QQBOT_REALTIME_MESSAGE_ENABLED, true);
+  return requireBooleanEnv('QQBOT_REALTIME_MESSAGE_ENABLED');
 }
 
 async function resolveRealtimeFeatureEnabled(
@@ -136,7 +141,7 @@ async function resolveVoiceInputFeatureEnabled(
   session: Session,
 ): Promise<boolean> {
   if (!featurePolicy) {
-    return normalizeBoolean(process.env.QQ_VOICE_INPUT_ENABLED, true);
+    return requireBooleanEnv('QQ_VOICE_INPUT_ENABLED');
   }
   return featurePolicy.resolveFeatureEnabled(session, 'QQ_VOICE_INPUT_ENABLED');
 }
@@ -158,7 +163,7 @@ async function captureRealtimeEntry(
   let voiceTranscript = cachedTranscript || '';
 
   if (hasVoiceInput && !voiceTranscript) {
-    const voiceRuntime = createVoiceRuntimeConfig();
+    const voiceRuntime = createVoiceRuntimeConfigFromEnv();
     const voiceFeatureEnabled = await resolveVoiceInputFeatureEnabled(featurePolicy, session);
     if (!voiceFeatureEnabled || !isVoiceInputRuntimeAvailable(voiceRuntime)) {
       return null;

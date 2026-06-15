@@ -16,11 +16,6 @@ export const CF_USER_RATING_TOOL = 'cf_user_rating';
 export const CF_USER_SUBMISSIONS_TOOL = 'cf_user_submissions';
 export const CF_CONTESTS_TOOL = 'cf_contests';
 
-const DEFAULT_CACHE_TTL_MS = 300_000;
-const DEFAULT_REQUEST_INTERVAL_MS = 2_100;
-const DEFAULT_RATING_CHART_WIDTH = 1_789;
-const DEFAULT_RATING_CHART_HEIGHT = 838;
-
 export interface Config {
   cacheTtlMs?: number;
   requestIntervalMs?: number;
@@ -29,10 +24,10 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  cacheTtlMs: Schema.natural().default(DEFAULT_CACHE_TTL_MS).description('Codeforces 查询结果进程内缓存时间（毫秒）。'),
-  requestIntervalMs: Schema.natural().default(DEFAULT_REQUEST_INTERVAL_MS).description('Codeforces API 最小请求间隔（毫秒）。'),
-  ratingChartWidth: Schema.natural().default(DEFAULT_RATING_CHART_WIDTH).description('rating 历史图宽度。'),
-  ratingChartHeight: Schema.natural().default(DEFAULT_RATING_CHART_HEIGHT).description('rating 历史图高度。'),
+  cacheTtlMs: Schema.natural().description('Codeforces 查询结果进程内缓存时间（毫秒）。'),
+  requestIntervalMs: Schema.natural().description('Codeforces API 最小请求间隔（毫秒）。'),
+  ratingChartWidth: Schema.natural().description('rating 历史图宽度。'),
+  ratingChartHeight: Schema.natural().description('rating 历史图高度。'),
 });
 
 type StorageTempFileLike = {
@@ -73,27 +68,21 @@ type ToolSessionLike = {
   userId?: string | null;
 };
 
-function clampNatural(value: unknown, fallback: number): number {
+function requireNaturalConfig(config: Config, key: keyof Config): number {
+  const value = config[key];
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error(`OJ 工具配置缺失或非法：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
+  }
   return Math.floor(parsed);
 }
 
 function toRuntimeConfig(config: Config): RuntimeConfig {
   return {
-    cacheTtlMs: clampNatural(config.cacheTtlMs ?? process.env.QQBOT_OJ_TOOLS_CACHE_TTL_MS, DEFAULT_CACHE_TTL_MS),
-    requestIntervalMs: clampNatural(
-      config.requestIntervalMs ?? process.env.QQBOT_OJ_TOOLS_REQUEST_INTERVAL_MS,
-      DEFAULT_REQUEST_INTERVAL_MS,
-    ),
-    ratingChartWidth: clampNatural(
-      config.ratingChartWidth ?? process.env.QQBOT_OJ_TOOLS_RATING_CHART_WIDTH,
-      DEFAULT_RATING_CHART_WIDTH,
-    ),
-    ratingChartHeight: clampNatural(
-      config.ratingChartHeight ?? process.env.QQBOT_OJ_TOOLS_RATING_CHART_HEIGHT,
-      DEFAULT_RATING_CHART_HEIGHT,
-    ),
+    cacheTtlMs: requireNaturalConfig(config, 'cacheTtlMs'),
+    requestIntervalMs: requireNaturalConfig(config, 'requestIntervalMs'),
+    ratingChartWidth: requireNaturalConfig(config, 'ratingChartWidth'),
+    ratingChartHeight: requireNaturalConfig(config, 'ratingChartHeight'),
   };
 }
 

@@ -175,24 +175,29 @@ function normalizeText(value: unknown): string {
   return String(value ?? '').trim();
 }
 
-function normalizeBoolean(value: unknown, fallback = true): boolean {
-  const raw = normalizeText(value).toLowerCase();
-  if (!raw) return fallback;
-  return raw !== 'false';
+function requireBooleanEnv(key: string): boolean {
+  const raw = normalizeText(process.env[key]).toLowerCase();
+  if (!raw) {
+    throw new Error(`${key} 未配置。默认值必须由 env/koishi.yml 显式提供。`);
+  }
+  if (raw !== 'true' && raw !== 'false') {
+    throw new Error(`${key} 必须是 true 或 false。`);
+  }
+  return raw === 'true';
 }
 
 function defaultFeatureEnabled(featureKey: ScopedFeatureKey): boolean {
   switch (featureKey) {
     case 'QQBOT_REALTIME_MESSAGE_ENABLED':
-      return normalizeBoolean(process.env.QQBOT_REALTIME_MESSAGE_ENABLED, true);
+      return requireBooleanEnv('QQBOT_REALTIME_MESSAGE_ENABLED');
     case 'QQBOT_REPLY_INTERRUPT_ENABLED':
-      return normalizeBoolean(process.env.QQBOT_REPLY_INTERRUPT_ENABLED, false);
+      return requireBooleanEnv('QQBOT_REPLY_INTERRUPT_ENABLED');
     case 'QQ_VOICE_INPUT_ENABLED':
-      return normalizeBoolean(process.env.QQ_VOICE_INPUT_ENABLED, true);
+      return requireBooleanEnv('QQ_VOICE_INPUT_ENABLED');
     case 'QQ_VOICE_OUTPUT_ENABLED':
-      return normalizeBoolean(process.env.QQ_VOICE_OUTPUT_ENABLED, true);
+      return requireBooleanEnv('QQ_VOICE_OUTPUT_ENABLED');
     case 'CHAT_NATURAL_TRIGGER_ENABLED':
-      return normalizeBoolean(process.env.CHAT_NATURAL_TRIGGER_ENABLED, true);
+      return requireBooleanEnv('CHAT_NATURAL_TRIGGER_ENABLED');
     default:
       return true;
   }

@@ -76,6 +76,7 @@ vi.mock('koishi', () => {
 });
 
 import { apply } from '../src/plugins/automation/index.js';
+import { apply as applySticker } from '../src/plugins/sticker/index.js';
 import { mainChatRuntimeState } from '../src/plugins/shared/llm/main-chat-runtime.js';
 import { resolveMainChatRuntimeProfileFromEnv } from '../src/plugins/shared/llm/main-chat-tabs.js';
 import { TOOL_CATALOG } from '../src/plugins/tool-policy/catalog.js';
@@ -209,6 +210,9 @@ function createHarness(seed: Record<string, Record<string, any>[]> = {}) {
     }),
   };
 
+  applySticker(ctx as never, {
+    stickerDir: './data/chathub/stickers',
+  });
   apply(ctx as never, {
     pollIntervalMs: 1000,
     maxJobsPerUser: 20,
@@ -298,6 +302,21 @@ describe('task automation tools and execution', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-03T10:00:00+08:00'));
+    vi.stubEnv('QQ_VOICE_INPUT_ENABLED', 'true');
+    vi.stubEnv('QQ_VOICE_OUTPUT_ENABLED', 'true');
+    vi.stubEnv('QQ_VOICE_ASR_BASE_URL', 'http://127.0.0.1:8081');
+    vi.stubEnv('QQ_VOICE_ASR_API_KEY', 'qqbot-voice-asr-token');
+    vi.stubEnv('QQ_VOICE_TTS_BASE_URL', 'http://127.0.0.1:8082');
+    vi.stubEnv('QQ_VOICE_TTS_API_KEY', 'qqbot-voice-tts-token');
+    vi.stubEnv('QQ_VOICE_OUTPUT_LANGUAGE', 'zh');
+    vi.stubEnv('QQ_VOICE_INPUT_MAX_SECONDS', '60');
+    vi.stubEnv('QQ_VOICE_OUTPUT_MAX_WORDS', '80');
+    vi.stubEnv('QQ_VOICE_OUTPUT_MAX_SECONDS', '45');
+    vi.stubEnv('QQ_VOICE_TRANSCRIBE_TIMEOUT_MS', '45000');
+    vi.stubEnv('QQ_VOICE_SYNTH_TIMEOUT_MS', '300000');
+    vi.stubEnv('QQBOT_REPLY_COLLECT_WINDOW_MS', '400');
+    vi.stubEnv('QQBOT_REPLY_MAX_PENDING_INPUTS', '8');
+    vi.stubEnv('QQBOT_REPLY_INTERRUPT_ENABLED', 'false');
     process.env.CHATLUNA_ACTIVE_TAB = 'openai';
     mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv(process.env));
   });
@@ -305,6 +324,7 @@ describe('task automation tools and execution', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     process.env.CHATLUNA_ACTIVE_TAB = originalActiveTab;
   });
 

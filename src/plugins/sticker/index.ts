@@ -25,8 +25,7 @@ export {
 } from './selection.js';
 
 const logger = new Logger(name);
-const DEFAULT_STICKER_DIR = './data/chathub/stickers';
-let runtimeStickerDir = DEFAULT_STICKER_DIR;
+let runtimeStickerDir = '';
 let runtimeStickerCatalog: LoadedStickerCatalog | null | undefined;
 
 export interface Config {
@@ -35,7 +34,6 @@ export interface Config {
 
 export const Config: Schema<Config> = Schema.object({
   stickerDir: Schema.string()
-    .default('./data/chathub/stickers')
     .description('表情包目录路径（包含 catalog.generated.json 与 images/ 子目录）。'),
 });
 
@@ -87,6 +85,7 @@ function resolveChatLunaService(ctx: ContextWithChatLuna): ChatLunaLike | undefi
 }
 
 function loadRuntimeStickerCatalog(): LoadedStickerCatalog | null {
+  if (!runtimeStickerDir) return null;
   if (runtimeStickerCatalog !== undefined) {
     return runtimeStickerCatalog ?? null;
   }
@@ -124,8 +123,11 @@ export function resolveStickerCapabilityArtifacts(preset?: string | null): {
   return { state };
 }
 
-export function apply(ctx: Context, config: Config = {}): void {
-  const stickerDir = config.stickerDir?.trim() || DEFAULT_STICKER_DIR;
+export function apply(ctx: Context, config: Config): void {
+  const stickerDir = config.stickerDir?.trim();
+  if (!stickerDir) {
+    throw new Error('表情包配置缺失：stickerDir。默认值必须由 koishi.yml 显式传入。');
+  }
   const catalog = loadStickerCatalog(stickerDir);
   setRuntimeStickerCatalog(stickerDir, catalog);
   if (!catalog?.entries.length) {

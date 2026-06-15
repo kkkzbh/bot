@@ -61,6 +61,17 @@ function isBlockType(value: string): value is BlockType {
   return value === 'message' || value === 'structured_block' || value === 'image' || value === 'meme' || value === 'voice';
 }
 
+function parseTypedEnd(line: string): BlockType | null {
+  const match = line.match(/^END\s+([a-z_]+)$/u);
+  if (!match) return null;
+  const blockType = match[1]!;
+  return isBlockType(blockType) ? blockType : null;
+}
+
+function isMatchingEnd(line: string, block: BlockBuilder): boolean {
+  return line === 'END' || parseTypedEnd(line) === block.type;
+}
+
 function parseMentionList(value: string, line: number, sourceLine: string): string[] {
   const trimmed = value.trim();
   if (/^none$/iu.test(trimmed)) return [];
@@ -151,6 +162,7 @@ export class ChatReplyV1Parser {
     const messages: StructuredReplyMessage[] = [];
     let block: BlockBuilder | null = null;
     let done = false;
+    let lastClosedBlockType: BlockType | null = null;
 
     for (; index < lines.length; index += 1) {
       const lineNumber = index + 1;
@@ -164,7 +176,8 @@ export class ChatReplyV1Parser {
       }
 
       if (block?.activePayload) {
-        if (line === 'END') {
+        if (isMatchingEnd(line, block)) {
+          lastClosedBlockType = block.type;
           messages.push(finalizeBlock(block));
           block = null;
           continue;
@@ -184,6 +197,13 @@ export class ChatReplyV1Parser {
 
       if (isBlank(line)) continue;
 
+      const typedEnd = parseTypedEnd(line);
+      if (typedEnd && typedEnd === lastClosedBlockType) {
+        lastClosedBlockType = null;
+        continue;
+      }
+      lastClosedBlockType = null;
+
       const doneMatch = line.match(/^DONE\s+([A-Za-z0-9_-]{6,32})$/u);
       if (doneMatch) {
         if (block) {
@@ -197,7 +217,8 @@ export class ChatReplyV1Parser {
       }
 
       if (block) {
-        if (line === 'END') {
+        if (isMatchingEnd(line, block)) {
+          lastClosedBlockType = block.type;
           messages.push(finalizeBlock(block));
           block = null;
           continue;

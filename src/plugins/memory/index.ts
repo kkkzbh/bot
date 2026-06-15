@@ -3,7 +3,7 @@ import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
 import { consumePromptEnvelope, registerPromptFragment } from '../shared/prompt-context/index.js';
 import { resolveSessionAvatarUrl, resolveSessionDisplayName, resolveSessionQqNick } from '../shared/session/index.js';
 import { buildMemoryAddress, type MemoryMiddlewareContextLike } from './address.js';
-import { DEFAULT_EMBED_BASE_URL, type MemoryRuntimeConfig } from './config.js';
+import type { MemoryRuntimeConfig } from './config.js';
 import { registerMemoryCommands } from './commands.js';
 import { retrieveMemoryForContext } from './recall.js';
 import { ensureMemoryTables } from './schema.js';
@@ -53,30 +53,30 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  enabled: Schema.boolean().default(true).description('是否启用本地长期记忆。'),
-  readEnabled: Schema.boolean().default(true).description('是否启用长期记忆召回。'),
-  writeEnabled: Schema.boolean().default(true).description('是否启用长期记忆提炼写入。'),
+  enabled: Schema.boolean().description('是否启用本地长期记忆。'),
+  readEnabled: Schema.boolean().description('是否启用长期记忆召回。'),
+  writeEnabled: Schema.boolean().description('是否启用长期记忆提炼写入。'),
   extractBaseUrl: Schema.string().description('长期记忆提炼用 OpenAI 兼容 Base URL；必须和 API Key、模型一起显式配置。'),
   extractApiKey: Schema.string().role('secret').description('长期记忆提炼用 API Key；缺失时不会写入长期记忆。'),
   extractModel: Schema.string().description('长期记忆提炼模型；缺失时不会写入长期记忆。'),
-  extractTimeoutMs: Schema.natural().role('time').default(60000).description('长期记忆提炼请求超时（毫秒）。'),
-  extractRequestMode: Schema.string().default('').description('提炼请求模式：chat_completions / responses；留空默认 chat_completions。'),
-  extractStructuredOutputProtocol: Schema.string().default('').description('提炼输出协议；留空默认 chat_reply_v1。'),
-  extractSupportsJsonMode: Schema.boolean().default(false).description('提炼 provider 是否支持 JSON mode + repair。'),
-  embedBaseUrl: Schema.string().role('link').default(DEFAULT_EMBED_BASE_URL).description('embedding 服务 Base URL。'),
+  extractTimeoutMs: Schema.natural().role('time').description('长期记忆提炼请求超时（毫秒）。'),
+  extractRequestMode: Schema.string().description('提炼请求模式：chat_completions / responses。'),
+  extractStructuredOutputProtocol: Schema.string().description('提炼输出协议。'),
+  extractSupportsJsonMode: Schema.boolean().description('提炼 provider 是否支持 JSON mode + repair。'),
+  embedBaseUrl: Schema.string().role('link').description('embedding 服务 Base URL。'),
   embedApiKey: Schema.string().role('secret').description('embedding 服务 API Key。'),
-  embedModel: Schema.string().default('Qwen/Qwen3-Embedding-8B').description('embedding 模型。'),
-  embedTimeoutMs: Schema.natural().role('time').default(12000).description('embedding 请求超时（毫秒）。'),
-  queryTopK: Schema.natural().default(8).description('长期记忆召回条数上限。'),
-  promptBudgetTokens: Schema.natural().default(1200).description('长期记忆注入 prompt 预算。'),
-  embedBatchSize: Schema.natural().default(16).description('单批 embedding 条数。'),
-  extractIdleMs: Schema.natural().role('time').default(90000).description('会话静默多久后触发记忆提炼。'),
-  extractMessageBatch: Schema.natural().default(12).description('提炼时读取的最近消息条数。'),
-  archiveDays: Schema.natural().default(90).description('低风险 episode 归档天数。'),
-  maxJobRetries: Schema.natural().default(5).description('job 最大重试次数。'),
-  jobLockTimeoutMs: Schema.natural().role('time').default(300000).description('processing job 锁超时。'),
-  maxFacts: Schema.natural().default(8).description('单批最多写入 fact 候选数。'),
-  maxEpisodes: Schema.natural().default(8).description('单批最多写入 episode 候选数。'),
+  embedModel: Schema.string().description('embedding 模型。'),
+  embedTimeoutMs: Schema.natural().role('time').description('embedding 请求超时（毫秒）。'),
+  queryTopK: Schema.natural().description('长期记忆召回条数上限。'),
+  promptBudgetTokens: Schema.natural().description('长期记忆注入 prompt 预算。'),
+  embedBatchSize: Schema.natural().description('单批 embedding 条数。'),
+  extractIdleMs: Schema.natural().role('time').description('会话静默多久后触发记忆提炼。'),
+  extractMessageBatch: Schema.natural().description('提炼时读取的最近消息条数。'),
+  archiveDays: Schema.natural().description('低风险 episode 归档天数。'),
+  maxJobRetries: Schema.natural().description('job 最大重试次数。'),
+  jobLockTimeoutMs: Schema.natural().role('time').description('processing job 锁超时。'),
+  maxFacts: Schema.natural().description('单批最多写入 fact 候选数。'),
+  maxEpisodes: Schema.natural().description('单批最多写入 episode 候选数。'),
 });
 
 type ChainHookBuilder = {
@@ -111,10 +111,49 @@ type ContextServiceView = {
   };
 };
 
-function clampNatural(value: number | undefined, fallback: number, min = 1): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
+function requireNaturalConfig(config: Config, key: keyof Config, min = 1): number {
+  const parsed = Number(config[key]);
+  if (!Number.isFinite(parsed) || parsed < min) {
+    throw new Error(`长期记忆配置缺失或非法：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
+  }
   return Math.max(min, Math.floor(parsed));
+}
+
+function requireBooleanConfig(config: Config, key: keyof Config): boolean {
+  const value = config[key];
+  if (typeof value !== 'boolean') {
+    throw new Error(`长期记忆配置缺失或非法：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
+  }
+  return value;
+}
+
+function requireStringConfig(config: Config, key: keyof Config): string {
+  const value = config[key];
+  if (value == null) {
+    throw new Error(`长期记忆配置缺失：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
+  }
+  return String(value).trim();
+}
+
+function requireExtractRequestMode(config: Config): 'chat_completions' | 'responses' {
+  const value = requireStringConfig(config, 'extractRequestMode');
+  if (value !== 'chat_completions' && value !== 'responses') {
+    throw new Error('长期记忆配置 extractRequestMode 必须是 chat_completions 或 responses。');
+  }
+  return value;
+}
+
+function requireExtractProtocol(config: Config): 'native_chat_json_schema' | 'native_responses_json_schema' | 'chat_reply_v1' | 'json_mode' {
+  const value = requireStringConfig(config, 'extractStructuredOutputProtocol');
+  if (
+    value !== 'native_chat_json_schema' &&
+    value !== 'native_responses_json_schema' &&
+    value !== 'chat_reply_v1' &&
+    value !== 'json_mode'
+  ) {
+    throw new Error('长期记忆配置 extractStructuredOutputProtocol 不受支持。');
+  }
+  return value;
 }
 
 function resolveChatLunaService(ctx: ContextServiceView): ChatLunaLike | undefined {
@@ -129,35 +168,35 @@ function resolveChatLunaService(ctx: ContextServiceView): ChatLunaLike | undefin
 export function toRuntimeConfig(config: Config): MemoryRuntimeConfig {
   const mainProfile = mainChatRuntimeState.getProfile();
   return {
-    enabled: config.enabled !== false,
-    readEnabled: config.readEnabled !== false,
-    writeEnabled: config.writeEnabled !== false,
+    enabled: requireBooleanConfig(config, 'enabled'),
+    readEnabled: requireBooleanConfig(config, 'readEnabled'),
+    writeEnabled: requireBooleanConfig(config, 'writeEnabled'),
     extract: buildMemoryExtractProviderProfile(mainProfile, {
       routeId: 'memory-extract',
-      baseUrl: config.extractBaseUrl,
-      apiKey: config.extractApiKey,
-      model: config.extractModel,
-      timeoutMs: clampNatural(config.extractTimeoutMs, 60000, 3000),
-      requestMode: config.extractRequestMode,
-      structuredOutputProtocol: config.extractStructuredOutputProtocol,
-      supportsJsonMode: config.extractSupportsJsonMode === true,
+      baseUrl: requireStringConfig(config, 'extractBaseUrl'),
+      apiKey: requireStringConfig(config, 'extractApiKey'),
+      model: requireStringConfig(config, 'extractModel'),
+      timeoutMs: requireNaturalConfig(config, 'extractTimeoutMs', 3000),
+      requestMode: requireExtractRequestMode(config),
+      structuredOutputProtocol: requireExtractProtocol(config),
+      supportsJsonMode: requireBooleanConfig(config, 'extractSupportsJsonMode'),
     }),
     embed: {
-      baseUrl: String(config.embedBaseUrl ?? DEFAULT_EMBED_BASE_URL).trim(),
-      apiKey: String(config.embedApiKey ?? '').trim(),
-      model: String(config.embedModel ?? 'Qwen/Qwen3-Embedding-8B').trim(),
-      timeoutMs: clampNatural(config.embedTimeoutMs, 12000, 3000),
+      baseUrl: requireStringConfig(config, 'embedBaseUrl'),
+      apiKey: requireStringConfig(config, 'embedApiKey'),
+      model: requireStringConfig(config, 'embedModel'),
+      timeoutMs: requireNaturalConfig(config, 'embedTimeoutMs', 3000),
     },
-    queryTopK: clampNatural(config.queryTopK, 8, 1),
-    promptBudgetTokens: clampNatural(config.promptBudgetTokens, 1200, 200),
-    embedBatchSize: clampNatural(config.embedBatchSize, 16, 1),
-    extractIdleMs: clampNatural(config.extractIdleMs, 90000, 10_000),
-    extractMessageBatch: clampNatural(config.extractMessageBatch, 12, 4),
-    archiveDays: clampNatural(config.archiveDays, 90, 7),
-    maxJobRetries: clampNatural(config.maxJobRetries, 5, 0),
-    jobLockTimeoutMs: clampNatural(config.jobLockTimeoutMs, 300000, 30_000),
-    maxFacts: clampNatural(config.maxFacts, 8, 1),
-    maxEpisodes: clampNatural(config.maxEpisodes, 8, 1),
+    queryTopK: requireNaturalConfig(config, 'queryTopK', 1),
+    promptBudgetTokens: requireNaturalConfig(config, 'promptBudgetTokens', 200),
+    embedBatchSize: requireNaturalConfig(config, 'embedBatchSize', 1),
+    extractIdleMs: requireNaturalConfig(config, 'extractIdleMs', 10_000),
+    extractMessageBatch: requireNaturalConfig(config, 'extractMessageBatch', 4),
+    archiveDays: requireNaturalConfig(config, 'archiveDays', 7),
+    maxJobRetries: requireNaturalConfig(config, 'maxJobRetries', 0),
+    jobLockTimeoutMs: requireNaturalConfig(config, 'jobLockTimeoutMs', 30_000),
+    maxFacts: requireNaturalConfig(config, 'maxFacts', 1),
+    maxEpisodes: requireNaturalConfig(config, 'maxEpisodes', 1),
   };
 }
 
@@ -195,7 +234,7 @@ async function injectMemoryContext(
   });
 }
 
-export function apply(ctx: Context, config: Config = {}): void {
+export function apply(ctx: Context, config: Config): void {
   const services = ctx as unknown as ContextServiceView;
   const database = services.database;
   const runtime = toRuntimeConfig(config);

@@ -11,7 +11,7 @@ import {
   buildReplyTransportPlanFromResolvedActions,
   buildReplyTurnInput,
   buildTurnCapabilitySnapshot,
-  createVoiceRuntimeConfig,
+  createVoiceRuntimeConfigFromEnv,
   createPromptTextFragment,
   deliverStandaloneReplyPlan,
   ensureSupportedStructuredReplyModel,
@@ -45,8 +45,6 @@ import {
 
 const logger = new Logger('task-automation');
 const FIXED_TIMEZONE = 'Asia/Shanghai';
-const DEFAULT_POLL_INTERVAL_MS = 30_000;
-const DEFAULT_MAX_JOBS_PER_USER = 20;
 const RECURRING_SCHEDULE_HINT = /每(?:天|日|周|星期|月|隔)/;
 const AUTOMATION_RECENT_CONTEXT_LIMIT = 8;
 const automationReplyOrchestrator = new ReplyOrchestratorService();
@@ -61,8 +59,8 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  pollIntervalMs: Schema.natural().role('time').default(DEFAULT_POLL_INTERVAL_MS).description('一次性任务轮询周期（毫秒）。'),
-  maxJobsPerUser: Schema.natural().default(DEFAULT_MAX_JOBS_PER_USER).description('每个用户允许创建的自动化任务上限。'),
+  pollIntervalMs: Schema.natural().role('time').description('一次性任务轮询周期（毫秒）。'),
+  maxJobsPerUser: Schema.natural().description('每个用户允许创建的自动化任务上限。'),
 });
 
 interface RuntimeConfig {
@@ -192,11 +190,18 @@ const AUTOMATION_TOOL_NAMES = {
   delete: 'automation_delete',
 } as const;
 
+function requireNaturalConfig(config: Config, key: keyof Config): number {
+  const parsed = Number(config[key]);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error(`任务自动化配置缺失或非法：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
+  }
+  return Math.floor(parsed);
+}
+
 function toRuntimeConfig(config: Config): RuntimeConfig {
   return {
-    pollIntervalMs: config.pollIntervalMs ?? Number(process.env.TASK_AUTOMATION_POLL_MS || DEFAULT_POLL_INTERVAL_MS),
-    maxJobsPerUser:
-      config.maxJobsPerUser ?? Number(process.env.TASK_AUTOMATION_MAX_TASKS_PER_USER || DEFAULT_MAX_JOBS_PER_USER),
+    pollIntervalMs: requireNaturalConfig(config, 'pollIntervalMs'),
+    maxJobsPerUser: requireNaturalConfig(config, 'maxJobsPerUser'),
   };
 }
 
@@ -987,7 +992,7 @@ async function prepareAutomationExecutionContext(
   currentState.qqSticker = stickerArtifacts.state as unknown as Record<string, unknown>;
   (session as Session & { state?: Record<string, unknown> }).state = currentState;
 
-  const voiceRuntime = createVoiceRuntimeConfig();
+  const voiceRuntime = createVoiceRuntimeConfigFromEnv();
   const replyCapability = await resolveReplyCapabilitySnapshot({
     runtime: voiceRuntime,
     session: session as never,
@@ -1088,7 +1093,7 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
       return;
     }
 
-    const voiceRuntime = createVoiceRuntimeConfig();
+    const voiceRuntime = createVoiceRuntimeConfigFromEnv();
     const delivery = await deliverStandaloneReplyPlan({
       runtime: voiceRuntime,
       session: source.session as never,

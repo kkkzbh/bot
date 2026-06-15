@@ -7,6 +7,22 @@ vi.mock('koishi-plugin-chatluna/utils/string', () => ({
 }));
 
 vi.mock('koishi', () => {
+  type MockSchemaNode = {
+    default: () => MockSchemaNode;
+    description: () => MockSchemaNode;
+    min: () => MockSchemaNode;
+    max: () => MockSchemaNode;
+    role: () => MockSchemaNode;
+  };
+
+  const createSchemaNode = (): MockSchemaNode => ({
+    default: () => createSchemaNode(),
+    description: () => createSchemaNode(),
+    min: () => createSchemaNode(),
+    max: () => createSchemaNode(),
+    role: () => createSchemaNode(),
+  });
+
   class MockLogger {
     info(): void {}
     warn(): void {}
@@ -18,27 +34,14 @@ vi.mock('koishi', () => {
     Context: class {},
     Logger: MockLogger,
     Schema: {
-      object: vi.fn(() => ({ description: vi.fn() })),
-      union: vi.fn(() => ({ description: vi.fn(), default: vi.fn(() => ({ description: vi.fn() })) })),
-      array: vi.fn(() => ({ role: vi.fn(() => ({ description: vi.fn() })) })),
-      string: vi.fn(() => ({
-        description: vi.fn(),
-        role: vi.fn(() => ({ description: vi.fn() })),
-        default: vi.fn(() => ({ description: vi.fn() })),
-      })),
-      boolean: vi.fn(() => ({ default: vi.fn(() => ({ description: vi.fn() })) })),
-      number: vi.fn(() => ({
-        min: vi.fn(() => ({
-          max: vi.fn(() => ({
-            default: vi.fn(() => ({ description: vi.fn() })),
-          })),
-        })),
-      })),
-      natural: vi.fn(() => ({
-        default: vi.fn(() => ({ description: vi.fn(), role: vi.fn(() => ({ default: vi.fn(() => ({ description: vi.fn() })) })) })),
-        role: vi.fn(() => ({ default: vi.fn(() => ({ description: vi.fn() })) })),
-      })),
-      const: vi.fn(() => ({})),
+      object: vi.fn(() => createSchemaNode()),
+      union: vi.fn(() => createSchemaNode()),
+      array: vi.fn(() => createSchemaNode()),
+      string: vi.fn(() => createSchemaNode()),
+      boolean: vi.fn(() => createSchemaNode()),
+      number: vi.fn(() => createSchemaNode()),
+      natural: vi.fn(() => createSchemaNode()),
+      const: vi.fn(() => createSchemaNode()),
     },
     Session: class {},
     h: {

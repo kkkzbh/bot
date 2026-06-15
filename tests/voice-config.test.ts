@@ -19,6 +19,14 @@ describe('qq voice config wiring', () => {
 
     expect(content).toContain("asrBaseUrl: ${{ env.QQ_VOICE_ASR_BASE_URL || '' }}");
     expect(content).toContain("ttsBaseUrl: ${{ env.QQ_VOICE_TTS_BASE_URL || '' }}");
+    expect(content).toContain('voiceOutputLanguage: ${{ env.QQ_VOICE_OUTPUT_LANGUAGE }}');
+    expect(content).toContain('replyInterruptCollectWindowMs: ${{ +env.QQBOT_REPLY_COLLECT_WINDOW_MS || 400 }}');
+    expect(content).toContain('replyInterruptMaxPendingInputs: ${{ +env.QQBOT_REPLY_MAX_PENDING_INPUTS || 8 }}');
+    expect(content).toContain("enabled: ${{ env.CHAT_NATURAL_TRIGGER_ENABLED === 'true' }}");
+    expect(content).toContain('aliases:');
+    expect(content).toContain("env.CHAT_NATURAL_TRIGGER_ALIASES || '祥子,祥,丰川,丰川祥子,saki,saki酱,sakiko'");
+    expect(content).toContain('historyWindow: ${{ +env.QQBOT_ATTACHMENT_HISTORY_WINDOW || 80 }}');
+    expect(content).toContain('voiceTranscribeTimeoutMs: ${{ +env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS || 45000 }}');
     expect(content).toContain("maxJobsPerUser: ${{ +env.TASK_AUTOMATION_MAX_TASKS_PER_USER || 20 }}");
     expect(content).not.toContain('maxTasksPerUser:');
     expect(content).toContain("platform: ${{ env.CHATLUNA_PLATFORM || 'siliconflow' }}");
@@ -46,6 +54,12 @@ describe('qq voice config wiring', () => {
 
     expect(content).toContain('QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161');
     expect(content).toContain('QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162');
+    expect(content).toContain('QQ_VOICE_OUTPUT_LANGUAGE=zh');
+    expect(content).toContain('CHAT_NATURAL_TRIGGER_ENABLED=false');
+    expect(content).toContain('QQBOT_ATTACHMENT_HISTORY_WINDOW=80');
+    expect(content).toContain('QQBOT_ATTACHMENT_REPLAY_MAX_REFS=5');
+    expect(content).toContain('MEMORY_MAX_FACTS=8');
+    expect(content).toContain('MEMORY_MAX_EPISODES=8');
     expect(content).toContain('PMHQ_BIND_HOST=127.0.0.1');
     expect(content).toContain('PMHQ_PORT=13000');
     expect(content).toContain('LLBOT_VERSION=7.12.15');
@@ -61,6 +75,12 @@ describe('qq voice config wiring', () => {
 
     expect(content).toContain('QQ_VOICE_INPUT_ENABLED=false');
     expect(content).toContain('QQ_VOICE_OUTPUT_ENABLED=false');
+    expect(content).toContain('QQ_VOICE_OUTPUT_LANGUAGE=zh');
+    expect(content).toContain('CHAT_NATURAL_TRIGGER_ENABLED=false');
+    expect(content).toContain('QQBOT_ATTACHMENT_HISTORY_WINDOW=80');
+    expect(content).toContain('QQBOT_ATTACHMENT_REPLAY_MAX_REFS=5');
+    expect(content).toContain('MEMORY_MAX_FACTS=8');
+    expect(content).toContain('MEMORY_MAX_EPISODES=8');
     expect(content).toContain('PMHQ_BIND_HOST=127.0.0.1');
     expect(content).toContain('PMHQ_PORT=13000');
     expect(content).toContain('LLBOT_VERSION=7.12.15');

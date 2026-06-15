@@ -29,6 +29,17 @@ export function normalizeVoiceOutputLanguage(value: unknown): VoiceOutputLanguag
   return VOICE_OUTPUT_LANGUAGE_SET.has(normalized) ? normalized as VoiceOutputLanguage : 'zh';
 }
 
+export function requireVoiceOutputLanguage(value: unknown): VoiceOutputLanguage {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (!normalized) {
+    throw new Error('QQ voice output language must be configured via voiceOutputLanguage or QQ_VOICE_OUTPUT_LANGUAGE.');
+  }
+  if (!VOICE_OUTPUT_LANGUAGE_SET.has(normalized)) {
+    throw new Error(`QQ voice output language must be one of ${VOICE_OUTPUT_LANGUAGES.join(', ')}, got ${String(value)}.`);
+  }
+  return normalized as VoiceOutputLanguage;
+}
+
 export function buildVoiceOutputLanguageContractLines(language: VoiceOutputLanguage): string[] {
   if (language === 'auto') {
     return [

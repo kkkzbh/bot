@@ -2,15 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   containsAlias,
   createEmptySpamState,
-  DEFAULT_TRIGGER_ALIASES,
   parseAliasList,
   recordSpamMessage,
   shouldTriggerByRule,
 } from '../src/plugins/triggers/group-natural/matcher.js';
 
 describe('group natural trigger aliases', () => {
-  it('parses alias list and falls back to defaults', () => {
-    expect(parseAliasList('')).toEqual(DEFAULT_TRIGGER_ALIASES.map((item) => item.toLowerCase()));
+  it('parses alias list without hidden defaults', () => {
+    expect(parseAliasList('')).toEqual([]);
     expect(parseAliasList('saki, SAKI, sakiko')).toEqual(['saki', 'sakiko']);
   });
 

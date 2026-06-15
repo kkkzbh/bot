@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { buildMemoryExtractProviderProfile, isMemoryProviderConfigured } from '../src/plugins/memory/providers/router.js';
 import { resolveMainChatRuntimeProfileFromEnv } from '../src/plugins/shared/llm/main-chat-tabs.js';
 
+const configuredExtractDefaults = {
+  baseUrl: '',
+  apiKey: '',
+  model: '',
+  timeoutMs: 60_000,
+  requestMode: 'chat_completions',
+  structuredOutputProtocol: 'chat_reply_v1',
+  supportsJsonMode: false,
+} as const;
+
 describe('memory runtime config', () => {
   it('keeps extraction unconfigured when extract provider fields are all empty', () => {
     const mainProfile = resolveMainChatRuntimeProfileFromEnv({
@@ -11,7 +21,7 @@ describe('memory runtime config', () => {
       CHATLUNA_COPILOT_DEFAULT_MODEL: 'gpt-5.4-mini',
     });
 
-    const profile = buildMemoryExtractProviderProfile(mainProfile);
+    const profile = buildMemoryExtractProviderProfile(mainProfile, configuredExtractDefaults);
 
     expect(profile).toMatchObject({
       baseUrl: '',
@@ -32,6 +42,7 @@ describe('memory runtime config', () => {
     });
 
     const profile = buildMemoryExtractProviderProfile(mainProfile, {
+      ...configuredExtractDefaults,
       apiKey: 'extract-key',
     });
 
@@ -57,8 +68,10 @@ describe('memory runtime config', () => {
       baseUrl: 'https://api.siliconflow.cn/v1',
       apiKey: 'extract-key',
       model: 'Pro/moonshotai/Kimi-K2.5',
+      timeoutMs: 60_000,
       requestMode: 'chat_completions',
       structuredOutputProtocol: 'chat_reply_v1',
+      supportsJsonMode: false,
     });
 
     expect(profile).toMatchObject({

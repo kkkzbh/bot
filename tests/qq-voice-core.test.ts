@@ -71,6 +71,9 @@ vi.mock('koishi', () => {
 });
 
 import {
+  requireVoiceOutputLanguage,
+} from '../src/plugins/shared/voice/language.js';
+import {
   buildVoiceFailureReply,
   extractFirstIncomingVoice,
   extractTextContentWithoutVoice,
@@ -80,6 +83,12 @@ import {
 } from '../src/plugins/reply/voice/tts.js';
 
 describe('qq voice core', () => {
+  it('requires explicit voice output language for runtime config', () => {
+    expect(requireVoiceOutputLanguage('ja')).toBe('ja');
+    expect(() => requireVoiceOutputLanguage('')).toThrow('QQ voice output language must be configured');
+    expect(() => requireVoiceOutputLanguage('klingon')).toThrow('QQ voice output language must be one of');
+  });
+
   it('extracts first incoming audio and counts all audio segments', () => {
     expect(extractFirstIncomingVoice('<audio src="https://example.com/a.amr"/>你好<audio file="second"/>')).toEqual({
       src: 'https://example.com/a.amr',

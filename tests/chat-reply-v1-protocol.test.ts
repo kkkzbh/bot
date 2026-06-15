@@ -63,6 +63,73 @@ describe('CHAT_REPLY_V1 protocol', () => {
     });
   });
 
+  it('parses typed END markers for all supported block types', () => {
+    const reply = parser.parse([
+      'CHAT_REPLY_V1 abc12345',
+      'DECISION reply',
+      'BEGIN message',
+      'MENTIONS 123,456',
+      'CONTENT',
+      '|第一条',
+      'END message',
+      'BEGIN structured_block',
+      'CONTENT',
+      '|```ts',
+      '|console.log("END")',
+      '|```',
+      'END structured_block',
+      'BEGIN image',
+      'ASSET_REF asset:tool:cf-card:01ABC',
+      'ALT',
+      '|Codeforces 用户分数卡',
+      'END image',
+      'BEGIN meme',
+      'CONTENT',
+      '|无语地看对方一眼',
+      'END meme',
+      'BEGIN voice',
+      'CONTENT',
+      '|本当にうれしいです。',
+      'END voice',
+      'DONE abc12345',
+    ].join('\n'));
+
+    expect(reply).toEqual({
+      decision: 'reply',
+      outbound_messages: [
+        { type: 'message', mentions: ['123', '456'], content: '第一条' },
+        { type: 'structured_block', content: '```ts\nconsole.log("END")\n```' },
+        { type: 'image', assetRef: 'asset:tool:cf-card:01ABC', alt: 'Codeforces 用户分数卡' },
+        { type: 'meme', content: '无语地看对方一眼' },
+        { type: 'voice', content: '本当にうれしいです。' },
+      ],
+    });
+  });
+
+  it('skips a redundant typed END marker immediately after the matching bare END', () => {
+    expect(parser.parse([
+      'CHAT_REPLY_V1 abc12345',
+      'DECISION reply',
+      'BEGIN voice',
+      'CONTENT',
+      '|おはようございます。',
+      'END',
+      'END voice',
+      'BEGIN message',
+      'MENTIONS none',
+      'CONTENT',
+      '|刚才语音里说的是早上好。',
+      'END message',
+      'DONE abc12345',
+    ].join('\n'))).toEqual({
+      decision: 'reply',
+      outbound_messages: [
+        { type: 'voice', content: 'おはようございます。' },
+        { type: 'message', mentions: [], content: '刚才语音里说的是早上好。' },
+      ],
+    });
+  });
+
   it('treats protocol-looking payload lines as content when prefixed with pipe', () => {
     expect(parser.parse([
       'CHAT_REPLY_V1 abc12345',

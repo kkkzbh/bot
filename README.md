@@ -31,6 +31,8 @@ Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime.
 - `CHATLUNA_OPENAI_BASE_URL`
 - `CHATLUNA_OPENAI_API_KEY`
 - `CHATLUNA_OPENAI_DEFAULT_MODEL`
+- `CHATLUNA_CODEX_DEFAULT_MODEL`
+- `CHATLUNA_CODEX_REASONING_EFFORT`
 - `CHATLUNA_COPILOT_BASE_URL`
 - `CHATLUNA_COPILOT_API_KEY`
 - `CHATLUNA_COPILOT_DEFAULT_MODEL`
@@ -44,10 +46,11 @@ Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime.
 - `MEMORY_EMBED_API_KEY`
 - `CHATLUNA_COMMAND_AUTHORITY`
 
-Main chat provider selection is fixed to five built-in tabs:
+Main chat provider selection is fixed to six built-in tabs:
 
 - `siliconflow`: current Kimi main-chat chain, fixed to `https://api.siliconflow.cn/v1` with `Pro/moonshotai/Kimi-K2.5`
 - `openai`: OpenAI-compatible provider tab, defaulting to `wyzai` with `openai/gpt-5.4-medium-thinking`
+- `codex`: Codex ChatGPT OAuth tab, using bot-managed OAuth with `openai/gpt-5.5` and configurable reasoning effort
 - `copilot`: GitHub Copilot OAuth tab, defaulting to the local bridge `http://127.0.0.1:5140/api/internal/copilot/v1` with `gpt-5.4-mini`
 - `deepseek`: DeepSeek official OpenAI-compatible tab, defaulting to `https://api.deepseek.com` with `deepseek-v4-flash`
 - `mimo`: Xiaomi MIMO Token Plan OpenAI-compatible tab, defaulting to `https://token-plan-cn.xiaomimimo.com/v1` with `mimo-v2.5-pro`
@@ -61,6 +64,7 @@ endpoint preset:
 
 - `siliconflow` uses the existing `chat/completions` main-chat path, locks the official SiliconFlow endpoint, and applies the Kimi-specific non-thinking override
 - `openai` uses the OpenAI-compatible GPT-5.4 strategy, currently pinned to `chat/completions` + `response_format` structured output for provider compatibility
+- `codex` maintains its own ChatGPT OAuth device login under the bot runtime state, never exposes the OAuth token in the console, and routes ChatLuna through `responses` + `native_responses_json_schema`; the console tab only exposes model and reasoning-effort selection while the bridge address/key are managed server-side
 - `copilot` uses GitHub device-flow OAuth, exchanges GitHub token into a short-lived Copilot session token at runtime, and routes ChatLuna through the local bridge to either `responses` or `chat/completions` based on the selected Copilot model
 - `deepseek` uses DeepSeek's official `/models` endpoint for its dropdown and routes replies through `chat/completions` + the `CHAT_REPLY_V1` plain-text protocol, because DeepSeek does not support this bot's native `response_format` JSON schema contract
 - `mimo` uses the MIMO `/models` endpoint when a key is available, then filters the result to the verified chat/completions allowlist so TTS models never become main-chat options
@@ -121,6 +125,7 @@ Koishi uses **OneBot WebSocket 正向连接** to LLBot:
 
 Memory stores user-scoped long-term facts and episode summaries in local SQLite.
 Embeddings are only used for long-memory recall/writeback and are expected to come from SiliconFlow (`Qwen/Qwen3-Embedding-8B` by default).
+Memory extraction writeback is a separate OpenAI-compatible provider configured by `MEMORY_EXTRACT_BASE_URL`, `MEMORY_EXTRACT_API_KEY`, and `MEMORY_EXTRACT_MODEL`; all three must be present, and it does not inherit the active chat model tab.
 
 ## 4. Start PMHQ + host LLBot
 
@@ -340,8 +345,9 @@ bash ./scripts/cleanup-debug-chat-state.sh
 
 ## 10. Group natural trigger environment variables
 
-- `CHAT_NATURAL_TRIGGER_ENABLED`：是否开启群聊自然触发（默认 `true`）。
+- `CHAT_NATURAL_TRIGGER_ENABLED`：是否开启群聊自然触发（默认 `false`，需要显式设为 `true` 才开启）。
 - `CHAT_NATURAL_TRIGGER_GROUPS`：自然触发白名单群（逗号分隔，留空表示不在任何群自动触发）。
+- `CHATLUNA_COMMON_FS_ALLOWED_GROUPS`：群聊文件系统工具白名单群（逗号分隔，留空表示群聊不向模型暴露 `file_*`、`grep`、`glob`、`bash`）。
 - `CHAT_NATURAL_TRIGGER_ALIASES`：别名列表（逗号分隔）。
 - `CHAT_NATURAL_TRIGGER_DIRECT_PROBABILITY`：任意消息直接触发概率（默认 `0.25`）。
 - `CHAT_NATURAL_TRIGGER_FOCUS_WINDOW_MS`：会话焦点窗口（默认 `300000`，同群共享）。
@@ -367,6 +373,7 @@ bash ./scripts/cleanup-debug-chat-state.sh
 - `QQ_VOICE_OUTPUT_ENABLED`：是否允许可选语音回复（默认 `true`）。
 - `QQ_VOICE_ASR_BASE_URL` / `QQ_VOICE_ASR_API_KEY`：Koishi 访问本机 ASR 服务的地址与 token。
 - `QQ_VOICE_TTS_BASE_URL` / `QQ_VOICE_TTS_API_KEY`：Koishi 访问 TTS 网关的地址与 token。本地通常指向 `127.0.0.1:5162`；服务器开启语音回复时应指向笔记本 Tailnet TTS 地址。
+- `QQ_VOICE_OUTPUT_LANGUAGE`：模型生成 `voice.content` 的目标语言，支持 `zh` / `ja` / `en` / `auto`；必须显式配置，缺失或非法会让启动失败。TTS 不翻译文本；日语语音模式应同时设置 `QQ_VOICE_OUTPUT_LANGUAGE=ja` 和 TTS 网关的 `VOICE_TTS_TEXT_LANG=all_ja`。
 - `QQ_VOICE_INPUT_MAX_SECONDS`：单条入站语音最大时长（默认 `60` 秒）。
 - `QQ_VOICE_OUTPUT_MAX_WORDS`：单个语音段最大词数（默认 `80`；超过时应由模型主动拆成多段语音）。
 - `QQ_VOICE_OUTPUT_MAX_SECONDS`：单个语音段最大时长（默认 `45` 秒）。

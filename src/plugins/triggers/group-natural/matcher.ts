@@ -1,5 +1,3 @@
-export const DEFAULT_TRIGGER_ALIASES = ['祥子', '祥', '丰川', '丰川祥子', 'saki', 'saki酱', 'sakiko'];
-
 const ASK_VERB_PATTERN = /(帮我|给我|请问|麻烦|告诉我|解释|总结|翻译|写|算|分析|推荐|建议|看看|查一下|答一下)/i;
 const QUESTION_PATTERN = /[?？]|(吗|么|呢|咋|如何|为什么|怎么|啥|什么|几|哪|可不可以|能不能)/;
 const SECOND_PERSON_PATTERN = /(你|你能|你会|你可以|机器人|bot|qbot)/i;
@@ -36,12 +34,7 @@ export function parseAliasList(value?: string[] | string): string[] {
     .filter(Boolean)
     .map((item) => item.toLowerCase());
 
-  const unique = new Set<string>();
-  for (const item of normalized) unique.add(item);
-  if (!unique.size) {
-    for (const item of DEFAULT_TRIGGER_ALIASES) unique.add(item.toLowerCase());
-  }
-  return [...unique];
+  return [...new Set(normalized)];
 }
 
 export function containsAlias(content: string, aliases: string[]): boolean {

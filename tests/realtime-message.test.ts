@@ -254,6 +254,29 @@ afterEach(() => {
   realtimeMessageCache.clear();
 });
 
+function stubVoiceRuntimeEnv(overrides: Record<string, string> = {}): void {
+  const values = {
+    QQ_VOICE_INPUT_ENABLED: 'true',
+    QQ_VOICE_OUTPUT_ENABLED: 'true',
+    QQ_VOICE_ASR_BASE_URL: 'http://127.0.0.1:8081',
+    QQ_VOICE_ASR_API_KEY: 'voice-token',
+    QQ_VOICE_TTS_BASE_URL: 'http://127.0.0.1:8082',
+    QQ_VOICE_TTS_API_KEY: 'tts-token',
+    QQ_VOICE_OUTPUT_LANGUAGE: 'zh',
+    QQ_VOICE_INPUT_MAX_SECONDS: '60',
+    QQ_VOICE_OUTPUT_MAX_WORDS: '80',
+    QQ_VOICE_OUTPUT_MAX_SECONDS: '45',
+    QQ_VOICE_TRANSCRIBE_TIMEOUT_MS: '45000',
+    QQ_VOICE_SYNTH_TIMEOUT_MS: '300000',
+    QQBOT_REPLY_COLLECT_WINDOW_MS: '400',
+    QQBOT_REPLY_MAX_PENDING_INPUTS: '8',
+    ...overrides,
+  };
+  for (const [key, value] of Object.entries(values)) {
+    vi.stubEnv(key, value);
+  }
+}
+
 describe('realtime message plugin', () => {
   it('declares chatluna as a required injection', () => {
     expect(inject).toEqual({ required: ['chatluna'], optional: ['featurePolicy'] });
@@ -521,10 +544,7 @@ describe('realtime message plugin', () => {
   });
 
   it('captures voice transcript when ASR is available', async () => {
-    vi.stubEnv('QQ_VOICE_INPUT_ENABLED', 'true');
-    vi.stubEnv('QQ_VOICE_ASR_BASE_URL', 'http://127.0.0.1:8081');
-    vi.stubEnv('QQ_VOICE_ASR_API_KEY', 'voice-token');
-    vi.stubEnv('QQ_VOICE_INPUT_MAX_SECONDS', '60');
+    stubVoiceRuntimeEnv();
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === 'https://example.com/input.amr') {
@@ -557,8 +577,7 @@ describe('realtime message plugin', () => {
   });
 
   it('skips voice realtime cache entries when the ASR runtime is unavailable', async () => {
-    vi.stubEnv('QQ_VOICE_INPUT_ENABLED', 'true');
-    vi.stubEnv('QQ_VOICE_ASR_BASE_URL', '');
+    stubVoiceRuntimeEnv({ QQ_VOICE_ASR_BASE_URL: '' });
 
     const { middleware } = createHarness();
     const session = createSession({

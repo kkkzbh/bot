@@ -5,6 +5,7 @@ export {
   buildTurnCapabilitySnapshot,
   createAudioDataUri,
   createVoiceRuntimeConfig,
+  createVoiceRuntimeConfigFromEnv,
   deliverStandaloneReplyPlan,
   ensureCanSendRecord,
   ensureSupportedStructuredReplyModel,

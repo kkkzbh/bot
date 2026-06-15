@@ -1,11 +1,9 @@
 import { Context, Logger, Schema, Session } from 'koishi';
 import type { FeaturePolicyServiceLike } from '../../../types/feature-policy.js';
 import { normalizeGroupId, parseGroupSet } from '../../shared/group-id.js';
-import { resolveDefaultLlmCredentials } from '../../shared/llm/main-chat-tabs.js';
 import {
   containsAlias,
   createEmptySpamState,
-  DEFAULT_TRIGGER_ALIASES,
   parseAliasList,
   recordSpamMessage,
   shouldTriggerByRule,
@@ -49,7 +47,7 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  enabled: Schema.boolean().default(true).description('是否启用群聊自然触发。'),
+  enabled: Schema.boolean().description('是否启用群聊自然触发。'),
   enabledGroups: Schema.union([
     Schema.array(Schema.string()).role('table').description('启用自然触发的白名单群号列表。留空表示不在任何群自动触发。'),
     Schema.string().description('启用自然触发的白名单群号（逗号分隔，留空表示不在任何群自动触发）。'),
@@ -61,21 +59,20 @@ export const Config: Schema<Config> = Schema.object({
   directTriggerProbability: Schema.number()
     .min(0)
     .max(1)
-    .default(0.25)
     .description('任意消息直接触发回复的概率。'),
-  focusWindowMs: Schema.natural().role('time').default(300000).description('会话焦点窗口（毫秒）。'),
-  replyIntervalMs: Schema.natural().role('time').default(2000).description('机器人两次回复最小时间间隔（毫秒）。'),
-  spamWindowMs: Schema.natural().role('time').default(10000).description('刷屏判定窗口（毫秒）。'),
-  spamThreshold: Schema.natural().default(10).description('刷屏判定阈值（窗口内消息数）。'),
-  spamMuteMs: Schema.natural().role('time').default(180000).description('刷屏后忽略时长（毫秒）。'),
-  decisionEnabled: Schema.boolean().default(true).description('是否启用模型触发判定。'),
+  focusWindowMs: Schema.natural().role('time').description('会话焦点窗口（毫秒）。'),
+  replyIntervalMs: Schema.natural().role('time').description('机器人两次回复最小时间间隔（毫秒）。'),
+  spamWindowMs: Schema.natural().role('time').description('刷屏判定窗口（毫秒）。'),
+  spamThreshold: Schema.natural().description('刷屏判定阈值（窗口内消息数）。'),
+  spamMuteMs: Schema.natural().role('time').description('刷屏后忽略时长（毫秒）。'),
+  decisionEnabled: Schema.boolean().description('是否启用模型触发判定。'),
   decisionBaseUrl: Schema.string()
     .role('link')
-    .description('触发判定模型 API Base URL（默认回落到当前主聊天 Tab）。'),
-  decisionApiKey: Schema.string().role('secret').description('触发判定模型 API Key（默认回落到当前主聊天 Tab）。'),
-  decisionModel: Schema.string().description('触发判定模型名（默认回落到当前主聊天 Tab）。'),
-  decisionTimeoutMs: Schema.natural().role('time').default(4000).description('触发判定模型超时（毫秒）。'),
-  decisionMinConfidence: Schema.number().min(0).max(1).default(0.62).description('触发判定模型最小置信度。'),
+    .description('触发判定模型 API Base URL。'),
+  decisionApiKey: Schema.string().role('secret').description('触发判定模型 API Key。'),
+  decisionModel: Schema.string().description('触发判定模型名。'),
+  decisionTimeoutMs: Schema.natural().role('time').description('触发判定模型超时（毫秒）。'),
+  decisionMinConfidence: Schema.number().min(0).max(1).description('触发判定模型最小置信度。'),
 });
 
 interface RuntimeConfig {
@@ -130,48 +127,62 @@ function extractJsonObject(raw: string): string | null {
   return null;
 }
 
+function requireConfigValue<T>(config: Config, key: keyof Config): NonNullable<T> {
+  const value = config[key] as T | null | undefined;
+  if (value == null) {
+    throw new Error(`群聊自然触发配置缺失：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
+  }
+  return value as NonNullable<T>;
+}
+
+function requireBooleanConfig(config: Config, key: keyof Config): boolean {
+  const value = requireConfigValue<unknown>(config, key);
+  if (typeof value !== 'boolean') {
+    throw new Error(`群聊自然触发配置 ${String(key)} 必须是 boolean。`);
+  }
+  return value;
+}
+
+function requireNumberConfig(config: Config, key: keyof Config, options: { min?: number; max?: number } = {}): number {
+  const value = Number(requireConfigValue<unknown>(config, key));
+  if (!Number.isFinite(value)) {
+    throw new Error(`群聊自然触发配置 ${String(key)} 必须是有效数字。`);
+  }
+  if (options.min != null && value < options.min) {
+    throw new Error(`群聊自然触发配置 ${String(key)} 不能小于 ${options.min}。`);
+  }
+  if (options.max != null && value > options.max) {
+    throw new Error(`群聊自然触发配置 ${String(key)} 不能大于 ${options.max}。`);
+  }
+  return value;
+}
+
+function requireStringConfig(config: Config, key: keyof Config): string {
+  return String(requireConfigValue<unknown>(config, key));
+}
+
 function toRuntimeConfig(config: Config): RuntimeConfig {
-  const configuredAliases = parseAliasList(config.aliases ?? process.env.CHAT_NATURAL_TRIGGER_ALIASES);
-  const configuredGroups = parseGroupSet(config.enabledGroups ?? process.env.CHAT_NATURAL_TRIGGER_GROUPS);
-  const directTriggerProbability = Number(
-    config.directTriggerProbability ?? process.env.CHAT_NATURAL_TRIGGER_DIRECT_PROBABILITY ?? 0.25,
-  );
-  const fallback = resolveDefaultLlmCredentials(process.env);
-  const decisionBaseUrl = (
-    config.decisionBaseUrl ??
-    process.env.CHAT_NATURAL_TRIGGER_DECISION_BASE_URL ??
-    fallback.baseUrl ??
-    ''
-  ).replace(/\/+$/, '');
+  const configuredAliases = parseAliasList(requireConfigValue<string[] | string>(config, 'aliases'));
+  const configuredGroups = parseGroupSet(requireConfigValue<string[] | string>(config, 'enabledGroups'));
+  const directTriggerProbability = requireNumberConfig(config, 'directTriggerProbability', { min: 0, max: 1 });
+  const decisionBaseUrl = requireStringConfig(config, 'decisionBaseUrl').replace(/\/+$/, '');
 
   return {
-    enabled:
-      config.enabled ??
-      String(process.env.CHAT_NATURAL_TRIGGER_ENABLED ?? 'true').toLowerCase() !== 'false',
+    enabled: requireBooleanConfig(config, 'enabled'),
     enabledGroups: configuredGroups,
-    aliases: configuredAliases.length ? configuredAliases : DEFAULT_TRIGGER_ALIASES.map((item) => item.toLowerCase()),
-    directTriggerProbability: Number.isFinite(directTriggerProbability)
-      ? Math.max(0, Math.min(1, directTriggerProbability))
-      : 0.25,
-    focusWindowMs: Number(config.focusWindowMs ?? process.env.CHAT_NATURAL_TRIGGER_FOCUS_WINDOW_MS ?? 300000),
-    replyIntervalMs: Number(config.replyIntervalMs ?? process.env.CHAT_NATURAL_TRIGGER_REPLY_INTERVAL_MS ?? 2000),
-    spamWindowMs: Number(config.spamWindowMs ?? process.env.CHAT_NATURAL_TRIGGER_SPAM_WINDOW_MS ?? 10000),
-    spamThreshold: Number(config.spamThreshold ?? process.env.CHAT_NATURAL_TRIGGER_SPAM_THRESHOLD ?? 10),
-    spamMuteMs: Number(config.spamMuteMs ?? process.env.CHAT_NATURAL_TRIGGER_SPAM_MUTE_MS ?? 180000),
-    decisionEnabled:
-      config.decisionEnabled ??
-      String(process.env.CHAT_NATURAL_TRIGGER_DECISION_ENABLED ?? 'true').toLowerCase() !== 'false',
+    aliases: configuredAliases,
+    directTriggerProbability,
+    focusWindowMs: requireNumberConfig(config, 'focusWindowMs', { min: 0 }),
+    replyIntervalMs: requireNumberConfig(config, 'replyIntervalMs', { min: 0 }),
+    spamWindowMs: requireNumberConfig(config, 'spamWindowMs', { min: 0 }),
+    spamThreshold: requireNumberConfig(config, 'spamThreshold', { min: 1 }),
+    spamMuteMs: requireNumberConfig(config, 'spamMuteMs', { min: 0 }),
+    decisionEnabled: requireBooleanConfig(config, 'decisionEnabled'),
     decisionBaseUrl,
-    decisionApiKey:
-      config.decisionApiKey ?? process.env.CHAT_NATURAL_TRIGGER_DECISION_API_KEY ?? fallback.apiKey ?? '',
-    decisionModel:
-      config.decisionModel ?? process.env.CHAT_NATURAL_TRIGGER_DECISION_MODEL ?? fallback.model ?? '',
-    decisionTimeoutMs: Number(
-      config.decisionTimeoutMs ?? process.env.CHAT_NATURAL_TRIGGER_DECISION_TIMEOUT_MS ?? 4000,
-    ),
-    decisionMinConfidence: Number(
-      config.decisionMinConfidence ?? process.env.CHAT_NATURAL_TRIGGER_DECISION_MIN_CONFIDENCE ?? 0.62,
-    ),
+    decisionApiKey: requireStringConfig(config, 'decisionApiKey'),
+    decisionModel: requireStringConfig(config, 'decisionModel'),
+    decisionTimeoutMs: requireNumberConfig(config, 'decisionTimeoutMs', { min: 0 }),
+    decisionMinConfidence: requireNumberConfig(config, 'decisionMinConfidence', { min: 0, max: 1 }),
   };
 }
 

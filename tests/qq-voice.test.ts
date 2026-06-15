@@ -378,13 +378,17 @@ function createHarness(overrides: {
     inputEnabled: true,
     outputEnabled: true,
     asrBaseUrl: 'http://127.0.0.1:8081',
+    asrApiKey: 'qqbot-voice-asr-token',
     ttsBaseUrl: 'http://127.0.0.1:8082',
     ttsApiKey: 'qqbot-voice-tts-token',
     inputMaxSeconds: 60,
     outputMaxWords: 80,
     outputMaxSeconds: 45,
+    voiceOutputLanguage: 'zh',
     transcribeTimeoutMs: 30_000,
     synthTimeoutMs: 300_000,
+    replyInterruptCollectWindowMs: 400,
+    replyInterruptMaxPendingInputs: 8,
     ...overrides.pluginConfig,
   });
 
@@ -595,6 +599,22 @@ describe('qq voice plugin', () => {
     loggerMocks.warn.mockReset();
     loggerMocks.error.mockReset();
     loggerMocks.debug.mockReset();
+    vi.stubEnv('ONEBOT_SELF_ID', 'bot-1');
+    vi.stubEnv('QQ_VOICE_INPUT_ENABLED', 'true');
+    vi.stubEnv('QQ_VOICE_OUTPUT_ENABLED', 'true');
+    vi.stubEnv('QQ_VOICE_ASR_BASE_URL', 'http://127.0.0.1:8081');
+    vi.stubEnv('QQ_VOICE_ASR_API_KEY', 'qqbot-voice-asr-token');
+    vi.stubEnv('QQ_VOICE_TTS_BASE_URL', 'http://127.0.0.1:8082');
+    vi.stubEnv('QQ_VOICE_TTS_API_KEY', 'qqbot-voice-tts-token');
+    vi.stubEnv('QQ_VOICE_OUTPUT_LANGUAGE', 'zh');
+    vi.stubEnv('QQ_VOICE_INPUT_MAX_SECONDS', '60');
+    vi.stubEnv('QQ_VOICE_OUTPUT_MAX_WORDS', '80');
+    vi.stubEnv('QQ_VOICE_OUTPUT_MAX_SECONDS', '45');
+    vi.stubEnv('QQ_VOICE_TRANSCRIBE_TIMEOUT_MS', '30000');
+    vi.stubEnv('QQ_VOICE_SYNTH_TIMEOUT_MS', '300000');
+    vi.stubEnv('QQBOT_REPLY_COLLECT_WINDOW_MS', '400');
+    vi.stubEnv('QQBOT_REPLY_MAX_PENDING_INPUTS', '8');
+    vi.stubEnv('QQBOT_REPLY_INTERRUPT_ENABLED', 'false');
     mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({}));
   });
 
@@ -1196,7 +1216,9 @@ describe('qq voice plugin', () => {
       CHATLUNA_DEEPSEEK_DEFAULT_MODEL: 'deepseek-v4-pro',
     });
     mainChatRuntimeState.initialize(profile);
-    const { ready, getPrepare, getPolicy, getPromptCompiler, bot, inject } = createHarness();
+    const { ready, getPrepare, getPolicy, getPromptCompiler, bot, inject } = createHarness({
+      pluginConfig: { voiceOutputLanguage: 'ja' },
+    });
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
     await ready();

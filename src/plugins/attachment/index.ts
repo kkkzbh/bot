@@ -37,19 +37,7 @@ import '../../types/attachment.js';
 const logger = new Logger('qqbot-attachment');
 const execFileAsync = promisify(execFile);
 const CHAT_CHAIN_CONTINUE = 2;
-const DEFAULT_MAX_INJECT_COUNT = 5;
-const DEFAULT_MAX_INJECT_TOTAL_BYTES = 16 * 1024 * 1024;
-const DEFAULT_MAX_INJECT_PER_FILE_BYTES = 6 * 1024 * 1024;
-const DEFAULT_MAX_PDF_PREVIEW_PAGES_PER_FILE = 6;
-const DEFAULT_MAX_PDF_PREVIEW_PAGES_TOTAL = 15;
-const DEFAULT_MAX_TEXT_CHARS_PER_FILE = 24_000;
-const DEFAULT_RECENT_CATALOG_SIZE = 12;
 const DEFAULT_IMAGE_DETAIL = 'high';
-const DEFAULT_HISTORY_WINDOW = 80;
-const DEFAULT_HISTORY_TRIGGER_COUNT = 120;
-const DEFAULT_HISTORY_TOKEN_RATIO = 0.7;
-const DEFAULT_PROJECTION_TEXT_CHARS = 1_200;
-const DEFAULT_REPLAY_TEXT_CHARS = 4_000;
 const DEFAULT_REPLAY_MAX_REFS = 5;
 const HIGH_DETAIL_IMAGE_KEYWORDS = [
   'ocr',
@@ -86,16 +74,34 @@ export interface Config {
   maxPdfPreviewPagesTotal?: number;
   maxTextCharsPerFile?: number;
   recentCatalogSize?: number;
+  historyWindow?: number;
+  historyTriggerCount?: number;
+  historyTokenRatio?: number;
+  projectionTextChars?: number;
+  replayTextChars?: number;
+  replayMaxRefs?: number;
+  voiceAsrBaseUrl?: string;
+  voiceAsrApiKey?: string;
+  voiceTranscribeTimeoutMs?: number;
 }
 
 export const Config: Schema<Config> = Schema.object({
-  maxInjectCount: Schema.natural().default(DEFAULT_MAX_INJECT_COUNT).description('每轮最多回灌多少个历史附件。'),
-  maxInjectTotalBytes: Schema.natural().default(DEFAULT_MAX_INJECT_TOTAL_BYTES).description('单轮附件回灌的总字节预算。'),
-  maxInjectPerFileBytes: Schema.natural().default(DEFAULT_MAX_INJECT_PER_FILE_BYTES).description('单个附件回灌的字节预算。'),
-  maxPdfPreviewPagesPerFile: Schema.natural().default(DEFAULT_MAX_PDF_PREVIEW_PAGES_PER_FILE).description('单个 PDF 最多生成多少页预览。'),
-  maxPdfPreviewPagesTotal: Schema.natural().default(DEFAULT_MAX_PDF_PREVIEW_PAGES_TOTAL).description('单轮所有 PDF 最多回灌多少页预览。'),
-  maxTextCharsPerFile: Schema.natural().default(DEFAULT_MAX_TEXT_CHARS_PER_FILE).description('单个文本派生物的最大字符数。'),
-  recentCatalogSize: Schema.natural().default(DEFAULT_RECENT_CATALOG_SIZE).description('最近附件目录最多列出多少个附件。'),
+  maxInjectCount: Schema.natural().description('每轮最多回灌多少个历史附件。'),
+  maxInjectTotalBytes: Schema.natural().description('单轮附件回灌的总字节预算。'),
+  maxInjectPerFileBytes: Schema.natural().description('单个附件回灌的字节预算。'),
+  maxPdfPreviewPagesPerFile: Schema.natural().description('单个 PDF 最多生成多少页预览。'),
+  maxPdfPreviewPagesTotal: Schema.natural().description('单轮所有 PDF 最多回灌多少页预览。'),
+  maxTextCharsPerFile: Schema.natural().description('单个文本派生物的最大字符数。'),
+  recentCatalogSize: Schema.natural().description('最近附件目录最多列出多少个附件。'),
+  historyWindow: Schema.natural().description('附件历史扫描窗口消息数。'),
+  historyTriggerCount: Schema.natural().description('触发附件目录回灌的历史附件数量阈值。'),
+  historyTokenRatio: Schema.number().min(0).max(1).description('附件历史回灌 token 比例。'),
+  projectionTextChars: Schema.natural().description('附件摘要投影最大字符数。'),
+  replayTextChars: Schema.natural().description('附件回放文本最大字符数。'),
+  replayMaxRefs: Schema.natural().description('单次附件回放最大引用数量。'),
+  voiceAsrBaseUrl: Schema.string().role('link').description('音频附件转写 ASR 服务地址。'),
+  voiceAsrApiKey: Schema.string().role('secret').description('音频附件转写 ASR token。'),
+  voiceTranscribeTimeoutMs: Schema.natural().role('time').description('音频附件转写超时（毫秒）。'),
 });
 
 interface RuntimeConfig {
@@ -112,6 +118,9 @@ interface RuntimeConfig {
   projectionTextChars: number;
   replayTextChars: number;
   replayMaxRefs: number;
+  voiceAsrBaseUrl: string;
+  voiceAsrApiKey: string;
+  voiceTranscribeTimeoutMs: number;
 }
 
 type StorageTempFileLike = {
@@ -179,51 +188,49 @@ type AttachmentSource = {
   filename: string | null;
 };
 
-function clampNatural(value: unknown, fallback: number): number {
+function requireNaturalConfig(config: Config, key: keyof Config): number {
+  const value = config[key];
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error(`附件配置缺失或非法：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
+  }
   return Math.floor(parsed);
 }
 
-function clampRatio(value: unknown, fallback: number): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) return fallback;
+function requireRatioConfig(config: Config, key: keyof Config): number {
+  const parsed = Number(config[key]);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) {
+    throw new Error(`附件配置缺失或非法：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
+  }
   return parsed;
+}
+
+function requireStringConfig(config: Config, key: keyof Config): string {
+  const value = config[key];
+  if (value == null) {
+    throw new Error(`附件配置缺失：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
+  }
+  return normalizeText(value);
 }
 
 function toRuntimeConfig(config: Config): RuntimeConfig {
   return {
-    maxInjectCount: clampNatural(config.maxInjectCount ?? process.env.QQBOT_ATTACHMENT_MAX_INJECT_COUNT, DEFAULT_MAX_INJECT_COUNT),
-    maxInjectTotalBytes: clampNatural(
-      config.maxInjectTotalBytes ?? process.env.QQBOT_ATTACHMENT_MAX_INJECT_TOTAL_BYTES,
-      DEFAULT_MAX_INJECT_TOTAL_BYTES,
-    ),
-    maxInjectPerFileBytes: clampNatural(
-      config.maxInjectPerFileBytes ?? process.env.QQBOT_ATTACHMENT_MAX_INJECT_PER_FILE_BYTES,
-      DEFAULT_MAX_INJECT_PER_FILE_BYTES,
-    ),
-    maxPdfPreviewPagesPerFile: clampNatural(
-      config.maxPdfPreviewPagesPerFile ?? process.env.QQBOT_ATTACHMENT_MAX_PDF_PREVIEW_PAGES_PER_FILE,
-      DEFAULT_MAX_PDF_PREVIEW_PAGES_PER_FILE,
-    ),
-    maxPdfPreviewPagesTotal: clampNatural(
-      config.maxPdfPreviewPagesTotal ?? process.env.QQBOT_ATTACHMENT_MAX_PDF_PREVIEW_PAGES_TOTAL,
-      DEFAULT_MAX_PDF_PREVIEW_PAGES_TOTAL,
-    ),
-    maxTextCharsPerFile: clampNatural(
-      config.maxTextCharsPerFile ?? process.env.QQBOT_ATTACHMENT_MAX_TEXT_CHARS_PER_FILE,
-      DEFAULT_MAX_TEXT_CHARS_PER_FILE,
-    ),
-    recentCatalogSize: clampNatural(
-      config.recentCatalogSize ?? process.env.QQBOT_ATTACHMENT_RECENT_CATALOG_SIZE,
-      DEFAULT_RECENT_CATALOG_SIZE,
-    ),
-    historyWindow: clampNatural(process.env.QQBOT_ATTACHMENT_HISTORY_WINDOW, DEFAULT_HISTORY_WINDOW),
-    historyTriggerCount: clampNatural(process.env.QQBOT_ATTACHMENT_HISTORY_TRIGGER_COUNT, DEFAULT_HISTORY_TRIGGER_COUNT),
-    historyTokenRatio: clampRatio(process.env.QQBOT_ATTACHMENT_HISTORY_TOKEN_RATIO, DEFAULT_HISTORY_TOKEN_RATIO),
-    projectionTextChars: clampNatural(process.env.QQBOT_ATTACHMENT_PROJECTION_TEXT_CHARS, DEFAULT_PROJECTION_TEXT_CHARS),
-    replayTextChars: clampNatural(process.env.QQBOT_ATTACHMENT_REPLAY_TEXT_CHARS, DEFAULT_REPLAY_TEXT_CHARS),
-    replayMaxRefs: clampNatural(process.env.QQBOT_ATTACHMENT_REPLAY_MAX_REFS, DEFAULT_REPLAY_MAX_REFS),
+    maxInjectCount: requireNaturalConfig(config, 'maxInjectCount'),
+    maxInjectTotalBytes: requireNaturalConfig(config, 'maxInjectTotalBytes'),
+    maxInjectPerFileBytes: requireNaturalConfig(config, 'maxInjectPerFileBytes'),
+    maxPdfPreviewPagesPerFile: requireNaturalConfig(config, 'maxPdfPreviewPagesPerFile'),
+    maxPdfPreviewPagesTotal: requireNaturalConfig(config, 'maxPdfPreviewPagesTotal'),
+    maxTextCharsPerFile: requireNaturalConfig(config, 'maxTextCharsPerFile'),
+    recentCatalogSize: requireNaturalConfig(config, 'recentCatalogSize'),
+    historyWindow: requireNaturalConfig(config, 'historyWindow'),
+    historyTriggerCount: requireNaturalConfig(config, 'historyTriggerCount'),
+    historyTokenRatio: requireRatioConfig(config, 'historyTokenRatio'),
+    projectionTextChars: requireNaturalConfig(config, 'projectionTextChars'),
+    replayTextChars: requireNaturalConfig(config, 'replayTextChars'),
+    replayMaxRefs: requireNaturalConfig(config, 'replayMaxRefs'),
+    voiceAsrBaseUrl: requireStringConfig(config, 'voiceAsrBaseUrl'),
+    voiceAsrApiKey: requireStringConfig(config, 'voiceAsrApiKey'),
+    voiceTranscribeTimeoutMs: requireNaturalConfig(config, 'voiceTranscribeTimeoutMs'),
   };
 }
 
@@ -636,16 +643,15 @@ async function renderPdfPagePreview(buffer: Buffer, pageNumber: number): Promise
   }
 }
 
-function createAsrRuntimeFromEnv() {
-  const asrBaseUrl = normalizeText(process.env.QQ_VOICE_ASR_BASE_URL);
-  if (!asrBaseUrl) {
+function createAsrRuntime(runtime: RuntimeConfig) {
+  if (!runtime.voiceAsrBaseUrl) {
     return null;
   }
 
   return {
-    asrBaseUrl,
-    asrApiKey: normalizeText(process.env.QQ_VOICE_ASR_API_KEY),
-    transcribeTimeoutMs: clampNatural(process.env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS, 45_000),
+    asrBaseUrl: runtime.voiceAsrBaseUrl,
+    asrApiKey: runtime.voiceAsrApiKey,
+    transcribeTimeoutMs: runtime.voiceTranscribeTimeoutMs,
   };
 }
 
@@ -1240,8 +1246,8 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
       return existing.textContent;
     }
 
-    const runtime = createAsrRuntimeFromEnv();
-    if (!runtime) {
+    const asrRuntime = createAsrRuntime(this.runtime);
+    if (!asrRuntime) {
       return null;
     }
 
@@ -1251,7 +1257,7 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
     }
 
     try {
-      const payload = await transcribeAudio(runtime, {
+      const payload = await transcribeAudio(asrRuntime, {
         bytes: await tempFile.data,
         contentType: record.mimeType ?? 'application/octet-stream',
         source: 'src',

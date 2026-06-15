@@ -1,7 +1,7 @@
 import { Context, h } from 'koishi';
 import {
   createAudioDataUri,
-  createVoiceRuntimeConfig,
+  createVoiceRuntimeConfigFromEnv,
   ensureCanSendRecord,
   isVoiceOutputConfigured,
   synthesizeVoice,
@@ -160,7 +160,7 @@ export function parseQqVoiceBridgeRequest(payload: unknown): QqVoiceBridgeReques
 }
 
 export async function sendVoiceByBridge(ctx: Context, request: QqVoiceBridgeRequest): Promise<QqVoiceBridgeResponse> {
-  const runtime = createVoiceRuntimeConfig();
+  const runtime = createVoiceRuntimeConfigFromEnv();
   if (!runtime.outputEnabled) {
     throw new QqVoiceBridgeHttpError(503, 'voice_output_disabled', 'QQ voice output is disabled on the server');
   }

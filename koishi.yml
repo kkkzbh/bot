@@ -42,8 +42,11 @@ plugins:
       inputMaxSeconds: ${{ +env.QQ_VOICE_INPUT_MAX_SECONDS || 60 }}
       outputMaxWords: ${{ +env.QQ_VOICE_OUTPUT_MAX_WORDS || 80 }}
       outputMaxSeconds: ${{ +env.QQ_VOICE_OUTPUT_MAX_SECONDS || 45 }}
+      voiceOutputLanguage: ${{ env.QQ_VOICE_OUTPUT_LANGUAGE }}
       transcribeTimeoutMs: ${{ +env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS || 45000 }}
       synthTimeoutMs: ${{ +env.QQ_VOICE_SYNTH_TIMEOUT_MS || 300000 }}
+      replyInterruptCollectWindowMs: ${{ +env.QQBOT_REPLY_COLLECT_WINDOW_MS || 400 }}
+      replyInterruptMaxPendingInputs: ${{ +env.QQBOT_REPLY_MAX_PENDING_INPUTS || 8 }}
     ./dist/plugins/realtime-message:realtime-message:
       maxInjectCount: ${{ +env.QQBOT_REALTIME_MESSAGE_MAX_INJECT_COUNT || 12 }}
     ./dist/plugins/oj-tools:oj-tools:
@@ -52,9 +55,11 @@ plugins:
       ratingChartWidth: ${{ +env.QQBOT_OJ_TOOLS_RATING_CHART_WIDTH || 1789 }}
       ratingChartHeight: ${{ +env.QQBOT_OJ_TOOLS_RATING_CHART_HEIGHT || 838 }}
     ./dist/plugins/triggers/group-natural:natural-trigger:
-      enabled: ${{ env.CHAT_NATURAL_TRIGGER_ENABLED !== 'false' }}
+      enabled: ${{ env.CHAT_NATURAL_TRIGGER_ENABLED === 'true' }}
       enabledGroups: ${{ env.CHAT_NATURAL_TRIGGER_GROUPS || '' }}
-      aliases: ${{ env.CHAT_NATURAL_TRIGGER_ALIASES || '' }}
+      aliases: >-
+        ${{ env.CHAT_NATURAL_TRIGGER_ALIASES || '祥子,祥,丰川,丰川祥子,saki,saki酱,sakiko'
+        }}
       directTriggerProbability: ${{ +env.CHAT_NATURAL_TRIGGER_DIRECT_PROBABILITY || 0.25 }}
       focusWindowMs: ${{ +env.CHAT_NATURAL_TRIGGER_FOCUS_WINDOW_MS || 300000 }}
       replyIntervalMs: ${{ +env.CHAT_NATURAL_TRIGGER_REPLY_INTERVAL_MS || 2000 }}
@@ -130,6 +135,15 @@ plugins:
       maxPdfPreviewPagesTotal: ${{ +env.QQBOT_ATTACHMENT_MAX_PDF_PREVIEW_PAGES_TOTAL || 15 }}
       maxTextCharsPerFile: ${{ +env.QQBOT_ATTACHMENT_MAX_TEXT_CHARS_PER_FILE || 24000 }}
       recentCatalogSize: ${{ +env.QQBOT_ATTACHMENT_RECENT_CATALOG_SIZE || 12 }}
+      historyWindow: ${{ +env.QQBOT_ATTACHMENT_HISTORY_WINDOW || 80 }}
+      historyTriggerCount: ${{ +env.QQBOT_ATTACHMENT_HISTORY_TRIGGER_COUNT || 120 }}
+      historyTokenRatio: ${{ +env.QQBOT_ATTACHMENT_HISTORY_TOKEN_RATIO || 0.7 }}
+      projectionTextChars: ${{ +env.QQBOT_ATTACHMENT_PROJECTION_TEXT_CHARS || 1200 }}
+      replayTextChars: ${{ +env.QQBOT_ATTACHMENT_REPLAY_TEXT_CHARS || 4000 }}
+      replayMaxRefs: ${{ +env.QQBOT_ATTACHMENT_REPLAY_MAX_REFS || 5 }}
+      voiceAsrBaseUrl: ${{ env.QQ_VOICE_ASR_BASE_URL || '' }}
+      voiceAsrApiKey: ${{ env.QQ_VOICE_ASR_API_KEY || '' }}
+      voiceTranscribeTimeoutMs: ${{ +env.QQ_VOICE_TRANSCRIBE_TIMEOUT_MS || 45000 }}
     chatluna-plugin-common:qf1a6x:
       think: ${{ env.CHATLUNA_COMMON_THINK === 'true' }}
       send: ${{ env.CHATLUNA_COMMON_SEND === 'true' }}
@@ -259,8 +273,8 @@ plugins:
       extractApiKey: ${{ env.MEMORY_EXTRACT_API_KEY || '' }}
       extractModel: ${{ env.MEMORY_EXTRACT_MODEL || '' }}
       extractTimeoutMs: ${{ +env.MEMORY_EXTRACT_TIMEOUT_MS || 180000 }}
-      extractRequestMode: ${{ env.MEMORY_EXTRACT_REQUEST_MODE || '' }}
-      extractStructuredOutputProtocol: ${{ env.MEMORY_EXTRACT_STRUCTURED_OUTPUT_PROTOCOL || '' }}
+      extractRequestMode: ${{ env.MEMORY_EXTRACT_REQUEST_MODE || 'chat_completions' }}
+      extractStructuredOutputProtocol: ${{ env.MEMORY_EXTRACT_STRUCTURED_OUTPUT_PROTOCOL || 'chat_reply_v1' }}
       extractSupportsJsonMode: ${{ env.MEMORY_EXTRACT_SUPPORTS_JSON_MODE === 'true' }}
       embedBaseUrl: ${{ env.MEMORY_EMBED_BASE_URL || 'https://api.siliconflow.cn/v1' }}
       embedApiKey: ${{ env.MEMORY_EMBED_API_KEY || '' }}
@@ -274,6 +288,8 @@ plugins:
       archiveDays: ${{ +env.MEMORY_ARCHIVE_DAYS || 90 }}
       maxJobRetries: ${{ +env.MEMORY_MAX_JOB_RETRIES || 5 }}
       jobLockTimeoutMs: ${{ +env.MEMORY_JOB_LOCK_TIMEOUT_MS || 300000 }}
+      maxFacts: ${{ +env.MEMORY_MAX_FACTS || 8 }}
+      maxEpisodes: ${{ +env.MEMORY_MAX_EPISODES || 8 }}
     commands:qp6oxu:
       chatluna:
         config:

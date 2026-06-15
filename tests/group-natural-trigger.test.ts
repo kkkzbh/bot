@@ -106,6 +106,11 @@ function createHarness(
     spamThreshold: 10,
     spamMuteMs: 180_000,
     decisionEnabled: false,
+    decisionBaseUrl: 'https://decision.example/v1',
+    decisionApiKey: '',
+    decisionModel: '',
+    decisionTimeoutMs: 4_000,
+    decisionMinConfidence: 0.62,
     ...overrides,
   });
 
@@ -162,10 +167,28 @@ describe('group natural trigger middleware', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it('declares chatluna as a required injection', () => {
     expect(inject).toEqual({ required: ['chatluna'], optional: ['featurePolicy'] });
+  });
+
+  it('fails fast when the enabled config is missing', () => {
+    expect(() => createHarness({ enabled: undefined })).toThrow('群聊自然触发配置缺失：enabled');
+  });
+
+  it('keeps natural trigger disabled when the enabled config is false', async () => {
+    const { middleware } = createHarness({ enabled: false, replyIntervalMs: 0 });
+
+    const result = await runAndCapture(
+      middleware,
+      createSession({
+        content: '祥子 在吗',
+      }),
+    );
+
+    expect(result.naturalTrigger).toBeNull();
   });
 
   it('shares focus within the same group and keeps other groups isolated', async () => {

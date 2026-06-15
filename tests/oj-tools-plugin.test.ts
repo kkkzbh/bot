@@ -68,7 +68,12 @@ describe('oj-tools plugin', () => {
       }),
     };
 
-    apply(ctx as never, {});
+    apply(ctx as never, {
+      cacheTtlMs: 300_000,
+      requestIntervalMs: 2_100,
+      ratingChartWidth: 1_789,
+      ratingChartHeight: 838,
+    });
 
     expect([...tools.keys()].sort()).toEqual([
       CF_CONTESTS_TOOL,

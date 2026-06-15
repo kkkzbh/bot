@@ -1,8 +1,6 @@
 import type { MemoryEmbedRuntime } from './providers/embedding-client.js';
 import type { MemoryProviderProfile } from './providers/router.js';
 
-export const DEFAULT_EMBED_BASE_URL = 'https://api.siliconflow.cn/v1';
-
 export interface MemoryRuntimeConfig {
   enabled: boolean;
   readEnabled: boolean;
