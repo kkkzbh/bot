@@ -54,8 +54,8 @@ export interface PresetDocument {
   raw?: string;
 }
 
-export type BotConsoleModelTabId = "siliconflow" | "openai" | "copilot" | "deepseek" | "mimo";
-export type BotConsoleAuthKind = "manual" | "oauth_device";
+export type BotConsoleModelTabId = "siliconflow" | "openai" | "codex" | "copilot" | "deepseek" | "mimo";
+export type BotConsoleAuthKind = "manual" | "oauth_device" | "codex_oauth";
 export type BotConsoleAuthStatus = "unauthenticated" | "pending" | "ready" | "expired" | "error";
 export type BotConsoleModelListSource = "dynamic" | "static";
 
@@ -70,11 +70,22 @@ export interface CopilotAuthAttempt {
   error: string | null;
 }
 
+export interface CodexAuthAttempt {
+  attemptId: string;
+  userCode: string;
+  verificationUri: string;
+  expiresAt: number;
+  intervalSec: number;
+  nextPollAt: number;
+  state: "pending" | "authorized" | "expired" | "failed" | "cancelled";
+  error: string | null;
+}
+
 export interface BotConsoleBuiltinModelTab {
   id: BotConsoleModelTabId;
   title: string;
   provider: "siliconflow" | "openai" | "deepseek" | "mimo";
-  strategyId: "siliconflow-kimi-main-chat" | "openai-gpt54-main-chat" | "copilot-github-oauth-main-chat" | "deepseek-official-main-chat" | "mimo-official-main-chat";
+  strategyId: "siliconflow-kimi-main-chat" | "openai-gpt54-main-chat" | "codex-chatgpt-oauth-main-chat" | "copilot-github-oauth-main-chat" | "deepseek-official-main-chat" | "mimo-official-main-chat";
   requestMode: "chat_completions" | "responses";
   structuredOutputProtocol: "native_chat_json_schema" | "native_responses_json_schema" | "chat_reply_v1";
   description: string;
@@ -83,9 +94,11 @@ export interface BotConsoleBuiltinModelTab {
   authStatus: BotConsoleAuthStatus;
   accountLabel?: string | null;
   authError?: string | null;
+  tokenExpiresAt?: number | null;
   baseUrl: string;
   apiKey: string;
   defaultModel: string;
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | null;
   canonicalModel?: string;
   transportModel?: string;
 }
@@ -116,6 +129,12 @@ export interface DeepSeekModelListResponse {
 }
 
 export interface CopilotModelListResponse {
+  source: BotConsoleModelListSource;
+  models: BotConsoleModelOption[];
+  error: string | null;
+}
+
+export interface CodexModelListResponse {
   source: BotConsoleModelListSource;
   models: BotConsoleModelOption[];
   error: string | null;
@@ -656,11 +675,25 @@ export interface CopilotAuthState {
   attempt: CopilotAuthAttempt | null;
 }
 
+export interface CodexAuthState {
+  authKind: "codex_oauth";
+  authStatus: BotConsoleAuthStatus;
+  accountLabel: string | null;
+  authError: string | null;
+  tokenExpiresAt: number | null;
+  attempt: CodexAuthAttempt | null;
+}
+
 export interface CopilotAuthStartResponse extends CopilotAuthState {}
 export interface CopilotAuthPollResponse extends CopilotAuthState {}
 export interface CopilotAuthStatusResponse extends CopilotAuthState {}
 export interface CopilotAuthCancelResponse extends CopilotAuthState {}
 export interface CopilotAuthLogoutResponse extends CopilotAuthState {}
+export interface CodexAuthStartResponse extends CodexAuthState {}
+export interface CodexAuthPollResponse extends CodexAuthState {}
+export interface CodexAuthStatusResponse extends CodexAuthState {}
+export interface CodexAuthCancelResponse extends CodexAuthState {}
+export interface CodexAuthLogoutResponse extends CodexAuthState {}
 
 export interface SavePresetResponse {
   preset: PresetDocument;

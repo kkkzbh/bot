@@ -1,0 +1,10 @@
+version = 1
+name = "qqbot"
+
+[setup]
+script = ""
+
+[[actions]]
+name = "Build and Restart Koishi"
+icon = "run"
+command = "pnpm build && systemctl --user restart qqbot-koishi.service && systemctl --user status qqbot-koishi.service --no-pager"

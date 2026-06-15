@@ -170,6 +170,7 @@ describe('supportsStructuredReplyJsonSchema', () => {
     expect(supportsStructuredReplyJsonSchema('siliconflow/Pro/moonshotai/Kimi-K2.5')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-5.4')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-5.4-medium-thinking')).toBe(true);
+    expect(supportsStructuredReplyJsonSchema('openai/gpt-5.5')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-4o')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gpt-5-mini')).toBe(true);
     expect(supportsStructuredReplyJsonSchema('openai/gemini-3.1-pro-preview')).toBe(false);
@@ -317,6 +318,30 @@ describe('buildReplyOutputContract', () => {
     });
   });
 
+  it('routes Codex OAuth models to Responses API native structured outputs', () => {
+    expect(
+      buildReplyOutputContract({
+        model: 'openai/gpt-5.5',
+      }),
+    ).toMatchObject({
+      requestMode: 'responses',
+      protocol: 'native_responses_json_schema',
+      schema: expect.objectContaining({
+        title: 'StructuredReply',
+      }),
+      instruction: null,
+      overrideRequestParams: {
+        qqbot_request_mode: 'responses',
+        qqbot_canonical_model: 'openai/gpt-5.5',
+        qqbot_transport_model: 'gpt-5.5',
+        qqbot_tool_profile: 'qqbot_openai_main_chat',
+        reasoning: {
+          effort: 'medium',
+        },
+      },
+    });
+  });
+
   it('exposes mention output only when mention capability is enabled', () => {
     const schema = buildReplyOutputContract({
       model: 'openai/gpt-5.4-medium-thinking',
@@ -401,6 +426,9 @@ describe('isSupportedMainChatModelForTab', () => {
     expect(isSupportedMainChatModelForTab('siliconflow', 'openai/gpt-5.4-medium-thinking')).toBe(false);
     expect(isSupportedMainChatModelForTab('openai', 'openai/gpt-5.4-medium-thinking')).toBe(true);
     expect(isSupportedMainChatModelForTab('openai', 'openai/gpt-5.2')).toBe(false);
+    expect(isSupportedMainChatModelForTab('codex', 'openai/gpt-5.5')).toBe(true);
+    expect(isSupportedMainChatModelForTab('codex', 'gpt-5.4-mini')).toBe(true);
+    expect(isSupportedMainChatModelForTab('codex', 'bad model')).toBe(false);
     expect(isSupportedMainChatModelForTab('copilot', 'openai/gpt-5.4')).toBe(false);
     expect(isSupportedMainChatModelForTab('copilot', 'openai/gpt-5.4-mini')).toBe(true);
     expect(isSupportedMainChatModelForTab('copilot', 'gpt-5-mini')).toBe(true);
@@ -492,6 +520,30 @@ describe('resolveMainChatRuntimeProfileFromEnv', () => {
       defaultModel: 'openai/gpt-5.4-mini',
       canonicalModel: 'openai/gpt-5.4-mini',
       transportModel: 'gpt-5.4-mini',
+    });
+  });
+
+  it('resolves the Codex tab into a ChatGPT OAuth Responses runtime profile', () => {
+    expect(
+      resolveMainChatRuntimeProfileFromEnv({
+        CHATLUNA_ACTIVE_TAB: 'codex',
+        CHATLUNA_CODEX_BASE_URL: 'http://127.0.0.1:5140/api/internal/codex/v1',
+        CHATLUNA_CODEX_API_KEY: 'codex-bridge-secret',
+        CHATLUNA_CODEX_DEFAULT_MODEL: 'openai/gpt-5.5',
+        CHATLUNA_CODEX_REASONING_EFFORT: 'high',
+      }),
+    ).toMatchObject({
+      tabId: 'codex',
+      provider: 'openai',
+      strategyId: 'codex-chatgpt-oauth-main-chat',
+      requestMode: 'responses',
+      structuredOutputProtocol: 'native_responses_json_schema',
+      authKind: 'codex_oauth',
+      baseUrl: 'http://127.0.0.1:5140/api/internal/codex/v1',
+      defaultModel: 'openai/gpt-5.5',
+      reasoningEffort: 'high',
+      canonicalModel: 'openai/gpt-5.5',
+      transportModel: 'gpt-5.5',
     });
   });
 

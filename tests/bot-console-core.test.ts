@@ -57,6 +57,28 @@ function createCopilotBridgeWithModels(models: unknown[]) {
   };
 }
 
+function createCodexBridgeWithModels(models: unknown[]) {
+  return {
+    getRuntimeConfig: async () => ({
+      baseUrl: 'http://127.0.0.1:5140/api/internal/codex/v1',
+      apiKey: 'codex-bridge-secret',
+    }),
+    getConsoleStatus: async () => ({
+      authKind: 'codex_oauth' as const,
+      authStatus: 'ready' as const,
+      accountLabel: 'codex-user',
+      authError: null,
+      tokenExpiresAt: Date.now() + 60_000,
+      attempt: null,
+    }),
+    proxyModels: async () => ({
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ data: models }),
+    }),
+  };
+}
+
 function createSystemdShowExec(activeState = 'inactive') {
   return async (_file: string, args: string[]) => ({
     stdout: [
@@ -109,6 +131,17 @@ const COPILOT_ENABLED_MODEL_PAYLOAD = [
     model_picker_enabled: true,
     capabilities: { supports: { structured_outputs: true } },
     supported_endpoints: ['/chat/completions'],
+  },
+];
+
+const CODEX_ENABLED_MODEL_PAYLOAD = [
+  {
+    id: 'gpt-5.5',
+    name: 'GPT-5.5',
+  },
+  {
+    id: 'gpt-5.4-mini',
+    name: 'GPT-5.4-Mini',
   },
 ];
 
@@ -226,6 +259,10 @@ describe('bot-console env helpers', () => {
       CHATLUNA_OPENAI_BASE_URL: 'https://shell.wyzai.top/v1',
       CHATLUNA_OPENAI_API_KEY: 'sk-openai',
       CHATLUNA_OPENAI_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+      CHATLUNA_CODEX_BASE_URL: 'http://127.0.0.1:5140/api/internal/codex/v1',
+      CHATLUNA_CODEX_API_KEY: 'codex-bridge-secret',
+      CHATLUNA_CODEX_DEFAULT_MODEL: 'openai/gpt-5.5',
+      CHATLUNA_CODEX_REASONING_EFFORT: 'xhigh',
       CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
       CHATLUNA_COPILOT_API_KEY: 'github_pat_123',
       CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/gpt-5.4-mini',
@@ -256,6 +293,16 @@ describe('bot-console env helpers', () => {
         structuredOutputProtocol: 'native_chat_json_schema',
         baseUrl: 'https://shell.wyzai.top/v1',
         defaultModel: 'openai/gpt-5.4-medium-thinking',
+      }),
+      expect.objectContaining({
+        id: 'codex',
+        strategyId: 'codex-chatgpt-oauth-main-chat',
+        requestMode: 'responses',
+        structuredOutputProtocol: 'native_responses_json_schema',
+        defaultModel: 'openai/gpt-5.5',
+        reasoningEffort: 'xhigh',
+        canonicalModel: 'openai/gpt-5.5',
+        transportModel: 'gpt-5.5',
       }),
       expect.objectContaining({
         id: 'copilot',
@@ -1170,6 +1217,57 @@ describe('bot-console manager', () => {
     });
   });
 
+  it('mirrors the Codex tab into runtime chatluna env keys with Responses metadata', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+
+    const manager = new BotConsoleManager({
+      rootDir: dir,
+      envFilePath,
+      codexBridge: createCodexBridgeWithModels(CODEX_ENABLED_MODEL_PAYLOAD),
+    });
+    const result = await manager.saveModelTabs({
+      activeTab: 'codex',
+      dirtyTabIds: ['codex'],
+      tabs: [
+        {
+          id: 'codex',
+          provider: 'openai',
+          baseUrl: 'http://127.0.0.1:5140/api/internal/codex/v1',
+          apiKey: '',
+          defaultModel: 'openai/gpt-5.5',
+          reasoningEffort: 'high',
+        },
+      ] as any,
+    });
+
+    expect(result.modelTabs.activeTab).toBe('codex');
+    expect(result.modelTabs.tabs).toContainEqual(expect.objectContaining({
+      id: 'codex',
+      strategyId: 'codex-chatgpt-oauth-main-chat',
+      requestMode: 'responses',
+      structuredOutputProtocol: 'native_responses_json_schema',
+      baseUrl: 'http://127.0.0.1:5140/api/internal/codex/v1',
+      apiKey: 'codex-bridge-secret',
+      defaultModel: 'openai/gpt-5.5',
+      reasoningEffort: 'high',
+      canonicalModel: 'openai/gpt-5.5',
+      transportModel: 'gpt-5.5',
+    }));
+    expect(result.env).toMatchObject({
+      CHATLUNA_ACTIVE_TAB: 'codex',
+      CHATLUNA_PLATFORM: 'openai',
+      CHATLUNA_BASE_URL: 'http://127.0.0.1:5140/api/internal/codex/v1',
+      CHATLUNA_API_KEY: 'codex-bridge-secret',
+      CHATLUNA_DEFAULT_MODEL: 'openai/gpt-5.5',
+      CHATLUNA_CODEX_BASE_URL: 'http://127.0.0.1:5140/api/internal/codex/v1',
+      CHATLUNA_CODEX_API_KEY: 'codex-bridge-secret',
+      CHATLUNA_CODEX_DEFAULT_MODEL: 'openai/gpt-5.5',
+      CHATLUNA_CODEX_REASONING_EFFORT: 'high',
+    });
+  });
+
   it('mirrors the MIMO tab into runtime chatluna env keys and inherited credentials', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');
@@ -1485,6 +1583,33 @@ describe('bot-console manager', () => {
       ],
     }),
     ).rejects.toThrow(/GitHub Copilot Tab：.*不在当前 OAuth 可用模型列表内/);
+  });
+
+  it('rejects unsupported Codex tab models outside the current visible API catalog', async () => {
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+
+    const manager = new BotConsoleManager({
+      rootDir: dir,
+      envFilePath,
+      codexBridge: createCodexBridgeWithModels(CODEX_ENABLED_MODEL_PAYLOAD.slice(0, 1)),
+    });
+    await expect(
+      manager.saveModelTabs({
+        activeTab: 'codex',
+        dirtyTabIds: ['codex'],
+        tabs: [
+          {
+            id: 'codex',
+            provider: 'openai',
+            baseUrl: 'http://127.0.0.1:5140/api/internal/codex/v1',
+            apiKey: '',
+            defaultModel: 'openai/gpt-5.4-mini',
+          },
+        ] as any,
+      }),
+    ).rejects.toThrow(/Codex Tab：.*不在当前 Codex 可见 API 模型列表内/);
   });
 
   it('rejects unsupported DeepSeek tab models when using the official fallback list', async () => {

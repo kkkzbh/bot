@@ -28,6 +28,7 @@ import type {
   BotServiceStatus,
   BotServiceUnit,
   CopilotModelListResponse,
+  CodexModelListResponse,
   DeepSeekModelListRequest,
   DeepSeekModelListResponse,
   EnvPatch,
@@ -45,6 +46,7 @@ import type {
 } from '../../types/bot-console.js';
 import {
   buildMainChatRuntimeEnvPatch,
+  CODEX_DEFAULT_REASONING_EFFORT,
   DEEPSEEK_DEFAULT_BASE_URL,
   DEEPSEEK_OFFICIAL_MODEL_OPTIONS,
   getBuiltinMainChatTabDefinition,
@@ -52,11 +54,15 @@ import {
   MAIN_CHAT_BUILTIN_TAB_IDS,
   MIMO_CHAT_MODEL_OPTIONS,
   MIMO_DEFAULT_BASE_URL,
+  normalizeCodexModelId,
+  normalizeCodexReasoningEffort,
   normalizeCopilotModelId,
   normalizeDeepSeekModelId,
   normalizeMainChatBuiltinTabId,
   normalizeMimoModelId,
+  registerCodexDynamicModelOptions,
   registerCopilotDynamicModelOptions,
+  type CodexModelOption,
   resolveMainChatActiveTabFromEnv,
   resolveMainChatTabStateFromEnv,
   validateMainChatTabModel,
@@ -115,6 +121,7 @@ type BotConsoleManagerOptions = {
   fs?: FsLike;
   execFile?: (file: string, args: string[], options?: { cwd?: string; timeout?: number }) => Promise<ExecResult>;
   copilotBridge?: CopilotBridgeStateProvider;
+  codexBridge?: CodexBridgeStateProvider;
 };
 
 type EnvLine =
@@ -146,6 +153,26 @@ type CopilotBridgeConsoleState = {
 type CopilotBridgeStateProvider = {
   getRuntimeConfig: () => Promise<CopilotBridgeRuntimeConfig>;
   getConsoleStatus: (options?: { probe?: boolean }) => Promise<CopilotBridgeConsoleState>;
+  proxyModels?: () => Promise<{ status: number; headers: Record<string, string>; body: string }>;
+};
+
+type CodexBridgeRuntimeConfig = {
+  baseUrl: string;
+  apiKey: string;
+};
+
+type CodexBridgeConsoleState = {
+  authKind: 'codex_oauth';
+  authStatus: BotConsoleAuthStatus;
+  accountLabel: string | null;
+  authError: string | null;
+  tokenExpiresAt: number | null;
+  attempt?: unknown;
+};
+
+type CodexBridgeStateProvider = {
+  getRuntimeConfig: () => Promise<CodexBridgeRuntimeConfig>;
+  getConsoleStatus: (options?: { probe?: boolean }) => Promise<CodexBridgeConsoleState>;
   proxyModels?: () => Promise<{ status: number; headers: Record<string, string>; body: string }>;
 };
 
@@ -208,6 +235,10 @@ export const BOT_CONSOLE_ENV_FIELDS: ManagedEnvField[] = [
   { key: 'CHATLUNA_OPENAI_BASE_URL', label: 'OpenAI 接口地址', type: 'text', section: 'model' },
   { key: 'CHATLUNA_OPENAI_API_KEY', label: 'OpenAI 接口密钥', type: 'secret', section: 'model' },
   { key: 'CHATLUNA_OPENAI_DEFAULT_MODEL', label: 'OpenAI 默认模型', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_CODEX_BASE_URL', label: 'Codex 接口地址', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_CODEX_API_KEY', label: 'Codex Bridge 密钥', type: 'secret', section: 'model' },
+  { key: 'CHATLUNA_CODEX_DEFAULT_MODEL', label: 'Codex 默认模型', type: 'text', section: 'model' },
+  { key: 'CHATLUNA_CODEX_REASONING_EFFORT', label: 'Codex 思考程度', type: 'text', section: 'model' },
   { key: 'CHATLUNA_COPILOT_BASE_URL', label: 'GitHub Copilot 接口地址', type: 'text', section: 'model' },
   { key: 'CHATLUNA_COPILOT_API_KEY', label: 'GitHub Copilot Bridge 密钥', type: 'secret', section: 'model' },
   { key: 'CHATLUNA_COPILOT_DEFAULT_MODEL', label: 'GitHub Copilot 默认模型', type: 'text', section: 'model' },
@@ -562,6 +593,25 @@ function normalizeCopilotModelList(models: readonly BotConsoleModelOption[]): Bo
   return result;
 }
 
+function normalizeCodexModelList(models: readonly BotConsoleModelOption[]): BotConsoleModelOption[] {
+  const result: BotConsoleModelOption[] = [];
+  const seen = new Set<string>();
+  for (const item of models) {
+    const modelId = normalizeCodexModelId(item.modelId);
+    if (!modelId || seen.has(modelId)) continue;
+    result.push({
+      modelId,
+      label: item.label?.trim() || modelId,
+      requestMode: 'responses',
+      structuredOutputProtocol: 'native_responses_json_schema',
+      deprecated: item.deprecated,
+      deprecationDate: item.deprecationDate,
+    });
+    seen.add(modelId);
+  }
+  return result;
+}
+
 function parseCopilotModelListPayload(payload: unknown): BotConsoleModelOption[] {
   if (!isObjectRecord(payload)) return [];
   const data = payload.data;
@@ -581,6 +631,25 @@ function parseCopilotModelListPayload(payload: unknown): BotConsoleModelOption[]
         label: readStringField(item, 'name') ?? id,
         requestMode: route.requestMode,
         structuredOutputProtocol: route.structuredOutputProtocol,
+      }];
+    }),
+  );
+}
+
+function parseCodexModelListPayload(payload: unknown): BotConsoleModelOption[] {
+  if (!isObjectRecord(payload)) return [];
+  const data = payload.data;
+  if (!Array.isArray(data)) return [];
+  return normalizeCodexModelList(
+    data.flatMap((item): BotConsoleModelOption[] => {
+      if (!isObjectRecord(item)) return [];
+      const id = readStringField(item, 'id');
+      if (!id) return [];
+      return [{
+        modelId: id,
+        label: readStringField(item, 'name') ?? id,
+        requestMode: 'responses',
+        structuredOutputProtocol: 'native_responses_json_schema',
       }];
     }),
   );
@@ -638,6 +707,14 @@ function unavailableCopilotModelList(error: string | null): CopilotModelListResp
   };
 }
 
+function unavailableCodexModelList(error: string | null): CodexModelListResponse {
+  return {
+    source: 'dynamic',
+    models: [],
+    error,
+  };
+}
+
 export async function listCopilotModelsFromOAuthBridge(
   bridge: CopilotBridgeStateProvider | undefined,
 ): Promise<CopilotModelListResponse> {
@@ -681,6 +758,45 @@ export async function listCopilotModelsFromOAuthBridge(
     };
   } catch (error) {
     return unavailableCopilotModelList(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export async function listCodexModelsFromOAuthBridge(
+  bridge: CodexBridgeStateProvider | undefined,
+): Promise<CodexModelListResponse> {
+  if (!bridge?.proxyModels) {
+    return unavailableCodexModelList('Codex OAuth bridge is unavailable.');
+  }
+
+  try {
+    const response = await bridge.proxyModels();
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`Codex /models returned HTTP ${response.status}: ${response.body.slice(0, 240)}`);
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(response.body) as unknown;
+    } catch (error) {
+      throw new Error(`Codex /models returned non-JSON response: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const models = parseCodexModelListPayload(payload);
+    if (models.length === 0) {
+      throw new Error('Codex /models returned no visible API-supported models.');
+    }
+    registerCodexDynamicModelOptions(models.map((model): CodexModelOption => ({
+      modelId: model.modelId,
+      label: model.label,
+    })));
+
+    return {
+      source: 'dynamic',
+      models,
+      error: null,
+    };
+  } catch (error) {
+    return unavailableCodexModelList(error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -783,6 +899,7 @@ export async function listMimoModelsFromOfficialSource(
 }
 
 type NormalizeModelTabInputOptions = {
+  codexModelIds?: readonly string[];
   copilotModelIds?: readonly string[];
   deepseekModelIds?: readonly string[];
   mimoModelIds?: readonly string[];
@@ -802,9 +919,12 @@ function normalizeModelTabInput(
   const strategy = getMainChatProviderStrategy(definition.strategyId);
   const rawModel = String(input?.defaultModel ?? fallbackTab.defaultModel ?? '').trim();
   const normalizedModel = strategy.normalizeModel(rawModel) ?? '';
+  const reasoningEffort = id === 'codex'
+    ? normalizeCodexReasoningEffort(input?.reasoningEffort ?? fallbackTab.reasoningEffort) ?? CODEX_DEFAULT_REASONING_EFFORT
+    : null;
   const requestMode = strategy.resolveRequestMode(normalizedModel);
   const structuredOutputProtocol = strategy.resolveStructuredOutputProtocol(normalizedModel);
-  const consoleDescription = strategy.describeForConsole(normalizedModel);
+  const consoleDescription = strategy.describeForConsole(normalizedModel, { reasoningEffort });
   const normalized: BotConsoleBuiltinModelTab = {
     id,
     title: definition.title,
@@ -818,21 +938,26 @@ function normalizeModelTabInput(
     authStatus: fallbackTab.authStatus,
     accountLabel: fallbackTab.accountLabel,
     authError: fallbackTab.authError,
+    tokenExpiresAt: fallbackTab.tokenExpiresAt,
     baseUrl: id === 'siliconflow'
       ? definition.defaultBaseUrl
       : id === 'deepseek'
         ? normalizeDeepSeekBaseUrl(input?.baseUrl ?? fallbackTab.baseUrl)
         : id === 'mimo'
           ? normalizeMimoBaseUrl(input?.baseUrl ?? fallbackTab.baseUrl)
+          : id === 'codex'
+            ? String(input?.baseUrl ?? fallbackTab.baseUrl ?? definition.defaultBaseUrl).trim()
           : String(input?.baseUrl ?? fallbackTab.baseUrl ?? '').trim(),
     apiKey: String(input?.apiKey || fallbackTab.apiKey || '').trim(),
     defaultModel: normalizedModel,
+    reasoningEffort,
     canonicalModel: normalizedModel,
     transportModel: strategy.transportModel(normalizedModel) ?? normalizedModel,
   };
 
   if (options.validate !== false) {
     const validation = validateMainChatTabModel(id, normalized.defaultModel || rawModel, {
+      codexDynamicModelIds: options.codexModelIds,
       copilotDynamicModelIds: options.copilotModelIds,
       deepseekDynamicModelIds: options.deepseekModelIds,
       mimoDynamicModelIds: options.mimoModelIds,
@@ -1196,6 +1321,7 @@ export class BotConsoleManager {
   readonly fs: FsLike;
   readonly execFile: (file: string, args: string[], options?: { cwd?: string; timeout?: number }) => Promise<ExecResult>;
   readonly copilotBridge?: CopilotBridgeStateProvider;
+  readonly codexBridge?: CodexBridgeStateProvider;
   private ttsHealth: BotConsoleTtsHealthSnapshot | null = null;
 
   constructor(options: BotConsoleManagerOptions = {}) {
@@ -1244,6 +1370,7 @@ export class BotConsoleManager {
     this.fs = options.fs ?? defaultFs();
     this.execFile = options.execFile ?? defaultExec;
     this.copilotBridge = options.copilotBridge;
+    this.codexBridge = options.codexBridge;
   }
 
   get managedServiceUnits(): readonly BotServiceUnit[] {
@@ -1557,6 +1684,10 @@ export class BotConsoleManager {
     return listCopilotModelsFromOAuthBridge(this.copilotBridge);
   }
 
+  async listCodexModels(): Promise<CodexModelListResponse> {
+    return listCodexModelsFromOAuthBridge(this.codexBridge);
+  }
+
   async listMimoModels(input: MimoModelListRequest): Promise<MimoModelListResponse> {
     return listMimoModelsFromOfficialSource(input);
   }
@@ -1848,6 +1979,15 @@ export class BotConsoleManager {
       ]),
     ) as Record<BotConsoleModelTabId, BotConsoleBuiltinModelTab>;
 
+    let codexModelIds: string[] | undefined;
+    if (dirtyIds.has('codex')) {
+      const codexModels = await this.listCodexModels();
+      if (codexModels.error || codexModels.models.length === 0) {
+        throw new Error(`Codex OAuth 模型列表不可用：${codexModels.error ?? '未返回可用模型'}`);
+      }
+      codexModelIds = codexModels.models.map((model) => model.modelId);
+    }
+
     let copilotModelIds: string[] | undefined;
     if (dirtyIds.has('copilot')) {
       const copilotModels = await this.listCopilotModels();
@@ -1884,6 +2024,7 @@ export class BotConsoleManager {
       const provided = providedById.get(id);
       const existing = existingByTab[id];
       return normalizeModelTabInput(provided ?? existing, {
+        codexModelIds,
         copilotModelIds,
         deepseekModelIds,
         mimoModelIds,
@@ -1907,6 +2048,21 @@ export class BotConsoleManager {
       }
     }
 
+    if (this.codexBridge) {
+      const runtime = await this.codexBridge.getRuntimeConfig().catch(() => null);
+      if (runtime) {
+        const codexTab = tabs.find((tab) => tab.id === 'codex');
+        if (codexTab) {
+          if (typeof runtime.baseUrl === 'string' && runtime.baseUrl.trim()) {
+            codexTab.baseUrl = runtime.baseUrl.trim();
+          }
+          if (typeof runtime.apiKey === 'string' && runtime.apiKey.trim()) {
+            codexTab.apiKey = runtime.apiKey.trim();
+          }
+        }
+      }
+    }
+
     return buildMainChatRuntimeEnvPatch(activeTab, tabs);
   }
 
@@ -1922,25 +2078,54 @@ export class BotConsoleManager {
   }
 
   private async decorateModelTabsState(state: BotConsoleModelTabsState): Promise<BotConsoleModelTabsState> {
-    if (!this.copilotBridge) {
+    if (!this.copilotBridge && !this.codexBridge) {
       return state;
     }
 
-    const runtime = await this.copilotBridge.getRuntimeConfig();
-    const consoleState = await this.copilotBridge.getConsoleStatus({ probe: false });
+    const [copilotRuntime, copilotState, codexRuntime, codexState] = await Promise.all([
+      this.copilotBridge?.getRuntimeConfig().catch(() => null) ?? Promise.resolve(null),
+      this.copilotBridge?.getConsoleStatus({ probe: false }).catch((error) => ({
+        authKind: 'oauth_device' as const,
+        authStatus: 'error' as const,
+        accountLabel: null,
+        authError: error instanceof Error ? error.message : String(error),
+      })) ?? Promise.resolve(null),
+      this.codexBridge?.getRuntimeConfig().catch(() => null) ?? Promise.resolve(null),
+      this.codexBridge?.getConsoleStatus({ probe: false }).catch((error) => ({
+        authKind: 'codex_oauth' as const,
+        authStatus: 'error' as const,
+        accountLabel: null,
+        authError: error instanceof Error ? error.message : String(error),
+        tokenExpiresAt: null,
+      })) ?? Promise.resolve(null),
+    ]);
     return {
       activeTab: state.activeTab,
       tabs: state.tabs.map((tab) => {
-        if (tab.id !== 'copilot') return tab;
-        return {
-          ...tab,
-          authKind: consoleState.authKind,
-          authStatus: consoleState.authStatus,
-          accountLabel: consoleState.accountLabel,
-          authError: consoleState.authError,
-          baseUrl: runtime.baseUrl,
-          apiKey: runtime.apiKey,
-        };
+        if (tab.id === 'copilot' && copilotRuntime && copilotState) {
+          return {
+            ...tab,
+            authKind: copilotState.authKind,
+            authStatus: copilotState.authStatus,
+            accountLabel: copilotState.accountLabel,
+            authError: copilotState.authError,
+            baseUrl: copilotRuntime.baseUrl,
+            apiKey: copilotRuntime.apiKey,
+          };
+        }
+        if (tab.id === 'codex' && codexRuntime && codexState) {
+          return {
+            ...tab,
+            authKind: codexState.authKind,
+            authStatus: codexState.authStatus,
+            accountLabel: codexState.accountLabel,
+            authError: codexState.authError,
+            tokenExpiresAt: codexState.tokenExpiresAt,
+            baseUrl: codexRuntime.baseUrl,
+            apiKey: codexRuntime.apiKey,
+          };
+        }
+        return tab;
       }),
     };
   }

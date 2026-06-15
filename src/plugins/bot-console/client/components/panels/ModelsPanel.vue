@@ -3,6 +3,8 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useToast } from '../../composables/useToast'
 import {
   BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA,
+  CODEX_MODEL_OPTIONS,
+  CODEX_REASONING_EFFORT_OPTIONS,
   DEEPSEEK_MODEL_OPTIONS,
   MIMO_MODEL_OPTIONS,
   MODEL_TAB_IDS,
@@ -16,6 +18,7 @@ const { add: toastAdd } = useToast()
 const {
   activeModelTab,
   copilotAuthAttempt,
+  codexAuthAttempt,
   currentModelTabDraft,
   canSaveModelSettings,
   modelTabsChanged,
@@ -29,7 +32,13 @@ const {
   pollCopilotAuth,
   cancelCopilotAuth,
   logoutCopilotAuth,
+  startCodexAuth,
+  pollCodexAuth,
+  cancelCodexAuth,
+  logoutCodexAuth,
   refreshCopilotAuthStatus,
+  refreshCodexAuthStatus,
+  listCodexModels,
   listCopilotModels,
   listDeepSeekModels,
   listMimoModels,
@@ -38,6 +47,7 @@ const {
 const tabTitles: Record<BotConsoleModelTabId, string> = {
   siliconflow: '硅基流动',
   openai: 'OpenAI',
+  codex: 'Codex',
   copilot: 'GitHub Copilot',
   deepseek: 'DeepSeek',
   mimo: 'MIMO',
@@ -47,9 +57,14 @@ const currentSchema = computed(() => BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA[activeModel
 const currentTabModelHint = computed(() => currentModelTabDraft.value.modelHint)
 
 const isCopilotTab = computed(() => activeModelTab.value === 'copilot')
+const isCodexTab = computed(() => activeModelTab.value === 'codex')
 const isDeepseekTab = computed(() => activeModelTab.value === 'deepseek')
 const isMimoTab = computed(() => activeModelTab.value === 'mimo')
 
+const codexModelOptions = ref<BotConsoleModelOption[]>(CODEX_MODEL_OPTIONS.map(option => ({ ...option })))
+const codexModelSource = ref<BotConsoleModelListSource>('static')
+const codexModelError = ref<string | null>(null)
+const codexModelLoading = ref(false)
 const copilotModelOptions = ref<BotConsoleModelOption[]>([])
 const copilotModelSource = ref<BotConsoleModelListSource>('dynamic')
 const copilotModelError = ref<string | null>(null)
@@ -77,8 +92,14 @@ const currentCopilotModelId = computed(() => {
   if (value.startsWith('github-copilot/')) return value.slice('github-copilot/'.length)
   return value
 })
+const currentCodexModelId = computed(() => {
+  const value = currentModelTabDraft.value.defaultModel.trim()
+  if (value.startsWith('openai/')) return value.slice('openai/'.length)
+  return value
+})
 
 const currentModelOptions = computed(() => {
+  if (isCodexTab.value) return codexModelOptions.value
   if (isCopilotTab.value) return copilotModelOptions.value
   if (isDeepseekTab.value) return deepseekModelOptions.value
   if (isMimoTab.value) return mimoModelOptions.value
@@ -88,15 +109,17 @@ const currentModelOptions = computed(() => {
 const currentModelSelectValue = computed(() => {
   if (isDeepseekTab.value) return currentDeepSeekModelId.value
   if (isMimoTab.value) return currentMimoModelId.value
+  if (isCodexTab.value) return currentCodexModelId.value
   if (isCopilotTab.value) return currentCopilotModelId.value
   return currentModelTabDraft.value.defaultModel
 })
 
+const codexSourceLabel = computed(() => codexModelError.value ? (codexModelSource.value === 'static' ? '静态兜底' : '不可用') : (codexModelSource.value === 'dynamic' ? 'Codex 动态' : '静态兜底'))
 const copilotSourceLabel = computed(() => copilotModelError.value ? '不可用' : 'OAuth 动态')
 const deepseekSourceLabel = computed(() => deepseekModelSource.value === 'dynamic' ? '官方动态' : '官方兜底')
 const mimoSourceLabel = computed(() => mimoModelSource.value === 'dynamic' ? '官方动态' : '静态兜底')
 
-const copilotStatusTone = computed(() => {
+const oauthStatusTone = computed(() => {
   switch (currentModelTabDraft.value.authStatus) {
     case 'ready':
       return 'is-success'
@@ -110,7 +133,7 @@ const copilotStatusTone = computed(() => {
   }
 })
 
-const copilotStatusLabel = computed(() => {
+const oauthStatusLabel = computed(() => {
   switch (currentModelTabDraft.value.authStatus) {
     case 'ready':
       return '已登录'
@@ -125,6 +148,12 @@ const copilotStatusLabel = computed(() => {
   }
 })
 
+const codexTokenExpiresLabel = computed(() => {
+  const value = currentModelTabDraft.value.tokenExpiresAt
+  if (!value) return ''
+  return new Date(value).toLocaleString()
+})
+
 const dirtyBadgeLabel = computed(() => {
   const ids = dirtyModelTabIds.value
   if (ids.length === 0) return ''
@@ -134,9 +163,16 @@ const dirtyBadgeLabel = computed(() => {
 let deepseekRefreshTimer: number | null = null
 let mimoRefreshTimer: number | null = null
 let copilotPollTimer: number | null = null
+let codexPollTimer: number | null = null
 
 function setTabField(key: 'baseUrl' | 'apiKey' | 'defaultModel', value: string) {
   currentModelTabDraft.value[key] = value
+}
+
+function setCodexReasoningEffort(value: string) {
+  if (value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') {
+    currentModelTabDraft.value.reasoningEffort = value
+  }
 }
 
 function stopDeepSeekRefreshTimer() {
@@ -166,6 +202,24 @@ async function refreshCopilotModels() {
     copilotModelError.value = err instanceof Error ? err.message : String(err)
   } finally {
     copilotModelLoading.value = false
+  }
+}
+
+async function refreshCodexModels() {
+  codexModelLoading.value = true
+  try {
+    const result = await listCodexModels()
+    codexModelOptions.value = result.models.length > 0
+      ? result.models.map(option => ({ ...option }))
+      : CODEX_MODEL_OPTIONS.map(option => ({ ...option }))
+    codexModelSource.value = result.source
+    codexModelError.value = result.error
+  } catch (err: unknown) {
+    codexModelOptions.value = CODEX_MODEL_OPTIONS.map(option => ({ ...option }))
+    codexModelSource.value = 'static'
+    codexModelError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    codexModelLoading.value = false
   }
 }
 
@@ -234,6 +288,13 @@ function stopCopilotPolling() {
   }
 }
 
+function stopCodexPolling() {
+  if (codexPollTimer != null) {
+    window.clearTimeout(codexPollTimer)
+    codexPollTimer = null
+  }
+}
+
 function scheduleCopilotPolling() {
   stopCopilotPolling()
   const attempt = copilotAuthAttempt.value
@@ -263,6 +324,58 @@ async function handleStartCopilotAuth() {
     toastAdd(`请在浏览器中输入验证码 ${result.attempt?.userCode ?? ''}`, 'success')
   } catch (err: unknown) {
     toastAdd(formatError(err) ?? '发起 GitHub Copilot OAuth 失败', 'error')
+  }
+}
+
+function scheduleCodexPolling() {
+  stopCodexPolling()
+  const attempt = codexAuthAttempt.value
+  if (!attempt || attempt.state !== 'pending') return
+  const delay = Math.max(250, attempt.nextPollAt - Date.now())
+  codexPollTimer = window.setTimeout(async () => {
+    try {
+      const result = await pollCodexAuth(attempt.attemptId)
+      if (result.authStatus === 'ready') {
+        await refreshCodexModels()
+        toastAdd('Codex OAuth 登录成功', 'success')
+      } else if (result.authStatus === 'error' || result.authStatus === 'expired') {
+        toastAdd(result.authError || 'Codex OAuth 登录失败', 'error')
+      }
+    } catch (err: unknown) {
+      toastAdd(formatError(err) ?? 'Codex OAuth 状态轮询失败', 'error')
+    } finally {
+      scheduleCodexPolling()
+    }
+  }, delay)
+}
+
+async function handleStartCodexAuth() {
+  try {
+    const result = await startCodexAuth()
+    scheduleCodexPolling()
+    toastAdd(`请在浏览器中输入验证码 ${result.attempt?.userCode ?? ''}`, 'success')
+  } catch (err: unknown) {
+    toastAdd(formatError(err) ?? '发起 Codex OAuth 失败', 'error')
+  }
+}
+
+async function handleCancelCodexAuth() {
+  try {
+    await cancelCodexAuth()
+    stopCodexPolling()
+    toastAdd('已取消 Codex OAuth 登录', 'success')
+  } catch (err: unknown) {
+    toastAdd(formatError(err) ?? '取消 Codex OAuth 失败', 'error')
+  }
+}
+
+async function handleLogoutCodexAuth() {
+  try {
+    await logoutCodexAuth()
+    stopCodexPolling()
+    toastAdd('Codex OAuth 授权已清除', 'success')
+  } catch (err: unknown) {
+    toastAdd(formatError(err) ?? '退出 Codex OAuth 失败', 'error')
   }
 }
 
@@ -298,6 +411,16 @@ async function handleRefreshCopilotAuth() {
   }
 }
 
+async function handleRefreshCodexAuth() {
+  try {
+    await refreshCodexAuthStatus()
+    await refreshCodexModels()
+    toastAdd('Codex OAuth 状态已刷新', 'success')
+  } catch (err: unknown) {
+    toastAdd(formatError(err) ?? '刷新 Codex OAuth 状态失败', 'error')
+  }
+}
+
 function formatError(err: unknown): string | null {
   if (err == null) return null
   if (err instanceof Error && err.message) return err.message
@@ -308,6 +431,33 @@ function formatError(err: unknown): string | null {
     try { return JSON.stringify(err) } catch { /* fall through */ }
   }
   return null
+}
+
+async function copyText(value: string | null | undefined, label: string) {
+  const text = value?.trim()
+  if (!text) {
+    toastAdd(`${label}为空，无法复制`, 'error')
+    return
+  }
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const input = document.createElement('textarea')
+      input.value = text
+      input.setAttribute('readonly', 'true')
+      input.style.position = 'fixed'
+      input.style.opacity = '0'
+      document.body.appendChild(input)
+      input.select()
+      document.execCommand('copy')
+      document.body.removeChild(input)
+    }
+    toastAdd(`已复制${label}`, 'success')
+  } catch (err: unknown) {
+    toastAdd(formatError(err) ?? `复制${label}失败`, 'error')
+  }
 }
 
 async function handleSave() {
@@ -334,18 +484,30 @@ watch(copilotAuthAttempt, () => {
   scheduleCopilotPolling()
 })
 
+watch(codexAuthAttempt, () => {
+  scheduleCodexPolling()
+})
+
 watch(activeModelTab, (tabId) => {
-  if (tabId === 'copilot') {
+  if (tabId === 'codex') {
+    void refreshCodexAuthStatus().catch(() => null)
+    void refreshCodexModels().catch(() => null)
+    stopCopilotPolling()
+  } else if (tabId === 'copilot') {
     void refreshCopilotAuthStatus().catch(() => null)
     void refreshCopilotModels().catch(() => null)
+    stopCodexPolling()
 	  } else if (tabId === 'deepseek') {
 	    scheduleDeepSeekRefresh()
 	    stopCopilotPolling()
+	    stopCodexPolling()
 	  } else if (tabId === 'mimo') {
 	    scheduleMimoRefresh()
 	    stopCopilotPolling()
+	    stopCodexPolling()
 	  } else {
 	    stopCopilotPolling()
+	    stopCodexPolling()
 	  }
 })
 
@@ -358,21 +520,26 @@ watch(
 	)
 
 onMounted(() => {
-  if (activeModelTab.value === 'copilot') {
+  if (activeModelTab.value === 'codex') {
+    void refreshCodexAuthStatus().catch(() => null)
+    void refreshCodexModels().catch(() => null)
+  } else if (activeModelTab.value === 'copilot') {
     void refreshCopilotAuthStatus().catch(() => null)
     void refreshCopilotModels().catch(() => null)
 	  } else if (activeModelTab.value === 'deepseek') {
 	    scheduleDeepSeekRefresh()
 	  } else if (activeModelTab.value === 'mimo') {
 	    scheduleMimoRefresh()
-	  }
+  }
   scheduleCopilotPolling()
+  scheduleCodexPolling()
 })
 
 onBeforeUnmount(() => {
 	  stopDeepSeekRefreshTimer()
 	  stopMimoRefreshTimer()
 	  stopCopilotPolling()
+	  stopCodexPolling()
 	})
 </script>
 
@@ -381,7 +548,7 @@ onBeforeUnmount(() => {
     <div class="bc-panel-head">
       <div>
         <h2>模型接口</h2>
-	        <p>固定内置五个主聊天 provider Tab。本页配置的就是 chat 主模型；其它功能（语音、回复等）若没有单独配置则回落到当前激活 Tab。保存后重启机器人生效。</p>
+	        <p>固定内置六个主聊天 provider Tab。本页配置的就是 chat 主模型；其它功能（语音、回复等）若没有单独配置则回落到当前激活 Tab。保存后重启机器人生效。</p>
       </div>
       <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
         <span
@@ -428,9 +595,9 @@ onBeforeUnmount(() => {
             <span class="bc-status-badge is-muted">strategy: {{ currentModelTabDraft.strategyId }}</span>
             <span class="bc-status-badge is-muted">mode: {{ currentModelTabDraft.requestMode }}</span>
             <span
-              v-if="isCopilotTab"
-              :class="['bc-status-badge', copilotStatusTone]"
-            >OAuth：{{ copilotStatusLabel }}</span>
+              v-if="isCopilotTab || isCodexTab"
+              :class="['bc-status-badge', oauthStatusTone]"
+            >OAuth：{{ oauthStatusLabel }}</span>
           </div>
         </div>
 
@@ -438,7 +605,10 @@ onBeforeUnmount(() => {
           class="bc-field-grid"
           style="margin-top: 1rem;"
         >
-          <label class="bc-field">
+          <label
+            v-if="!isCodexTab"
+            class="bc-field"
+          >
             <span class="bc-field-label">
               <span>对话模型接口地址</span>
               <span
@@ -458,7 +628,10 @@ onBeforeUnmount(() => {
             >
           </label>
 
-          <label class="bc-field">
+          <label
+            v-if="!isCodexTab"
+            class="bc-field"
+          >
             <span class="bc-field-label">
               <span>对话模型接口密钥</span>
               <span
@@ -502,9 +675,16 @@ onBeforeUnmount(() => {
             <select
               v-if="currentSchema.modelInputKind !== 'free-text'"
               :value="currentModelSelectValue"
-              :disabled="isCopilotTab && copilotModelOptions.length === 0"
+              :disabled="(isCopilotTab && copilotModelOptions.length === 0) || (isCodexTab && codexModelOptions.length === 0)"
               @change="(e) => setTabField('defaultModel', (e.target as HTMLSelectElement).value)"
             >
+              <option
+                v-if="isCodexTab && codexModelOptions.length === 0"
+                value=""
+                disabled
+              >
+                暂无 Codex 可用模型
+              </option>
               <option
                 v-if="isCopilotTab && copilotModelOptions.length === 0"
                 value=""
@@ -528,6 +708,27 @@ onBeforeUnmount(() => {
               autocomplete="off"
               @input="(e) => setTabField('defaultModel', (e.target as HTMLInputElement).value)"
             >
+          </label>
+
+          <label
+            v-if="isCodexTab"
+            class="bc-field"
+          >
+            <span class="bc-field-label">
+              <span>思考程度</span>
+            </span>
+            <select
+              :value="currentModelTabDraft.reasoningEffort || 'medium'"
+              @change="(e) => setCodexReasoningEffort((e.target as HTMLSelectElement).value)"
+            >
+              <option
+                v-for="option in CODEX_REASONING_EFFORT_OPTIONS"
+                :key="option.id"
+                :value="option.id"
+              >
+                {{ option.label }}
+              </option>
+            </select>
           </label>
         </div>
 
@@ -580,6 +781,103 @@ onBeforeUnmount(() => {
 	              </button>
 	            </div>
 	          </template>
+
+	          <template v-else-if="currentSchema.secondaryAction === 'codex-oauth'">
+            <div class="bc-model-secondary-row bc-model-secondary-row-stack">
+              <div class="bc-model-secondary-info">
+                <span><strong>模型：</strong>{{ codexSourceLabel }}</span>
+                <span
+                  v-if="codexModelLoading"
+                  class="bc-model-secondary-muted"
+                >刷新中</span>
+                <span
+                  v-if="codexModelError"
+                  class="bc-model-secondary-error"
+                >
+                  <strong>模型错误：</strong>{{ codexModelError }}
+                </span>
+                <span><strong>账号：</strong>{{ currentModelTabDraft.accountLabel || '未登录' }}</span>
+                <span v-if="codexTokenExpiresLabel"><strong>Token 过期：</strong>{{ codexTokenExpiresLabel }}</span>
+                <span v-if="currentModelTabDraft.authError" class="bc-model-secondary-error">
+                  <strong>错误：</strong>{{ currentModelTabDraft.authError }}
+                </span>
+                <span
+                  v-if="codexAuthAttempt"
+                >
+                  <strong>验证码：</strong>
+                  <code>{{ codexAuthAttempt.userCode }}</code>
+                  <button
+                    class="bc-btn bc-btn-sm"
+                    type="button"
+                    style="margin-left: 0.5rem;"
+                    @click="copyText(codexAuthAttempt.userCode, 'Codex 验证码')"
+                  >
+                    复制验证码
+                  </button>
+                  <a
+                    :href="codexAuthAttempt.verificationUri"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style="margin-left: 0.5rem;"
+                  >打开 Codex 授权页</a>
+                  <button
+                    class="bc-btn bc-btn-sm"
+                    type="button"
+                    style="margin-left: 0.5rem;"
+                    @click="copyText(codexAuthAttempt.verificationUri, 'Codex 授权链接')"
+                  >
+                    复制链接
+                  </button>
+                </span>
+                <span
+                  v-if="codexAuthAttempt"
+                  class="bc-model-secondary-muted"
+                >OpenAI 授权页若在选择账号时报 Route Error，请换无痕窗口或清理 auth.openai.com Cookie 后重新打开链接；本地只负责设备码申请和轮询，不接收页面账号选择内容。</span>
+                <span class="bc-model-secondary-muted">OAuth 由机器人控制台独立维护，不读取本机 Codex CLI 登录状态。</span>
+              </div>
+              <div class="bc-model-secondary-actions">
+                <button
+                  class="bc-btn bc-btn-primary"
+                  type="button"
+                  :disabled="currentModelTabDraft.authStatus === 'pending'"
+                  @click="handleStartCodexAuth"
+                >
+                  开始 OAuth 登录
+                </button>
+                <button
+                  class="bc-btn"
+                  type="button"
+                  :disabled="!codexAuthAttempt || currentModelTabDraft.authStatus !== 'pending'"
+                  @click="handleCancelCodexAuth"
+                >
+                  取消登录
+                </button>
+                <button
+                  class="bc-btn"
+                  type="button"
+                  :disabled="currentModelTabDraft.authStatus === 'unauthenticated'"
+                  @click="handleLogoutCodexAuth"
+                >
+                  退出登录
+                </button>
+                <button
+                  class="bc-btn"
+                  type="button"
+                  :disabled="codexModelLoading"
+                  @click="refreshCodexModels"
+                >
+                  刷新模型列表
+                </button>
+                <button
+                  class="bc-btn"
+                  type="button"
+                  @click="handleRefreshCodexAuth"
+                >
+                  刷新状态
+                </button>
+              </div>
+            </div>
+          </template>
 
 	          <template v-else-if="currentSchema.secondaryAction === 'copilot-oauth'">
             <div class="bc-model-secondary-row bc-model-secondary-row-stack">

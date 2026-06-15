@@ -41,6 +41,13 @@ import type {
   CopilotAuthStartResponse,
   CopilotAuthStatusResponse,
   CopilotModelListResponse,
+  CodexAuthAttempt,
+  CodexAuthCancelResponse,
+  CodexAuthLogoutResponse,
+  CodexAuthPollResponse,
+  CodexAuthStartResponse,
+  CodexAuthStatusResponse,
+  CodexModelListResponse,
   ScopedFeatureKey,
   ToolCatalogEntry,
   ToolPolicyOverrideInput,
@@ -64,6 +71,11 @@ import {
 } from './toolPolicy'
 import {
   BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA as SHARED_BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA,
+  CODEX_BRIDGE_DEFAULT_BASE_URL as SHARED_CODEX_BRIDGE_DEFAULT_BASE_URL,
+  CODEX_DEFAULT_MODEL as SHARED_CODEX_DEFAULT_MODEL,
+  CODEX_DEFAULT_REASONING_EFFORT as SHARED_CODEX_DEFAULT_REASONING_EFFORT,
+  CODEX_MODEL_OPTIONS as SHARED_CODEX_MODEL_OPTIONS,
+  CODEX_REASONING_EFFORT_OPTIONS as SHARED_CODEX_REASONING_EFFORT_OPTIONS,
   COPILOT_MODEL_OPTIONS as SHARED_COPILOT_MODEL_OPTIONS,
   DEEPSEEK_DEFAULT_BASE_URL as SHARED_DEEPSEEK_DEFAULT_BASE_URL,
   DEEPSEEK_DEFAULT_MODEL as SHARED_DEEPSEEK_DEFAULT_MODEL,
@@ -151,9 +163,14 @@ export const PRIVATE_UNSUPPORTED_FEATURE_KEYS = ['CHAT_NATURAL_TRIGGER_ENABLED',
 
 export const PRESET_SCOPE_KEYS = ['CHATLUNA_DEFAULT_PRESET'] as const
 
-export const MODEL_TAB_IDS = ['siliconflow', 'openai', 'copilot', 'deepseek', 'mimo'] as const satisfies readonly BotConsoleModelTabId[]
+export const MODEL_TAB_IDS = ['siliconflow', 'openai', 'codex', 'copilot', 'deepseek', 'mimo'] as const satisfies readonly BotConsoleModelTabId[]
 export const SILICONFLOW_FIXED_BASE_URL = 'https://api.siliconflow.cn/v1'
 export const SILICONFLOW_FIXED_MODEL = 'Pro/moonshotai/Kimi-K2.5'
+export const CODEX_BRIDGE_DEFAULT_BASE_URL = SHARED_CODEX_BRIDGE_DEFAULT_BASE_URL
+export const CODEX_DEFAULT_MODEL = SHARED_CODEX_DEFAULT_MODEL
+export const CODEX_DEFAULT_REASONING_EFFORT = SHARED_CODEX_DEFAULT_REASONING_EFFORT
+export const CODEX_MODEL_OPTIONS = SHARED_CODEX_MODEL_OPTIONS
+export const CODEX_REASONING_EFFORT_OPTIONS = SHARED_CODEX_REASONING_EFFORT_OPTIONS
 export const DEEPSEEK_DEFAULT_BASE_URL = SHARED_DEEPSEEK_DEFAULT_BASE_URL
 export const DEEPSEEK_DEFAULT_MODEL = SHARED_DEEPSEEK_DEFAULT_MODEL
 export const MIMO_DEFAULT_BASE_URL = SHARED_MIMO_DEFAULT_BASE_URL
@@ -274,6 +291,20 @@ function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltin
       accountLabel: null,
       authError: null,
     },
+    codex: {
+      title: 'Codex',
+      provider: 'openai',
+      strategyId: 'codex-chatgpt-oauth-main-chat',
+      requestMode: 'responses',
+      structuredOutputProtocol: 'native_responses_json_schema',
+      description: '当前由机器人维护独立 Codex OAuth，运行时通过本地 bridge 注入 OAuth token，并固定走 Responses API + native_responses_json_schema。',
+      modelHint: '当前从 Codex 可见 API 模型列表选择；只支持 Responses API，不会回退到 chat/completions。',
+      authKind: 'codex_oauth',
+      authStatus: 'unauthenticated',
+      accountLabel: null,
+      authError: null,
+      tokenExpiresAt: null,
+    },
     copilot: {
       title: 'GitHub Copilot',
       provider: 'openai',
@@ -322,15 +353,18 @@ function createEmptyBuiltinModelTab(id: BotConsoleModelTabId): BotConsoleBuiltin
     ...tabMeta[id],
     baseUrl: id === 'siliconflow'
       ? SILICONFLOW_FIXED_BASE_URL
+      : id === 'codex'
+        ? CODEX_BRIDGE_DEFAULT_BASE_URL
       : id === 'deepseek'
         ? DEEPSEEK_DEFAULT_BASE_URL
         : id === 'mimo'
           ? MIMO_DEFAULT_BASE_URL
           : '',
     apiKey: '',
-    defaultModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : id === 'deepseek' ? DEEPSEEK_DEFAULT_MODEL : id === 'mimo' ? MIMO_DEFAULT_MODEL : '',
-    canonicalModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : id === 'deepseek' ? `deepseek/${DEEPSEEK_DEFAULT_MODEL}` : id === 'mimo' ? `mimo/${MIMO_DEFAULT_MODEL}` : '',
-    transportModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : id === 'deepseek' ? DEEPSEEK_DEFAULT_MODEL : id === 'mimo' ? MIMO_DEFAULT_MODEL : '',
+    defaultModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : id === 'codex' ? CODEX_DEFAULT_MODEL : id === 'deepseek' ? DEEPSEEK_DEFAULT_MODEL : id === 'mimo' ? MIMO_DEFAULT_MODEL : '',
+    reasoningEffort: id === 'codex' ? CODEX_DEFAULT_REASONING_EFFORT : null,
+    canonicalModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : id === 'codex' ? CODEX_DEFAULT_MODEL : id === 'deepseek' ? `deepseek/${DEEPSEEK_DEFAULT_MODEL}` : id === 'mimo' ? `mimo/${MIMO_DEFAULT_MODEL}` : '',
+    transportModel: id === 'siliconflow' ? SILICONFLOW_FIXED_MODEL : id === 'codex' ? CODEX_DEFAULT_MODEL.replace(/^openai\//, '') : id === 'deepseek' ? DEEPSEEK_DEFAULT_MODEL : id === 'mimo' ? MIMO_DEFAULT_MODEL : '',
   }
 }
 
@@ -361,6 +395,7 @@ function serializeModelTabsState(state: BotConsoleModelTabsState): string {
         baseUrl: tab.baseUrl,
         apiKey: tab.apiKey,
         defaultModel: tab.defaultModel,
+        reasoningEffort: tab.reasoningEffort ?? null,
         canonicalModel: tab.canonicalModel,
         transportModel: tab.transportModel,
       }
@@ -531,6 +566,7 @@ export function useBotConsole() {
 	  const modelTabsDraft = reactive<Record<BotConsoleModelTabId, BotConsoleBuiltinModelTab>>({
 	    siliconflow: createEmptyBuiltinModelTab('siliconflow'),
 	    openai: createEmptyBuiltinModelTab('openai'),
+	    codex: createEmptyBuiltinModelTab('codex'),
 	    copilot: createEmptyBuiltinModelTab('copilot'),
 	    deepseek: createEmptyBuiltinModelTab('deepseek'),
 	    mimo: createEmptyBuiltinModelTab('mimo'),
@@ -542,6 +578,7 @@ export function useBotConsole() {
   /** Last successfully loaded model tabs state. */
   const originalModelTabs = ref<BotConsoleModelTabsState>(buildModelTabsState(null))
   const copilotAuthAttempt = ref<CopilotAuthAttempt | null>(null)
+  const codexAuthAttempt = ref<CodexAuthAttempt | null>(null)
 
   /** True while an embedding probe request is in-flight. */
   const probePending = ref(false)
@@ -630,7 +667,8 @@ export function useBotConsole() {
       if (
         draft.baseUrl !== original.baseUrl ||
         draft.apiKey !== original.apiKey ||
-        draft.defaultModel !== original.defaultModel
+        draft.defaultModel !== original.defaultModel ||
+        (draft.reasoningEffort ?? null) !== (original.reasoningEffort ?? null)
       ) {
         dirty.push(id)
       }
@@ -753,6 +791,47 @@ export function useBotConsole() {
     }
   }
 
+  function syncCodexTabState(partial: Partial<BotConsoleBuiltinModelTab>): void {
+    modelTabsDraft.codex = {
+      ...modelTabsDraft.codex,
+      ...partial,
+      id: 'codex',
+    }
+
+    originalModelTabs.value = {
+      activeTab: originalModelTabs.value.activeTab,
+      tabs: MODEL_TAB_IDS.map((id) => {
+        if (id !== 'codex') {
+          return originalModelTabs.value.tabs.find(tab => tab.id === id) ?? createEmptyBuiltinModelTab(id)
+        }
+        return {
+          ...(originalModelTabs.value.tabs.find(tab => tab.id === 'codex') ?? createEmptyBuiltinModelTab('codex')),
+          ...partial,
+          id: 'codex',
+        }
+      }),
+    }
+
+    if (botState.value) {
+      botState.value = {
+        ...botState.value,
+        modelTabs: {
+          activeTab: botState.value.modelTabs.activeTab,
+          tabs: MODEL_TAB_IDS.map((id) => {
+            if (id !== 'codex') {
+              return botState.value?.modelTabs.tabs.find(tab => tab.id === id) ?? createEmptyBuiltinModelTab(id)
+            }
+            return {
+              ...(botState.value?.modelTabs.tabs.find(tab => tab.id === 'codex') ?? createEmptyBuiltinModelTab('codex')),
+              ...partial,
+              id: 'codex',
+            }
+          }),
+        },
+      }
+    }
+  }
+
   function applyCopilotAuthState(
     state:
       | CopilotAuthStartResponse
@@ -767,6 +846,24 @@ export function useBotConsole() {
       authStatus: state.authStatus,
       accountLabel: state.accountLabel,
       authError: state.authError,
+    })
+  }
+
+  function applyCodexAuthState(
+    state:
+      | CodexAuthStartResponse
+      | CodexAuthPollResponse
+      | CodexAuthStatusResponse
+      | CodexAuthCancelResponse
+      | CodexAuthLogoutResponse,
+  ): void {
+    codexAuthAttempt.value = state.attempt ?? null
+    syncCodexTabState({
+      authKind: state.authKind,
+      authStatus: state.authStatus,
+      accountLabel: state.accountLabel,
+      authError: state.authError,
+      tokenExpiresAt: state.tokenExpiresAt,
     })
   }
 
@@ -1004,7 +1101,7 @@ export function useBotConsole() {
         title: modelTabsDraft[id].title,
         provider: modelTabsDraft[id].provider,
       })),
-      dirtyTabIds: [...dirtyModelTabIds.value],
+      dirtyTabIds: dirtyModelTabIds.value.length > 0 ? [...dirtyModelTabIds.value] : [activeModelTab.value],
     }
 
     const result = await send<SaveModelTabsResponse>('bot-console/save-model-tabs', payload)
@@ -1057,8 +1154,45 @@ export function useBotConsole() {
     return send<CopilotModelListResponse>('bot-console/list-copilot-models')
   }
 
+  async function listCodexModels(): Promise<CodexModelListResponse> {
+    return send<CodexModelListResponse>('bot-console/list-codex-models')
+  }
+
   async function listMimoModels(request: MimoModelListRequest): Promise<MimoModelListResponse> {
     return send<MimoModelListResponse>('bot-console/list-mimo-models', request)
+  }
+
+  async function refreshCodexAuthStatus(): Promise<CodexAuthStatusResponse> {
+    const result = await send<CodexAuthStatusResponse>('bot-console/codex-auth/status')
+    applyCodexAuthState(result)
+    return result
+  }
+
+  async function startCodexAuth(): Promise<CodexAuthStartResponse> {
+    const result = await send<CodexAuthStartResponse>('bot-console/codex-auth/start')
+    applyCodexAuthState(result)
+    return result
+  }
+
+  async function pollCodexAuth(attemptId: string): Promise<CodexAuthPollResponse> {
+    const result = await send<CodexAuthPollResponse>('bot-console/codex-auth/poll', attemptId)
+    applyCodexAuthState(result)
+    return result
+  }
+
+  async function cancelCodexAuth(): Promise<CodexAuthCancelResponse> {
+    const result = await send<CodexAuthCancelResponse>(
+      'bot-console/codex-auth/cancel',
+      codexAuthAttempt.value?.attemptId ?? '',
+    )
+    applyCodexAuthState(result)
+    return result
+  }
+
+  async function logoutCodexAuth(): Promise<CodexAuthLogoutResponse> {
+    const result = await send<CodexAuthLogoutResponse>('bot-console/codex-auth/logout')
+    applyCodexAuthState(result)
+    return result
   }
 
   async function refreshCopilotAuthStatus(): Promise<CopilotAuthStatusResponse> {
@@ -1513,6 +1647,7 @@ export function useBotConsole() {
     activeModelTab,
     originalModelTabs,
     copilotAuthAttempt,
+    codexAuthAttempt,
     featureOverrideDraft,
     originalFeatureOverrides,
     currentPreset,
@@ -1562,11 +1697,17 @@ export function useBotConsole() {
     saveModelTabs,
     saveModelSettings,
     selectModelTab,
+    refreshCodexAuthStatus,
+    startCodexAuth,
+    pollCodexAuth,
+    cancelCodexAuth,
+    logoutCodexAuth,
     refreshCopilotAuthStatus,
     startCopilotAuth,
     pollCopilotAuth,
     cancelCopilotAuth,
     logoutCopilotAuth,
+    listCodexModels,
     listCopilotModels,
     listDeepSeekModels,
     listMimoModels,

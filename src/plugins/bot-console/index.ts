@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { Context, Logger } from 'koishi';
 import { BotConsoleManager, resolveBotEnvFiles } from './server.js';
 import { CopilotOAuthBridgeService } from '../copilot-oauth/index.js';
+import { CodexOAuthBridgeService } from '../codex-oauth/index.js';
 import {
   canHotSwitchMainChatModelOnly,
   mainChatRuntimeState,
@@ -26,9 +27,15 @@ import type {
   CopilotAuthPollResponse,
   CopilotAuthStartResponse,
   CopilotAuthStatusResponse,
+  CodexAuthCancelResponse,
+  CodexAuthLogoutResponse,
+  CodexAuthPollResponse,
+  CodexAuthStartResponse,
+  CodexAuthStatusResponse,
   ClearConversationHistoryRequest,
   ClearConversationHistoryResponse,
   CopilotModelListResponse,
+  CodexModelListResponse,
   DeepSeekModelListResponse,
   MimoModelListResponse,
   DeleteConversationRoomRequest,
@@ -146,11 +153,16 @@ async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager
 }
 
 export function apply(ctx: Context): void {
+  const envFiles = resolveBotEnvFiles(ctx.baseDir);
   const copilotBridge = new CopilotOAuthBridgeService({
     rootDir: ctx.baseDir,
-    envFiles: resolveBotEnvFiles(ctx.baseDir),
+    envFiles,
   });
-  const manager = new BotConsoleManager({ rootDir: ctx.baseDir, copilotBridge });
+  const codexBridge = new CodexOAuthBridgeService({
+    rootDir: ctx.baseDir,
+    envFiles,
+  });
+  const manager = new BotConsoleManager({ rootDir: ctx.baseDir, copilotBridge, codexBridge });
   const consoleService = ctx.console as any;
   const runtimeCtx = ctx as unknown as RuntimeServiceContext;
   // Koishi console production asset serving rejects local plugin client files outside node_modules.
@@ -443,6 +455,14 @@ export function apply(ctx: Context): void {
   );
 
   consoleService.addListener(
+    'bot-console/list-codex-models',
+    async (): Promise<CodexModelListResponse> => {
+      return manager.listCodexModels();
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
     'bot-console/list-mimo-models',
     async (payload: unknown): Promise<MimoModelListResponse> => {
       const record = ensureRecord(payload);
@@ -490,6 +510,46 @@ export function apply(ctx: Context): void {
     'bot-console/copilot-auth/status',
     async (): Promise<CopilotAuthStatusResponse> => {
       return copilotBridge.getConsoleStatus({ probe: true });
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/codex-auth/status',
+    async (): Promise<CodexAuthStatusResponse> => {
+      return codexBridge.getConsoleStatus({ probe: true });
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/codex-auth/start',
+    async (): Promise<CodexAuthStartResponse> => {
+      return codexBridge.startLogin();
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/codex-auth/poll',
+    async (attemptId: string): Promise<CodexAuthPollResponse> => {
+      return codexBridge.pollLogin(String(attemptId ?? ''));
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/codex-auth/cancel',
+    async (attemptId: string): Promise<CodexAuthCancelResponse> => {
+      return codexBridge.cancelLogin(String(attemptId ?? ''));
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/codex-auth/logout',
+    async (): Promise<CodexAuthLogoutResponse> => {
+      return codexBridge.logout();
     },
     { authority: LISTENER_AUTHORITY },
   );
@@ -645,6 +705,26 @@ export function apply(ctx: Context): void {
       koaCtx.body = result.body;
     });
 
+    ctx.server.get('/api/internal/codex/v1/models', async (koaCtx: any) => {
+      if (!(await validateCodexBridgeAuth(koaCtx, codexBridge))) return;
+      const result = await codexBridge.proxyModels();
+      koaCtx.status = result.status;
+      for (const [key, value] of Object.entries(result.headers)) {
+        koaCtx.set(key, value);
+      }
+      koaCtx.body = result.body;
+    });
+
+    ctx.server.post('/api/internal/codex/v1/responses', async (koaCtx: any) => {
+      if (!(await validateCodexBridgeAuth(koaCtx, codexBridge))) return;
+      const result = await codexBridge.proxyResponses(koaCtx.request.body);
+      koaCtx.status = result.status;
+      for (const [key, value] of Object.entries(result.headers)) {
+        koaCtx.set(key, value);
+      }
+      koaCtx.body = result.body;
+    });
+
     ctx.server.options('/api/internal/qq-voice/v1/send', async (koaCtx: any) => {
       setQqVoiceBridgeCorsHeaders(koaCtx);
       koaCtx.status = 204;
@@ -684,6 +764,16 @@ async function validateCopilotBridgeAuth(koaCtx: any, bridge: CopilotOAuthBridge
     return true;
   }
   writeJsonError(koaCtx, 401, 'invalid_request_error', 'invalid copilot bridge authorization');
+  return false;
+}
+
+async function validateCodexBridgeAuth(koaCtx: any, bridge: CodexOAuthBridgeService): Promise<boolean> {
+  const expected = await bridge.getRuntimeConfig();
+  const authHeader = String(koaCtx.get('authorization') || '').trim();
+  if (authHeader === `Bearer ${expected.apiKey}`) {
+    return true;
+  }
+  writeJsonError(koaCtx, 401, 'invalid_request_error', 'invalid codex bridge authorization');
   return false;
 }
 

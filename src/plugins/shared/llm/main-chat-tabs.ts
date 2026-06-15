@@ -4,18 +4,20 @@ import {
   type ReplyOutputProtocol,
 } from './reply-output-contract.js';
 
-export type MainChatBuiltinTabId = 'siliconflow' | 'openai' | 'copilot' | 'deepseek' | 'mimo';
+export type MainChatBuiltinTabId = 'siliconflow' | 'openai' | 'codex' | 'copilot' | 'deepseek' | 'mimo';
 export type MainChatProvider = 'siliconflow' | 'openai' | 'deepseek' | 'mimo';
 export type MainChatRequestMode = 'chat_completions' | 'responses';
 export type OutputProtocolId = ReplyOutputProtocol;
 export type StructuredOutputProtocol = OutputProtocolId;
-export type MainChatAuthKind = 'manual' | 'oauth_device';
+export type MainChatAuthKind = 'manual' | 'oauth_device' | 'codex_oauth';
 export type MainChatAuthStatus = 'unauthenticated' | 'pending' | 'ready' | 'expired' | 'error';
+export type MainChatReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 
 export interface MainChatTabEnvKeys {
   baseUrl: string;
   apiKey: string;
   defaultModel: string;
+  reasoningEffort?: string;
 }
 
 export interface BuiltinTabDefinition {
@@ -44,6 +46,11 @@ export interface CopilotModelOption {
   deprecated?: boolean;
 }
 
+export interface CodexModelOption {
+  modelId: string;
+  label: string;
+}
+
 export interface DeepSeekModelOption {
   modelId: string;
   label: string;
@@ -57,16 +64,20 @@ export interface MimoModelOption {
 }
 
 export interface MainChatProviderStrategy {
-  id: 'siliconflow-kimi-main-chat' | 'openai-gpt54-main-chat' | 'copilot-github-oauth-main-chat' | 'deepseek-official-main-chat' | 'mimo-official-main-chat';
+  id: 'siliconflow-kimi-main-chat' | 'openai-gpt54-main-chat' | 'codex-chatgpt-oauth-main-chat' | 'copilot-github-oauth-main-chat' | 'deepseek-official-main-chat' | 'mimo-official-main-chat';
   platform: MainChatProvider;
   supportsModel: (model?: string | null) => boolean;
-  buildRequestOverride: (model?: string | null) => Record<string, unknown> | null;
-  buildReplyOutputContract: (model?: string | null) => MainChatReplyOutputContract;
+  buildRequestOverride: (model?: string | null, options?: MainChatStrategyOptions) => Record<string, unknown> | null;
+  buildReplyOutputContract: (model?: string | null, options?: MainChatStrategyOptions) => MainChatReplyOutputContract;
   normalizeModel: (model?: string | null) => string | null;
   transportModel: (model?: string | null) => string | null;
   resolveRequestMode: (model?: string | null) => MainChatRequestMode;
   resolveStructuredOutputProtocol: (model?: string | null) => StructuredOutputProtocol;
-  describeForConsole: (model?: string | null) => MainChatConsoleDescription;
+  describeForConsole: (model?: string | null, options?: MainChatStrategyOptions) => MainChatConsoleDescription;
+}
+
+export interface MainChatStrategyOptions {
+  reasoningEffort?: MainChatReasoningEffort | null;
 }
 
 function buildMainChatReplyOutputContract(args: {
@@ -104,6 +115,7 @@ export interface MainChatRuntimeProfile {
   baseUrl: string;
   apiKey: string;
   defaultModel: string;
+  reasoningEffort?: MainChatReasoningEffort | null;
   canonicalModel: string;
   transportModel: string;
   description: string;
@@ -119,13 +131,16 @@ export const WYZAI_DEFAULT_API_KEY = 'sk-AU2PaFWvQImSIbTtXkx9t286QyCgUUh8Ith5R0m
 export const OPENAI_DEFAULT_MODEL = 'openai/gpt-5.4-medium-thinking';
 export const SILICONFLOW_DEFAULT_BASE_URL = 'https://api.siliconflow.cn/v1';
 export const SILICONFLOW_DEFAULT_MODEL = 'Pro/moonshotai/Kimi-K2.5';
+export const CODEX_BRIDGE_DEFAULT_BASE_URL = 'http://127.0.0.1:5140/api/internal/codex/v1';
+export const CODEX_DEFAULT_MODEL = 'openai/gpt-5.5';
+export const CODEX_DEFAULT_REASONING_EFFORT = 'medium' as const satisfies MainChatReasoningEffort;
 export const COPILOT_BRIDGE_DEFAULT_BASE_URL = 'http://127.0.0.1:5140/api/internal/copilot/v1';
 export const COPILOT_DEFAULT_MODEL = 'openai/gpt-5.4-mini';
 export const DEEPSEEK_DEFAULT_BASE_URL = 'https://api.deepseek.com';
 export const DEEPSEEK_DEFAULT_MODEL = 'deepseek-v4-flash';
 export const MIMO_DEFAULT_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
 export const MIMO_DEFAULT_MODEL = 'mimo-v2.5-pro';
-export const MAIN_CHAT_BUILTIN_TAB_IDS = ['siliconflow', 'openai', 'copilot', 'deepseek', 'mimo'] as const satisfies readonly MainChatBuiltinTabId[];
+export const MAIN_CHAT_BUILTIN_TAB_IDS = ['siliconflow', 'openai', 'codex', 'copilot', 'deepseek', 'mimo'] as const satisfies readonly MainChatBuiltinTabId[];
 export const COPILOT_MODEL_OPTIONS = [
   {
     modelId: 'gpt-5.4-mini',
@@ -230,6 +245,19 @@ export const MIMO_CHAT_MODEL_OPTIONS = [
   { modelId: 'mimo-v2-omni', label: 'MiMo V2 Omni' },
 ] as const satisfies readonly MimoModelOption[];
 
+export const CODEX_MODEL_OPTIONS = [
+  { modelId: 'gpt-5.5', label: 'GPT-5.5' },
+  { modelId: 'gpt-5.4', label: 'GPT-5.4' },
+  { modelId: 'gpt-5.4-mini', label: 'GPT-5.4-Mini' },
+] as const satisfies readonly CodexModelOption[];
+
+export const CODEX_REASONING_EFFORT_OPTIONS = [
+  { id: 'low', label: '低' },
+  { id: 'medium', label: '中' },
+  { id: 'high', label: '高' },
+  { id: 'xhigh', label: '极高' },
+] as const satisfies readonly { id: MainChatReasoningEffort; label: string }[];
+
 export function formatCopilotModelOptionLabel(option: CopilotModelOption): string {
   return option.deprecated
     ? `${option.label} (${option.rateLabel}, 可能弃用)`
@@ -243,6 +271,25 @@ export function getCopilotModelOption(model?: string | null): CopilotModelOption
 }
 
 const copilotDynamicModelOptions = new Map<string, CopilotModelOption>();
+
+const codexDynamicModelOptions = new Map<string, CodexModelOption>();
+
+export function getCodexModelOption(model?: string | null): CodexModelOption | null {
+  const normalized = normalizeCodexModelId(model);
+  if (!normalized) return null;
+  return codexDynamicModelOptions.get(normalized) ?? CODEX_MODEL_OPTIONS.find((option) => option.modelId === normalized) ?? null;
+}
+
+export function registerCodexDynamicModelOptions(models: readonly CodexModelOption[]): void {
+  for (const model of models) {
+    const modelId = normalizeCodexModelId(model.modelId);
+    if (!modelId) continue;
+    codexDynamicModelOptions.set(modelId, {
+      ...model,
+      modelId,
+    });
+  }
+}
 
 export function registerCopilotDynamicModelOptions(models: readonly CopilotModelOption[]): void {
   for (const model of models) {
@@ -299,6 +346,20 @@ export const BUILTIN_MAIN_CHAT_TABS: readonly BuiltinTabDefinition[] = [
     defaultBaseUrl: WYZAI_DEFAULT_BASE_URL,
     defaultModel: OPENAI_DEFAULT_MODEL,
     strategyId: 'openai-gpt54-main-chat',
+  },
+  {
+    id: 'codex',
+    title: 'Codex',
+    provider: 'openai',
+    envKeys: {
+      baseUrl: 'CHATLUNA_CODEX_BASE_URL',
+      apiKey: 'CHATLUNA_CODEX_API_KEY',
+      defaultModel: 'CHATLUNA_CODEX_DEFAULT_MODEL',
+      reasoningEffort: 'CHATLUNA_CODEX_REASONING_EFFORT',
+    },
+    defaultBaseUrl: CODEX_BRIDGE_DEFAULT_BASE_URL,
+    defaultModel: CODEX_DEFAULT_MODEL,
+    strategyId: 'codex-chatgpt-oauth-main-chat',
   },
   {
     id: 'copilot',
@@ -420,6 +481,55 @@ export const MAIN_CHAT_PROVIDER_STRATEGIES: readonly MainChatProviderStrategy[] 
       return {
         description: '当前按 OpenAI 兼容 provider 处理，默认预填 wyzai + gpt-5.4-medium-thinking，并走 chat/completions 结构化输出。',
         modelHint: '推荐填写 openai/gpt-5.4-medium-thinking。当前 OpenAI Tab 默认接入 wyzai。',
+      };
+    },
+  },
+  {
+    id: 'codex-chatgpt-oauth-main-chat',
+    platform: 'openai',
+    supportsModel: isCodexModelId,
+    buildRequestOverride(model, options) {
+      const canonicalModel = this.normalizeModel(model);
+      if (!canonicalModel) return null;
+      const transportModel = this.transportModel(canonicalModel);
+      if (!transportModel) return null;
+      return {
+        qqbot_request_mode: 'responses',
+        qqbot_canonical_model: canonicalModel,
+        qqbot_transport_model: transportModel,
+        qqbot_tool_profile: 'qqbot_openai_main_chat',
+        reasoning: {
+          effort: normalizeCodexReasoningEffort(options?.reasoningEffort) ?? CODEX_DEFAULT_REASONING_EFFORT,
+        },
+      };
+    },
+    buildReplyOutputContract(model, options) {
+      return buildMainChatReplyOutputContract({
+        requestMode: this.resolveRequestMode(model),
+        protocol: this.resolveStructuredOutputProtocol(model),
+        overrideRequestParams: this.buildRequestOverride(model, options),
+      });
+    },
+    normalizeModel(model) {
+      return normalizeCodexCanonicalModelId(model);
+    },
+    transportModel(model) {
+      return normalizeCodexModelId(model);
+    },
+    resolveRequestMode() {
+      return 'responses';
+    },
+    resolveStructuredOutputProtocol() {
+      return 'native_responses_json_schema';
+    },
+    describeForConsole(model, options) {
+      const option = getCodexModelOption(model);
+      const effort = normalizeCodexReasoningEffort(options?.reasoningEffort) ?? CODEX_DEFAULT_REASONING_EFFORT;
+      return {
+        description: '当前由机器人维护独立 Codex OAuth，运行时通过本地 bridge 注入 OAuth token，并固定走 Responses API + native_responses_json_schema。',
+        modelHint: option
+          ? `当前从 Codex 可见 API 模型列表选择，已选 ${option.label}，思考程度 ${effort}。保存为 openai/${option.modelId}，上游请求发送 ${option.modelId}。`
+          : `当前从 Codex 可见 API 模型列表选择，思考程度 ${effort}；只支持 Responses API，不会回退到 chat/completions。`,
       };
     },
   },
@@ -580,7 +690,7 @@ export function getMainChatProviderStrategyForTab(id: MainChatBuiltinTabId): Mai
 
 export function normalizeMainChatBuiltinTabId(value: unknown): MainChatBuiltinTabId {
   const normalized = String(value ?? '').trim();
-  if (normalized === 'siliconflow' || normalized === 'openai' || normalized === 'copilot' || normalized === 'deepseek' || normalized === 'mimo') {
+  if (normalized === 'siliconflow' || normalized === 'openai' || normalized === 'codex' || normalized === 'copilot' || normalized === 'deepseek' || normalized === 'mimo') {
     return normalized;
   }
   throw new Error(`不支持这个模型 Tab：${normalized || 'unknown'}`);
@@ -596,7 +706,7 @@ export function resolveMainChatRuntimeProfileFromEnv(env: Record<string, string>
 
 export function resolveMainChatActiveTabFromEnv(env: Record<string, string> | NodeJS.ProcessEnv): MainChatBuiltinTabId {
   const raw = String(env.CHATLUNA_ACTIVE_TAB ?? '').trim();
-  if (raw === 'openai' || raw === 'copilot' || raw === 'deepseek' || raw === 'mimo') return raw;
+  if (raw === 'openai' || raw === 'codex' || raw === 'copilot' || raw === 'deepseek' || raw === 'mimo') return raw;
   return 'siliconflow';
 }
 
@@ -624,7 +734,10 @@ export function resolveMainChatTabStateFromEnv(
     (activeTab === id ? trimOptionalEnvValue(env.CHATLUNA_DEFAULT_MODEL) : null) ||
     definition.defaultModel;
   const canonicalModel = strategy.normalizeModel(defaultModel) ?? definition.defaultModel;
-  const { description, modelHint } = strategy.describeForConsole(canonicalModel);
+  const reasoningEffort = id === 'codex'
+    ? normalizeCodexReasoningEffort(definition.envKeys.reasoningEffort ? env[definition.envKeys.reasoningEffort] : null) ?? CODEX_DEFAULT_REASONING_EFFORT
+    : null;
+  const { description, modelHint } = strategy.describeForConsole(canonicalModel, { reasoningEffort });
 
   return {
     id,
@@ -634,13 +747,14 @@ export function resolveMainChatTabStateFromEnv(
     strategyId: strategy.id,
     requestMode: strategy.resolveRequestMode(canonicalModel),
     structuredOutputProtocol: strategy.resolveStructuredOutputProtocol(canonicalModel),
-    authKind: id === 'copilot' ? 'oauth_device' : 'manual',
-    authStatus: apiKey ? 'ready' : id === 'copilot' ? 'unauthenticated' : 'ready',
+    authKind: id === 'copilot' ? 'oauth_device' : id === 'codex' ? 'codex_oauth' : 'manual',
+    authStatus: apiKey ? 'ready' : (id === 'copilot' || id === 'codex') ? 'unauthenticated' : 'ready',
     accountLabel: null,
     authError: null,
     baseUrl,
     apiKey,
     defaultModel: canonicalModel,
+    reasoningEffort,
     canonicalModel,
     transportModel: strategy.transportModel(canonicalModel) ?? canonicalModel,
     description,
@@ -651,7 +765,7 @@ export function resolveMainChatTabStateFromEnv(
 export function resolveMainChatRuntimeProfileFromTabConfig(
   activeTab: MainChatBuiltinTabId,
   tabs: readonly (Pick<MainChatBuiltinTabState, 'id' | 'baseUrl' | 'apiKey' | 'defaultModel'> &
-    Partial<Pick<MainChatBuiltinTabState, 'canonicalModel' | 'transportModel'>>)[],
+    Partial<Pick<MainChatBuiltinTabState, 'canonicalModel' | 'transportModel' | 'reasoningEffort'>>)[],
 ): MainChatRuntimeProfile {
   const activeConfig = tabs.find((item) => item.id === activeTab);
   if (!activeConfig) {
@@ -662,7 +776,10 @@ export function resolveMainChatRuntimeProfileFromTabConfig(
   const strategy = getMainChatProviderStrategy(definition.strategyId);
   const canonicalModel =
     strategy.normalizeModel(activeConfig.canonicalModel ?? activeConfig.defaultModel) ?? definition.defaultModel;
-  const { description, modelHint } = strategy.describeForConsole(canonicalModel);
+  const reasoningEffort = activeTab === 'codex'
+    ? normalizeCodexReasoningEffort((activeConfig as { reasoningEffort?: unknown }).reasoningEffort) ?? CODEX_DEFAULT_REASONING_EFFORT
+    : null;
+  const { description, modelHint } = strategy.describeForConsole(canonicalModel, { reasoningEffort });
 
   return {
     tabId: activeTab,
@@ -671,13 +788,14 @@ export function resolveMainChatRuntimeProfileFromTabConfig(
     strategyId: strategy.id,
     requestMode: strategy.resolveRequestMode(canonicalModel),
     structuredOutputProtocol: strategy.resolveStructuredOutputProtocol(canonicalModel),
-    authKind: activeTab === 'copilot' ? 'oauth_device' : 'manual',
-    authStatus: activeConfig.apiKey.trim() ? 'ready' : activeTab === 'copilot' ? 'unauthenticated' : 'ready',
+    authKind: activeTab === 'copilot' ? 'oauth_device' : activeTab === 'codex' ? 'codex_oauth' : 'manual',
+    authStatus: activeConfig.apiKey.trim() ? 'ready' : (activeTab === 'copilot' || activeTab === 'codex') ? 'unauthenticated' : 'ready',
     accountLabel: null,
     authError: null,
     baseUrl: activeTab === 'siliconflow' ? definition.defaultBaseUrl : activeConfig.baseUrl.trim(),
     apiKey: activeConfig.apiKey.trim(),
     defaultModel: canonicalModel,
+    reasoningEffort,
     canonicalModel,
     transportModel: strategy.transportModel(canonicalModel) ?? canonicalModel,
     description,
@@ -688,11 +806,12 @@ export function resolveMainChatRuntimeProfileFromTabConfig(
 export function buildMainChatRuntimeEnvPatch(
   activeTab: MainChatBuiltinTabId,
   tabs: readonly (Pick<MainChatBuiltinTabState, 'id' | 'baseUrl' | 'apiKey' | 'defaultModel'> &
-    Partial<Pick<MainChatBuiltinTabState, 'canonicalModel' | 'transportModel'>>)[],
+    Partial<Pick<MainChatBuiltinTabState, 'canonicalModel' | 'transportModel' | 'reasoningEffort'>>)[],
 ): Record<string, string> {
   const runtimeProfile = resolveMainChatRuntimeProfileFromTabConfig(activeTab, tabs);
   const siliconflowTab = requireMainChatTabConfig(tabs, 'siliconflow');
   const openaiTab = requireMainChatTabConfig(tabs, 'openai');
+  const codexTab = requireMainChatTabConfig(tabs, 'codex');
   const copilotTab = requireMainChatTabConfig(tabs, 'copilot');
   const deepseekTab = requireMainChatTabConfig(tabs, 'deepseek');
   const mimoTab = requireMainChatTabConfig(tabs, 'mimo');
@@ -709,6 +828,10 @@ export function buildMainChatRuntimeEnvPatch(
     CHATLUNA_OPENAI_BASE_URL: openaiTab.baseUrl.trim(),
     CHATLUNA_OPENAI_API_KEY: openaiTab.apiKey.trim(),
     CHATLUNA_OPENAI_DEFAULT_MODEL: (openaiTab.canonicalModel ?? openaiTab.defaultModel).trim(),
+    CHATLUNA_CODEX_BASE_URL: codexTab.baseUrl.trim(),
+    CHATLUNA_CODEX_API_KEY: codexTab.apiKey.trim(),
+    CHATLUNA_CODEX_DEFAULT_MODEL: (codexTab.canonicalModel ?? codexTab.defaultModel).trim(),
+    CHATLUNA_CODEX_REASONING_EFFORT: normalizeCodexReasoningEffort((codexTab as { reasoningEffort?: unknown }).reasoningEffort) ?? CODEX_DEFAULT_REASONING_EFFORT,
     CHATLUNA_COPILOT_BASE_URL: copilotTab.baseUrl.trim(),
     CHATLUNA_COPILOT_API_KEY: copilotTab.apiKey.trim(),
     CHATLUNA_COPILOT_DEFAULT_MODEL: (copilotTab.canonicalModel ?? copilotTab.defaultModel).trim(),
@@ -753,7 +876,9 @@ export function buildReplyOutputContract(args: {
     ? getMainChatProviderStrategy(args.profile.strategyId)
     : resolveMainChatProviderStrategyForModel(args.model) ?? getMainChatProviderStrategy('siliconflow-kimi-main-chat');
   const model = strategy.normalizeModel(args.model ?? args.profile?.canonicalModel ?? args.profile?.defaultModel ?? null);
-  const baseContract = strategy.buildReplyOutputContract(model);
+  const baseContract = strategy.buildReplyOutputContract(model, {
+    reasoningEffort: args.profile?.reasoningEffort ?? null,
+  });
   return createReplyOutputContract({
     requestMode: baseContract.requestMode,
     protocol: baseContract.protocol,
@@ -775,8 +900,8 @@ function requireMainChatTabConfig<T extends Pick<MainChatBuiltinTabState, 'id'>>
 }
 
 function resolveMainChatProviderStrategyForModel(model?: string | null): MainChatProviderStrategy | null {
-  const found = MAIN_CHAT_PROVIDER_STRATEGIES.find((strategy) => strategy.supportsModel(model));
-  return found ?? null;
+  const candidates = MAIN_CHAT_PROVIDER_STRATEGIES.filter((strategy) => strategy.supportsModel(model));
+  return candidates.find((strategy) => strategy.id !== 'codex-chatgpt-oauth-main-chat') ?? candidates[0] ?? null;
 }
 
 function isSiliconFlowKimiK25Model(model?: string | null): boolean {
@@ -822,6 +947,27 @@ export function normalizeCopilotModelId(model?: string | null): string | null {
     return value.slice('github-copilot/'.length).trim() || null;
   }
   return value;
+}
+
+export function normalizeCodexModelId(model?: string | null): string | null {
+  const value = model?.trim();
+  if (!value) return null;
+  if (value.startsWith('openai/')) {
+    const normalized = value.slice('openai/'.length).trim();
+    return normalized && !normalized.includes('/') ? normalized : null;
+  }
+  return value.includes('/') ? null : value;
+}
+
+export function normalizeCodexReasoningEffort(value: unknown): MainChatReasoningEffort | null {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'low' || normalized === 'medium' || normalized === 'high' || normalized === 'xhigh') return normalized;
+  return null;
+}
+
+function normalizeCodexCanonicalModelId(model?: string | null): string | null {
+  const normalized = normalizeCodexModelId(model);
+  return normalized ? `openai/${normalized}` : null;
 }
 
 function normalizeCopilotCanonicalModelId(model?: string | null): string | null {
@@ -884,6 +1030,10 @@ function isCopilotModelId(model?: string | null): boolean {
   return getCopilotModelOption(model) != null;
 }
 
+function isCodexModelId(model?: string | null): boolean {
+  return getCodexModelOption(model) != null;
+}
+
 function getCopilotRequestMode(model?: string | null): MainChatRequestMode {
   return getCopilotModelOption(model)?.requestMode ?? 'responses';
 }
@@ -929,7 +1079,7 @@ export function resolveMainChatModelDescriptor(args: {
 // ─── UI schema (single source of truth for the bot-console Models tab) ────────
 
 export type ModelInputKind = 'select-static' | 'select-dynamic' | 'free-text';
-export type SecondaryActionKind = 'copilot-oauth' | 'deepseek-refresh' | 'mimo-refresh' | null;
+export type SecondaryActionKind = 'codex-oauth' | 'copilot-oauth' | 'deepseek-refresh' | 'mimo-refresh' | null;
 
 export interface ModelOptionSummary {
   modelId: string;
@@ -988,6 +1138,18 @@ const OPENAI_UI_SCHEMA: BuiltinTabUiSchema = {
   secondaryAction: null,
 };
 
+const CODEX_UI_SCHEMA: BuiltinTabUiSchema = {
+  id: 'codex',
+  baseUrlEditable: false,
+  apiKeyEditable: false,
+  apiKeyVisible: false,
+  modelInputKind: 'select-dynamic',
+  modelOptions: [],
+  allowedModelExamples: CODEX_MODEL_OPTIONS.map((option) => option.modelId),
+  allowedModelsDescription: 'Codex Tab 只能选择当前可见且 supported_in_api=true 的模型；OAuth、bridge 地址和内部密钥由机器人后台接管。',
+  secondaryAction: 'codex-oauth',
+};
+
 const COPILOT_UI_SCHEMA: BuiltinTabUiSchema = {
   id: 'copilot',
   baseUrlEditable: false,
@@ -1031,6 +1193,7 @@ const MIMO_UI_SCHEMA: BuiltinTabUiSchema = {
 export const BUILTIN_MAIN_CHAT_TAB_UI_SCHEMA: Readonly<Record<MainChatBuiltinTabId, BuiltinTabUiSchema>> = {
   siliconflow: SILICONFLOW_UI_SCHEMA,
   openai: OPENAI_UI_SCHEMA,
+  codex: CODEX_UI_SCHEMA,
   copilot: COPILOT_UI_SCHEMA,
   deepseek: DEEPSEEK_UI_SCHEMA,
   mimo: MIMO_UI_SCHEMA,
@@ -1054,6 +1217,7 @@ export function validateMainChatTabModel(
   id: MainChatBuiltinTabId,
   rawModel: string | null | undefined,
   options: {
+    codexDynamicModelIds?: readonly string[];
     copilotDynamicModelIds?: readonly string[];
     deepseekDynamicModelIds?: readonly string[];
     mimoDynamicModelIds?: readonly string[];
@@ -1103,6 +1267,34 @@ export function validateMainChatTabModel(
         ok: false,
         message: `MIMO Tab：'${trimmed}' 不在允许的聊天模型列表中。可选：${[...supportedIds].slice(0, 6).join(' / ')}${supportedIds.size > 6 ? ' …' : ''}`,
         suggestions: [...supportedIds],
+      };
+    }
+    return { ok: true };
+  }
+
+  if (id === 'codex') {
+    const transportModel = normalizeCodexModelId(trimmed);
+    const dynamicIds = (options.codexDynamicModelIds ?? [])
+      .map((value) => normalizeCodexModelId(value))
+      .filter((value): value is string => Boolean(value));
+    if (dynamicIds.length > 0) {
+      const supportedIds = new Set<string>(dynamicIds);
+      if (!transportModel || !supportedIds.has(transportModel)) {
+        return {
+          ok: false,
+          message: `Codex Tab：'${trimmed}' 不在当前 Codex 可见 API 模型列表内。可选：${[...supportedIds].slice(0, 6).join(' / ')}${supportedIds.size > 6 ? ' …' : ''}`,
+          suggestions: [...supportedIds],
+        };
+      }
+      return { ok: true };
+    }
+
+    const fallbackIds = CODEX_MODEL_OPTIONS.map((option) => option.modelId);
+    if (!transportModel || (trimmed.includes('/') && !trimmed.startsWith('openai/'))) {
+      return {
+        ok: false,
+        message: `Codex Tab 默认模型必须是 openai/<slug> 或 <slug>。${schema.allowedModelsDescription}`,
+        suggestions: fallbackIds,
       };
     }
     return { ok: true };

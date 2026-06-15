@@ -79,8 +79,14 @@ describe('bot-console plugin', () => {
     apply(ctx as any);
 
     expect(addEntry).toHaveBeenCalledTimes(1);
-    expect(addListener).toHaveBeenCalledTimes(31);
+    expect(addListener).toHaveBeenCalledTimes(37);
     expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/list-copilot-models');
+    expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/list-codex-models');
+    expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/codex-auth/status');
+    expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/codex-auth/start');
+    expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/codex-auth/poll');
+    expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/codex-auth/cancel');
+    expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/codex-auth/logout');
     for (const call of addListener.mock.calls) {
       expect(call[2]).toEqual({ authority: 4 });
     }
