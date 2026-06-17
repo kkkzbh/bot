@@ -18,6 +18,20 @@ export interface ReplyOutputContract {
   overrideRequestParams: Record<string, unknown> | null;
 }
 
+export function buildReplyOutputContractAdditionalKwargs(
+  contract: ReplyOutputContract,
+  options: {
+    overrideRequestParams?: Record<string, unknown> | null;
+  } = {},
+): Record<string, unknown> {
+  return {
+    qqbot_final_response_contract: contract,
+    ...(contract.schema ? { qqbot_final_response_schema: contract.schema } : {}),
+    ...(contract.instruction ? { qqbot_final_response_instruction: contract.instruction } : {}),
+    ...(options.overrideRequestParams ? { overrideRequestParams: options.overrideRequestParams } : {}),
+  };
+}
+
 export interface ReplyOutputLanguageOptions {
   voiceOutputLanguage?: VoiceOutputLanguage;
 }

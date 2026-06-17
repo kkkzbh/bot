@@ -63,6 +63,7 @@ import {
 import { buildReplyTurnInput, normalizeReplyRouteHint } from '../pipeline/context-builder.js';
 import {
   buildReplyOutputContract,
+  buildReplyOutputContractAdditionalKwargs,
   isSupportedMainChatModelForTab,
   type MainChatReplyOutputContract,
 } from '../../shared/llm/index.js';
@@ -996,8 +997,9 @@ export function applyReplyOutputContract(
   inputMessage.additional_kwargs = {
     ...(inputMessage.additional_kwargs ?? {}),
     qqbot_reply_mode: replyMode,
-    qqbot_final_response_contract: replyOutputContract,
-    ...(overrideRequestParams ? { overrideRequestParams } : {}),
+    ...buildReplyOutputContractAdditionalKwargs(replyOutputContract, {
+      overrideRequestParams,
+    }),
   };
   return replyOutputContract;
 }

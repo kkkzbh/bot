@@ -7,7 +7,7 @@ import type { ReplyTransportPlan } from '../shared/outbound/index.js';
 import { resolveSessionDisplayName } from '../shared/session/index.js';
 import { decodeStoredMessageText, extractPlainText } from '../shared/stored-message.js';
 import { buildGroupScopeKey, realtimeMessageCache } from '../realtime-message/index.js';
-import { deliverStandaloneReplyPlan } from '../reply/voice/generation.js';
+import { deliverStandaloneReplyPlan } from '../reply/index.js';
 import { resolveStickerCapabilityArtifacts } from '../sticker/index.js';
 import type {
   AffinityAnalysisModelConfig,

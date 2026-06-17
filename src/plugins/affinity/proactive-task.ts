@@ -1,5 +1,5 @@
 import type { PromptFragment } from '../shared/prompt-context/index.js';
-import { createPromptTextFragment } from '../reply/prompt/compiler.js';
+import { createPromptTextFragment } from '../reply/index.js';
 import type {
   AffinityRandomContextTurn,
   AffinityRandomGenerationInput,

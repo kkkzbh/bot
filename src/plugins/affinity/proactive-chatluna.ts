@@ -2,6 +2,7 @@ import type { Session } from 'koishi';
 import type { ReplyOutputProtocol } from '../shared/llm/reply-output-contract.js';
 import {
   buildReplyOutputContract,
+  buildReplyOutputContractAdditionalKwargs,
 } from '../shared/llm/index.js';
 import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
 import {
@@ -11,19 +12,17 @@ import {
 } from '../shared/outbound/index.js';
 import type { PromptEnvelopeMessage } from '../shared/prompt-context/index.js';
 import {
-  buildReplyPromptCompilerInput,
-  compileReplyPromptEnvelope,
-} from '../reply/prompt/compiler.js';
-import { buildReplyTurnInput } from '../reply/pipeline/context-builder.js';
-import { ReplyOrchestratorService } from '../reply/pipeline/orchestrator.js';
-import {
   buildReplyTransportPlanFromResolvedActions,
+  buildReplyPromptCompilerInput,
+  buildReplyTurnInput,
+  compileReplyPromptEnvelope,
   createVoiceRuntimeConfig,
   createVoiceRuntimeConfigFromEnv,
   isVoiceOutputConfigured,
+  ReplyOrchestratorService,
   type RuntimeConfig as ReplyVoiceRuntimeConfig,
-} from '../reply/voice/generation.js';
-import type { TurnContext } from '../reply/pipeline/types.js';
+  type TurnContext,
+} from '../reply/index.js';
 import type {
   AffinityRandomGenerationInput,
   AffinityRandomGenerationResult,
@@ -162,8 +161,9 @@ function attachReplyOutputContract(
   message.additional_kwargs = {
     ...(message.additional_kwargs ?? {}),
     qqbot_reply_mode: 'agent',
-    qqbot_final_response_contract: contract,
-    ...(contract.overrideRequestParams ? { overrideRequestParams: contract.overrideRequestParams } : {}),
+    ...buildReplyOutputContractAdditionalKwargs(contract, {
+      overrideRequestParams: contract.overrideRequestParams,
+    }),
   };
   return contract;
 }

@@ -106,7 +106,10 @@ describe('chatluna prompt pollution regression', () => {
     expect(executorSource).not.toContain('finishContract.maxRetries');
     expect(executorSource).not.toContain('finishContract.retryMessage');
     expect(executorSource).toContain("type: 'json_schema'");
-    expect(executorSource).toContain('qqbot_final_response_contract');
+    expect(
+      executorSource.includes('qqbot_final_response_contract')
+      || executorSource.includes('qqbot_final_response_schema'),
+    ).toBe(true);
   });
 
   it('removes plugin chat chain whole-turn retry loop', () => {
@@ -125,11 +128,16 @@ describe('chatluna prompt pollution regression', () => {
     const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
     const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/executor.ts'), 'utf8');
 
-    expect(pluginChainSource).toContain("requests['qqbot_final_response_contract'] = finalResponseContract");
+    const hasLegacyContractPath = pluginChainSource.includes("requests['qqbot_final_response_contract'] = finalResponseContract");
+    const hasSchemaInstructionPath = pluginChainSource.includes("requests['qqbot_final_response_schema'] = finalResponseSchema")
+      && pluginChainSource.includes("requests['qqbot_final_response_instruction'] =");
+    expect(hasLegacyContractPath || hasSchemaInstructionPath).toBe(true);
     expect(executorSource).toContain("type: 'json_schema'");
     expect(executorSource).toContain('buildFinalResponseOverrideRequestParams');
-    expect(executorSource).toContain('mergeFinalResponseInstructionAfterUserMessage');
-    expect(executorSource).toContain('new SystemMessage(normalizedInstruction)');
+    expect(
+      executorSource.includes('mergeFinalResponseInstructionAfterUserMessage')
+      || executorSource.includes('qqbot_final_response_instruction'),
+    ).toBe(true);
     expect(executorSource).not.toContain('buildFinalResponseMessage');
     expect(executorSource).not.toContain("tool_choice: 'none'");
     expect(executorSource).not.toContain('finalResponseMode');

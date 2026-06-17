@@ -293,6 +293,9 @@ describe('affinity proactive task prompt and provider adapter', () => {
       protocol: 'native_chat_json_schema',
       schema: expect.objectContaining({ title: 'StructuredReply' }),
     }));
+    expect(modelMessage.additional_kwargs?.qqbot_final_response_schema).toEqual(expect.objectContaining({
+      title: 'StructuredReply',
+    }));
     const injectedText = chatluna.contextManager.inject.mock.calls[0]?.[0]?.value
       .map((message: { content: string }) => message.content)
       .join('\n\n');
@@ -386,6 +389,7 @@ describe('affinity proactive task prompt and provider adapter', () => {
       schema: null,
       instruction: expect.stringContaining('CHAT_REPLY_V1 <nonce>'),
     }));
+    expect(modelMessage.additional_kwargs?.qqbot_final_response_instruction).toContain('CHAT_REPLY_V1 <nonce>');
     const injectedText = chatluna.contextManager.inject.mock.calls[0]?.[0]?.value
       .map((message: { content: string }) => message.content)
       .join('\n\n');

@@ -15,15 +15,18 @@ export {
   synthesizeVoice,
   type OneBotBotLike,
   type ReplyCapabilitySnapshot,
+  type RuntimeConfig,
 } from './voice/generation.js';
 export { formatStructuredLogBlock } from './pipeline/debug.js';
 export { buildReplyTurnInput } from './pipeline/context-builder.js';
 export { ReplyOrchestratorService } from './pipeline/orchestrator.js';
 export type { TurnContext } from './pipeline/types.js';
 export {
+  buildReplyPromptCompilerInput,
   buildReplyCapabilityPromptFragments,
   buildReplyRuntimeContractFragments,
   buildReplyStructuredReplyContractFragments,
+  compileReplyPromptEnvelope,
   createPromptJsonFragment,
   createPromptTextFragment,
 } from './prompt/compiler.js';

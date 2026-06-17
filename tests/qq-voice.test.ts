@@ -1204,7 +1204,13 @@ describe('qq voice plugin', () => {
         }),
       }),
     );
-    const groupContract = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_contract;
+    const groupAdditionalKwargs = context.options.inputMessage.additional_kwargs as Record<string, any>;
+    expect(groupAdditionalKwargs.qqbot_final_response_schema).toEqual(
+      expect.objectContaining({
+        title: 'StructuredReply',
+      }),
+    );
+    const groupContract = groupAdditionalKwargs.qqbot_final_response_contract;
     const groupSchema = groupContract?.schema;
     expect(extractSchemaMessageTitles(groupSchema)).toContain('MessageItem');
   });
@@ -1276,7 +1282,9 @@ describe('qq voice plugin', () => {
         }),
       }),
     );
-    const finalContract = (context.options.inputMessage.additional_kwargs as Record<string, any>).qqbot_final_response_contract;
+    const chatReplyAdditionalKwargs = context.options.inputMessage.additional_kwargs as Record<string, any>;
+    expect(chatReplyAdditionalKwargs.qqbot_final_response_instruction).toContain('CHAT_REPLY_V1 <nonce>');
+    const finalContract = chatReplyAdditionalKwargs.qqbot_final_response_contract;
     expect(finalContract.instruction).toContain('当前语音输出目标语言：日语');
   });
 
