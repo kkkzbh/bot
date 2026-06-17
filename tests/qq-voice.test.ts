@@ -303,6 +303,7 @@ function createHarness(overrides: {
       return overrides.canSendRecord ?? true;
     }),
     getRecord: vi.fn(async (file: string) => ({ file })),
+    getGroupMemberList: vi.fn(async (): Promise<Array<{ user_id: string | number; card?: string; nickname?: string }>> => []),
     sendPrivateMsg: vi.fn(async () => 'msg-id'),
     sendGroupMsg: vi.fn(async () => 'msg-id'),
   };
@@ -330,7 +331,7 @@ function createHarness(overrides: {
           invoke: async () => ({
             content: JSON.stringify({
               decision: 'reply',
-              outbound_messages: [{ type: 'message', content: '默认回复', mentions: [] }],
+              outbound_messages: [{ type: 'message', content: '默认回复' }],
             }),
           }),
         })),
@@ -446,7 +447,7 @@ function createReplyV2Response(input: string | Record<string, unknown>) {
     typeof input === 'string'
       ? {
           decision: 'reply',
-          outbound_messages: [{ type: 'message', content: input, mentions: [] }],
+          outbound_messages: [{ type: 'message', content: input }],
         }
       : input;
   return {
@@ -460,7 +461,6 @@ function encodeExpectedChatReplyV1History(content: string): string {
     'CHAT_REPLY_V1 history',
     'DECISION reply',
     'BEGIN message',
-    'MENTIONS none',
     'CONTENT',
     ...content.split('\n').map((line) => `|${line}`),
     'END',
@@ -474,7 +474,6 @@ function createChatReplyV1Response(content: string, nonce: string) {
       `CHAT_REPLY_V1 ${nonce}`,
       'DECISION reply',
       'BEGIN message',
-      'MENTIONS none',
       'CONTENT',
       ...content.split('\n').map((line) => `|${line}`),
       'END',
@@ -496,7 +495,7 @@ function expectedStructuredAssistantHistory(input: string | Record<string, unkno
     typeof input === 'string'
       ? {
           decision: 'reply',
-          outbound_messages: [{ type: 'message', content: input, mentions: [] }],
+          outbound_messages: [{ type: 'message', content: input }],
         }
       : input;
   return JSON.stringify(reply);
@@ -1374,7 +1373,7 @@ describe('qq voice plugin', () => {
     expect(envelopeText).toContain('speaker_id=<id>');
     expect(envelopeText).toContain('不同 speaker_id 的消息当成同一个人');
     expect(envelopeText).toContain('最新一条真实用户消息对应本轮直接回应对象');
-    expect(envelopeText).toContain('默认不要使用 `mentions`');
+    expect(envelopeText).toContain('直接在 `message.content` 里写 `@群名片 `');
     expect(envelopeText).toContain('"type": "voice"');
     expect(envelopeText).not.toContain('"displayName": "小祥"');
     expect(envelopeText).not.toContain('"userId": "u2"');
@@ -1564,7 +1563,6 @@ describe('qq voice plugin', () => {
             'CHAT_REPLY_V1 abc12345',
             'DECISION reply',
             'BEGIN message',
-            'MENTIONS none',
             'CONTENT',
             '|今晚先这样吧',
             'END',
@@ -1585,7 +1583,6 @@ describe('qq voice plugin', () => {
         'CHAT_REPLY_V1 history',
         'DECISION reply',
         'BEGIN message',
-        'MENTIONS none',
         'CONTENT',
         '|今晚先这样吧',
         'END',
@@ -1624,7 +1621,6 @@ describe('qq voice plugin', () => {
           'CHAT_REPLY_V1 history',
           'DECISION reply',
           'BEGIN message',
-          'MENTIONS none',
           'CONTENT',
           '|篮球……国一？',
           '',
@@ -1746,7 +1742,7 @@ describe('qq voice plugin', () => {
     ).toBe(true);
   });
 
-  it('executes a mention structured reply through the executor as one atomic mention message', async () => {
+  it('executes an inline mention structured reply through the executor as one atomic mention message', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -1754,6 +1750,9 @@ describe('qq voice plugin', () => {
     await flushMicrotasks();
 
     const executor = getExecutor();
+    bot.internal.getGroupMemberList.mockResolvedValueOnce([
+      { user_id: 123456, card: '小祥', nickname: '小祥' },
+    ]);
     const session = createSession(bot, {
       content: '普通聊聊',
       strippedContent: '普通聊聊',
@@ -1772,15 +1771,14 @@ describe('qq voice plugin', () => {
       options: {
         room: createPluginRoom('conv-mention'),
         responseMessage: createReplyV2Response({
-          decision: 'reply',
-          outbound_messages: [
-            {
-              type: 'message',
-              content: '先问下这件事。',
-              mentions: ['123456'],
-            },
-          ],
-        }),
+            decision: 'reply',
+            outbound_messages: [
+              {
+                type: 'message',
+                content: '@小祥 先问下这件事。',
+              },
+            ],
+          }),
       },
     };
 
@@ -1798,17 +1796,16 @@ describe('qq voice plugin', () => {
       expectedStructuredAssistantHistory({
         decision: 'reply',
         outbound_messages: [
-          {
-            type: 'message',
-            content: '先问下这件事。',
-            mentions: ['123456'],
-          },
+            {
+              type: 'message',
+              content: '@小祥 先问下这件事。',
+            },
         ],
       }),
     );
   });
 
-  it('dedupes handwritten leading mention tokens against structured mentions before executor send', async () => {
+  it('keeps unresolved inline mention text instead of fabricating an at segment', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -1838,8 +1835,7 @@ describe('qq voice plugin', () => {
           outbound_messages: [
             {
               type: 'message',
-              content: '[mention:123456] [mention:123456] 先问下这件事。',
-              mentions: ['123456'],
+              content: '@小祥 先问下这件事。',
             },
           ],
         }),
@@ -1850,10 +1846,7 @@ describe('qq voice plugin', () => {
     expect(typeof result).toBe('number');
     expect(bot.sendMessage).toHaveBeenCalledTimes(1);
     const calls = bot.sendMessage.mock.calls as any[][];
-    expect(calls[0]?.[1]).toEqual([
-      expect.objectContaining({ type: 'at', attrs: expect.objectContaining({ id: '123456' }) }),
-      expect.objectContaining({ type: 'text', attrs: expect.objectContaining({ content: ' 先问下这件事。' }) }),
-    ]);
+    expect(extractVisibleMessageText(calls[0]?.[1])).toBe('@小祥 先问下这件事。');
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-handwritten-mention' }),
       expectedStructuredAssistantHistory({
@@ -1861,15 +1854,14 @@ describe('qq voice plugin', () => {
         outbound_messages: [
           {
             type: 'message',
-            content: '先问下这件事。',
-            mentions: ['123456'],
+            content: '@小祥 先问下这件事。',
           },
         ],
       }),
     );
   });
 
-  it('keeps mention-only handwritten leading mention replies as real mention messages', async () => {
+  it('strips platform mention control tags without creating at segments', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -1899,8 +1891,7 @@ describe('qq voice plugin', () => {
           outbound_messages: [
             {
               type: 'message',
-              content: '[mention:123456]',
-              mentions: [],
+              content: '[CQ:at,qq=123456] <at id="123456"/>先问下这件事。',
             },
           ],
         }),
@@ -1911,9 +1902,7 @@ describe('qq voice plugin', () => {
     expect(typeof result).toBe('number');
     expect(bot.sendMessage).toHaveBeenCalledTimes(1);
     const calls = bot.sendMessage.mock.calls as any[][];
-    expect(calls[0]?.[1]).toEqual([
-      expect.objectContaining({ type: 'at', attrs: expect.objectContaining({ id: '123456' }) }),
-    ]);
+    expect(extractVisibleMessageText(calls[0]?.[1])).toBe('先问下这件事。');
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-mention-only' }),
       expectedStructuredAssistantHistory({
@@ -1921,8 +1910,7 @@ describe('qq voice plugin', () => {
         outbound_messages: [
           {
             type: 'message',
-            content: '',
-            mentions: ['123456'],
+            content: '先问下这件事。',
           },
         ],
       }),
@@ -1992,8 +1980,8 @@ describe('qq voice plugin', () => {
           responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
-              { type: 'message', content: '第一句', mentions: [] },
-              { type: 'message', content: '第二句', mentions: [] },
+              { type: 'message', content: '第一句' },
+              { type: 'message', content: '第二句' },
             ],
           }),
         },
@@ -2021,6 +2009,9 @@ describe('qq voice plugin', () => {
     await flushMicrotasks();
 
     const executor = getExecutor();
+    bot.internal.getGroupMemberList.mockResolvedValueOnce([
+      { user_id: 123456, card: '小祥', nickname: '小祥' },
+    ]);
     const quoteSpy = vi.spyOn(ReplyRuntime.prototype, 'consumeFirstReplyQuote').mockReturnValueOnce('msg-b');
 
     try {
@@ -2036,11 +2027,10 @@ describe('qq voice plugin', () => {
           responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
-              {
-                type: 'message',
-                content: '先问下这件事。',
-                mentions: ['123456'],
-              },
+	              {
+	                type: 'message',
+	                content: '@小祥 先问下这件事。',
+	              },
             ],
           }),
         },
@@ -2284,7 +2274,7 @@ describe('qq voice plugin', () => {
         responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
-            { type: 'message', content: '……随你', mentions: [] },
+            { type: 'message', content: '……随你' },
             { type: 'meme', content: '无语地看对方一眼' },
           ],
         }),
@@ -2303,7 +2293,7 @@ describe('qq voice plugin', () => {
       expectedStructuredAssistantHistory({
         decision: 'reply',
         outbound_messages: [
-          { type: 'message', content: '……随你', mentions: [] },
+          { type: 'message', content: '……随你' },
           { type: 'meme', content: '无语地看对方一眼' },
         ],
       }),
@@ -2389,7 +2379,7 @@ describe('qq voice plugin', () => {
         responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
-            { type: 'message', content: '还是先说正事。', mentions: [] },
+            { type: 'message', content: '还是先说正事。' },
             { type: 'meme', content: '无语地看对方一眼' },
           ],
         }),
@@ -2472,9 +2462,9 @@ describe('qq voice plugin', () => {
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [
-            { type: 'message', content: '先看这个清单。', mentions: [] },
+            { type: 'message', content: '先看这个清单。' },
             { type: 'structured_block', content: '- 牛奶\n- 面包' },
-            { type: 'message', content: '照着买。', mentions: [] },
+            { type: 'message', content: '照着买。' },
           ],
         }),
       },
@@ -2495,9 +2485,9 @@ describe('qq voice plugin', () => {
       expectedStructuredAssistantHistory({
         decision: 'reply',
         outbound_messages: [
-          { type: 'message', content: '先看这个清单。', mentions: [] },
+          { type: 'message', content: '先看这个清单。' },
           { type: 'structured_block', content: '- 牛奶\n- 面包' },
-          { type: 'message', content: '照着买。', mentions: [] },
+          { type: 'message', content: '照着买。' },
         ],
       }),
     );

@@ -1,5 +1,7 @@
 import { sanitizeStructuredReplyText } from '../../shared/outbound/index.js';
 import type { ResolvedAction, StructuredReply, TurnContext } from './types.js';
+import { GroupMemberMentionResolver } from './mention-resolver.js';
+import type { Session } from 'koishi';
 
 function isCodeforcesImageAction(action: ResolvedAction): boolean {
   return action.kind === 'image' && /(?:Codeforces|CF|分数卡|rating)/iu.test(`${action.alt} ${action.assetRef}`);
@@ -14,22 +16,10 @@ function preferCodeforcesImagesFirst(actions: ResolvedAction[]): ResolvedAction[
   ];
 }
 
-function normalizeMentionIds(mentions: string[] | undefined): string[] {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-
-  for (const value of mentions ?? []) {
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    normalized.push(trimmed);
-  }
-
-  return normalized;
-}
-
 export class ActionResolverService {
-  resolve(reply: StructuredReply, turnContext: TurnContext): ResolvedAction[] {
+  constructor(private readonly mentionResolver = new GroupMemberMentionResolver()) {}
+
+  async resolve(reply: StructuredReply, turnContext: TurnContext, session: Session): Promise<ResolvedAction[]> {
     if (reply.decision === 'no_reply') {
       return [{ kind: 'no_reply' }];
     }
@@ -88,15 +78,14 @@ export class ActionResolverService {
       }
 
       const content = sanitizeStructuredReplyText(message.content, 'message');
-      const mentions = normalizeMentionIds(message.mentions);
-      if (!content && !mentions.length) {
+      if (!content) {
         continue;
       }
+      const parts = await this.mentionResolver.resolveInlineMentions(content, turnContext, session);
 
       resolved.push({
         kind: 'message',
-        content,
-        mentions,
+        parts,
       });
     }
 

@@ -342,7 +342,7 @@ describe('buildReplyOutputContract', () => {
     });
   });
 
-  it('exposes mention output only when mention capability is enabled', () => {
+  it('keeps mentions inline in message content schema', () => {
     const schema = buildReplyOutputContract({
       model: 'openai/gpt-5.4-medium-thinking',
       canMention: true,
@@ -375,9 +375,11 @@ describe('buildReplyOutputContract', () => {
 
     expect(textMessage?.description).toBe('Ordinary chat message.');
     expect(textMessage?.properties?.type?.description).toBe('Ordinary chat message.');
-    expect(textMessage?.properties?.content?.description).toBe('Ordinary conversational plain text for this chat message.');
-    expect(textMessage?.properties?.mentions?.description).toBe('QQ user IDs to mention in this chat message. Use [] when no mention is needed.');
-    expect(textMessage?.required).toContain('mentions');
+    expect(textMessage?.properties?.content?.description).toBe(
+      'Ordinary conversational plain text for this chat message. To mention a group member, write @name followed by a space directly in this text.',
+    );
+    expect(textMessage?.properties?.mentions).toBeUndefined();
+    expect(textMessage?.required).toEqual(['type', 'content']);
     assertStrictRequiredForAllObjects(schema);
 
     const structuredBlock = messageSchemas.find((item) => item.title === 'StructuredBlockItem') as

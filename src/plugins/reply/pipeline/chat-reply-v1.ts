@@ -10,7 +10,6 @@ export type ChatReplyV1ParseErrorCode =
   | 'UNKNOWN_BLOCK_TYPE'
   | 'DUPLICATE_FIELD'
   | 'MISSING_FIELD'
-  | 'BAD_MENTION_LIST'
   | 'PAYLOAD_LINE_WITHOUT_PIPE'
   | 'UNTERMINATED_BLOCK'
   | 'TRAILING_TEXT_AFTER_DONE';
@@ -72,16 +71,6 @@ function isMatchingEnd(line: string, block: BlockBuilder): boolean {
   return line === 'END' || parseTypedEnd(line) === block.type;
 }
 
-function parseMentionList(value: string, line: number, sourceLine: string): string[] {
-  const trimmed = value.trim();
-  if (/^none$/iu.test(trimmed)) return [];
-  const mentions = trimmed.split(',').map((item) => item.trim()).filter(Boolean);
-  if (mentions.length === 0 || mentions.some((item) => !/^\d+$/u.test(item))) {
-    throw parseError('BAD_MENTION_LIST', line, sourceLine, 'MENTIONS must be none or comma-separated numeric ids.');
-  }
-  return [...new Set(mentions)];
-}
-
 function requirePayload(block: BlockBuilder, key: PayloadSection): string {
   const lines = block.payloads.get(key);
   if (!lines?.length) {
@@ -103,9 +92,6 @@ function finalizeBlock(block: BlockBuilder): StructuredReplyMessage {
     case 'message':
       return {
         type: 'message',
-        mentions: block.headers.has('MENTIONS')
-          ? parseMentionList(requireHeader(block, 'MENTIONS'), block.startLine, `BEGIN ${block.type}`)
-          : [],
         content: requirePayload(block, 'CONTENT'),
       };
     case 'structured_block':
@@ -237,6 +223,9 @@ export class ChatReplyV1Parser {
           throw parseError('UNKNOWN_COMMAND', lineNumber, line, 'Expected block header, payload section, or END.');
         }
         const key = headerMatch[1]!;
+        if (key === 'MENTIONS') {
+          throw parseError('UNKNOWN_COMMAND', lineNumber, line, 'MENTIONS header is no longer supported; write @name in CONTENT instead.');
+        }
         if (block.headers.has(key)) {
           throw parseError('DUPLICATE_FIELD', lineNumber, line, `${key} already exists in this block.`);
         }
@@ -291,7 +280,6 @@ export function encodeChatReplyV1(reply: StructuredReply, nonce: string): string
     for (const message of reply.outbound_messages ?? []) {
       lines.push(`BEGIN ${message.type}`);
       if (message.type === 'message') {
-        lines.push(`MENTIONS ${message.mentions?.length ? message.mentions.join(',') : 'none'}`);
         lines.push('CONTENT', ...message.content.split('\n').map((line) => `|${line}`));
       } else if (message.type === 'image') {
         lines.push(`ASSET_REF ${message.assetRef}`, 'ALT', ...message.alt.split('\n').map((line) => `|${line}`));

@@ -100,7 +100,7 @@ export class ReplyOrchestratorService {
       outputProtocol: context.outputProtocol,
     });
     const reply = compiler.compile();
-    const actions = this.actionResolver.resolve(reply, turnContext);
+    const actions = await this.actionResolver.resolve(reply, turnContext, _session);
     return {
       status: 'ready',
       route,

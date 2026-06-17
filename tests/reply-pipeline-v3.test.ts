@@ -33,6 +33,34 @@ function createTurnInput(text: string) {
   };
 }
 
+function createGroupTurnInput(text: string) {
+  return {
+    ...createTurnInput(text),
+    isDirect: false,
+    channelId: '1019832161',
+    guildId: '1019832161',
+  };
+}
+
+function createGroupSession(
+  members: Array<{ user_id: string | number; card?: string; nickname?: string }> = [
+    { user_id: 3623807220, card: '刘若希', nickname: '希娃儿' },
+  ],
+) {
+  return {
+    isDirect: false,
+    channelId: '1019832161',
+    guildId: '1019832161',
+    bot: {
+      selfId: 'bot-1',
+      platform: 'onebot',
+      internal: {
+        getGroupMemberList: vi.fn(async () => members),
+      },
+    },
+  } as never;
+}
+
 describe('reply pipeline v3', () => {
   it('maps plugin rooms to the agent route hint without keeping legacy aliases', () => {
     expect(normalizeReplyChatMode('plugin')).toBe('agent');
@@ -176,9 +204,9 @@ describe('reply pipeline v3', () => {
     ]);
   });
 
-  it('resolves message actions with inline mentions', async () => {
+  it('resolves inline group member mentions by card, nickname, and user id', async () => {
     const orchestrator = new ReplyOrchestratorService();
-    const ready = await orchestrator.handle(createTurnInput('提醒一下对方'), {} as never, {
+    const ready = await orchestrator.handle(createGroupTurnInput('提醒一下对方'), createGroupSession(), {
       routeHint: 'agent',
       capabilitySnapshot: {
         canMultiline: true,
@@ -193,8 +221,7 @@ describe('reply pipeline v3', () => {
         outbound_messages: [
           {
             type: 'message',
-            content: '先问下这件事。',
-            mentions: ['123456'],
+            content: '@刘若希 22:00了。麻烦 @希娃儿 看一下；@3623807220 也同步。',
           },
         ],
       }),
@@ -209,23 +236,30 @@ describe('reply pipeline v3', () => {
       outbound_messages: [
         {
           type: 'message',
-          content: '先问下这件事。',
-          mentions: ['123456'],
+          content: '@刘若希 22:00了。麻烦 @希娃儿 看一下；@3623807220 也同步。',
         },
       ],
     });
     expect(ready.actions).toEqual([
       {
         kind: 'message',
-        content: '先问下这件事。',
-        mentions: ['123456'],
+        parts: [
+          { kind: 'at', userId: '3623807220', label: '刘若希' },
+          { kind: 'text', content: ' 22:00了。麻烦 ' },
+          { kind: 'at', userId: '3623807220', label: '希娃儿' },
+          { kind: 'text', content: ' 看一下；' },
+          { kind: 'at', userId: '3623807220', label: '3623807220' },
+          { kind: 'text', content: ' 也同步。' },
+        ],
       },
     ]);
   });
 
-  it('lifts leading handwritten mention tokens into structured mentions and dedupes them', async () => {
+  it('preserves inline mention position in the middle of text', async () => {
     const orchestrator = new ReplyOrchestratorService();
-    const ready = await orchestrator.handle(createTurnInput('提醒一下对方'), {} as never, {
+    const ready = await orchestrator.handle(createGroupTurnInput('提醒一下对方'), createGroupSession([
+      { user_id: 123456, card: '小祥', nickname: '小祥' },
+    ]), {
       routeHint: 'agent',
       capabilitySnapshot: {
         canMultiline: true,
@@ -240,8 +274,7 @@ describe('reply pipeline v3', () => {
         outbound_messages: [
           {
             type: 'message',
-            content: '[mention:123456] [mention:123456] 先问下这件事。',
-            mentions: ['123456'],
+            content: '麻烦 @小祥 看一下',
           },
         ],
       }),
@@ -256,23 +289,28 @@ describe('reply pipeline v3', () => {
       outbound_messages: [
         {
           type: 'message',
-          content: '先问下这件事。',
-          mentions: ['123456'],
+          content: '麻烦 @小祥 看一下',
         },
       ],
     });
     expect(ready.actions).toEqual([
       {
         kind: 'message',
-        content: '先问下这件事。',
-        mentions: ['123456'],
+        parts: [
+          { kind: 'text', content: '麻烦 ' },
+          { kind: 'at', userId: '123456', label: '小祥' },
+          { kind: 'text', content: ' 看一下' },
+        ],
       },
     ]);
   });
 
-  it('appends handwritten leading mention tokens after explicit mentions and keeps mention-only replies', async () => {
+  it('resolves adjacent inline mentions separated by a single space', async () => {
     const orchestrator = new ReplyOrchestratorService();
-    const ready = await orchestrator.handle(createTurnInput('提醒两个人'), {} as never, {
+    const ready = await orchestrator.handle(createGroupTurnInput('提醒两个人'), createGroupSession([
+      { user_id: 123456, card: '小祥', nickname: '小祥' },
+      { user_id: 456789, card: '小月', nickname: '小月' },
+    ]), {
       routeHint: 'agent',
       capabilitySnapshot: {
         canMultiline: true,
@@ -284,18 +322,7 @@ describe('reply pipeline v3', () => {
       },
       responseMessage: createStructuredResponse({
         decision: 'reply',
-        outbound_messages: [
-          {
-            type: 'message',
-            content: '[mention:456789] 继续跟进。',
-            mentions: ['123456'],
-          },
-          {
-            type: 'message',
-            content: '[mention:789012]',
-            mentions: [],
-          },
-        ],
+        outbound_messages: [{ type: 'message', content: '@小祥 @小月 看一下' }],
       }),
     });
 
@@ -303,33 +330,101 @@ describe('reply pipeline v3', () => {
     if (ready.status !== 'ready') {
       throw new Error('expected ready');
     }
-    expect(ready.reply).toEqual({
-      decision: 'reply',
-      outbound_messages: [
-        {
-          type: 'message',
-          content: '继续跟进。',
-          mentions: ['123456', '456789'],
-        },
-        {
-          type: 'message',
-          content: '',
-          mentions: ['789012'],
-        },
-      ],
-    });
     expect(ready.actions).toEqual([
       {
         kind: 'message',
-        content: '继续跟进。',
-        mentions: ['123456', '456789'],
-      },
-      {
-        kind: 'message',
-        content: '',
-        mentions: ['789012'],
+        parts: [
+          { kind: 'at', userId: '123456', label: '小祥' },
+          { kind: 'text', content: ' ' },
+          { kind: 'at', userId: '456789', label: '小月' },
+          { kind: 'text', content: ' 看一下' },
+        ],
       },
     ]);
+  });
+
+  it('keeps unmatched, ambiguous, private, and no-space at text as plain text', async () => {
+    const orchestrator = new ReplyOrchestratorService();
+    const context = {
+      routeHint: 'agent' as const,
+      capabilitySnapshot: {
+        canMultiline: true,
+        canMention: true,
+        canVoice: false,
+        canSticker: false,
+        stickerAvailableCount: 0,
+        source: 'test',
+      },
+      responseMessage: createStructuredResponse({
+        decision: 'reply',
+        outbound_messages: [{ type: 'message', content: '@小祥 看一下' }],
+      }),
+    };
+
+    await expect(
+      orchestrator.handle(createGroupTurnInput('提醒一下对方'), createGroupSession([]), context),
+    ).resolves.toMatchObject({
+      status: 'ready',
+      actions: [
+        {
+          kind: 'message',
+          parts: [
+            { kind: 'text', content: '@小祥' },
+            { kind: 'text', content: ' 看一下' },
+          ],
+        },
+      ],
+    });
+
+    await expect(
+      orchestrator.handle(createGroupTurnInput('提醒一下对方'), createGroupSession([
+        { user_id: 123456, card: '小祥', nickname: 'a' },
+        { user_id: 456789, card: '小祥', nickname: 'b' },
+      ]), context),
+    ).resolves.toMatchObject({
+      status: 'ready',
+      actions: [
+        {
+          kind: 'message',
+          parts: [
+            { kind: 'text', content: '@小祥' },
+            { kind: 'text', content: ' 看一下' },
+          ],
+        },
+      ],
+    });
+
+    await expect(
+      orchestrator.handle(createTurnInput('提醒一下对方'), createGroupSession(), context),
+    ).resolves.toMatchObject({
+      status: 'ready',
+      actions: [
+        {
+          kind: 'message',
+          parts: [{ kind: 'text', content: '@小祥 看一下' }],
+        },
+      ],
+    });
+
+    await expect(
+      orchestrator.handle(createGroupTurnInput('提醒一下对方'), createGroupSession([
+        { user_id: 123456, card: '小祥', nickname: '小祥' },
+      ]), {
+        ...context,
+        responseMessage: createStructuredResponse({
+          decision: 'reply',
+          outbound_messages: [{ type: 'message', content: '@小祥看一下' }],
+        }),
+      }),
+    ).resolves.toMatchObject({
+      status: 'ready',
+      actions: [
+        {
+          kind: 'message',
+          parts: [{ kind: 'text', content: '@小祥看一下' }],
+        },
+      ],
+    });
   });
 
   it('resolves structured block content as a dedicated action', async () => {
@@ -358,11 +453,11 @@ describe('reply pipeline v3', () => {
     expect(ready.reply).toEqual({
       decision: 'reply',
       outbound_messages: [
-        { type: 'structured_block', content: '- 牛奶\n1. 面包' },
+        { type: 'structured_block', content: '- 牛奶\n2. 面包' },
       ],
     });
     expect(ready.actions).toEqual([
-      { kind: 'structured_block', content: '- 牛奶\n1. 面包' },
+      { kind: 'structured_block', content: '- 牛奶\n2. 面包' },
     ]);
   });
 
@@ -414,7 +509,7 @@ describe('reply pipeline v3', () => {
       responseMessage: createStructuredResponse({
         decision: 'reply',
         outbound_messages: [
-          { type: 'message', content: 'liuliu00 目前 rating 896，段位 newbie。', mentions: [] },
+          { type: 'message', content: 'liuliu00 目前 rating 896，段位 newbie。' },
           { type: 'image', assetRef: 'https://example.com/cf.png', alt: 'liuliu00 的 Codeforces 分数卡' },
         ],
       }),
@@ -427,13 +522,13 @@ describe('reply pipeline v3', () => {
     expect(ready.reply).toEqual({
       decision: 'reply',
       outbound_messages: [
-        { type: 'message', content: 'liuliu00 目前 rating 896，段位 newbie。', mentions: [] },
+        { type: 'message', content: 'liuliu00 目前 rating 896，段位 newbie。' },
         { type: 'image', assetRef: 'https://example.com/cf.png', alt: 'liuliu00 的 Codeforces 分数卡' },
       ],
     });
     expect(ready.actions).toEqual([
       { kind: 'image', assetRef: 'https://example.com/cf.png', alt: 'liuliu00 的 Codeforces 分数卡' },
-      { kind: 'message', content: 'liuliu00 目前 rating 896，段位 newbie。', mentions: [] },
+      { kind: 'message', parts: [{ kind: 'text', content: 'liuliu00 目前 rating 896，段位 newbie。' }] },
     ]);
   });
 
@@ -451,7 +546,7 @@ describe('reply pipeline v3', () => {
       responseMessage: createStructuredResponse({
         decision: 'reply',
         outbound_messages: [
-          { type: 'message', content: '# 标题\n- 第一项\n2. 第二项', mentions: [] },
+          { type: 'message', content: '# 标题\n- 第一项\n2. 第二项' },
         ],
       }),
     });
@@ -463,11 +558,11 @@ describe('reply pipeline v3', () => {
     expect(ready.reply).toEqual({
       decision: 'reply',
       outbound_messages: [
-        { type: 'message', content: '标题\n第一项\n第二项', mentions: [] },
+        { type: 'message', content: '标题\n第一项\n第二项' },
       ],
     });
     expect(ready.actions).toEqual([
-      { kind: 'message', content: '标题\n第一项\n第二项', mentions: [] },
+      { kind: 'message', parts: [{ kind: 'text', content: '标题\n第一项\n第二项' }] },
     ]);
   });
 
@@ -492,14 +587,14 @@ describe('reply pipeline v3', () => {
         routeHint: 'agent',
         responseMessage: createStructuredResponse({
           decision: 'reply',
-          outbound_messages: [{ type: 'message', content: '', mentions: [] }],
+          outbound_messages: [{ type: 'message', content: '' }],
         }),
       }),
     ).resolves.toMatchObject({
       status: 'ready',
       reply: {
         decision: 'reply',
-        outbound_messages: [{ type: 'message', content: '', mentions: [] }],
+        outbound_messages: [{ type: 'message', content: '' }],
       },
       actions: [{ kind: 'no_reply' }],
     });
@@ -513,14 +608,14 @@ describe('reply pipeline v3', () => {
         routeHint: 'agent',
         responseMessage: createStructuredResponse({
           decision: 'reply',
-          outbound_messages: [{ type: 'message', content: '收到。', mentions: [] }],
+          outbound_messages: [{ type: 'message', content: '收到。' }],
         }),
       }),
     ).resolves.toMatchObject({
       status: 'ready',
       reply: {
         decision: 'reply',
-        outbound_messages: [{ type: 'message', content: '收到。', mentions: [] }],
+        outbound_messages: [{ type: 'message', content: '收到。' }],
       },
     });
 
@@ -551,7 +646,6 @@ describe('reply pipeline v3', () => {
             'CHAT_REPLY_V1 abc12345',
             'DECISION reply',
             'BEGIN message',
-            'MENTIONS none',
             'CONTENT',
             '|收到。',
             'END',
@@ -563,14 +657,13 @@ describe('reply pipeline v3', () => {
       status: 'ready',
       reply: {
         decision: 'reply',
-        outbound_messages: [{ type: 'message', content: '收到。', mentions: [] }],
+        outbound_messages: [{ type: 'message', content: '收到。' }],
       },
-      actions: [{ kind: 'message', content: '收到。', mentions: [] }],
+      actions: [{ kind: 'message', parts: [{ kind: 'text', content: '收到。' }] }],
       assistantHistoryText: [
         'CHAT_REPLY_V1 history',
         'DECISION reply',
         'BEGIN message',
-        'MENTIONS none',
         'CONTENT',
         '|收到。',
         'END',
@@ -591,7 +684,6 @@ describe('reply pipeline v3', () => {
             'CHAT_REPLY_V1 a1b2c3d4',
             'DECISION reply',
             'BEGIN message',
-            'MENTIONS none',
             'CONTENT',
             '|你——急性子，嘴快，爱挑刺，但也知道什么时候该收手。',
             '',
@@ -617,7 +709,6 @@ describe('reply pipeline v3', () => {
               '',
               '不算坏人。',
             ].join('\n'),
-            mentions: [],
           },
         ],
       },
@@ -656,7 +747,6 @@ describe('reply pipeline v3', () => {
         'CHAT_REPLY_V1 history',
         'DECISION reply',
         'BEGIN message',
-        'MENTIONS none',
         'CONTENT',
         '|篮球……国一？',
         '',
@@ -674,7 +764,6 @@ describe('reply pipeline v3', () => {
       outbound_messages: [
         {
           type: 'message',
-          mentions: [],
           content: [
             '篮球……国一？',
             '',
@@ -811,7 +900,7 @@ describe('reply pipeline v3', () => {
     ).rejects.toThrow('voice output but voice capability is unavailable');
   });
 
-  it('rejects message mentions with non-numeric user ids', async () => {
+  it('rejects obsolete message mentions fields', async () => {
     const orchestrator = new ReplyOrchestratorService();
 
     await expect(
@@ -822,6 +911,6 @@ describe('reply pipeline v3', () => {
           outbound_messages: [{ type: 'message', content: 'hi', mentions: ['u1'] }],
         }),
       }),
-    ).rejects.toThrow('outbound_messages.0.mentions.0');
+    ).rejects.toThrow('outbound_messages.0 Unrecognized key');
   });
 });

@@ -29,8 +29,6 @@ const UNORDERED_LIST_PREFIX_PATTERN = /^(\s*)[-*+]\s+/;
 const ORDERED_LIST_PREFIX_PATTERN = /^(\s*)(\d+)[.)]\s+/;
 const XML_MENTION_TOKEN_PATTERN = /<at\b[\s\S]*?\/>/gi;
 const CQ_MENTION_TOKEN_PATTERN = /\[CQ:at,[^\]]+\]/gi;
-const MANUAL_MENTION_TOKEN_PATTERN =
-  /(^|[\s\u3000,，。.!！？?;；:：([{<《【“"'`])[@＠][\p{L}\p{N}_-]+/gu;
 
 type AsyncTask<T> = () => Promise<T>;
 
@@ -74,8 +72,7 @@ export type OutboundMessageSegment =
     }
   | {
       kind: 'message-block';
-      content: string;
-      mentions: string[];
+      parts: ReplyMessagePart[];
       raw: string;
     }
   | {
@@ -101,8 +98,7 @@ export type StructuredReplyTextKind =
 export type ReplyTransportSegment =
   | {
       kind: 'message';
-      content: string;
-      mentions: string[];
+      parts: ReplyMessagePart[];
     }
   | {
       kind: 'structured_block';
@@ -123,6 +119,17 @@ export interface ReplyTransportPlan {
 }
 
 export type BotMessageContent = string | ReturnType<typeof h> | Array<ReturnType<typeof h>>;
+
+export type ReplyMessagePart =
+  | {
+      kind: 'text';
+      content: string;
+    }
+  | {
+      kind: 'at';
+      userId: string;
+      label?: string;
+    };
 
 export type BotMessageSender = {
   sendMessage: (
@@ -315,20 +322,6 @@ function sanitizeMentionText(text: string): string {
   return text.replace(/\r\n?/g, '\n');
 }
 
-function normalizeMessageMentionIds(mentions: string[] | undefined): string[] {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-
-  for (const value of mentions ?? []) {
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    normalized.push(trimmed);
-  }
-
-  return normalized;
-}
-
 export function normalizeMention(mention: ReplyMention): ReplyMention | null {
   const userId = mention.userId.trim();
   if (!userId) return null;
@@ -354,21 +347,69 @@ export function renderMentionVisibleText(mention: ReplyMention): string {
   return normalized.content ? `@${normalized.userId} ${normalized.content}` : `@${normalized.userId}`;
 }
 
-export function renderMessageVisibleText(message: { content: string; mentions?: string[] }): string {
-  const mentions = normalizeMessageMentionIds(message.mentions)
-    .map((userId) => `@${userId}`);
-  const content = sanitizeStructuredReplyText(message.content, 'message');
-  const parts = [...mentions, content].filter((value) => value.trim().length > 0);
-  return parts.join(' ').trim();
+function normalizeReplyMessageParts(parts: ReplyMessagePart[]): ReplyMessagePart[] {
+  const normalized: ReplyMessagePart[] = [];
+
+  for (const part of parts) {
+    if (part.kind === 'at') {
+      const userId = part.userId.trim();
+      if (!userId) continue;
+      normalized.push({
+        kind: 'at',
+        userId,
+        ...(part.label?.trim() ? { label: part.label.trim() } : {}),
+      });
+      continue;
+    }
+
+    const content = sanitizeReplyMessagePartText(part.content);
+    if (!content) continue;
+    const previous = normalized[normalized.length - 1];
+    if (previous?.kind === 'text') {
+      previous.content = `${previous.content}${content}`;
+    } else {
+      normalized.push({ kind: 'text', content });
+    }
+  }
+
+  return normalized;
 }
 
-export function renderModelFacingMessageText(message: { content: string; mentions?: string[] }): string {
-  const mentions = normalizeMessageMentionIds(message.mentions);
-  const content = sanitizeStructuredReplyText(message.content, 'message');
-  if (content || !mentions.length) {
-    return content;
-  }
-  return `（提及用户：${mentions.join('、')}）`;
+function sanitizeReplyMessagePartText(content: string): string {
+  const normalized = normalizeLineEndings(content);
+  const leading = normalized.match(/^[ \t\u3000]*/u)?.[0] ?? '';
+  const trailing = normalized.match(/[ \t\u3000]*$/u)?.[0] ?? '';
+  const coreStart = leading.length;
+  const coreEnd = normalized.length - trailing.length;
+  const core = coreEnd > coreStart ? normalized.slice(coreStart, coreEnd) : '';
+  if (!core) return leading || trailing;
+  return `${leading}${normalizeMessageBlockContent(core)}${trailing}`;
+}
+
+function renderReplyMessagePartsVisibleText(parts: ReplyMessagePart[]): string {
+  return normalizeReplyMessageParts(parts)
+    .map((part) => (part.kind === 'at' ? `@${part.userId}` : part.content))
+    .join('')
+    .trim();
+}
+
+export function renderMessageVisibleText(message: { parts: ReplyMessagePart[] }): string {
+  return renderReplyMessagePartsVisibleText(message.parts);
+}
+
+export function renderModelFacingMessageText(message: { parts: ReplyMessagePart[] }): string {
+  const parts = normalizeReplyMessageParts(message.parts);
+  const text = parts
+    .filter((part): part is Extract<ReplyMessagePart, { kind: 'text' }> => part.kind === 'text')
+    .map((part) => part.content)
+    .join('')
+    .trim();
+  if (text) return text;
+
+  const mentionedIds = parts
+    .filter((part): part is Extract<ReplyMessagePart, { kind: 'at' }> => part.kind === 'at')
+    .map((part) => part.userId);
+  return mentionedIds.length ? `（提及用户：${mentionedIds.join('、')}）` : '';
 }
 
 export function createMentionMessageContent(
@@ -384,18 +425,12 @@ export function createMentionMessageContent(
   return [h.at(normalized.userId), h.text(`${prefix}${normalized.content}`)];
 }
 
-export function createMessageMessageContent(message: { content: string; mentions?: string[] }): BotMessageContent {
-  const normalizedMentions = normalizeMessageMentionIds(message.mentions);
-  const content = sanitizeStructuredReplyText(message.content, 'message');
-  if (!normalizedMentions.length) {
-    return h.text(content);
-  }
+export function createMessageMessageContent(message: { parts: ReplyMessagePart[] }): BotMessageContent {
+  const parts = normalizeReplyMessageParts(message.parts);
+  if (!parts.length) return h.text('');
 
-  const elements = normalizedMentions.map((userId) => h.at(userId));
-  if (content) {
-    elements.push(h.text(` ${content}`));
-  }
-  return elements;
+  const elements = parts.map((part) => (part.kind === 'at' ? h.at(part.userId) : h.text(part.content)));
+  return elements.length === 1 ? elements[0]! : elements;
 }
 
 export function createQuotedMessageContent(content: BotMessageContent, targetMessageId?: string | null): BotMessageContent {
@@ -555,7 +590,6 @@ function stripManualMentionTokens(message: string): string {
   return message
     .replace(XML_MENTION_TOKEN_PATTERN, ' ')
     .replace(CQ_MENTION_TOKEN_PATTERN, ' ')
-    .replace(MANUAL_MENTION_TOKEN_PATTERN, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/[ \t]{2,}/g, ' ')
@@ -577,6 +611,37 @@ export function createTextOnlyOutboundMessagePlan(message: unknown): OutboundMes
   };
 }
 
+function splitReplyMessagePartsByLines(parts: ReplyMessagePart[]): ReplyMessagePart[][] {
+  const lines: ReplyMessagePart[][] = [[]];
+
+  const pushText = (content: string) => {
+    const currentLine = lines[lines.length - 1]!;
+    const previous = currentLine[currentLine.length - 1];
+    if (previous?.kind === 'text') {
+      previous.content = `${previous.content}${content}`;
+    } else {
+      currentLine.push({ kind: 'text', content });
+    }
+  };
+
+  for (const part of parts) {
+    if (part.kind === 'at') {
+      lines[lines.length - 1]!.push(part);
+      continue;
+    }
+
+    const chunks = normalizeLineEndings(part.content).split('\n');
+    for (const [index, chunk] of chunks.entries()) {
+      if (index > 0) lines.push([]);
+      if (chunk) pushText(chunk);
+    }
+  }
+
+  return lines
+    .map((line) => normalizeReplyMessageParts(line))
+    .filter((line) => line.some((part) => part.kind === 'at' || (part.kind === 'text' && part.content.trim().length > 0)));
+}
+
 export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan): OutboundMessagePlan {
   const segments: OutboundMessageSegment[] = [];
   const createStructuredRaw = (kind: ReplyTransportSegmentKind, index: number, value: string): string =>
@@ -584,30 +649,30 @@ export function buildOutboundMessagePlanFromReplyPlan(plan: ReplyTransportPlan):
 
   for (const [index, segment] of plan.segments.entries()) {
     if (segment.kind === 'message') {
-      const content = sanitizeStructuredReplyText(segment.content, 'message');
-      const mentions = normalizeMessageMentionIds(segment.mentions);
-      if (!content && !mentions.length) continue;
-      const lines = splitMessageByLines(content);
-      if (!lines.length) {
+      const parts = normalizeReplyMessageParts(segment.parts);
+      if (!parts.length) continue;
+      const lines = splitReplyMessagePartsByLines(parts);
+      if (!lines.length && parts.some((part) => part.kind === 'at')) {
         segments.push({
           kind: 'message-block',
-          content: '',
-          mentions,
-          raw: createStructuredRaw(segment.kind, index, renderMessageVisibleText({ content: '', mentions })),
+          parts,
+          raw: createStructuredRaw(segment.kind, index, renderMessageVisibleText({ parts })),
         });
         continue;
       }
 
-      for (const [lineIndex, line] of lines.entries()) {
-        if (lineIndex === 0 && mentions.length > 0) {
+      for (const [lineIndex, lineParts] of lines.entries()) {
+        if (lineParts.some((part) => part.kind === 'at')) {
           segments.push({
             kind: 'message-block',
-            content: line,
-            mentions,
-            raw: createStructuredRaw(segment.kind, index, renderMessageVisibleText({ content: line, mentions })),
+            parts: lineParts,
+            raw: createStructuredRaw(segment.kind, index, renderMessageVisibleText({ parts: lineParts })),
           });
           continue;
         }
+
+        const line = renderMessageVisibleText({ parts: lineParts });
+        if (!line) continue;
 
         segments.push({
           kind: 'text-line',

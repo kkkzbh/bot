@@ -266,7 +266,6 @@ describe('affinity proactive task prompt and provider adapter', () => {
         {
           type: 'message',
           content: '前面那道缩点题，只要缩完后还能绕回来，原来就该在同一个强连通分量里。',
-          mentions: [],
         },
       ],
     }));
@@ -286,7 +285,7 @@ describe('affinity proactive task prompt and provider adapter', () => {
     }));
     expect(result.transportPlan?.segments[0]).toEqual(expect.objectContaining({
       kind: 'message',
-      content: expect.stringContaining('缩点题'),
+      parts: [{ kind: 'text', content: expect.stringContaining('缩点题') }],
     }));
     const modelMessage = chatluna.chat.mock.calls[0]?.[2] as { additional_kwargs?: Record<string, any> };
     expect(modelMessage.additional_kwargs?.qqbot_final_response_contract).toEqual(expect.objectContaining({

@@ -156,7 +156,7 @@ describe('prompt assembly', () => {
     expect(envelope?.fragments.map((fragment) => fragment.source)).not.toContain('qqbot_reply_capability_snapshot');
     expect(envelope?.fragments.map((fragment) => fragment.source)).toContain('qqbot_structured_reply_contract');
     expect(compiledContent).toContain('speaker_id=<id>');
-    expect(compiledContent).toContain('默认不要使用 `mentions`');
+    expect(compiledContent).toContain('直接在 `message.content` 里写 `@群名片 `');
     expect(compiledContent).toContain('"type": "structured_block"');
     expect(compiledContent).not.toContain('qqbot_reply_chat_style');
     expect(compiledContent).not.toContain('"displayName": "小祥"');

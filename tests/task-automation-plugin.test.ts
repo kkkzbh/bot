@@ -149,6 +149,7 @@ function createHarness(seed: Record<string, Record<string, any>[]> = {}) {
     platform: 'onebot',
     internal: {
       _request: vi.fn(async () => ({ retcode: 0, data: { yes: true } })),
+      getGroupMemberList: vi.fn(async (): Promise<Array<{ user_id: string | number; card?: string; nickname?: string }>> => []),
       canSendRecord: vi.fn(async () => true),
       sendGroupMsg: vi.fn(async () => ['msg-id']),
     },
@@ -544,11 +545,10 @@ describe('task automation tools and execution', () => {
       });
       harness.ctx.chatluna.chat.mockResolvedValueOnce({
         content: [
-          'CHAT_REPLY_V1 abc12345',
-          'DECISION reply',
-          'BEGIN message',
-          'MENTIONS none',
-          'CONTENT',
+	          'CHAT_REPLY_V1 abc12345',
+	          'DECISION reply',
+	          'BEGIN message',
+	          'CONTENT',
           '|自动化执行结果',
           'END',
           'DONE abc12345',
@@ -713,19 +713,21 @@ describe('task automation tools and execution', () => {
     );
   });
 
-  it('sends real mention messages from structured mention output without mentionCreator wrapper', async () => {
+  it('sends real mention messages from inline mention content without mentionCreator wrapper', async () => {
     const harness = createHarness({
       chathub_room: [createRoom({ roomName: '当前群房间' })],
       automation_job: [createJob({ runAt: Date.now() - 1, mentionCreator: 0 })],
     });
+    harness.bot.internal.getGroupMemberList.mockResolvedValueOnce([
+      { user_id: 3623807220, card: '刘若希', nickname: '希娃儿' },
+    ]);
     harness.ctx.chatluna.chat.mockResolvedValueOnce({
       content: JSON.stringify({
         decision: 'reply',
         outbound_messages: [
           {
             type: 'message',
-            content: '继续看《Ave Mujica》。',
-            mentions: ['3623807220'],
+            content: '@刘若希 继续看《Ave Mujica》。',
           },
         ],
       }),

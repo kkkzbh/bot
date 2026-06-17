@@ -11,10 +11,13 @@ export interface StructuredReplySchemaOptions {
   voiceOutputLanguage?: VoiceOutputLanguage;
 }
 
-const QQ_USER_ID_PATTERN = '^\\s*\\d+\\s*$';
-
-function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
-  const properties: Record<string, unknown> = {
+const MESSAGE_MESSAGE_SCHEMA = {
+  type: 'object',
+  title: 'MessageItem',
+  description: 'Ordinary chat message.',
+  additionalProperties: false,
+  required: ['type', 'content'],
+  properties: {
     type: {
       title: 'Type',
       type: 'string',
@@ -24,33 +27,10 @@ function buildMessageMessageSchema(options: StructuredReplySchemaOptions) {
     content: {
       title: 'Content',
       type: 'string',
-      description: 'Ordinary conversational plain text for this chat message.',
+      description: 'Ordinary conversational plain text for this chat message. To mention a group member, write @name followed by a space directly in this text.',
     },
-  };
-  const required = ['type', 'content'];
-
-  if (options.canMention !== false) {
-    properties.mentions = {
-      title: 'Mentions',
-      type: 'array',
-      description: 'QQ user IDs to mention in this chat message. Use [] when no mention is needed.',
-      items: {
-        type: 'string',
-        pattern: QQ_USER_ID_PATTERN,
-      },
-    };
-    required.push('mentions');
-  }
-
-  return {
-    type: 'object',
-    title: 'MessageItem',
-    description: 'Ordinary chat message.',
-    additionalProperties: false,
-    required,
-    properties,
-  } as const;
-}
+  },
+} as const;
 
 const STRUCTURED_BLOCK_SCHEMA = {
   type: 'object',
@@ -150,7 +130,7 @@ const MEME_MESSAGE_SCHEMA = {
 
 export function buildStructuredReplyJsonSchema(options: StructuredReplySchemaOptions = {}): Record<string, unknown> {
   const outboundSchemas: Record<string, unknown>[] = [
-    buildMessageMessageSchema(options),
+    MESSAGE_MESSAGE_SCHEMA,
     STRUCTURED_BLOCK_SCHEMA,
   ];
 

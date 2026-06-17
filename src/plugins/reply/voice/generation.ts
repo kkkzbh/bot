@@ -614,8 +614,7 @@ function downgradeVoiceSegmentsToText(plan: ReplyTransportPlan): ReplyTransportP
       segment.kind === 'voice'
         ? {
             kind: 'message',
-            content: segment.content,
-            mentions: [],
+            parts: [{ kind: 'text', content: segment.content }],
           }
         : segment,
     ),
@@ -638,8 +637,7 @@ export function buildReplyTransportPlanFromResolvedActions(actions: ResolvedActi
     if (action.kind === 'message') {
       segments.push({
         kind: 'message' as const,
-        content: action.content,
-        mentions: action.mentions,
+        parts: action.parts,
       });
       continue;
     }
@@ -803,7 +801,6 @@ function buildTextOnlyAssistantHistoryText(
         {
           type: 'message',
           content: normalized,
-          mentions: [],
         },
       ],
     } satisfies StructuredReply,

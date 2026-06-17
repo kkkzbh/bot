@@ -24,9 +24,8 @@ describe('CHAT_REPLY_V1 protocol', () => {
       'CHAT_REPLY_V1 abc12345',
       'DECISION reply',
       'BEGIN message',
-      'MENTIONS 123,456',
       'CONTENT',
-      '|第一条',
+      '|@123 第一条',
       '|第二行',
       'END',
       'BEGIN structured_block',
@@ -54,7 +53,7 @@ describe('CHAT_REPLY_V1 protocol', () => {
     expect(reply).toEqual({
       decision: 'reply',
       outbound_messages: [
-        { type: 'message', mentions: ['123', '456'], content: '第一条\n第二行' },
+        { type: 'message', content: '@123 第一条\n第二行' },
         { type: 'structured_block', content: '```ts\nconsole.log("END")\n```' },
         { type: 'image', assetRef: 'asset:tool:cf-card:01ABC', alt: 'Codeforces 用户分数卡' },
         { type: 'meme', content: '无语地看对方一眼' },
@@ -68,9 +67,8 @@ describe('CHAT_REPLY_V1 protocol', () => {
       'CHAT_REPLY_V1 abc12345',
       'DECISION reply',
       'BEGIN message',
-      'MENTIONS 123,456',
       'CONTENT',
-      '|第一条',
+      '|@123 第一条',
       'END message',
       'BEGIN structured_block',
       'CONTENT',
@@ -97,7 +95,7 @@ describe('CHAT_REPLY_V1 protocol', () => {
     expect(reply).toEqual({
       decision: 'reply',
       outbound_messages: [
-        { type: 'message', mentions: ['123', '456'], content: '第一条' },
+        { type: 'message', content: '@123 第一条' },
         { type: 'structured_block', content: '```ts\nconsole.log("END")\n```' },
         { type: 'image', assetRef: 'asset:tool:cf-card:01ABC', alt: 'Codeforces 用户分数卡' },
         { type: 'meme', content: '无语地看对方一眼' },
@@ -116,7 +114,6 @@ describe('CHAT_REPLY_V1 protocol', () => {
       'END',
       'END voice',
       'BEGIN message',
-      'MENTIONS none',
       'CONTENT',
       '|刚才语音里说的是早上好。',
       'END message',
@@ -125,7 +122,7 @@ describe('CHAT_REPLY_V1 protocol', () => {
       decision: 'reply',
       outbound_messages: [
         { type: 'voice', content: 'おはようございます。' },
-        { type: 'message', mentions: [], content: '刚才语音里说的是早上好。' },
+        { type: 'message', content: '刚才语音里说的是早上好。' },
       ],
     });
   });
@@ -152,7 +149,6 @@ describe('CHAT_REPLY_V1 protocol', () => {
       'CHAT_REPLY_V1 abc12345',
       'DECISION reply',
       'BEGIN message',
-      'MENTIONS none',
       'CONTENT',
       '|第一段',
       '',
@@ -164,7 +160,7 @@ describe('CHAT_REPLY_V1 protocol', () => {
     ].join('\n'))).toEqual({
       decision: 'reply',
       outbound_messages: [
-        { type: 'message', mentions: [], content: '第一段\n\n第二段\n\n第三段' },
+        { type: 'message', content: '第一段\n\n第二段\n\n第三段' },
       ],
     });
   });
@@ -174,7 +170,6 @@ describe('CHAT_REPLY_V1 protocol', () => {
       'CHAT_REPLY_V1 history',
       'DECISION reply',
       'BEGIN message',
-      'MENTIONS none',
       'CONTENT',
       '|篮球……国一？',
       '',
@@ -188,7 +183,6 @@ describe('CHAT_REPLY_V1 protocol', () => {
       outbound_messages: [
         {
           type: 'message',
-          mentions: [],
           content: [
             '篮球……国一？',
             '',
@@ -205,7 +199,7 @@ describe('CHAT_REPLY_V1 protocol', () => {
     const original = {
       decision: 'reply' as const,
       outbound_messages: [
-        { type: 'message' as const, content: '一\n二\nEND', mentions: [] },
+        { type: 'message' as const, content: '一\n二\nEND' },
         { type: 'meme' as const, content: '轻轻叹气' },
       ],
     };
@@ -213,7 +207,7 @@ describe('CHAT_REPLY_V1 protocol', () => {
     expect(parser.parse(encodeChatReplyV1(original, 'abc12345'))).toEqual(original);
   });
 
-  it('treats omitted message mentions as none', () => {
+  it('parses message blocks without a legacy mention header', () => {
     expect(parser.parse([
       'CHAT_REPLY_V1 abc12345',
       'DECISION reply',
@@ -227,7 +221,6 @@ describe('CHAT_REPLY_V1 protocol', () => {
       outbound_messages: [
         {
           type: 'message',
-          mentions: [],
           content: '在我看来算是个不错的成绩筹码',
         },
       ],
@@ -239,10 +232,10 @@ describe('CHAT_REPLY_V1 protocol', () => {
     ['NONCE_MISMATCH', 'CHAT_REPLY_V1 abc12345\nDECISION no_reply\nDONE zzz99999'],
     ['UNKNOWN_COMMAND', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nhello\nDONE abc12345'],
     ['UNKNOWN_BLOCK_TYPE', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nBEGIN poll\nEND\nDONE abc12345'],
-    ['DUPLICATE_FIELD', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nBEGIN message\nMENTIONS none\nMENTIONS none\nCONTENT\n|hi\nEND\nDONE abc12345'],
-    ['UNTERMINATED_BLOCK', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nBEGIN message\nMENTIONS none\nDONE abc12345'],
+    ['DUPLICATE_FIELD', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nBEGIN image\nASSET_REF asset:a\nASSET_REF asset:b\nALT\n|hi\nEND\nDONE abc12345'],
+    ['UNTERMINATED_BLOCK', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nBEGIN message\nCONTENT\n|hi\nDONE abc12345'],
     ['TRAILING_TEXT_AFTER_DONE', 'CHAT_REPLY_V1 abc12345\nDECISION no_reply\nDONE abc12345\nextra'],
-    ['BAD_MENTION_LIST', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nBEGIN message\nMENTIONS u1\nCONTENT\n|hi\nEND\nDONE abc12345'],
+    ['UNKNOWN_COMMAND', 'CHAT_REPLY_V1 abc12345\nDECISION reply\nBEGIN message\nMENTIONS u1\nCONTENT\n|hi\nEND\nDONE abc12345'],
   ])('rejects invalid protocol with %s', (code, text) => {
     expect(() => parser.parse(text)).toThrow(ChatReplyV1ParseError);
     try {
@@ -257,7 +250,6 @@ describe('CHAT_REPLY_V1 protocol', () => {
       'CHAT_REPLY_V1 abc12345',
       'DECISION no_reply',
       'BEGIN message',
-      'MENTIONS none',
       'CONTENT',
       '|hi',
       'END',

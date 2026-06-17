@@ -209,7 +209,7 @@ function createHarness(options: {
   const chat = options.chat ?? vi.fn(async () => options.chatResponse ?? ({
     content: JSON.stringify({
       decision: 'reply',
-      outbound_messages: [{ type: 'message', content: RANDOM_MESSAGE, mentions: [] }],
+      outbound_messages: [{ type: 'message', content: RANDOM_MESSAGE }],
     }),
     additional_kwargs: {},
   }));
@@ -267,7 +267,7 @@ describe('affinity service random history sync', () => {
     const chat = vi.fn(async () => ({
       content: JSON.stringify({
         decision: 'reply',
-        outbound_messages: [{ type: 'message', content: RANDOM_MESSAGE, mentions: [] }],
+        outbound_messages: [{ type: 'message', content: RANDOM_MESSAGE }],
       }),
       additional_kwargs: {},
     }));
@@ -551,7 +551,6 @@ describe('affinity service random history sync', () => {
             {
               type: 'message',
               content: declarativeMessage,
-              mentions: [],
             },
           ],
         }),

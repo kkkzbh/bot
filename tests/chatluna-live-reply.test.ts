@@ -134,7 +134,6 @@ function encodeChatReplyV1History(content: string): string {
     'CHAT_REPLY_V1 history',
     'DECISION reply',
     'BEGIN message',
-    'MENTIONS none',
     'CONTENT',
     ...content.split('\n').map((line) => `|${line}`),
     'END',
@@ -195,13 +194,12 @@ describe('research reply history compatibility', () => {
       messages: [],
     });
     const rawOutputs = [
-      ['CHAT_REPLY_V1 abc12341', 'DECISION reply', 'BEGIN message', 'MENTIONS none', 'CONTENT', '|第 1 轮回复', 'END', 'DONE abc12341'].join('\n'),
-      ['CHAT_REPLY_V1 abc12342', 'DECISION reply', 'BEGIN message', 'MENTIONS none', 'CONTENT', '|第 2 轮回复', 'END', 'DONE abc12342'].join('\n'),
+      ['CHAT_REPLY_V1 abc12341', 'DECISION reply', 'BEGIN message', 'CONTENT', '|第 1 轮回复', 'END', 'DONE abc12341'].join('\n'),
+      ['CHAT_REPLY_V1 abc12342', 'DECISION reply', 'BEGIN message', 'CONTENT', '|第 2 轮回复', 'END', 'DONE abc12342'].join('\n'),
       [
         'CHAT_REPLY_V1 history',
         'DECISION reply',
         'BEGIN message',
-        'MENTIONS none',
         'CONTENT',
         '|篮球……国一？',
         '',
@@ -211,8 +209,8 @@ describe('research reply history compatibility', () => {
         'END',
         'DONE history',
       ].join('\n'),
-      ['CHAT_REPLY_V1 abc12344', 'DECISION reply', 'BEGIN message', 'MENTIONS none', 'CONTENT', '|第 4 轮回复', 'END', 'DONE abc12344'].join('\n'),
-      ['CHAT_REPLY_V1 abc12345', 'DECISION reply', 'BEGIN message', 'MENTIONS none', 'CONTENT', '|第 5 轮回复', 'END', 'DONE abc12345'].join('\n'),
+      ['CHAT_REPLY_V1 abc12344', 'DECISION reply', 'BEGIN message', 'CONTENT', '|第 4 轮回复', 'END', 'DONE abc12344'].join('\n'),
+      ['CHAT_REPLY_V1 abc12345', 'DECISION reply', 'BEGIN message', 'CONTENT', '|第 5 轮回复', 'END', 'DONE abc12345'].join('\n'),
     ];
 
     for (let turn = 1; turn <= rawOutputs.length; turn += 1) {

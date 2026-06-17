@@ -105,12 +105,12 @@ describe('/cf reply scenarios', () => {
     const outboundMessages: StructuredReplyMessage[] =
       scenario.name === 'model orders text before image but cf image still sends first'
         ? [
-            { type: 'message', content: scenario.evaluation, mentions: [] },
+            { type: 'message', content: scenario.evaluation },
             scenario.image,
           ]
         : [
             scenario.image,
-            { type: 'message', content: scenario.evaluation, mentions: [] },
+            { type: 'message', content: scenario.evaluation },
           ];
     const reply: StructuredReply = {
       decision: 'reply',
@@ -143,8 +143,7 @@ describe('/cf reply scenarios', () => {
       },
       {
         kind: 'message',
-        content: scenario.evaluation,
-        mentions: [],
+        parts: [{ kind: 'text', content: scenario.evaluation }],
       },
     ]);
   });
