@@ -244,6 +244,9 @@ function createAttachmentService(records: QqbotAttachmentRecord[], options?: {
     projectionTextChars: 1200,
     replayTextChars: 4000,
     replayMaxRefs: 5,
+    voiceAsrBaseUrl: '',
+    voiceAsrApiKey: '',
+    voiceTranscribeTimeoutMs: 45_000,
   };
 
   return {
