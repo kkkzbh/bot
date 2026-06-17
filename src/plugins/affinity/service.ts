@@ -166,6 +166,16 @@ type RandomGenerationWithTransport = AffinityRandomGenerationResult & {
   deliveryHistoryText?: string | null;
 };
 
+type ProactiveSourceRoomResolution =
+  | {
+      sourceRoom: ChatLunaRoomRecord;
+      skipReason: null;
+    }
+  | {
+      sourceRoom: null;
+      skipReason: string;
+    };
+
 const RANDOM_MEMORY_TTL_MS = 45 * 24 * 60 * 60 * 1000;
 const RANDOM_OPEN_THREAD_TTL_MS = 3 * 60 * 60 * 1000;
 const RECENT_CONTEXT_LIMIT = 18;
@@ -520,12 +530,14 @@ export class AffinityService implements AffinityServiceLike {
     plan: AffinityRandomPlanRecord;
   }): Promise<ChatLunaHistoryRoom> {
     const conversationId = `affinity-proactive-${randomUUID()}`;
+    const profile = mainChatRuntimeState.getProfile();
     const room: ChatLunaHistoryRoom = {
       ...toChatLunaHistoryRoom(args.sourceRoom, normalizeText(args.sourceRoom.conversationId) || conversationId)!,
       roomId: await this.getNextChatLunaRoomId(),
       roomName: `affinity-random-${args.plan.id}`,
       roomMasterId: normalizeText(args.session.userId) || 'affinity-proactive',
       conversationId,
+      model: normalizeText(profile.canonicalModel) || normalizeText(args.sourceRoom.model),
       chatMode: 'plugin',
       autoUpdate: false,
       updatedTime: new Date(),
@@ -562,6 +574,100 @@ export class AffinityService implements AffinityServiceLike {
       await this.database.remove('chathub_conversation', { id: room.conversationId });
     }
     await this.database.remove('chathub_room', { roomId: room.roomId });
+  }
+
+  private scoreProactiveFallbackRoom(room: ChatLunaRoomRecord, bot: AffinityBotLike): number {
+    const profile = mainChatRuntimeState.getProfile();
+    let score = 0;
+    if (normalizeText(room.preset) === 'sakiko') score += 100;
+    if (normalizeText(room.model) === normalizeText(profile.canonicalModel)) score += 50;
+    if (normalizeText(room.chatMode) === 'plugin') score += 25;
+    if (normalizeChatLunaVisibility(room.visibility) === 'template_clone') score += 15;
+    if (normalizeText(room.roomMasterId) === normalizeText(bot.selfId)) score += 5;
+    if (normalizeText(room.conversationId)) score += 3;
+    return score;
+  }
+
+  private async findFallbackProactiveSourceRoom(bot: AffinityBotLike): Promise<ChatLunaRoomRecord | null> {
+    const rooms = await this.database.get('chathub_room', {} as Record<string, never>) as ChatLunaRoomRecord[];
+    const candidates = rooms.filter((room) => (
+      normalizeText(room.preset) ||
+      normalizeText(room.model) ||
+      normalizeText(room.conversationId)
+    ));
+    if (!candidates.length) return null;
+    return candidates
+      .sort((left, right) => this.scoreProactiveFallbackRoom(right, bot) - this.scoreProactiveFallbackRoom(left, bot))
+      [0] ?? null;
+  }
+
+  private createSyntheticProactiveSourceRoom(args: {
+    plan: AffinityRandomPlanRecord;
+    scope: AffinityScopeConfigRecord;
+    bot: AffinityBotLike;
+  }): ChatLunaRoomRecord {
+    const profile = mainChatRuntimeState.getProfile();
+    return {
+      roomId: 0,
+      roomName: `affinity-manual-${args.scope.scopeKind}-${args.scope.scopeId}`,
+      conversationId: null,
+      roomMasterId:
+        normalizeText(args.plan.botSelfId) ||
+        normalizeText(args.scope.botSelfId) ||
+        normalizeText(args.bot.selfId) ||
+        'affinity-proactive',
+      visibility: 'template_clone',
+      preset: 'sakiko',
+      model: normalizeText(profile.canonicalModel),
+      chatMode: 'plugin',
+      password: null,
+      autoUpdate: false,
+      updatedTime: new Date(),
+    };
+  }
+
+  private async resolveProactiveSourceRoom(args: {
+    plan: AffinityRandomPlanRecord;
+    scope: AffinityScopeConfigRecord;
+    bot: AffinityBotLike;
+    manual: boolean;
+  }): Promise<ProactiveSourceRoomResolution> {
+    const targetConversationId = normalizeText(args.plan.conversationId) || normalizeText(args.scope.conversationId) || null;
+    if (targetConversationId) {
+      const [sourceRoom] = await this.database.get('chathub_room', { conversationId: targetConversationId }) as ChatLunaRoomRecord[];
+      if (sourceRoom) {
+        return {
+          sourceRoom,
+          skipReason: null,
+        };
+      }
+      if (!args.manual) {
+        return {
+          sourceRoom: null,
+          skipReason: 'room_unavailable',
+        };
+      }
+    }
+
+    if (!args.manual) {
+      return {
+        sourceRoom: null,
+        skipReason: 'missing_conversation_id',
+      };
+    }
+
+    const fallbackRoom = await this.findFallbackProactiveSourceRoom(args.bot);
+    if (fallbackRoom) {
+      return {
+        sourceRoom: fallbackRoom,
+        skipReason: null,
+      };
+    }
+
+    return {
+      sourceRoom: this.createSyntheticProactiveSourceRoom(args),
+      skipReason: null,
+    };
   }
 
   setScheduleRefreshCallback(callback: () => void): void {
@@ -1427,25 +1533,29 @@ export class AffinityService implements AffinityServiceLike {
     bot: AffinityBotLike;
     input: AffinityRandomGenerationInput;
     channelId: string;
+    manual: boolean;
   }): Promise<AffinityProactiveGenerationResult> {
     const chatluna = this.getChatLuna();
-    const conversationId = normalizeText(args.plan.conversationId) || normalizeText(args.scope.conversationId);
-    if (!conversationId) return this.createProactiveSkipGeneration('missing_conversation_id');
-    const [sourceRoom] = await this.database.get('chathub_room', { conversationId }) as ChatLunaRoomRecord[];
-    if (!sourceRoom) return this.createProactiveSkipGeneration('room_unavailable');
+    const source = await this.resolveProactiveSourceRoom({
+      plan: args.plan,
+      scope: args.scope,
+      bot: args.bot,
+      manual: args.manual,
+    });
+    if (!source.sourceRoom) return this.createProactiveSkipGeneration(source.skipReason);
 
     const session = this.createProactiveSession({
       bot: args.bot,
       scope: args.scope,
       plan: args.plan,
       channelId: args.channelId,
-      sourceRoom,
+      sourceRoom: source.sourceRoom,
     });
 
     let tempRoom: ChatLunaHistoryRoom | null = null;
     try {
       tempRoom = await this.createTemporaryProactiveRoom({
-        sourceRoom,
+        sourceRoom: source.sourceRoom,
         session,
         plan: args.plan,
       });
@@ -1592,6 +1702,7 @@ export class AffinityService implements AffinityServiceLike {
       bot,
       input: prepared.input,
       channelId,
+      manual,
     });
     if (!generation.shouldSend || !generation.message) {
       await this.writeAudit('random_message_generation_skipped', {

@@ -234,7 +234,7 @@ describe('affinity service random history sync', () => {
     clearPromptAssemblyTurn('conv-affinity');
   });
 
-  it('creates a manual random plan without adding a whitelist scope and skips without ChatLuna context', async () => {
+  it('sends a manual random plan for a non-whitelisted group through a temporary ChatLuna room', async () => {
     const db = new MemoryDatabase({
       affinity_config: [{
         id: 1,
@@ -258,14 +258,37 @@ describe('affinity service random history sync', () => {
       platform: 'onebot',
       sendMessage: vi.fn(async () => undefined),
     };
-    const service = new AffinityService(db, () => [bot], () => 0.5, () => undefined);
+    const addMessages = vi.fn(async () => undefined);
+    const query = vi.fn(async () => ({
+      chatHistory: {
+        addMessages,
+      },
+    }));
+    const chat = vi.fn(async () => ({
+      content: JSON.stringify({
+        decision: 'reply',
+        outbound_messages: [{ type: 'message', content: RANDOM_MESSAGE, mentions: [] }],
+      }),
+      additional_kwargs: {},
+    }));
+    const contextManager = {
+      inject: vi.fn(),
+    };
+    const chatluna = {
+      queryInterfaceWrapper: vi.fn(() => ({ query })),
+      chat,
+      contextManager,
+    };
+    const service = new AffinityService(db, () => [bot], () => 0.5, () => chatluna as any);
 
     const result = await service.createManualRandomPlan({
       scopeKind: 'group',
-      scopeId: '829573670',
+      scopeId: '1012912433',
       delayMs: 5000,
       platform: 'onebot',
       botSelfId: 'bot-1',
+      channelId: '1012912433',
+      guildId: '1012912433',
     }, NOW);
 
     expect(result).toEqual({
@@ -278,21 +301,38 @@ describe('affinity service random history sync', () => {
     expect(db.tables.affinity_random_plan[0]).toEqual(expect.objectContaining({
       triggerKind: 'manual',
       scopeKind: 'group',
-      scopeId: '829573670',
+      scopeId: '1012912433',
       status: 'pending',
       scheduledAt: NOW + 5000,
+      conversationId: null,
     }));
     await expect(service.getNextPendingRandomPlanAt(NOW)).resolves.toBe(NOW + 5000);
 
     await service.runDueRandomPlans(NOW + 5000);
 
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(contextManager.inject).toHaveBeenCalledTimes(1);
+    expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+    expect((bot.sendMessage as any).mock.calls[0]?.[0]).toBe('1012912433');
     expect(db.tables.affinity_random_plan[0]).toEqual(expect.objectContaining({
-      status: 'skipped',
-      skipReason: 'missing_conversation_id',
-      messageText: null,
+      status: 'sent',
+      skipReason: null,
+      messageText: RANDOM_MESSAGE,
     }));
-    expect(db.tables.affinity_random_memory).toHaveLength(0);
+    expect(db.tables.affinity_random_memory).toHaveLength(1);
+    expect(addMessages).not.toHaveBeenCalled();
+    expect(chatluna.queryInterfaceWrapper).not.toHaveBeenCalled();
+    const historySkipAudit = db.tables.affinity_audit.find((row) => row.eventType === 'random_history_sync_skipped');
+    expect(parseAuditDetail(historySkipAudit)).toEqual(expect.objectContaining({
+      planId: result.planId,
+      reason: 'missing_conversation_id',
+    }));
+    const sentAudit = db.tables.affinity_audit.find((row) => row.eventType === 'random_plan_sent');
+    expect(parseAuditDetail(sentAudit)).toEqual(expect.objectContaining({
+      planId: result.planId,
+      historySynced: false,
+      historySkipReason: 'missing_conversation_id',
+    }));
   });
 
   it('lets manual plans bypass scope proactive off while scheduled plans stay blocked', async () => {
