@@ -145,7 +145,7 @@ describe('message send utils', () => {
   it('sanitizes structured block content into lightweight plain-text formatting', () => {
     expect(
       sanitizeStructuredReplyText('* 第一项\n2) 第二项\n> 引用', 'structured_block'),
-    ).toBe('- 第一项\n1. 第二项\n引用');
+    ).toBe('- 第一项\n2. 第二项\n引用');
 
     expect(
       sanitizeStructuredReplyText('```ts\nconst answer = 42;\nconsole.log(answer);\n```', 'structured_block'),
@@ -507,8 +507,8 @@ describe('message send utils', () => {
         { kind: 'text-line', content: '第二项', raw: 'reply-plan:message:0:line:2:第二项' },
         {
           kind: 'structured-block',
-          content: '- 第一项\n1. 第二项',
-          raw: 'reply-plan:structured_block:1:- 第一项\n1. 第二项',
+          content: '- 第一项\n2. 第二项',
+          raw: 'reply-plan:structured_block:1:- 第一项\n2. 第二项',
         },
       ],
     });

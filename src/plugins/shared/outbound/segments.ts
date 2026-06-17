@@ -26,7 +26,7 @@ const ALT_EMPHASIS_PATTERN = /(^|[^\w])_([^_\n]+)_(?=[^\w]|$)/g;
 const HEADING_PREFIX_PATTERN = /^\s{0,3}#{1,6}\s+/;
 const BLOCKQUOTE_PREFIX_PATTERN = /^\s{0,3}>\s?/;
 const UNORDERED_LIST_PREFIX_PATTERN = /^(\s*)[-*+]\s+/;
-const ORDERED_LIST_PREFIX_PATTERN = /^\s*\d+[.)]\s+/;
+const ORDERED_LIST_PREFIX_PATTERN = /^(\s*)(\d+)[.)]\s+/;
 const XML_MENTION_TOKEN_PATTERN = /<at\b[\s\S]*?\/>/gi;
 const CQ_MENTION_TOKEN_PATTERN = /\[CQ:at,[^\]]+\]/gi;
 const MANUAL_MENTION_TOKEN_PATTERN =
@@ -527,7 +527,7 @@ function normalizeStructuredBlockContent(rawContent: string): string {
     next = next.replace(HEADING_PREFIX_PATTERN, '');
     next = next.replace(BLOCKQUOTE_PREFIX_PATTERN, '');
     next = next.replace(UNORDERED_LIST_PREFIX_PATTERN, '- ');
-    next = next.replace(ORDERED_LIST_PREFIX_PATTERN, '1. ');
+    next = next.replace(ORDERED_LIST_PREFIX_PATTERN, '$1$2. ');
     return next;
   });
 
