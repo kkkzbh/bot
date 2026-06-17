@@ -6,7 +6,7 @@ import {
   clearPromptAssemblyTurn,
   consumePromptEnvelope,
 } from '../src/plugins/shared/prompt-context/index.js';
-import type { AffinityRandomPlanRecord, AffinityScopeConfigRecord } from '../src/types/affinity.js';
+import type { AffinityEventRecord, AffinityRandomPlanRecord, AffinityScopeConfigRecord } from '../src/types/affinity.js';
 
 vi.mock('koishi', () => {
   class MockLogger {
@@ -228,6 +228,219 @@ function createHarness(options: {
 function parseAuditDetail(row: Row | undefined): Record<string, unknown> {
   return JSON.parse(String(row?.detail ?? '{}')) as Record<string, unknown>;
 }
+
+describe('affinity service panel view', () => {
+  it('builds an initial panel for a new user without writing relationship state or events', async () => {
+    const { db, service } = createHarness();
+    db.tables.affinity_user_state = [];
+    db.tables.affinity_event = [];
+    const session = {
+      platform: 'onebot',
+      userId: 'new-user',
+      bot: { selfId: 'bot-1' },
+    } as any;
+
+    const view = await service.buildPanelView(session, NOW);
+
+    expect(view.userKey).toBe('onebot:new-user');
+    expect(view.stage).toBe('stranger');
+    expect(view.recentEvents[0]).toEqual(expect.objectContaining({
+      title: '尚未留下有效变化',
+    }));
+    expect(db.tables.affinity_user_state).toHaveLength(0);
+    expect(db.tables.affinity_event).toHaveLength(0);
+  });
+
+  it('writes a successful panel command into the matching ChatLuna history as an AI message', async () => {
+    const { db, service, addMessages, chatluna } = createHarness();
+    const userKey = 'onebot:u-1';
+    db.tables.affinity_user_state.push({
+      id: 10,
+      characterId: CHARACTER_ID,
+      userKey,
+      platform: 'onebot',
+      userId: 'u-1',
+      displayName: 'Alice',
+      trust: 43,
+      familiarity: 58,
+      comfort: 36,
+      tension: 18,
+      mood: 'focused',
+      attentionHeat: 30,
+      energy: 72,
+      stage: 'remembered',
+      flags: null,
+      unlockedScenes: null,
+      dailyState: null,
+      weeklyState: null,
+      lastSeenAt: NOW,
+      lastUpdatedAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    db.tables.affinity_event.push({
+      id: 20,
+      characterId: CHARACTER_ID,
+      userKey,
+      scopeKind: 'group',
+      scopeId: '829573670',
+      platform: 'onebot',
+      botSelfId: 'bot-1',
+      channelId: '829573670',
+      guildId: '829573670',
+      conversationId: 'conv-affinity',
+      messageId: 'msg-event',
+      eventType: 'contest_discussion',
+      effectTier: 'progress',
+      route: 'affinity_candidate',
+      confidence: 0.9,
+      reasonCode: 'accepted',
+      deltaJson: JSON.stringify({ trust: 1, familiarity: 1 }),
+      beforeJson: null,
+      afterJson: null,
+      evidence: '不应进入面板 history 的原文',
+      createdAt: NOW - 12 * 60_000,
+    } satisfies AffinityEventRecord);
+    const session = {
+      platform: 'onebot',
+      userId: 'u-1',
+      guildId: '829573670',
+      channelId: '829573670',
+      messageId: 'msg-panel-1',
+      bot: { selfId: 'bot-1' },
+    } as any;
+
+    const view = await service.buildPanelView(session, NOW);
+    const result = await service.syncPanelCommandToChatHistory(session, view);
+
+    expect(result).toEqual({ synced: true, conversationId: 'conv-affinity' });
+    expect(addMessages).toHaveBeenCalledTimes(1);
+    expect(chatluna.queryInterfaceWrapper).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-affinity', roomId: 11 }),
+      true,
+    );
+    const [messages] = addMessages.mock.calls[0];
+    const [message] = messages;
+    expect(message.getType()).toBe('ai');
+    expect(message.id).toBe('affinity-panel-command:msg-panel-1');
+    expect(message.content).toContain('发送了一张好感面板');
+    expect(message.content).toContain('阶段「被记住的人」');
+    expect(message.content).toContain(view.fixedLine);
+    expect(message.content).not.toContain('不应进入面板 history 的原文');
+    expect(message.additional_kwargs.qqbot_affinity_panel_command).toEqual(expect.objectContaining({
+      version: 'v1',
+      characterId: CHARACTER_ID,
+      userKey,
+      scopeKind: 'group',
+      scopeId: '829573670',
+      conversationId: 'conv-affinity',
+      triggerMessageId: 'msg-panel-1',
+      fixedLine: view.fixedLine,
+      imageAlt: '好感面板',
+    }));
+    const syncAudit = db.tables.affinity_audit.find((row) => row.eventType === 'panel_history_synced');
+    expect(parseAuditDetail(syncAudit)).toEqual(expect.objectContaining({
+      conversationId: 'conv-affinity',
+      userKey,
+      fixedLine: view.fixedLine,
+    }));
+  });
+
+  it('records why a panel command cannot be synced when the current scope has no conversation id', async () => {
+    const { db, service, addMessages } = createHarness({
+      scope: { conversationId: null },
+      includeRoom: false,
+    });
+    const session = {
+      platform: 'onebot',
+      userId: 'u-1',
+      guildId: '829573670',
+      channelId: '829573670',
+      messageId: 'msg-panel-missing-conv',
+      bot: { selfId: 'bot-1' },
+    } as any;
+    const view = await service.buildPanelView(session, NOW);
+
+    const result = await service.syncPanelCommandToChatHistory(session, view);
+
+    expect(result).toEqual({ synced: false, reason: 'missing_conversation_id' });
+    expect(addMessages).not.toHaveBeenCalled();
+    const skippedAudit = db.tables.affinity_audit.find((row) => row.eventType === 'panel_history_sync_skipped');
+    expect(parseAuditDetail(skippedAudit)).toEqual(expect.objectContaining({
+      reason: 'missing_conversation_id',
+      fixedLine: view.fixedLine,
+      triggerMessageId: 'msg-panel-missing-conv',
+    }));
+  });
+
+  it('builds panel recent changes from abstract event records without evidence text', async () => {
+    const { db, service } = createHarness();
+    const userKey = 'onebot:u-1';
+    db.tables.affinity_user_state.push({
+      id: 10,
+      characterId: CHARACTER_ID,
+      userKey,
+      platform: 'onebot',
+      userId: 'u-1',
+      displayName: 'Alice',
+      trust: 43,
+      familiarity: 58,
+      comfort: 36,
+      tension: 18,
+      mood: 'focused',
+      attentionHeat: 30,
+      energy: 72,
+      stage: 'remembered',
+      flags: null,
+      unlockedScenes: null,
+      dailyState: null,
+      weeklyState: null,
+      lastSeenAt: NOW,
+      lastUpdatedAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    db.tables.affinity_event.push({
+      id: 20,
+      characterId: CHARACTER_ID,
+      userKey,
+      scopeKind: 'private',
+      scopeId: 'u-1',
+      platform: 'onebot',
+      botSelfId: 'bot-1',
+      channelId: 'u-1',
+      guildId: null,
+      conversationId: 'private-conv',
+      messageId: 'msg-private',
+      eventType: 'boundary_respect',
+      effectTier: 'progress',
+      route: 'affinity_candidate',
+      confidence: 0.9,
+      reasonCode: 'accepted',
+      deltaJson: JSON.stringify({ comfort: 1, tension: -1 }),
+      beforeJson: null,
+      afterJson: null,
+      evidence: '私聊原文不能出现在面板',
+      createdAt: NOW - 12 * 60_000,
+    } satisfies AffinityEventRecord);
+
+    const view = await service.buildPanelView({
+      platform: 'onebot',
+      userId: 'u-1',
+      bot: { selfId: 'bot-1' },
+    } as any, NOW);
+
+    expect(JSON.stringify(view)).not.toContain('私聊原文');
+    expect(view.recentEvents[0]).toEqual(expect.objectContaining({
+      time: '12分钟前',
+      title: '尊重了她没有继续说的部分',
+      effects: [
+        { name: '安心', sign: '+' },
+        { name: '紧张', sign: '-' },
+      ],
+    }));
+  });
+});
 
 describe('affinity service random history sync', () => {
   afterEach(() => {

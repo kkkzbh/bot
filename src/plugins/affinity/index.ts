@@ -2,6 +2,8 @@ import { Context, Logger, Schema, type Session } from 'koishi';
 import type { AffinityServiceLike } from '../../types/affinity.js';
 import { AffinityService, getSessionAffinityResult, type AffinityDatabaseLike } from './service.js';
 import { AffinityRandomPlanScheduler } from './scheduler.js';
+import { isAffinityPanelCommandSession } from './command.js';
+import { renderAffinityPanelImage, type AffinityPanelPuppeteerLike } from './panel.js';
 export {
   AffinityService,
   affinityMutationResponse,
@@ -15,13 +17,14 @@ export {
   resolveAnalysisModelConfig,
   selectRandomCount,
 } from './public.js';
+export { isAffinityPanelCommandSession } from './command.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { CONTINUE: number };
 };
 
 export const name = 'affinity';
-export const inject = { required: ['database'], optional: ['chatluna'] } as const;
+export const inject = { required: ['database', 'puppeteer'], optional: ['chatluna'] } as const;
 
 const logger = new Logger(name);
 const allowReplyResolverName = 'qqbot-affinity';
@@ -74,7 +77,37 @@ type ContextWithAffinity = Context & {
     sendMessage: (...args: any[]) => Promise<unknown>;
   }>;
   affinity?: AffinityServiceLike;
+  puppeteer: AffinityPanelPuppeteerLike;
 };
+
+type CommandRegistrationLike = {
+  action(callback: (argv: { session?: Session }) => unknown): unknown;
+};
+
+type AffinityCommandContextLike = {
+  command(name: string, description?: string): CommandRegistrationLike;
+  puppeteer: AffinityPanelPuppeteerLike;
+};
+
+export function registerAffinityPanelCommand(
+  ctx: AffinityCommandContextLike,
+  service: AffinityServiceLike,
+  commandLogger = logger,
+): void {
+  ctx.command('好感', '查看与丰川祥子的关系面板').action(async ({ session }) => {
+    if (!session?.userId) return '无法识别当前用户。';
+    try {
+      const panelView = await service.buildPanelView(session);
+      const image = await renderAffinityPanelImage(ctx.puppeteer, panelView);
+      await session.send(image as never);
+      await session.send(panelView.fixedLine);
+      await service.syncPanelCommandToChatHistory(session, panelView);
+    } catch (error) {
+      commandLogger.warn('affinity panel command failed: %s', error instanceof Error ? error.message : String(error));
+      return '关系面板生成失败。';
+    }
+  });
+}
 
 function resolveChatLunaService(ctx: ContextWithAffinity): ChatLunaLike | undefined {
   const carrier = ctx as unknown as { get?: (name: string) => unknown; chatluna?: ChatLunaLike };
@@ -342,7 +375,9 @@ export function apply(ctx: Context, config: Config): void {
   if (runtime.enabled) {
     ctx.middleware(async (session, next) => {
       try {
-        await service.processIncomingSession(session);
+        if (!isAffinityPanelCommandSession(session)) {
+          await service.processIncomingSession(session);
+        }
       } catch (error) {
         logger.warn('affinity incoming processing skipped: %s', error instanceof Error ? error.message : String(error));
       }
@@ -350,19 +385,7 @@ export function apply(ctx: Context, config: Config): void {
     });
   }
 
-  ctx.command('祥子状态', '查看丰川祥子关系状态').action(async ({ session }) => {
-    if (!session?.userId) return '无法识别当前用户。';
-    const userKey = `${session.platform || 'unknown'}:${session.userId}`;
-    const state = await service.getConsoleState();
-    const user = state.users.find((item) => item.userKey === userKey);
-    if (!user) return '祥子还没有留下关于你的关系记录。';
-    return [
-      `关系阶段：${user.stage}`,
-      `心情：${user.mood}`,
-      `状态：trust ${Math.round(user.trust)} / familiarity ${Math.round(user.familiarity)} / comfort ${Math.round(user.comfort)} / tension ${Math.round(user.tension)}`,
-      '群聊里默认不会公开精确数值；这里只是调试视图。',
-    ].join('\n');
-  });
+  registerAffinityPanelCommand(serviceCtx as unknown as AffinityCommandContextLike, service);
 
   const registerChatLunaHooks = (): boolean => {
     if (chatlunaHooksRegistered) return true;

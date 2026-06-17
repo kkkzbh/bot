@@ -322,6 +322,36 @@ describe('realtime message plugin', () => {
     ]);
   });
 
+  it('does not capture the exact 好感 command as realtime chat history', async () => {
+    const { middleware } = createHarness();
+
+    await middleware(
+      createSession({
+        userId: 'u8',
+        messageId: 'msg-panel-command',
+        content: '<at id="bot"/> 好感',
+        stripped: { content: ' 好感 ' },
+      }),
+      async () => undefined,
+    );
+    await middleware(
+      createSession({
+        userId: 'u8',
+        messageId: 'msg-normal-affinity-text',
+        content: '看看好感这个词会不会被普通聊天记录下来',
+      }),
+      async () => undefined,
+    );
+
+    expect(realtimeMessageCache.get('onebot:bot-1:group:100')).toEqual([
+      expect.objectContaining({
+        messageId: 'msg-normal-affinity-text',
+        userId: 'u8',
+        text: '看看好感这个词会不会被普通聊天记录下来',
+      }),
+    ]);
+  });
+
   it('clears existing group cache as soon as the realtime feature is disabled', async () => {
     const { middleware, setRealtimeEnabled } = createHarness();
 

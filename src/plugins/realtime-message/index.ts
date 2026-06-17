@@ -1,5 +1,6 @@
 import { Context, Logger, Schema, type Session } from 'koishi';
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
+import { isAffinityPanelCommandSession } from '../affinity/command.js';
 import { createVoiceRuntimeConfigFromEnv } from '../reply/index.js';
 import {
   buildGroupScopeKey,
@@ -159,6 +160,7 @@ async function captureRealtimeEntry(
   if (!userId || userId === session.bot?.selfId) return null;
 
   const text = normalizeMessageText(session);
+  if (isAffinityPanelCommandSession(session as Session)) return null;
   const imageUrls = collectImageUrls(session);
   const cachedTranscript = resolveSessionVoiceTranscript(session);
   const hasVoiceInput = Boolean(cachedTranscript || extractFirstIncomingVoice(String(session.content ?? '')));

@@ -16,7 +16,9 @@ import type {
   AffinityEventRecord,
   AffinityManualRandomPlanInput,
   AffinityManualRandomPlanResponse,
+  AffinityPanelHistorySyncResult,
   AffinityMutationResponse,
+  AffinityPanelView,
   AffinityRandomDirection,
   AffinityRandomMemoryRecord,
   AffinityRandomPlanRecord,
@@ -51,6 +53,7 @@ import {
 } from './rules.js';
 import { fetchWebHotTopicSummary } from './web-source.js';
 import { materialToPromptText, pickRandomMaterial } from './random-materials.js';
+import { buildAffinityPanelView } from './panel.js';
 import {
   type AffinityRandomContextTurn,
   type AffinityRandomGenerationInput,
@@ -139,6 +142,19 @@ type ChatLunaHistoryLike = {
     }) => void;
   };
 };
+
+type ChatHistoryWriterResolution =
+  | {
+      ok: true;
+      conversationId: string;
+      room: ChatLunaHistoryRoom;
+      addMessages: (messages: unknown[]) => Promise<void>;
+    }
+  | {
+      ok: false;
+      reason: string;
+      conversationId?: string;
+    };
 
 type ConversationRow = {
   id?: string | null;
@@ -361,6 +377,58 @@ function snapshotState(state: AffinityStateInput): Record<string, unknown> {
   };
 }
 
+function formatPanelEffectsForHistory(effects: AffinityPanelView['recentEvents'][number]['effects']): string {
+  if (!effects.length) return '';
+  return effects.map((effect) => `${effect.name}${effect.sign}`).join('、');
+}
+
+function buildPanelHistoryContent(view: AffinityPanelView): string {
+  const axes = view.axes.map((axis) => `${axis.name} ${axis.value}`).join('、');
+  const rhythm = view.rhythm.map((item) => `${item.label} ${item.value}`).join('、');
+  const recentEvents = view.recentEvents
+    .map((event) => {
+      const effects = formatPanelEffectsForHistory(event.effects);
+      return effects ? `${event.time}：${event.title}（${effects}）` : `${event.time}：${event.title}`;
+    })
+    .join('；');
+  return [
+    '发送了一张好感面板。',
+    `面板显示：阶段「${view.stageName}」，上次变化「${view.lastRelationChange}」。`,
+    `关系轴：${axes}。`,
+    `今日节奏：${rhythm}。`,
+    `最近变化：${recentEvents || '无'}。`,
+    `随后发送固定台词：「${view.fixedLine}」`,
+  ].join('\n');
+}
+
+function buildPanelHistoryMetadata(view: AffinityPanelView): Record<string, unknown> {
+  return {
+    version: 'v1',
+    characterId: view.characterId,
+    userKey: view.userKey,
+    stage: view.stage,
+    stageName: view.stageName,
+    lastRelationChange: view.lastRelationChange,
+    lineKind: view.lineKind,
+    fixedLine: view.fixedLine,
+    visibleText: view.fixedLine,
+    imageAlt: '好感面板',
+    axes: view.axes.map((axis) => ({
+      name: axis.name,
+      value: axis.value,
+    })),
+    rhythm: view.rhythm.map((item) => ({
+      label: item.label,
+      value: item.value,
+    })),
+    recentEvents: view.recentEvents.map((event) => ({
+      time: event.time,
+      title: event.title,
+      effects: event.effects,
+    })),
+  };
+}
+
 function parseStringArray(raw: string | null | undefined): string[] {
   const parsed = parseJson<unknown>(raw, []);
   return Array.isArray(parsed)
@@ -522,6 +590,51 @@ export class AffinityService implements AffinityServiceLike {
   private async getNextChatLunaRoomId(): Promise<number> {
     const rooms = await this.database.get('chathub_room', {} as Record<string, never>) as ChatLunaRoomRecord[];
     return rooms.reduce((current, room) => Math.max(current, toFiniteNumber(room.roomId, 0)), 0) + 1;
+  }
+
+  private async resolveChatHistoryWriter(conversationId: string): Promise<ChatHistoryWriterResolution> {
+    const normalizedConversationId = normalizeText(conversationId);
+    if (!normalizedConversationId) {
+      return { ok: false, reason: 'missing_conversation_id' };
+    }
+
+    const chatluna = this.getChatLuna();
+    const queryInterfaceWrapper = chatluna?.queryInterfaceWrapper?.bind(chatluna);
+    if (typeof queryInterfaceWrapper !== 'function') {
+      return {
+        ok: false,
+        reason: 'chatluna_history_unavailable',
+        conversationId: normalizedConversationId,
+      };
+    }
+
+    const [roomRow] = await this.database.get('chathub_room', { conversationId: normalizedConversationId }) as ChatLunaRoomRecord[];
+    const room = toChatLunaHistoryRoom(roomRow, normalizedConversationId);
+    if (!room) {
+      return {
+        ok: false,
+        reason: 'room_unavailable',
+        conversationId: normalizedConversationId,
+      };
+    }
+
+    const interfaceWrapper = queryInterfaceWrapper(room, true);
+    const chatInterface = await interfaceWrapper?.query(room, true);
+    const addMessages = chatInterface?.chatHistory?.addMessages;
+    if (typeof addMessages !== 'function') {
+      return {
+        ok: false,
+        reason: 'chat_history_unavailable',
+        conversationId: normalizedConversationId,
+      };
+    }
+
+    return {
+      ok: true,
+      conversationId: normalizedConversationId,
+      room,
+      addMessages,
+    };
   }
 
   private async createTemporaryProactiveRoom(args: {
@@ -746,6 +859,103 @@ export class AffinityService implements AffinityServiceLike {
       randomPlans: randomPlans.sort((left, right) => right.scheduledAt - left.scheduledAt).slice(0, 80),
       audit: audit.sort((left, right) => right.createdAt - left.createdAt).slice(0, 80),
     };
+  }
+
+  async buildPanelView(session: Session, now = Date.now()): Promise<AffinityPanelView> {
+    const userKey = userKeyFromSession(session);
+    if (!userKey) throw new Error('无法识别当前用户。');
+    const [stateRows, recentEvents] = await Promise.all([
+      this.database.get('affinity_user_state', { characterId: CHARACTER_ID, userKey }) as Promise<AffinityUserStateRecord[]>,
+      this.database.get('affinity_event', { characterId: CHARACTER_ID, userKey }) as Promise<AffinityEventRecord[]>,
+    ]);
+    const state = applyTemporalDecay(stateFromRecord(stateRows[0], now), now);
+    return buildAffinityPanelView({
+      userKey,
+      state,
+      recentEvents,
+      now,
+    });
+  }
+
+  async syncPanelCommandToChatHistory(
+    session: Session,
+    view: AffinityPanelView,
+  ): Promise<AffinityPanelHistorySyncResult> {
+    const userKey = userKeyFromSession(session);
+    let scope: AffinityScopeConfigRecord | null = null;
+    let conversationId = '';
+
+    try {
+      scope = await this.resolveScope(session);
+      if (!scope) {
+        await this.writePanelHistorySyncAudit('panel_history_sync_skipped', session, view, null, {
+          reason: 'scope_unavailable',
+        });
+        return { synced: false, reason: 'scope_unavailable' };
+      }
+
+      conversationId = normalizeText(scope.conversationId);
+      if (!conversationId) {
+        await this.writePanelHistorySyncAudit('panel_history_sync_skipped', session, view, scope, {
+          reason: 'missing_conversation_id',
+        });
+        return { synced: false, reason: 'missing_conversation_id' };
+      }
+
+      const writer = await this.resolveChatHistoryWriter(conversationId);
+      if (!writer.ok) {
+        await this.writePanelHistorySyncAudit('panel_history_sync_skipped', session, view, scope, {
+          reason: writer.reason,
+          conversationId: writer.conversationId ?? conversationId,
+        });
+        return {
+          synced: false,
+          reason: writer.reason,
+          conversationId: writer.conversationId ?? conversationId,
+        };
+      }
+
+      await writer.addMessages([
+        new AIMessage({
+          content: buildPanelHistoryContent(view),
+          id: `affinity-panel-command:${normalizeText(session.messageId) || randomUUID()}`,
+          additional_kwargs: {
+            qqbot_affinity_panel_command: {
+              ...buildPanelHistoryMetadata(view),
+              scopeKind: scope.scopeKind,
+              scopeId: scope.scopeId,
+              platform: normalizeText(session.platform) || scope.platform || null,
+              botSelfId: normalizeText(session.bot?.selfId) || scope.botSelfId || null,
+              channelId: normalizeText(session.channelId) || scope.channelId || null,
+              guildId: normalizeText(session.guildId) || scope.guildId || null,
+              conversationId: writer.conversationId,
+              triggerMessageId: normalizeText(session.messageId) || null,
+            },
+          },
+        }),
+      ]);
+      await this.writePanelHistorySyncAudit('panel_history_synced', session, view, scope, {
+        conversationId: writer.conversationId,
+        userKey,
+      });
+      return { synced: true, conversationId: writer.conversationId };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.warn(
+        'affinity panel history sync skipped: userKey=%s conversationId=%s error=%s',
+        userKey ?? '<unknown>',
+        conversationId || '<unknown>',
+        errorMessage,
+      );
+      await this.writePanelHistorySyncAudit('panel_history_sync_skipped', session, view, scope, {
+        reason: 'write_failed',
+        conversationId: conversationId || null,
+        error: errorMessage,
+      });
+      return conversationId
+        ? { synced: false, reason: 'write_failed', conversationId }
+        : { synced: false, reason: 'write_failed' };
+    }
   }
 
   async saveWhitelist(scopes: AffinityWhitelistInput[]): Promise<AffinityStateSummary> {
@@ -1831,41 +2041,23 @@ export class AffinityService implements AffinityServiceLike {
     }
 
     try {
-      const chatluna = this.getChatLuna();
-      const queryInterfaceWrapper = chatluna?.queryInterfaceWrapper?.bind(chatluna);
-      if (typeof queryInterfaceWrapper !== 'function') {
+      const writer = await this.resolveChatHistoryWriter(conversationId);
+      if (!writer.ok) {
         await this.writeRandomHistorySyncAudit('random_history_sync_skipped', plan, {
-          reason: 'chatluna_history_unavailable',
-          conversationId,
+          reason: writer.reason,
+          conversationId: writer.conversationId ?? conversationId,
         });
-        return { synced: false, reason: 'chatluna_history_unavailable', conversationId };
-      }
-
-      const [roomRow] = await this.database.get('chathub_room', { conversationId }) as ChatLunaRoomRecord[];
-      const room = toChatLunaHistoryRoom(roomRow, conversationId);
-      if (!room) {
-        await this.writeRandomHistorySyncAudit('random_history_sync_skipped', plan, {
-          reason: 'room_unavailable',
-          conversationId,
-        });
-        return { synced: false, reason: 'room_unavailable', conversationId };
-      }
-
-      const interfaceWrapper = queryInterfaceWrapper(room, true);
-      const chatInterface = await interfaceWrapper?.query(room, true);
-      const addMessages = chatInterface?.chatHistory?.addMessages;
-      if (typeof addMessages !== 'function') {
-        await this.writeRandomHistorySyncAudit('random_history_sync_skipped', plan, {
-          reason: 'chat_history_unavailable',
-          conversationId,
-        });
-        return { synced: false, reason: 'chat_history_unavailable', conversationId };
+        return {
+          synced: false,
+          reason: writer.reason,
+          conversationId: writer.conversationId ?? conversationId,
+        };
       }
 
       const historyContent = normalizeText(generation.assistantHistoryText)
         || normalizeText(generation.deliveryHistoryText)
         || messageText;
-      await addMessages([
+      await writer.addMessages([
         new AIMessage({
           content: historyContent,
           id: `affinity-random-plan:${plan.id}`,
@@ -1888,9 +2080,9 @@ export class AffinityService implements AffinityServiceLike {
         }),
       ]);
       await this.writeRandomHistorySyncAudit('random_history_synced', plan, {
-        conversationId,
+        conversationId: writer.conversationId,
       });
-      return { synced: true, conversationId };
+      return { synced: true, conversationId: writer.conversationId };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       logger.warn(
@@ -1950,6 +2142,31 @@ export class AffinityService implements AffinityServiceLike {
       });
     } catch (error) {
       logger.warn('affinity random history sync audit failed: %s', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async writePanelHistorySyncAudit(
+    eventType: 'panel_history_synced' | 'panel_history_sync_skipped',
+    session: Session,
+    view: AffinityPanelView,
+    scope: AffinityScopeConfigRecord | null,
+    detail: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.writeAudit(eventType, {
+        userKey: userKeyFromSession(session) ?? view.userKey,
+        scopeKind: scope?.scopeKind ?? null,
+        scopeId: scope?.scopeId ?? null,
+        detail: {
+          characterId: view.characterId,
+          lineKind: view.lineKind,
+          fixedLine: view.fixedLine,
+          triggerMessageId: normalizeText(session.messageId) || null,
+          ...detail,
+        },
+      });
+    } catch (error) {
+      logger.warn('affinity panel history sync audit failed: %s', error instanceof Error ? error.message : String(error));
     }
   }
 

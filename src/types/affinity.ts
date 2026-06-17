@@ -5,6 +5,7 @@ export type AffinityScopeKind = 'group' | 'private';
 export type AffinityStage = 'stranger' | 'polite' | 'remembered' | 'trusted' | 'special';
 export type AffinityMood = 'neutral' | 'calm' | 'focused' | 'pleased' | 'guarded' | 'tired' | 'embarrassed';
 export type AffinityEffectTier = 'ignore' | 'flavor' | 'mood' | 'progress';
+export type AffinityPanelLineKind = AffinityStage | 'overheated';
 export type AffinityAnalysisRoute =
   | 'ignore'
   | 'normal_chat'
@@ -50,6 +51,8 @@ export type AffinityAuditEventType =
   | 'random_plan_skipped'
   | 'random_history_synced'
   | 'random_history_sync_skipped'
+  | 'panel_history_synced'
+  | 'panel_history_sync_skipped'
   | 'admin_update';
 export type AffinityAnalysisRequestMode = 'chat_completions' | 'responses';
 export type AffinityAnalysisStructuredOutputProtocol =
@@ -243,6 +246,56 @@ export interface AffinityStateSummary {
   audit: AffinityAuditRecord[];
 }
 
+export type AffinityPanelAxisTone = 'wine' | 'teal' | 'blue' | 'gold';
+export type AffinityPanelEffectSign = '+' | '-';
+
+export interface AffinityPanelAxis {
+  name: string;
+  value: number;
+  tone: AffinityPanelAxisTone;
+  icon: string;
+}
+
+export interface AffinityPanelRhythmItem {
+  label: string;
+  value: string;
+  icon: string;
+}
+
+export interface AffinityPanelEffectToken {
+  name: string;
+  sign: AffinityPanelEffectSign;
+}
+
+export interface AffinityPanelRecentEvent {
+  time: string;
+  title: string;
+  icon: string;
+  effects: AffinityPanelEffectToken[];
+}
+
+export interface AffinityPanelView {
+  characterId: AffinityCharacterId;
+  userKey: string;
+  stage: AffinityStage;
+  stageName: string;
+  stageIcon: string;
+  lastRelationChange: string;
+  axes: AffinityPanelAxis[];
+  rhythm: AffinityPanelRhythmItem[];
+  recentEvents: AffinityPanelRecentEvent[];
+  adviceIcon: string;
+  advice: string;
+  lineKind: AffinityPanelLineKind;
+  fixedLine: string;
+}
+
+export interface AffinityPanelHistorySyncResult {
+  synced: boolean;
+  reason?: string;
+  conversationId?: string;
+}
+
 export interface AffinityMutationResponse {
   ok: boolean;
   affinity: AffinityStateSummary;
@@ -268,6 +321,11 @@ export interface AffinityManualRandomPlanResponse {
 
 export interface AffinityServiceLike {
   getConsoleState(): Promise<AffinityStateSummary>;
+  buildPanelView(session: import('koishi').Session, now?: number): Promise<AffinityPanelView>;
+  syncPanelCommandToChatHistory(
+    session: import('koishi').Session,
+    view: AffinityPanelView,
+  ): Promise<AffinityPanelHistorySyncResult>;
   saveSettings(settings: Partial<AffinitySettings>): Promise<AffinityStateSummary>;
   saveWhitelist(scopes: AffinityWhitelistInput[]): Promise<AffinityStateSummary>;
   createManualRandomPlan(input: AffinityManualRandomPlanInput, now?: number): Promise<AffinityManualRandomPlanResponse>;
