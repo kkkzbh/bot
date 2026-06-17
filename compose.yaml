@@ -4,7 +4,6 @@ services:
   pmhq:
     image: ${PMHQ_IMAGE:-docker.io/linyuchen/pmhq}:${PMHQ_TAG:-latest}
     container_name: pmhq
-    privileged: true
     environment:
       ENABLE_HEADLESS: ${ENABLE_HEADLESS:-false}
       AUTO_LOGIN_QQ: ${AUTO_LOGIN_QQ:-}
