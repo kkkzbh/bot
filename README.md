@@ -1,659 +1,235 @@
-# QQ AI Chat Bot (Fedora + Podman)
+# QQ AI Chat Bot
 
-Koishi + OneBot + LLOneBot + ChatLuna implementation for Fedora 43 (KDE/Wayland).
+A QQ chat bot built with Koishi, OneBot, LLBot, PMHQ, and ChatLuna.
 
-## 1. Prerequisites
+This README is for users who want to install and run a bot. It keeps the setup
+path small: install the packages, configure one QQ account and one chat model
+provider, start the three runtime processes, then test a message.
 
-- Node.js >= 22
-- pnpm >= 9
-- Podman >= 5
+## Runtime Layout
 
-## 2. Install
+- PMHQ runs the QQ client inside Podman.
+- LLBot runs on the host, connects to PMHQ, and exposes OneBot WebSocket on
+  `127.0.0.1:3001`.
+- Koishi runs the bot logic and console on `127.0.0.1:5140`.
+
+The default local runtime uses `.env.local`.
+
+## Requirements
+
+- Linux host. This project is maintained for Fedora with rootless Podman.
+- Node.js `>= 22`.
+- pnpm `9.15.4`.
+- Podman with `podman compose` or `podman-compose`.
+- Git, Python 3, curl, unzip support, and ffmpeg.
+- One QQ account for the bot.
+- One API key for an OpenAI-compatible chat model provider.
+
+On Fedora, install the system tools first:
 
 ```bash
-pnpm install
+sudo dnf install -y git nodejs podman podman-compose python3 curl unzip ffmpeg
+corepack enable
+corepack prepare pnpm@9.15.4 --activate
+```
+
+Check the versions:
+
+```bash
+node --version
+pnpm --version
+podman --version
+podman compose version
+```
+
+## Install
+
+`qqbot` depends on a sibling ChatLuna checkout. Keep the two repositories side
+by side:
+
+```bash
+mkdir -p ~/code
+cd ~/code
+
+git clone https://github.com/kkkzbh/kbot.git qqbot
+git clone --branch v1-dev https://github.com/kkkzbh/chatluna.git chatluna
+```
+
+Install ChatLuna dependencies:
+
+```bash
+cd ~/code/chatluna
+corepack yarn install --no-immutable
+```
+
+Install and build the bot:
+
+```bash
+cd ~/code/qqbot
+pnpm install --frozen-lockfile
 cp .env.example .env.local
-cp .env.server.example .env.server
-```
-
-Edit `.env.local` for local runtime and `.env.server` for server deploy/runtime. Set at least:
-
-- `ONEBOT_SELF_ID`
-- `SQLITE_PATH`
-- `CHATLUNA_ACTIVE_TAB`
-- `CHATLUNA_PLATFORM`
-- `CHATLUNA_BASE_URL`
-- `CHATLUNA_API_KEY`
-- `CHATLUNA_DEFAULT_MODEL`
-- `CHATLUNA_SILICONFLOW_BASE_URL`
-- `CHATLUNA_SILICONFLOW_API_KEY`
-- `CHATLUNA_SILICONFLOW_DEFAULT_MODEL`
-- `CHATLUNA_OPENAI_BASE_URL`
-- `CHATLUNA_OPENAI_API_KEY`
-- `CHATLUNA_OPENAI_DEFAULT_MODEL`
-- `CHATLUNA_CODEX_DEFAULT_MODEL`
-- `CHATLUNA_CODEX_REASONING_EFFORT`
-- `CHATLUNA_COPILOT_BASE_URL`
-- `CHATLUNA_COPILOT_API_KEY`
-- `CHATLUNA_COPILOT_DEFAULT_MODEL`
-- `CHATLUNA_COPILOT_OAUTH_CLIENT_ID`
-- `CHATLUNA_DEEPSEEK_BASE_URL`
-- `CHATLUNA_DEEPSEEK_API_KEY`
-- `CHATLUNA_DEEPSEEK_DEFAULT_MODEL`
-- `OPENAI_BASE_URL`
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL`
-- `MEMORY_EMBED_API_KEY`
-- `CHATLUNA_COMMAND_AUTHORITY`
-
-Main chat provider selection is fixed to six built-in tabs:
-
-- `siliconflow`: current Kimi main-chat chain, fixed to `https://api.siliconflow.cn/v1` with `Pro/moonshotai/Kimi-K2.5`
-- `openai`: OpenAI-compatible provider tab, defaulting to `wyzai` with `openai/gpt-5.4-medium-thinking`
-- `codex`: Codex ChatGPT OAuth tab, using bot-managed OAuth with `openai/gpt-5.5` and configurable reasoning effort
-- `copilot`: GitHub Copilot OAuth tab, defaulting to the local bridge `http://127.0.0.1:5140/api/internal/copilot/v1` with `gpt-5.4-mini`
-- `deepseek`: DeepSeek official OpenAI-compatible tab, defaulting to `https://api.deepseek.com` with `deepseek-v4-flash`
-- `mimo`: Xiaomi MIMO Token Plan OpenAI-compatible tab, defaulting to `https://token-plan-cn.xiaomimimo.com/v1` with `mimo-v2.5-pro`
-
-`CHATLUNA_ACTIVE_TAB` selects which built-in tab is mirrored into the runtime
-keys `CHATLUNA_PLATFORM` / `CHATLUNA_BASE_URL` / `CHATLUNA_API_KEY` /
-`CHATLUNA_DEFAULT_MODEL`.
-
-Each built-in tab now maps to a provider strategy bundle rather than only an
-endpoint preset:
-
-- `siliconflow` uses the existing `chat/completions` main-chat path, locks the official SiliconFlow endpoint, and applies the Kimi-specific non-thinking override
-- `openai` uses the OpenAI-compatible GPT-5.4 strategy, currently pinned to `chat/completions` + `response_format` structured output for provider compatibility
-- `codex` maintains its own ChatGPT OAuth device login under the bot runtime state, never exposes the OAuth token in the console, and routes ChatLuna through `responses` + `native_responses_json_schema`; the console tab only exposes model and reasoning-effort selection while the bridge address/key are managed server-side
-- `copilot` uses GitHub device-flow OAuth, exchanges GitHub token into a short-lived Copilot session token at runtime, and routes ChatLuna through the local bridge to either `responses` or `chat/completions` based on the selected Copilot model
-- `deepseek` uses DeepSeek's official `/models` endpoint for its dropdown and routes replies through `chat/completions` + the `CHAT_REPLY_V1` plain-text protocol, because DeepSeek does not support this bot's native `response_format` JSON schema contract
-- `mimo` uses the MIMO `/models` endpoint when a key is available, then filters the result to the verified chat/completions allowlist so TTS models never become main-chat options
-
-## Developer docs (web)
-
-This repository includes a VitePress documentation site for developers only.
-
-Source files are in:
-
-- `web/`
-
-Run docs locally:
-
-```bash
-pnpm docs:dev
-```
-
-Build static docs:
-
-```bash
-pnpm docs:build
-```
-
-Preview built docs:
-
-```bash
-pnpm docs:preview
-```
-
-## 3. Start Koishi bot (host)
-
-Build the runtime artifacts explicitly after source changes:
-
-```bash
 pnpm build
 ```
 
-```bash
-pnpm start
+If `pnpm build` reports that linked ChatLuna packages need a build, rerun the
+same command from `~/code/qqbot`. The build script compiles the linked ChatLuna
+packages and this bot's runtime plugins.
+
+## Configure
+
+Edit `.env.local`.
+
+Set your QQ identity:
+
+```dotenv
+BOT_OWNER_QQ=123456789
+ONEBOT_SELF_ID=987654321
+ONEBOT_WS_ENDPOINT=ws://127.0.0.1:3001
 ```
 
-`pnpm start` does not build or delete runtime artifacts. It checks linked
-ChatLuna packages and `dist/plugins/*` first, then resolves bot env in this
-order:
+- `BOT_OWNER_QQ` is your own QQ number.
+- `ONEBOT_SELF_ID` is the QQ account that will run the bot.
+- Keep `ONEBOT_WS_ENDPOINT` unchanged unless you also change
+  `LLONEBOT_WS_PORT`.
 
-- `.env.local`
+Set one chat model provider. The smallest path is the default SiliconFlow tab:
 
-Then it runs `koishi start koishi.yml`. If the preflight fails, run
-`pnpm build` before starting again.
+```dotenv
+CHATLUNA_ACTIVE_TAB=siliconflow
+CHATLUNA_PLATFORM=siliconflow
+CHATLUNA_BASE_URL=https://api.siliconflow.cn/v1
+CHATLUNA_API_KEY=sk-your-siliconflow-key
+CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5
 
-Koishi listens on `KOISHI_HOST:KOISHI_PORT` (default `0.0.0.0:5140`).
-
-Koishi uses **OneBot WebSocket 正向连接** to LLBot:
-
-- `ONEBOT_WS_ENDPOINT=ws://127.0.0.1:3001`
-- Only OneBot protocol is supported in this project.
-
-Memory stores user-scoped long-term facts and episode summaries in local SQLite.
-Embeddings are only used for long-memory recall/writeback and are expected to come from SiliconFlow (`Qwen/Qwen3-Embedding-8B` by default).
-Memory extraction writeback is a separate OpenAI-compatible provider configured by `MEMORY_EXTRACT_BASE_URL`, `MEMORY_EXTRACT_API_KEY`, and `MEMORY_EXTRACT_MODEL`; all three must be present, and it does not inherit the active chat model tab.
-
-## 4. Start PMHQ + host LLBot
-
-```bash
-podman compose pull pmhq
-podman compose up -d pmhq
-bash ./scripts/run-llbot-host.sh
+CHATLUNA_SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
+CHATLUNA_SILICONFLOW_API_KEY=sk-your-siliconflow-key
+CHATLUNA_SILICONFLOW_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5
 ```
 
-Official runtime mode uses:
+For a first run, disable optional services that need extra API keys or local
+voice models:
 
-- `pmhq`: QQ client runtime and login session
-- `llbot`: host-native OneBot + WebUI
-- `voice-asr`: `faster-whisper small/int8 + ffmpeg` HTTP service for QQ voice transcription
-- `compose.yaml` now keeps only `pmhq` and `voice-asr`; LLBot is downloaded from upstream release zips and started on host by `scripts/run-llbot-host.sh`.
-- `llbot` must talk to `pmhq` through `127.0.0.1:${PMHQ_PORT}`.
-- LLBot host ports are pinned to loopback (`127.0.0.1:3001` and `127.0.0.1:3080`) so Koishi and SSH local-forwards use the same endpoint on both laptop and server.
-
-Watch login logs (QR code / login progress):
-
-```bash
-podman compose logs -f pmhq
+```dotenv
+MEMORY_ENABLED=false
+MEMORY_READ_ENABLED=false
+MEMORY_WRITE_ENABLED=false
+CHATLUNA_SEARCH_SERVICE_ENABLED=false
+QQ_VOICE_INPUT_ENABLED=false
+QQ_VOICE_OUTPUT_ENABLED=false
 ```
 
-Open WebUI after services are up:
+Group natural trigger is disabled by default. With the default configuration,
+the bot replies in private chats and in group chats when it is mentioned or
+called by one of the names configured in `CHAT_NATURAL_TRIGGER_ALIASES`.
 
-- `http://127.0.0.1:${LLONEBOT_WEBUI_PORT}` (default `3080`)
+To enable passive group replies later, set both fields:
 
-Then in LLBot WebUI enable **WebSocket正向** (server mode) on port `3001`.
-
-If token is set, keep LLBot token consistent with `ONEBOT_TOKEN`.
-
-`qqbot-pmhq.service` also exports a dedicated Podman `containers.conf` with
-`keyring = false` to avoid rootless `runc` startup failures caused by exhausted
-session key quotas on the host.
-
-### 4.1 QQ voice services (server ASR + laptop TTS with loopback core and optional tailnet publish)
-
-- The server compose stack keeps only ASR on loopback:
-  - `QQ_VOICE_ASR_BASE_URL=http://127.0.0.1:5161`
-  - `./data/voice/asr/cache/` stores the Whisper cache on the server
-- Optional voice replies use different bot envs by runtime role:
-  - local bot: set `QQ_VOICE_TTS_BASE_URL=http://127.0.0.1:5162` in `.env.local`
-  - server bot: set `QQ_VOICE_TTS_BASE_URL=http://your-laptop.tailnet.ts.net:5162` in `.env.server`
-  - if the server cannot resolve MagicDNS reliably, use the laptop Tailscale IP instead, for example `http://100.x.y.z:5162`
-  - keep `QQ_VOICE_TTS_API_KEY` identical between the bot env file in use and `config/voice-tts.local.env`
-- Server deploy no longer force-disables voice output in systemd.
-  - if `QQ_VOICE_OUTPUT_ENABLED=true` on the server, it is expected to call your laptop-local TTS over Tailnet
-  - deploy now rejects `QQ_VOICE_OUTPUT_ENABLED=true` when `QQ_VOICE_TTS_BASE_URL` / `QQ_VOICE_TTS_API_KEY` are empty or point at loopback
-  - if the laptop-local TTS gateway or its Tailnet publish layer is unavailable, server voice reply should be treated as unavailable rather than silently downgraded to a fake enabled state
-- The local TTS gateway itself should only listen on loopback:
-  - set `VOICE_TTS_HOST=127.0.0.1` in `config/voice-tts.local.env`
-  - do not bind the model process directly to a Tailscale IP
-- If the server needs to reach your laptop TTS, publish the loopback gateway separately:
-  - use `tailscale serve --tcp 5162 tcp://127.0.0.1:5162`
-  - or install the optional `qqbot-voice-tts-tailnet.service`
-  - this publish layer does not load another model, so GPU memory usage stays single-copy
-- The laptop-local runtime now lives entirely under this repo:
-  - upstream wrapper code: `/home/kkkzbh/code/qqbot/.runtime/gpt-sovits-upstream`
-  - copied model assets: `/home/kkkzbh/code/qqbot/data/voice/tts-local`
-- This repository ships the laptop-local TTS templates:
-  - `config/voice-tts.local.example`
-  - `config/voice-tts.tailnet.example`
-  - `config/systemd/qqbot-voice-tts.service.example`
-  - `config/systemd/qqbot-voice-tts-tailnet.service.example`
-  - `scripts/run-voice-tts-local.sh`
-  - `scripts/publish-voice-tts-tailnet.sh`
-  - `scripts/setup-voice-tts-local-runtime.sh`
-
-### 4.2 Start laptop-local TTS gateway
-
-1. Copy `config/voice-tts.local.example` to `config/voice-tts.local.env`.
-   Keep `VOICE_TTS_PROMPT_LANG=all_ja` for the bundled Sakiko reference audio and `VOICE_TTS_TEXT_LANG=all_zh` for Chinese bot replies unless you intentionally replace the reference set.
-2. Populate the repo-local TTS runtime and copied assets:
-
-```bash
-cd /home/kkkzbh/code/qqbot
-scripts/setup-voice-tts-local-runtime.sh \
-  --source-pretrained-root /path/to/pretrained_models \
-  --source-model-root /path/to/GPT-SoVITS_models \
-  --source-reference-root /path/to/reference_audio/sakiko
+```dotenv
+CHAT_NATURAL_TRIGGER_ENABLED=true
+CHAT_NATURAL_TRIGGER_GROUPS=123456789,987654321
 ```
 
-3. Create a dedicated virtual environment for the laptop-local TTS gateway:
+## Start
+
+Use three terminals for the first run.
+
+Terminal 1: start PMHQ and watch QQ login logs.
 
 ```bash
-cd /home/kkkzbh/code/qqbot
-uv venv --python 3.12 .venv-voice-tts
-uv pip install --python .venv-voice-tts/bin/python --index-url https://download.pytorch.org/whl/cu124 \
-  torch==2.5.1 torchaudio==2.5.1
+cd ~/code/qqbot
+QQBOT_ENV_FILE=.env.local bash ./scripts/podman-pmhq-service.sh up
+podman logs -f pmhq
 ```
 
-4. Install the gateway and GPT-SoVITS deps into that interpreter:
+Terminal 2: start LLBot.
 
 ```bash
-uv pip install --python /home/kkkzbh/code/qqbot/.venv-voice-tts/bin/python \
-  -r /home/kkkzbh/code/qqbot/docker/voice-tts/requirements-gateway.txt \
-  -r /home/kkkzbh/code/qqbot/docker/voice-tts/requirements-upstream.txt
+cd ~/code/qqbot
+QQBOT_ENV_FILE=.env.local bash ./scripts/run-llbot-host.sh
 ```
 
-5. Smoke test the laptop-local gateway before enabling systemd:
+Open the LLBot WebUI after LLBot starts:
 
-```bash
- QQBOT_VOICE_TTS_ENV_FILE=/home/kkkzbh/code/qqbot/config/voice-tts.local.env \
-  /home/kkkzbh/code/qqbot/scripts/run-voice-tts-local.sh
+```text
+http://127.0.0.1:3080
 ```
 
-6. Install the loopback-only user unit after the manual smoke test passes:
+Log in to QQ from the PMHQ or LLBot login prompt. The managed LLBot startup
+enables the OneBot WebSocket server on port `3001`.
+
+Terminal 3: start Koishi.
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp /home/kkkzbh/code/qqbot/config/systemd/qqbot-voice-tts.service.example \
-  ~/.config/systemd/user/qqbot-voice-tts.service
-systemctl --user daemon-reload
-systemctl --user enable --now qqbot-voice-tts.service
+cd ~/code/qqbot
+pnpm start:local
 ```
 
-7. Optional: if the server bot should access this laptop TTS over Tailnet, publish the loopback gateway instead of rebinding the model process:
+Open the Koishi console:
 
-```bash
-cp /home/kkkzbh/code/qqbot/config/voice-tts.tailnet.example \
-  /home/kkkzbh/code/qqbot/config/voice-tts.tailnet.env
-mkdir -p ~/.config/systemd/user
-cp /home/kkkzbh/code/qqbot/config/systemd/qqbot-voice-tts-tailnet.service.example \
-  ~/.config/systemd/user/qqbot-voice-tts-tailnet.service
-systemctl --user daemon-reload
-systemctl --user enable --now qqbot-voice-tts-tailnet.service
+```text
+http://127.0.0.1:5140/console
 ```
 
-If `tailscale serve` reports permission denied, grant your user operator access once:
+## Test The Bot
+
+After all three processes are running:
+
+- Send a private message to the bot QQ account.
+- Or invite the bot to a group and mention it.
+- Or send a group message that starts with one of the configured names.
+
+For a local text-reply smoke test:
 
 ```bash
-sudo tailscale set --operator=$USER
-```
-
-### 4.3 Fixed local chat smoke cases
-
-After the local bot chain is running, use the fixed chat smoke suite to regression-test text reply, protocol-leak avoidance, sticker reply, and voice reply:
-
-```bash
-cd /home/kkkzbh/code/qqbot
+cd ~/code/qqbot
 pnpm smoke:chat
 ```
 
-The suite reuses a single fake private chat for the current run and prints only:
-- input prompt
-- final visible output summary
-- pass/fail result
+## Stop
 
-By default it generates a fresh `FAKE_USER_ID` for each smoke run, then reuses it serially within that run to avoid private-room creation races. Override `FAKE_USER_ID` or `BOT_TIMEOUT_SECONDS` only when needed.
-The script now also removes the debug-generated private room, conversation, messages, and fake user on exit, so successful and failed runs do not leave `codex-debug` residue behind.
+Stop Koishi and LLBot with `Ctrl-C` in their terminals.
 
-If you need to manually clean prior debug probes, run:
+Stop PMHQ:
 
 ```bash
-cd /home/kkkzbh/code/qqbot
-bash ./scripts/cleanup-debug-chat-state.sh
+cd ~/code/qqbot
+QQBOT_ENV_FILE=.env.local bash ./scripts/podman-pmhq-service.sh stop
 ```
 
-## 5. Trigger contract
+## Common Checks
 
-- Runtime trigger path = `group-natural-trigger` 判定 + ChatLuna allow-reply resolver 接线 + ChatLuna native。
-- `reply runtime` 统一接管生成期与发送期中断：
-  - 同一会话的新消息会中断旧 run，并以最新消息重新生成。
-  - 已经发出的内容不会撤回；未发送的剩余 segment 会被丢弃，并重写历史尾部。
-  - `ReplyPlan.multiline` 仍保持原子块发送，但整块发送前可以被新 run 替换。
-- 群聊可自然触发，无需 `@` 或句首昵称：
-  - 任意消息有 `25%` 概率直接触发对话。
-  - 否则走“规则 + 模型”触发判定。
-  - 会话焦点窗口 `5` 分钟（同群共享、群间隔离）。
-  - 机器人最小回复间隔 `2s`（同群串行等待，不丢消息）。
-  - 反刷屏：同一用户 `10s` 内 `10` 条消息，`3` 分钟内忽略该用户。
-  - `group-natural-trigger` 负责产出自然触发判定，并通过 ChatLuna service 注册的 allow-reply resolver 把结果接入放行链。
-- 昵称触发保留，默认别名包含：
-  - `祥子`、`祥`、`丰川`、`丰川祥子`、`saki`、`saki酱`、`sakiko`。
-- 自动化任务不再拦截普通消息：
-  - 创建入口为 Agent 显式调用 `automation_*` 工具。
-  - 到点后会启动一次独立 Agent run，而不是复用当前聊天历史。
-  - 自动化 run 最终仍向原群/私聊发送文本结果；群任务默认 `@创建者`。
-  - 到点执行时会跟随当前房间的 preset / model / tool-policy，而不是使用创建时快照。
-
-## 6. Command authority
-
-- `chatluna.*` command family is overridden by `@koishijs/plugin-commands`.
-- Default required authority is `>= 3` (configurable by `CHATLUNA_COMMAND_AUTHORITY`).
-- Passive conversation triggers still work for normal group members (subject to ChatLuna room/trigger settings).
-
-## 7. Task automation tools
-
-- `automation_create`：在当前 plugin 房间按自然语言 `scheduleText` 创建自动化任务，时间解析由代码负责。
-- `automation_list`：查看当前房间内由当前用户创建的自动化任务。
-- `automation_update`：按自然语言 `scheduleText` 修改现有自动化任务，避免模型自己重写 ISO / cron。
-- `automation_pause`：暂停自动化任务。
-- `automation_resume`：恢复已暂停的自动化任务。
-- `automation_delete`：删除自动化任务。
-
-## 8. SQLite persistence
-
-- SQLite file DB is enabled via `@koishijs/plugin-database-sqlite`.
-- Default DB path: `./data/koishi.db` (override with `SQLITE_PATH`).
-- No extra DB container is required.
-- ChatLuna rooms and context can persist across Koishi restarts.
-- 自动化任务也持久化到同一 SQLite 数据库，核心表为 `automation_job` 和 `automation_job_run`。
-
-## 9. Legacy removal status
-
-- Deprecated `group-chat` implementation has been removed:
-  - `src/plugins/group-chat.ts`
-  - `src/plugins/group-chat-core.ts`
-  - `tests/group-chat.test.ts`
-  - `src/types/chat.ts`
-- Current conversation chain:
-  - `chatluna` + `chatluna-openai-like-adapter` + `chatluna-model-guard` + `database-sqlite` + `commands`
-- Task automation extension chain:
-  - `cron` + `task-automation`
-  - 调度器只负责扫描到点任务、启动独立 Agent run、记录执行结果、回投 QQ 消息。
-
-## 10. Group natural trigger environment variables
-
-- `CHAT_NATURAL_TRIGGER_ENABLED`：是否开启群聊自然触发（默认 `false`，需要显式设为 `true` 才开启）。
-- `CHAT_NATURAL_TRIGGER_GROUPS`：自然触发白名单群（逗号分隔，留空表示不在任何群自动触发）。
-- `CHATLUNA_COMMON_FS_ALLOWED_GROUPS`：群聊文件系统工具白名单群（逗号分隔，留空表示群聊不向模型暴露 `file_*`、`grep`、`glob`、`bash`）。
-- `CHAT_NATURAL_TRIGGER_ALIASES`：别名列表（逗号分隔）。
-- `CHAT_NATURAL_TRIGGER_DIRECT_PROBABILITY`：任意消息直接触发概率（默认 `0.25`）。
-- `CHAT_NATURAL_TRIGGER_FOCUS_WINDOW_MS`：会话焦点窗口（默认 `300000`，同群共享）。
-- `CHAT_NATURAL_TRIGGER_REPLY_INTERVAL_MS`：机器人最小回复间隔（默认 `2000`，同群串行等待）。
-- `CHAT_NATURAL_TRIGGER_SPAM_WINDOW_MS`：刷屏判定窗口（默认 `10000`）。
-- `CHAT_NATURAL_TRIGGER_SPAM_THRESHOLD`：刷屏判定阈值（默认 `10`）。
-- `CHAT_NATURAL_TRIGGER_SPAM_MUTE_MS`：刷屏忽略时长（默认 `180000`）。
-- `CHAT_NATURAL_TRIGGER_DECISION_ENABLED`：是否启用模型判定（默认 `true`）。
-- `CHAT_NATURAL_TRIGGER_DECISION_BASE_URL` / `CHAT_NATURAL_TRIGGER_DECISION_API_KEY` / `CHAT_NATURAL_TRIGGER_DECISION_MODEL`：
-  - 未设置时复用 `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL`。
-- `CHAT_NATURAL_TRIGGER_DECISION_TIMEOUT_MS`：模型判定超时（默认 `4000`）。
-- `CHAT_NATURAL_TRIGGER_DECISION_MIN_CONFIDENCE`：模型判定最小置信度（默认 `0.62`）。
-
-## 11. Task automation environment variables
-
-- `TASK_AUTOMATION_POLL_MS`：一次性任务轮询间隔（默认 `30000`）。
-- `TASK_AUTOMATION_MAX_TASKS_PER_USER`：单用户任务上限（默认 `20`）。
-- 自动化任务创建与执行都改为 ChatLuna 工具链驱动，不再提供单独的意图模型、到点发送模型或创建回复模型配置。
-
-### QQ voice environment variables
-
-- `QQ_VOICE_INPUT_ENABLED`：是否允许 QQ 语音转写输入（默认 `true`）。
-- `QQ_VOICE_OUTPUT_ENABLED`：是否允许可选语音回复（默认 `true`）。
-- `QQ_VOICE_ASR_BASE_URL` / `QQ_VOICE_ASR_API_KEY`：Koishi 访问本机 ASR 服务的地址与 token。
-- `QQ_VOICE_TTS_BASE_URL` / `QQ_VOICE_TTS_API_KEY`：Koishi 访问 TTS 网关的地址与 token。本地通常指向 `127.0.0.1:5162`；服务器开启语音回复时应指向笔记本 Tailnet TTS 地址。
-- `QQ_VOICE_OUTPUT_LANGUAGE`：模型生成 `voice.content` 的目标语言，支持 `zh` / `ja` / `en` / `auto`；必须显式配置，缺失或非法会让启动失败。TTS 不翻译文本；日语语音模式应同时设置 `QQ_VOICE_OUTPUT_LANGUAGE=ja` 和 TTS 网关的 `VOICE_TTS_TEXT_LANG=all_ja`。
-- `QQ_VOICE_INPUT_MAX_SECONDS`：单条入站语音最大时长（默认 `60` 秒）。
-- `QQ_VOICE_OUTPUT_MAX_WORDS`：单个语音段最大词数（默认 `80`；超过时应由模型主动拆成多段语音）。
-- `QQ_VOICE_OUTPUT_MAX_SECONDS`：单个语音段最大时长（默认 `45` 秒）。
-- `QQ_VOICE_TRANSCRIBE_TIMEOUT_MS`：ASR 请求超时（默认 `45000` 毫秒）。
-- `QQ_VOICE_SYNTH_TIMEOUT_MS`：TTS 请求超时（默认 `300000` 毫秒）。
-- Server compose env:
-  - `VOICE_ASR_PORT` / `VOICE_ASR_MODEL` / `VOICE_ASR_COMPUTE_TYPE`
-- Laptop-local TTS env:
-  - see `config/voice-tts.local.example`
-  - key knobs are `VOICE_TTS_PYTHON_BIN`, `VOICE_TTS_HOST`, `VOICE_TTS_DEVICE`, `VOICE_TTS_IS_HALF`, `VOICE_TTS_MAX_TEXT_CHARS`, `VOICE_TTS_UPSTREAM_ROOT`, `VOICE_TTS_PRETRAINED_ROOT`, `VOICE_TTS_MODEL_ROOT`, and `VOICE_TTS_REFERENCE_ROOT`
-- Quick rollback:
-  - set `QQ_VOICE_INPUT_ENABLED=false` and/or `QQ_VOICE_OUTPUT_ENABLED=false`, then restart `qqbot.target`.
-
-## 12. Quality checks
+PMHQ is not running:
 
 ```bash
-pnpm docs:build
-pnpm typecheck
-pnpm test
+podman ps --filter name=pmhq
+QQBOT_ENV_FILE=.env.local bash ./scripts/podman-pmhq-service.sh up
+```
+
+LLBot WebUI does not open:
+
+```bash
+podman logs --tail 200 pmhq
+```
+
+Koishi says linked ChatLuna packages need a build:
+
+```bash
+cd ~/code/qqbot
 pnpm build
-pnpm runtime:check
 ```
 
-## 13. Fedora / Podman notes
-
-- This project is built for Podman (not Docker Desktop).
-- `compose.yaml` uses `:Z` on bind mount for SELinux Enforcing.
-- `pmhq` stays containerized, but LLBot and Koishi both run on host.
-- `llbot` must call `pmhq` through `127.0.0.1:${PMHQ_PORT}`, never container DNS names.
-- `llonebot` runtime data must live in an environment-specific directory (`LLONEBOT_DATA_DIR`), not in the deploy payload. Local default is `./.runtime/llonebot`; server default is `/opt/qqbot/shared/llonebot`.
-- Extracted LLBot program files must live in `LLBOT_RUNTIME_DIR`. Local default is `./.runtime/llbot`; server default is `/opt/qqbot/shared/llbot-runtime`.
-- On every boot, `scripts/run-llbot-host.sh` prepares the upstream release, rewrites the managed transport fields in both `default_config.json` and each `config_*.json`, patches LLBot media-path resolution from `/root/.config/QQ/...` into the host PMHQ QQ volume, and keeps WebUI / forward-WS / token repo-controlled while account login state remains environment-local.
-- `scripts/run-llbot-host.sh` captures the real host home in `QQBOT_HOST_HOME` before isolating LLBot `HOME`; rootless Podman inspection must use the real host home so local and server deployments resolve the same PMHQ QQ volume contract.
-- `QQBOT_QQ_CONFIG_MOUNT_SOURCE` is the explicit PMHQ QQ volume path override when `podman inspect pmhq` cannot resolve it automatically. Managed LLBot startup fails fast if neither path can be resolved.
-- `PMHQ_BIND_HOST` only controls how `pmhq` is exposed to the host; it does not participate in container-to-container addressing.
-- Server runtime may keep `AUTO_LOGIN_QQ` enabled for normal quick-login boot.
-- One QQ account should have exactly one active quick-login edge at a time. If laptop-local and server both set the same `AUTO_LOGIN_QQ`, expect one side to wedge into `登录系统连接异常`, stale QR state, or broken quick-login.
-- If server quick-login wedges QQ into `登录系统连接异常` or blocks QR fetch, run `scripts/server-recover-qq-login.sh prepare`, complete one manual login in LLBot WebUI, then run `scripts/server-recover-qq-login.sh restore` to return to auto-login.
-
-## 14. Troubleshooting
-
-- No reply in group:
-  - Confirm ChatLuna is loaded and DeepSeek adapter is loaded.
-  - Confirm trigger pattern matches ChatLuna native rules (`@`/昵称/私聊).
-- 自动化未触发：
-  - 确认 `./dist/plugins/automation` 与 `cron` 已在 `koishi.yml` 启用。
-  - 确认当前会话对应房间 `chatMode=plugin`，且 Agent 侧允许调用 `automation_*` 工具。
-  - 确认控制台 `automation` route 下的工具策略允许到点 run 使用所需工具。
-- OneBot WS cannot connect:
-  - Confirm Koishi process is running.
-  - Confirm LLBot `WebSocket正向` is enabled at `3001`.
-  - LLBot `7.12.15` only starts `3001` after QQ login succeeds; if `pmhq` logs `quick login failed` / `登录系统连接异常`, treat a missing `3001` listener as a login-state problem instead of a network/bootstrap problem.
-  - If QQ has not finished login yet, do not treat a missing `3001` listener as a stack bootstrap failure; verify LLBot WebUI and `PMHQ WebSocket 连接成功` first.
-  - Confirm `ONEBOT_WS_ENDPOINT` points to LLBot OneBot WS endpoint.
-  - Confirm `scripts/verify-qqbot-host-runtime.sh` passes on host.
-- No QR/login prompt:
-  - Check `podman compose logs -f pmhq` instead of only checking `llbot` logs.
-  - Confirm `pmhq` container is `Up` and healthy.
-  - Confirm local and server are not sharing the same `AUTO_LOGIN_QQ` at the same time for one QQ account.
-  - Confirm `LLONEBOT_DATA_DIR` is environment-specific; server should use `/opt/qqbot/shared/llonebot`, not `/opt/qqbot/current/data/llonebot`.
-  - If server auto-login gets stuck in `登录系统连接异常`, do not permanently disable it. Use `scripts/server-recover-qq-login.sh prepare`, complete one manual login, then `scripts/server-recover-qq-login.sh restore`.
-- Model call fails:
-  - Check `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`.
-  - Recommended DeepSeek endpoint is `https://api.deepseek.com/v1`.
-  - Check network/proxy for model endpoint.
-- Command denied:
-  - `chatluna.*`：确认账号 authority >= `CHATLUNA_COMMAND_AUTHORITY`。
-- QQ 语音不可用：
-  - 服务器部署默认禁用语音；不要在服务器上排查 `voice-asr`，它不应该存在。
-  - 确认笔记本 `qqbot-voice-tts.service` 已启动：`systemctl --user status qqbot-voice-tts.service`
-  - 确认笔记本 TTS 可以在 tailnet 内访问：`curl -H "Authorization: Bearer $QQ_VOICE_TTS_API_KEY" http://<laptop-tailnet-host>:5162/healthz`
-  - 确认 `QQ_VOICE_*` 地址与 token 和当前运行角色对应的 env 文件一致：本地看 `.env.local`，服务器看 `.env.server`
-  - 确认 `config/voice-tts.local.env` 中仓库内 `data/voice/tts-local/**` 路径有效
-  - 若声音几乎无声，先检查 `VOICE_TTS_PROMPT_LANG` 是否与参考音频一致；当前仓库内 Sakiko 参考音频应为 `all_ja`
-  - 只想回退文本时，直接关闭 `QQ_VOICE_INPUT_ENABLED` 或 `QQ_VOICE_OUTPUT_ENABLED`
-
-## 16. Run as `systemd --user` (recommended)
-
-This project can be managed as a user-level systemd stack so you do not need to keep WebStorm open.
-
-Installed unit files:
-
-- `/home/kkkzbh/.config/systemd/user/qqbot-pmhq.service`
-- `/home/kkkzbh/.config/systemd/user/qqbot-llbot.service`
-- `/home/kkkzbh/.config/systemd/user/qqbot-koishi.service`
-- `/home/kkkzbh/.config/systemd/user/qqbot.target`
-
-`qqbot-pmhq.service` starts/stops the PMHQ Podman service defined in `compose.yaml`.
-`qqbot-llbot.service` runs LLBot on host with release files under `LLBOT_RUNTIME_DIR`.
-`qqbot-koishi.service` runs Koishi on host with `/home/kkkzbh/code/qqbot/.env.local` as the canonical local env file.
-Server-side startup should explicitly use `/home/kkkzbh/code/qqbot/.env.server`.
-It sets `NODE_USE_ENV_PROXY=1` and proxy variables to match `~/.zshrc`:
-`http_proxy` / `https_proxy` / `all_proxy` / `no_proxy`
-and uppercase variants.
-`qqbot.target` groups all three units for one-command start/stop.
-
-Reload units after changes:
+OneBot WebSocket cannot connect:
 
 ```bash
-systemctl --user daemon-reload
+curl http://127.0.0.1:3080/
 ```
 
-Start or stop the full stack:
+Make sure LLBot is running, QQ login has completed, and `ONEBOT_WS_ENDPOINT` is
+`ws://127.0.0.1:3001`.
 
-```bash
-systemctl --user start qqbot.target
-systemctl --user stop qqbot.target
-```
+The bot does not reply in a group:
 
-Enable auto start on login:
-
-```bash
-systemctl --user enable qqbot.target
-```
-
-Enable linger so services can run without an active desktop login:
-
-```bash
-loginctl enable-linger kkkzbh
-```
-
-## 17. `systemd` logs and troubleshooting
-
-Check unit status:
-
-```bash
-systemctl --user status qqbot-pmhq.service
-systemctl --user status qqbot-llbot.service
-systemctl --user status qqbot-koishi.service
-systemctl --user status qqbot.target
-```
-
-Follow Koishi logs:
-
-```bash
-journalctl --user -u qqbot-koishi.service -f
-```
-
-Follow laptop-local TTS logs:
-
-```bash
-journalctl --user -u qqbot-voice-tts.service -f
-```
-
-Follow container login logs:
-
-```bash
-podman compose -f /home/kkkzbh/code/qqbot/compose.yaml logs -f pmhq
-```
-
-Common issues:
-
-- `qqbot-koishi.service` fails with `ExecStart`: confirm configured pnpm path exists (current file uses `/home/kkkzbh/.local/bin/pnpm`; check with `which pnpm`).
-- `qqbot-pmhq.service` fails: confirm Podman compose plugin is installed and `compose.yaml` exists.
-- `qqbot-llbot.service` fails: confirm host `node` exists and `LLBOT_RUNTIME_DIR` is writable.
-- Image sends fail with `reply plan delivery failed ... retcode: 1200`:
-  - Check `/opt/qqbot/shared/llonebot/logs/llbot-*.log` for `copyfile ... -> /root/.config/QQ/... ENOENT`.
-  - If present, PMHQ returned a container-internal QQ media path that was not rewritten to the host PMHQ volume path before `llbot` copied the file.
-  - The managed host runtime must rewrite `/root/.config/QQ/...` into the resolved Podman QQ volume source during LLBot prepare; if that rewrite is missing or the bundle patch fails, treat it as a runtime prepare regression instead of a Koishi/CF/image-generation problem.
-- Service not started after reboot: confirm `systemctl --user is-enabled qqbot.target` and `loginctl show-user kkkzbh | grep Linger`.
-- Host logs grow too quickly:
-  - deploy installs `/etc/systemd/journald.conf.d/qqbot.conf` plus a root timer `qqbot-log-maintenance.timer` when `sudo -n` is available
-  - journald is capped to `512M` persistent + `128M` runtime
-  - the maintenance timer runs daily, uses a dedicated `logrotate` policy with `su root syslog` when `/var/log/syslog` exceeds `100M`, and vacuums old journal data
-
-## 18. GitHub CI/CD auto deploy (push to `main`)
-
-This repo now includes:
-
-- `/.github/workflows/ci.yml`
-- `/.github/workflows/deploy.yml`
-
-Behavior:
-
-- `CI` runs on every `push` / `pull_request` (`pnpm typecheck`, `pnpm test`, `pnpm build`).
-- `Deploy` runs on `push` to `main` (or manual `workflow_dispatch`).
-- `Deploy` SSHes to your server, `rsync`s project files, then runs `pnpm install`, `pnpm build`, and restarts `qqbot.target`.
-- The generated deploy units are `qqbot-pmhq.service`, `qqbot-llbot.service`, `qqbot-koishi.service`, and `qqbot.target`.
-- Deploy verifies `pmhq` health, LLBot WebUI, the `PMHQ WebSocket 连接成功` log, and Koishi-to-LLBot websocket reachability through `scripts/verify-qqbot-host-runtime.sh`.
-- Laptop-local `qqbot-voice-tts.service` is not managed by GitHub Actions and must be updated separately on your own machine.
-
-### 18.1 GitHub Actions secrets (required)
-
-- `QQBOT_SERVER_HOST`: deploy server host/IP
-- `QQBOT_SERVER_USER`: SSH login user
-- `QQBOT_SSH_PRIVATE_KEY`: private key used by GitHub Actions to login server
-- `QQBOT_SSH_KNOWN_HOSTS`: optional but recommended (`ssh-keyscan` output)
-- `QQBOT_DOTENV`: production `.env.server` full content (multiline secret)
-
-### 18.2 GitHub Actions variables (optional)
-
-- `QQBOT_SERVER_PORT` (default: `22`)
-- `QQBOT_SERVER_APP_DIR` (default: `/opt/qqbot/current`)
-- `QQBOT_SYSTEMD_TARGET` (default: `qqbot.target`)
-
-### 18.3 One-time server preparation
-
-1. Prepare deploy directory (example uses default path, root user deploy):
-
-```bash
-sudo mkdir -p /opt/qqbot/current /opt/qqbot/chatluna /root/.config/systemd/user
-sudo chown -R root:root /opt/qqbot
-```
-
-2. Install runtime dependencies on server (Ubuntu example):
-
-```bash
-sudo apt-get update
-sudo apt-get install -y curl git podman podman-compose rsync sqlite3 wget
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs
-wget -q -O /tmp/google-chrome-stable_current_amd64.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-sudo apt-get install -y /tmp/google-chrome-stable_current_amd64.deb
-sudo apt-get purge -y chromium-browser || true
-sudo snap remove --purge chromium || true
-sudo corepack enable
-sudo corepack prepare pnpm@9.15.4 --activate
-```
-
-Server deploy is pinned to `.deb` Google Chrome for Puppeteer. Do not install the
-`chromium-browser` transition package or rely on the Chromium snap on Ubuntu.
-
-3. Enable linger so `systemd --user` services survive logout:
-
-```bash
-sudo loginctl enable-linger root
-```
-
-4. In GitHub repo settings, set secret `QQBOT_DOTENV` to your production `.env.server` content.
-
-`Deploy` will sync this secret to `${QQBOT_SERVER_APP_DIR}/.env.server` every run.
-
-5. Ensure root user-level systemd is usable:
-
-```bash
-sudo -i systemctl --user daemon-reload
-sudo -i systemctl --user status
-```
-
-6. `Deploy` will auto-provision user units (`qqbot-pmhq.service`, `qqbot-llbot.service`, `qqbot-koishi.service`, `qqbot.target`)
-when `QQBOT_SYSTEMD_TARGET=qqbot.target`.
-
-7. If you use a custom target (not `qqbot.target`), manage that unit yourself and keep
-`QQBOT_SYSTEMD_TARGET` consistent.
-
-8. Ensure your `systemd --user` units are enabled:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable qqbot.target
-loginctl enable-linger root
-```
-
-### 18.4 First push to GitHub
-
-```bash
-git remote add origin git@github.com:kkkzbh/kbot.git
-git branch -M main
-git push -u origin main
-```
-
-After this push, GitHub Actions will run CI and then deploy automatically.
-
-### 18.5 Manual deploy trigger
-
-GitHub repo -> `Actions` -> `Deploy` -> `Run workflow`.
-
-### 18.6 Common deploy failures
-
-- `User systemd bus not available`:
-  - run `loginctl enable-linger <server_user>` on server, and ensure user service session bus exists.
-- `pnpm is not installed on target host`:
-  - install Node.js/corepack on server, or ensure `pnpm` is in the deploy user's `PATH`.
-- `podman-compose is not installed on target host`:
-  - install Podman and `podman-compose` on server.
-- `Error: no chrome installations found`:
-  - server Puppeteer requires `.deb` Google Chrome in `PATH`; do not use Ubuntu's `chromium-browser` snap transition package.
-- `Cannot find module '/opt/qqbot/chatluna/node_modules/@chatluna/.../lib/index.cjs'`:
-  - update to the latest `qqbot` scripts and redeploy; startup now auto-builds linked ChatLuna workspace runtime dependencies recursively.
-- voice containers fail during startup:
-  - confirm `./data/voice/**` exists on server and contains the required models/reference audio before restarting `qqbot.target`.
-- SSH failure:
-  - verify `QQBOT_*` secrets and `known_hosts` content.
+- Mention the bot or use one of the configured names.
+- If you enabled passive group replies, make sure the group number is listed in
+  `CHAT_NATURAL_TRIGGER_GROUPS`.
+- Check the Koishi terminal for model provider errors.
