@@ -39,6 +39,9 @@ test.png
 data/chathub/presets/*.yml
 !data/chathub/presets/sakiko.yml
 config/voice-tts.local.env
+config/*.env.bak.*
+data/koishi.db.bak-*
+docs/affinity-random-events-live-results.json
 web/.vitepress/dist
 web/.vitepress/cache
 .codex/*
