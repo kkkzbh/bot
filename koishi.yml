@@ -265,6 +265,12 @@ plugins:
       servers: '{"mcpServers":{}}'
       tools: {}
     ./dist/plugins/model-guard:mjddgg: {}
+    ./dist/plugins/affinity:affinity:
+      enabled: ${{ env.AFFINITY_ENABLED !== 'false' }}
+      proactiveEnabled: ${{ env.AFFINITY_PROACTIVE_ENABLED !== 'false' }}
+      pollIntervalMs: ${{ +env.AFFINITY_POLL_INTERVAL_MS || 60000 }}
+      randomWindowStartHour: ${{ +env.AFFINITY_RANDOM_WINDOW_START_HOUR || 8 }}
+      randomWindowEndHour: ${{ +env.AFFINITY_RANDOM_WINDOW_END_HOUR || 22 }}
     ./dist/plugins/memory:memory:
       enabled: ${{ env.MEMORY_ENABLED !== 'false' }}
       readEnabled: ${{ env.MEMORY_READ_ENABLED !== 'false' }}

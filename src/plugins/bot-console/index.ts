@@ -43,8 +43,14 @@ import type {
   EnvPatch,
   PresetDocument,
   ReorderPresetsResponse,
+  AdjustAffinityUserRequest,
+  AdjustAffinityUserResponse,
   SaveFeatureOverridesRequest,
   SaveFeatureOverridesResponse,
+  SaveAffinitySettingsRequest,
+  SaveAffinitySettingsResponse,
+  SaveAffinityWhitelistRequest,
+  SaveAffinityWhitelistResponse,
   SaveModelTabsRequest,
   SaveModelTabsResponse,
   SaveTtsSettingsRequest,
@@ -56,10 +62,16 @@ import type {
   SynthesizeTtsSampleResponse,
 } from '../../types/bot-console.js';
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
+import type { AffinityServiceLike } from '../../types/affinity.js';
 import type { MemoryStatusServiceLike } from '../../types/memory.js';
 import type { ToolPolicyServiceLike } from '../../types/tool-policy.js';
+import { createUnavailableAffinityState } from '../affinity/index.js';
 import { createUnavailableMemoryStatusSnapshot } from '../shared/memory-status.js';
 import { buildMemoryState, createUnavailableMemoryState } from './memory.js';
+import {
+  AffinityBridgeHttpError,
+  parseAffinityRandomPlanBridgeRequest,
+} from './affinity-bridge.js';
 import {
   parseQqVoiceBridgeRequest,
   QqVoiceBridgeHttpError,
@@ -70,7 +82,7 @@ import {
 const logger = new Logger('bot-console');
 
 export const name = 'bot-console';
-export const inject = { required: ['console'], optional: ['server', 'memoryStatus', 'featurePolicy', 'toolPolicy', 'database'] } as const;
+export const inject = { required: ['console'], optional: ['server', 'memoryStatus', 'featurePolicy', 'toolPolicy', 'affinity', 'database'] } as const;
 
 const CONSOLE_CLIENT_ASSET_DIR = 'dist/node_modules/@qqbot/bot-console-client';
 const LISTENER_AUTHORITY = 4;
@@ -86,6 +98,7 @@ type RuntimeServiceContext = {
   memoryStatus?: MemoryStatusServiceLike;
   featurePolicy?: FeaturePolicyServiceLike;
   toolPolicy?: ToolPolicyServiceLike;
+  affinity?: AffinityServiceLike;
   database?: {
     get: (table: string, query: Record<string, unknown>) => Promise<any[]>;
     set?: (table: string, query: Record<string, unknown>, data: Record<string, unknown>) => Promise<unknown>;
@@ -118,6 +131,7 @@ async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager
   const featureScopesPromise = ctx.featurePolicy?.listConsoleFeatureScopes?.() ?? Promise.resolve([]);
   const featureOverridesPromise = ctx.featurePolicy?.getFeatureOverrides?.() ?? Promise.resolve([]);
   const conversationTargetsPromise = ctx.featurePolicy?.listConversationTargets?.() ?? Promise.resolve([]);
+  const affinityPromise = ctx.affinity?.getConsoleState?.() ?? Promise.resolve(createUnavailableAffinityState());
   const toolPolicyPromise = ctx.toolPolicy?.getToolPolicyState?.() ?? Promise.resolve({
     catalog: [],
     routeProfiles: [],
@@ -128,11 +142,12 @@ async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager
     conversationTargets: [],
   });
 
-  const [state, featureScopes, featureOverrides, conversationTargets, toolPolicy] = await Promise.all([
+  const [state, featureScopes, featureOverrides, conversationTargets, affinity, toolPolicy] = await Promise.all([
     statePromise,
     featureScopesPromise,
     featureOverridesPromise,
     conversationTargetsPromise,
+    affinityPromise,
     toolPolicyPromise,
   ]);
 
@@ -141,6 +156,7 @@ async function buildState(ctx: RuntimeServiceContext, manager: BotConsoleManager
     featureScopes,
     featureOverrides,
     conversationTargets,
+    affinity,
     toolPolicy: {
       ...toolPolicy,
       conversationTargets: toolPolicy.conversationTargets.length > 0 ? toolPolicy.conversationTargets : conversationTargets,
@@ -569,6 +585,62 @@ export function apply(ctx: Context): void {
   );
 
   consoleService.addListener(
+    'bot-console/affinity/save-settings',
+    async (payload: SaveAffinitySettingsRequest): Promise<SaveAffinitySettingsResponse> => {
+      if (!runtimeCtx.affinity?.saveSettings) {
+        throw new Error('affinity service unavailable');
+      }
+      const record = ensureRecord(payload);
+      const settings = record.settings && typeof record.settings === 'object' && !Array.isArray(record.settings)
+        ? record.settings as SaveAffinitySettingsRequest['settings']
+        : {};
+      return {
+        ok: true,
+        affinity: await runtimeCtx.affinity.saveSettings(settings),
+      };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/affinity/save-whitelist',
+    async (payload: SaveAffinityWhitelistRequest): Promise<SaveAffinityWhitelistResponse> => {
+      if (!runtimeCtx.affinity?.saveWhitelist) {
+        throw new Error('affinity service unavailable');
+      }
+      const record = ensureRecord(payload);
+      const scopes = Array.isArray(record.scopes) ? record.scopes as SaveAffinityWhitelistRequest['scopes'] : [];
+      return {
+        ok: true,
+        affinity: await runtimeCtx.affinity.saveWhitelist(scopes),
+      };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
+    'bot-console/affinity/adjust-user',
+    async (payload: AdjustAffinityUserRequest): Promise<AdjustAffinityUserResponse> => {
+      if (!runtimeCtx.affinity?.adjustUserState) {
+        throw new Error('affinity service unavailable');
+      }
+      const record = ensureRecord(payload);
+      return {
+        ok: true,
+        affinity: await runtimeCtx.affinity.adjustUserState({
+          userKey: String(record.userKey ?? ''),
+          reason: String(record.reason ?? ''),
+          trust: record.trust == null ? undefined : Number(record.trust),
+          familiarity: record.familiarity == null ? undefined : Number(record.familiarity),
+          comfort: record.comfort == null ? undefined : Number(record.comfort),
+          tension: record.tension == null ? undefined : Number(record.tension),
+        }),
+      };
+    },
+    { authority: LISTENER_AUTHORITY },
+  );
+
+  consoleService.addListener(
     'bot-console/get-tool-policy-state',
     async () => {
       if (runtimeCtx.toolPolicy?.getToolPolicyState) {
@@ -730,6 +802,11 @@ export function apply(ctx: Context): void {
       koaCtx.status = 204;
     });
 
+    ctx.server.options('/api/internal/affinity/v1/random-plans', async (koaCtx: any) => {
+      setQqVoiceBridgeCorsHeaders(koaCtx);
+      koaCtx.status = 204;
+    });
+
     ctx.server.post('/api/internal/qq-voice/v1/send', async (koaCtx: any) => {
       setQqVoiceBridgeCorsHeaders(koaCtx);
       if (!validateVoiceBridgeAuthHeader(String(koaCtx.get('authorization') || ''))) {
@@ -750,6 +827,37 @@ export function apply(ctx: Context): void {
         }
         logger.warn('qq voice bridge failed: %s', error instanceof Error ? error.message : String(error));
         writeJsonError(koaCtx, 500, 'internal_error', 'qq voice bridge failed');
+      }
+    });
+
+    ctx.server.post('/api/internal/affinity/v1/random-plans', async (koaCtx: any) => {
+      setQqVoiceBridgeCorsHeaders(koaCtx);
+      if (!validateVoiceBridgeAuthHeader(String(koaCtx.get('authorization') || ''))) {
+        writeJsonError(koaCtx, 401, 'invalid_request_error', 'invalid affinity bridge authorization');
+        return;
+      }
+      if (!runtimeCtx.affinity?.createManualRandomPlan) {
+        writeJsonError(koaCtx, 503, 'affinity_unavailable', 'affinity service is unavailable');
+        return;
+      }
+
+      try {
+        const request = parseAffinityRandomPlanBridgeRequest(koaCtx.request.body);
+        const response = await runtimeCtx.affinity.createManualRandomPlan(request);
+        koaCtx.status = 200;
+        koaCtx.set('content-type', 'application/json; charset=utf-8');
+        koaCtx.body = JSON.stringify(response);
+      } catch (error) {
+        if (error instanceof AffinityBridgeHttpError) {
+          writeJsonError(koaCtx, error.status, error.code, error.message);
+          return;
+        }
+        if (error instanceof Error && error.message === 'affinity is disabled') {
+          writeJsonError(koaCtx, 503, 'affinity_disabled', error.message);
+          return;
+        }
+        logger.warn('affinity bridge failed: %s', error instanceof Error ? error.message : String(error));
+        writeJsonError(koaCtx, 500, 'internal_error', 'affinity bridge failed');
       }
     });
   }

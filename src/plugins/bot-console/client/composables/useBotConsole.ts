@@ -10,6 +10,9 @@ import type {
   BotConsoleState,
   BotConsoleTtsStyleId,
   BotConsoleTtsState,
+  AffinitySettings,
+  AffinityWhitelistInput,
+  AdjustAffinityUserResponse,
   ClearConversationHistoryResponse,
   ConversationTarget,
   DeleteConversationRoomResponse,
@@ -24,6 +27,8 @@ import type {
   PresetPrompt,
   ReorderPresetsResponse,
   SaveEnvResponse,
+  SaveAffinitySettingsResponse,
+  SaveAffinityWhitelistResponse,
   SaveFeatureOverridesResponse,
   SaveModelTabsRequest,
   SaveModelTabsResponse,
@@ -1631,6 +1636,46 @@ export function useBotConsole() {
     return result
   }
 
+  async function saveAffinitySettings(settings: Partial<AffinitySettings>): Promise<SaveAffinitySettingsResponse> {
+    const result = await send<SaveAffinitySettingsResponse>('bot-console/affinity/save-settings', { settings })
+    if (botState.value) {
+      botState.value = {
+        ...botState.value,
+        affinity: result.affinity,
+      }
+    }
+    return result
+  }
+
+  async function saveAffinityWhitelist(scopes: AffinityWhitelistInput[]): Promise<SaveAffinityWhitelistResponse> {
+    const result = await send<SaveAffinityWhitelistResponse>('bot-console/affinity/save-whitelist', { scopes })
+    if (botState.value) {
+      botState.value = {
+        ...botState.value,
+        affinity: result.affinity,
+      }
+    }
+    return result
+  }
+
+  async function adjustAffinityUser(payload: {
+    userKey: string
+    reason: string
+    trust?: number
+    familiarity?: number
+    comfort?: number
+    tension?: number
+  }): Promise<AdjustAffinityUserResponse> {
+    const result = await send<AdjustAffinityUserResponse>('bot-console/affinity/adjust-user', payload)
+    if (botState.value) {
+      botState.value = {
+        ...botState.value,
+        affinity: result.affinity,
+      }
+    }
+    return result
+  }
+
   // ── Public API ────────────────────────────────────────────────────────────────
 
   return {
@@ -1734,5 +1779,8 @@ export function useBotConsole() {
     editMemory,
     forgetMemory,
     reviewMemoryCandidate,
+    saveAffinitySettings,
+    saveAffinityWhitelist,
+    adjustAffinityUser,
   }
 }

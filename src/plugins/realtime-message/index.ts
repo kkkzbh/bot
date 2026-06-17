@@ -27,6 +27,8 @@ import {
   type OneBotVoiceBotLike,
 } from '../shared/voice/index.js';
 
+export { buildGroupScopeKey, realtimeMessageCache };
+
 const logger = new Logger('realtime-message');
 const CHAT_CHAIN_CONTINUE = 2;
 

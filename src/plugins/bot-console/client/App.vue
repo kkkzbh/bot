@@ -10,6 +10,7 @@ import ServicesPanel from './components/panels/ServicesPanel.vue'
 import FeaturesPanel from './components/panels/FeaturesPanel.vue'
 import ToolPolicyPanel from './components/panels/ToolPolicyPanel.vue'
 import MemoryPanel from './components/panels/MemoryPanel.vue'
+import AffinityPanel from './components/panels/AffinityPanel.vue'
 import ModelsPanel from './components/panels/ModelsPanel.vue'
 import TtsPanel from './components/panels/TtsPanel.vue'
 import BasicPanel from './components/panels/BasicPanel.vue'
@@ -39,6 +40,7 @@ const TABS = [
   { id: 'services', label: '运行控制' },
   { id: 'features', label: '功能开关' },
   { id: 'tools', label: '工具控制' },
+  { id: 'affinity', label: '关系事件' },
   { id: 'memory', label: '长期记忆' },
   { id: 'models',   label: '模型接口' },
   { id: 'tts',      label: 'TTS 语音' },
@@ -52,6 +54,7 @@ const panelMap: Record<string, Component> = {
   services: ServicesPanel,
   features: FeaturesPanel,
   tools: ToolPolicyPanel,
+  affinity: AffinityPanel,
   memory: MemoryPanel,
   models:   ModelsPanel,
   tts:      TtsPanel,

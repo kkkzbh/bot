@@ -23,6 +23,12 @@ import type {
   ToolOverrideInput,
   ToolOverrideRecord,
 } from './tool-policy.js';
+import type {
+  AffinityMutationResponse,
+  AffinitySettings,
+  AffinityStateSummary,
+  AffinityWhitelistInput,
+} from './affinity.js';
 
 export type ServiceAction = 'start' | 'stop' | 'restart' | 'enable';
 
@@ -292,6 +298,7 @@ export interface BotConsoleState {
   featureScopes: ConsoleFeatureScope[];
   featureOverrides: FeatureScopeOverrideRecord[];
   conversationTargets: import('./feature-policy.js').ConversationTarget[];
+  affinity: AffinityStateSummary;
   toolPolicy: BotConsoleToolPolicyState;
   modelTabs: BotConsoleModelTabsState;
   tts: BotConsoleTtsState;
@@ -446,6 +453,27 @@ export interface BotConsoleMemoryMutationResponse {
   ok: boolean;
   memory: BotConsoleMemoryState;
 }
+
+export interface SaveAffinitySettingsRequest {
+  settings: Partial<AffinitySettings>;
+}
+
+export interface SaveAffinityWhitelistRequest {
+  scopes: AffinityWhitelistInput[];
+}
+
+export interface AdjustAffinityUserRequest {
+  userKey: string;
+  reason: string;
+  trust?: number;
+  familiarity?: number;
+  comfort?: number;
+  tension?: number;
+}
+
+export interface SaveAffinitySettingsResponse extends AffinityMutationResponse {}
+export interface SaveAffinityWhitelistResponse extends AffinityMutationResponse {}
+export interface AdjustAffinityUserResponse extends AffinityMutationResponse {}
 
 export interface BotConsoleMemoryVisibilityRequest {
   userKey: string;

@@ -55,6 +55,26 @@ function createTempDir(): string {
   return dir;
 }
 
+function writeMinimalConsoleFixture(dir: string): void {
+  mkdirSync(join(dir, 'data/chathub/presets'), { recursive: true });
+  writeFileSync(join(dir, '.env.local'), 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+  writeFileSync(
+    join(dir, 'data/chathub/presets/sakiko.yml'),
+    'keywords: []\nprompts:\n  - role: system\n    content: hi\n',
+    'utf8',
+  );
+}
+
+function createKoaCtx(body: unknown, authorization = '') {
+  return {
+    status: 0,
+    body: undefined as unknown,
+    request: { body },
+    set: vi.fn(),
+    get: vi.fn((name: string) => (name.toLowerCase() === 'authorization' ? authorization : '')),
+  };
+}
+
 describe('bot-console plugin', () => {
   it('registers console entry and protected listeners', async () => {
     const dir = createTempDir();
@@ -79,7 +99,7 @@ describe('bot-console plugin', () => {
     apply(ctx as any);
 
     expect(addEntry).toHaveBeenCalledTimes(1);
-    expect(addListener).toHaveBeenCalledTimes(37);
+    expect(addListener).toHaveBeenCalledTimes(40);
     expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/list-copilot-models');
     expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/list-codex-models');
     expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/codex-auth/status');
@@ -87,8 +107,82 @@ describe('bot-console plugin', () => {
     expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/codex-auth/poll');
     expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/codex-auth/cancel');
     expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/codex-auth/logout');
+    expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/affinity/save-settings');
+    expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/affinity/save-whitelist');
+    expect(addListener.mock.calls.map((call) => call[0])).toContain('bot-console/affinity/adjust-user');
     for (const call of addListener.mock.calls) {
       expect(call[2]).toEqual({ authority: 4 });
+    }
+  });
+
+  it('protects and serves the affinity manual random-plan internal endpoint', async () => {
+    const previousApiKey = process.env.QQ_VOICE_BRIDGE_API_KEY;
+    process.env.QQ_VOICE_BRIDGE_API_KEY = 'bridge-secret';
+    try {
+      const dir = createTempDir();
+      writeMinimalConsoleFixture(dir);
+      const createManualRandomPlan = vi.fn(async () => ({
+        ok: true,
+        planId: 123,
+        scheduledAt: 1800000005000,
+        triggerKind: 'manual',
+      }));
+      const server = {
+        get: vi.fn(),
+        options: vi.fn(),
+        post: vi.fn(),
+      };
+
+      apply({
+        baseDir: dir,
+        console: {
+          addEntry: vi.fn(),
+          addListener: vi.fn(),
+        },
+        server,
+        affinity: {
+          createManualRandomPlan,
+        },
+      } as any);
+
+      const handler = server.post.mock.calls.find((call) => call[0] === '/api/internal/affinity/v1/random-plans')?.[1];
+      expect(handler).toBeTypeOf('function');
+
+      const badAuthCtx = createKoaCtx({ scopeKind: 'group', scopeId: '829573670', delayMs: 5000 });
+      await handler(badAuthCtx);
+      expect(badAuthCtx.status).toBe(401);
+      expect(createManualRandomPlan).not.toHaveBeenCalled();
+
+      const invalidCtx = createKoaCtx({ scopeKind: 'private', scopeId: '829573670' }, 'Bearer bridge-secret');
+      await handler(invalidCtx);
+      expect(invalidCtx.status).toBe(400);
+      expect(createManualRandomPlan).not.toHaveBeenCalled();
+
+      const okCtx = createKoaCtx({ scopeKind: 'group', scopeId: '829573670', delayMs: 5000 }, 'Bearer bridge-secret');
+      await handler(okCtx);
+      expect(createManualRandomPlan).toHaveBeenCalledWith({
+        scopeKind: 'group',
+        scopeId: '829573670',
+        delayMs: 5000,
+        platform: null,
+        botSelfId: null,
+        channelId: '829573670',
+        guildId: '829573670',
+        conversationId: null,
+      });
+      expect(okCtx.status).toBe(200);
+      expect(JSON.parse(String(okCtx.body))).toEqual({
+        ok: true,
+        planId: 123,
+        scheduledAt: 1800000005000,
+        triggerKind: 'manual',
+      });
+    } finally {
+      if (previousApiKey == null) {
+        delete process.env.QQ_VOICE_BRIDGE_API_KEY;
+      } else {
+        process.env.QQ_VOICE_BRIDGE_API_KEY = previousApiKey;
+      }
     }
   });
 

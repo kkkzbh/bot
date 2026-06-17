@@ -3,6 +3,145 @@
 
 export type ServiceAction = "start" | "stop" | "restart" | "enable";
 
+export type AffinityCharacterId = "sakiko";
+export type AffinityScopeKind = "group" | "private";
+export type AffinityStage = "stranger" | "polite" | "remembered" | "trusted" | "special";
+export type AffinityMood = "neutral" | "calm" | "focused" | "pleased" | "guarded" | "tired" | "embarrassed";
+export type AffinityRandomDirection =
+  | "local_thread"
+  | "daily_greeting"
+  | "music_rehearsal"
+  | "contest_discussion"
+  | "computer_knowledge"
+  | "web_hot_topic"
+  | "relationship_scene";
+
+export interface AffinityAnalysisModelConfig {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  requestMode: "chat_completions" | "responses";
+  structuredOutputProtocol: "native_chat_json_schema" | "native_responses_json_schema" | "chat_reply_v1" | "json_mode";
+  timeoutMs: number;
+}
+
+export interface AffinitySettings {
+  enabled: boolean;
+  proactiveEnabled: boolean;
+  randomWindowStartHour: number;
+  randomWindowEndHour: number;
+  randomCountWeights: [number, number, number, number];
+  enabledDirections: AffinityRandomDirection[];
+  webSourceEnabled: boolean;
+  analysisModel: Partial<AffinityAnalysisModelConfig>;
+}
+
+export interface AffinityScopeConfigRecord {
+  id: number;
+  characterId: AffinityCharacterId;
+  scopeKind: AffinityScopeKind;
+  scopeId: string;
+  enabled: number;
+  proactiveEnabled: number;
+  label: string | null;
+  platform: string | null;
+  botSelfId: string | null;
+  channelId: string | null;
+  guildId: string | null;
+  conversationId: string | null;
+  updatedAt: number;
+}
+
+export interface AffinityUserStateRecord {
+  id: number;
+  characterId: AffinityCharacterId;
+  userKey: string;
+  platform: string;
+  userId: string;
+  displayName: string | null;
+  trust: number;
+  familiarity: number;
+  comfort: number;
+  tension: number;
+  mood: AffinityMood;
+  attentionHeat: number;
+  energy: number;
+  stage: AffinityStage;
+  flags: string | null;
+  unlockedScenes: string | null;
+  dailyState: string | null;
+  weeklyState: string | null;
+  lastSeenAt: number;
+  lastUpdatedAt: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AffinityEventRecord {
+  id: number;
+  userKey: string | null;
+  scopeKind: AffinityScopeKind;
+  scopeId: string;
+  eventType: string;
+  effectTier: string;
+  route: string;
+  confidence: number;
+  reasonCode: string;
+  deltaJson: string | null;
+  evidence: string | null;
+  createdAt: number;
+}
+
+export interface AffinityRandomPlanRecord {
+  id: number;
+  scopeKind: AffinityScopeKind;
+  scopeId: string;
+  dayKey: string;
+  slotIndex: number;
+  direction: AffinityRandomDirection;
+  scheduledAt: number;
+  status: "pending" | "sent" | "skipped" | "failed" | "expired";
+  messageText: string | null;
+  skipReason: string | null;
+  sentAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AffinityAuditRecord {
+  id: number;
+  eventType: string;
+  userKey: string | null;
+  scopeKind: AffinityScopeKind | null;
+  scopeId: string | null;
+  detail: string | null;
+  createdAt: number;
+}
+
+export interface AffinityWhitelistInput {
+  characterId?: AffinityCharacterId;
+  scopeKind: AffinityScopeKind;
+  scopeId: string;
+  enabled: boolean;
+  proactiveEnabled: boolean;
+  label?: string | null;
+  platform?: string | null;
+  botSelfId?: string | null;
+  channelId?: string | null;
+  guildId?: string | null;
+  conversationId?: string | null;
+}
+
+export interface AffinityStateSummary {
+  available: boolean;
+  settings: AffinitySettings;
+  scopes: AffinityScopeConfigRecord[];
+  users: AffinityUserStateRecord[];
+  recentEvents: AffinityEventRecord[];
+  randomPlans: AffinityRandomPlanRecord[];
+  audit: AffinityAuditRecord[];
+}
+
 export type BotServiceUnit =
   | "qqbot.target"
   | "qqbot-pmhq.service"
@@ -462,6 +601,7 @@ export interface BotConsoleState {
   featureScopes: ConsoleFeatureScope[];
   featureOverrides: FeatureScopeOverrideRecord[];
   conversationTargets: ConversationTarget[];
+  affinity: AffinityStateSummary;
   toolPolicy?: BotConsoleToolPolicyState | null;
   modelTabs: BotConsoleModelTabsState;
   tts: BotConsoleTtsState;
@@ -607,6 +747,21 @@ export interface GetMemoryStateResponse extends BotConsoleMemoryState {}
 export interface BotConsoleMemoryMutationResponse {
   ok: boolean;
   memory: BotConsoleMemoryState;
+}
+
+export interface SaveAffinitySettingsResponse {
+  ok: boolean;
+  affinity: AffinityStateSummary;
+}
+
+export interface SaveAffinityWhitelistResponse {
+  ok: boolean;
+  affinity: AffinityStateSummary;
+}
+
+export interface AdjustAffinityUserResponse {
+  ok: boolean;
+  affinity: AffinityStateSummary;
 }
 
 export interface SaveEnvResponse {

@@ -1250,6 +1250,69 @@
     margin: 0;
 }
 
+.bc-card {
+    margin-top: 1rem;
+    padding: 1rem;
+    border: 1px solid var(--k-color-border);
+    border-radius: 8px;
+    background: var(--k-color-bg);
+}
+
+.bc-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.85rem;
+}
+
+.bc-card-head h3 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.bc-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+}
+
+.bc-check-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0.5rem;
+    margin-top: 0.85rem;
+}
+
+.bc-check-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--k-color-text);
+}
+
+.bc-list {
+    display: grid;
+    gap: 0.55rem;
+    margin-top: 0.75rem;
+}
+
+.bc-list-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.7rem;
+    border: 1px solid var(--k-color-border);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--k-color-bg) 96%, var(--k-color-primary));
+}
+
+.bc-list-row p {
+    margin: 0.15rem 0 0;
+}
+
 /* ── Tooltip help icon ──────────────────────────────────────────────────── */
 
 .bc-field-help {
