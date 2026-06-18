@@ -1,5 +1,7 @@
 # QQ AI Chat Bot
 
+English | [简体中文](README.zh-CN.md)
+
 A QQ chat bot built with Koishi, OneBot, LLBot, PMHQ, and ChatLuna.
 
 This README is for users who want to install and run a bot. It keeps the setup
