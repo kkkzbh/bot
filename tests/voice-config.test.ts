@@ -219,7 +219,7 @@ describe('qq voice config wiring', () => {
     expect(installer).toContain('QQBOT_DEPLOY_DRY_RUN');
     expect(installer).toContain('QQBOT_SERVER_ENV_FILE="${SHARED_DIR}/.env.server"');
 
-    expect(prereqs).toContain('require_cmd corepack');
+    expect(prereqs).toContain('corepack or npm');
     expect(prereqs).toContain('require_cmd google-chrome');
     expect(prereqs).toContain('require_cmd podman');
     expect(prereqs).toContain('podman compose version');

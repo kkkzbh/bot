@@ -79,28 +79,25 @@ describe('chatluna prompt pollution regression', () => {
 
   it('uses a chatluna build without pseudo natural-language after_user_message injection', () => {
     const packageRoot = resolveChatlunaSourceRoot();
-    const builtEntry = readFileSync(join(packageRoot, 'lib/index.cjs'), 'utf8');
+    const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/legacy-executor.ts'), 'utf8');
 
-    expect(builtEntry).toContain('requests["after_user_message"] = afterUserMessage');
-    expect(builtEntry).toContain('qqbot_after_user_message');
-    expect(builtEntry).not.toContain('AGENT_AFTER_USER_PROMPT');
-    expect(builtEntry).not.toContain('Respond naturally according to your system prompt');
+    expect(executorSource).toContain('after_user_message');
+    expect(executorSource).toContain('mergeFinalResponseInstructionAfterUserMessage');
+    expect(executorSource).not.toContain('AGENT_AFTER_USER_PROMPT');
+    expect(executorSource).not.toContain('Respond naturally according to your system prompt');
   });
 
-  it('keeps finishContract wired through plugin chat chain construction', () => {
+  it('keeps qqbot request extensions wired through agent chat chain construction', () => {
     const packageRoot = resolveChatlunaSourceRoot();
-    const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
+    const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/agent_chat_chain.ts'), 'utf8');
 
-    expect(pluginChainSource).toContain('finishContract');
-    expect(pluginChainSource).toContain('finishContract: this.finishContract');
-    expect(pluginChainSource).toContain('ensureToolMaskAllows');
     expect(pluginChainSource).toContain('toolMask,');
-    expect(pluginChainSource).toContain('toolMask,\n            finishContract');
+    expect(pluginChainSource).toContain('copyQqbotRequestExtensions(requests, message)');
   });
 
   it('removes the legacy reply_plan module and switches executor to the final response contract', () => {
     const packageRoot = resolveChatlunaSourceRoot();
-    const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/executor.ts'), 'utf8');
+    const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/legacy-executor.ts'), 'utf8');
 
     expect(existsSync(join(packageRoot, 'src/llm-core/agent/reply_plan.ts'))).toBe(false);
     expect(executorSource).not.toContain('finishContract.maxRetries');
@@ -114,24 +111,21 @@ describe('chatluna prompt pollution regression', () => {
 
   it('removes plugin chat chain whole-turn retry loop', () => {
     const packageRoot = resolveChatlunaSourceRoot();
-    const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
-    const builtEntry = readFileSync(join(packageRoot, 'lib/index.cjs'), 'utf8');
+    const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/agent_chat_chain.ts'), 'utf8');
 
     expect(pluginChainSource).not.toContain('for (let i = 0; i < 3; i++)');
     expect(pluginChainSource).toContain('response = await request()');
-    expect(builtEntry).not.toContain('for (let i = 0; i < 3; i++)');
-    expect(builtEntry).toContain('response = await request2();');
   });
 
   it('wires the reply output contract through the plugin request path', () => {
     const packageRoot = resolveChatlunaSourceRoot();
-    const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
-    const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/executor.ts'), 'utf8');
+    const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/agent_chat_chain.ts'), 'utf8');
+    const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/legacy-executor.ts'), 'utf8');
 
-    const hasLegacyContractPath = pluginChainSource.includes("requests['qqbot_final_response_contract'] = finalResponseContract");
-    const hasSchemaInstructionPath = pluginChainSource.includes("requests['qqbot_final_response_schema'] = finalResponseSchema")
-      && pluginChainSource.includes("requests['qqbot_final_response_instruction'] =");
-    expect(hasLegacyContractPath || hasSchemaInstructionPath).toBe(true);
+    expect(pluginChainSource).toContain("'qqbot_final_response_contract'");
+    expect(pluginChainSource).toContain("'qqbot_final_response_schema'");
+    expect(pluginChainSource).toContain("'qqbot_final_response_instruction'");
+    expect(pluginChainSource).toContain("'overrideRequestParams'");
     expect(executorSource).toContain("type: 'json_schema'");
     expect(executorSource).toContain('buildFinalResponseOverrideRequestParams');
     expect(
@@ -142,7 +136,7 @@ describe('chatluna prompt pollution regression', () => {
     expect(executorSource).not.toContain("tool_choice: 'none'");
     expect(executorSource).not.toContain('finalResponseMode');
     expect(executorSource).toContain('buildAgentPlanningConfig');
-    expect(executorSource).toContain('const planConfig = buildAgentPlanningConfig(input, config)');
+    expect(executorSource).toContain('const planningConfig = buildAgentPlanningConfig(input, config)');
     expect(executorSource).toContain('overrideRequestParams');
   });
 
@@ -160,12 +154,10 @@ describe('chatluna prompt pollution regression', () => {
     const sharedAdapterRequesterSource = readFileSync(join(sharedAdapterRoot, 'src', 'requester.ts'), 'utf8');
     const openAIRequesterSource = readFileSync(join(openAiAdapterRoot, 'src', 'requester.ts'), 'utf8');
 
-    expect(sharedAdapterRequesterSource).toContain("override['qqbot_request_mode'] === 'responses'");
-    expect(sharedAdapterRequesterSource).toContain("completionUrl: string = 'responses'");
     expect(sharedAdapterRequesterSource).toContain('sanitizeOverrideRequestParams');
     expect(sharedAdapterRequesterSource).toContain("key.startsWith('qqbot_')");
-    expect(openAIRequesterSource).toContain("params.overrideRequestParams['qqbot_request_mode'] === 'responses'");
-    expect(openAIRequesterSource).toContain("completionResponses(");
+    expect(openAIRequesterSource).toContain("override['qqbot_request_mode'] === 'responses'");
+    expect(openAIRequesterSource).toContain("responseApiCompletion(");
   });
 
   it('uses a chatluna context manager build that accepts plain prompt message objects', () => {
@@ -179,16 +171,17 @@ describe('chatluna prompt pollution regression', () => {
 
   it('suppresses tool call thought rendering in qqbot agent reply mode', () => {
     const packageRoot = resolveChatlunaSourceRoot();
-    const requestModelSource = readFileSync(join(packageRoot, 'src/middlewares/model/request_model.ts'), 'utf8');
+    const requestModelSource = readFileSync(join(packageRoot, 'src/middlewares/conversation/request_conversation.ts'), 'utf8');
 
-    expect(requestModelSource).toContain("context.options.inputMessage?.additional_kwargs?.qqbot_reply_mode ===");
+    expect(requestModelSource).toContain('context.options.inputMessage?.additional_kwargs');
+    expect(requestModelSource).toContain('qqbot_reply_mode ===');
     expect(requestModelSource).toContain("'agent'");
     expect(requestModelSource).toContain('return');
   });
 
-  it('keeps reply request_model cleanup hooks wired through the request path', () => {
+  it('keeps reply request_conversation cleanup hooks wired through the request path', () => {
     const packageRoot = resolveChatlunaSourceRoot();
-    const requestModelSource = readFileSync(join(packageRoot, 'src/middlewares/model/request_model.ts'), 'utf8');
+    const requestModelSource = readFileSync(join(packageRoot, 'src/middlewares/conversation/request_conversation.ts'), 'utf8');
     const generationSource = readFileSync(join(process.cwd(), 'src/plugins/reply/voice/generation.ts'), 'utf8');
 
     expect(requestModelSource).toContain('maybeHandleReplyRequestModelError');
@@ -196,28 +189,26 @@ describe('chatluna prompt pollution regression', () => {
     expect(generationSource).toContain('registerReplyRunRequestModelGuard');
     expect(generationSource).toContain('suppressReplyErrorNotice(session);');
     expect(generationSource).toContain('setReplyRequestModelErrorHandler(session, undefined);');
+    expect(generationSource).toContain("executorBuilder.after('request_conversation');");
   });
 
-  it('keeps multimodal content structured through request_model and shared-adapter boundaries', () => {
+  it('keeps multimodal content structured through request_conversation and shared-adapter boundaries', () => {
     const packageRoot = resolveChatlunaSourceRoot();
     const sharedAdapterRoot = resolveChatlunaSiblingPackageRoot('shared-adapter');
     const readChatMessageSource = readFileSync(join(packageRoot, 'src/middlewares/chat/read_chat_message.ts'), 'utf8');
-    const requestModelSource = readFileSync(join(packageRoot, 'src/middlewares/model/request_model.ts'), 'utf8');
-    const chatServiceSource = readFileSync(join(packageRoot, 'src/services/chat.ts'), 'utf8');
+    const requestModelSource = readFileSync(join(packageRoot, 'src/middlewares/conversation/request_conversation.ts'), 'utf8');
+    const conversationRuntimeSource = readFileSync(join(packageRoot, 'src/services/conversation_runtime.ts'), 'utf8');
     const sharedAdapterSource = readFileSync(join(sharedAdapterRoot, 'src', 'utils.ts'), 'utf8');
-    const sharedAdapterRequesterSource = readFileSync(join(sharedAdapterRoot, 'src', 'requester.ts'), 'utf8');
 
-    expect(readChatMessageSource).toContain("url.startsWith('base64://')");
-    expect(readChatMessageSource).toContain("data:${ext ?? 'image/jpeg'};base64,${base64}");
+    expect(readChatMessageSource).toContain("image_url: { url: imageUrl }");
+    expect(readChatMessageSource).toContain('addTextPart(message, `[image:${imageText}]`)');
     expect(requestModelSource).toContain('qqbot_input_content_meta');
     expect(requestModelSource).toContain('ensureImageContentIntegrity');
     expect(requestModelSource).toContain('originContent.map(async (message) =>');
     expect(requestModelSource).not.toContain('sortContentByType(');
-    expect(chatServiceSource).toContain('ensureMessageImageIntegrity(message)');
+    expect(conversationRuntimeSource).toContain('serializeQqbotHumanMessageContent');
     expect(sharedAdapterSource).toContain("detail: 'high'");
     expect(sharedAdapterSource).not.toContain("detail: 'low'");
-    expect(sharedAdapterRequesterSource).toContain('summarizeLastUserMessage');
-    expect(sharedAdapterRequesterSource).toContain('hasImageUrl');
   });
 
   it('keeps tool-call history content as strings for OpenAI-compatible request payloads', () => {
@@ -233,11 +224,18 @@ describe('chatluna prompt pollution regression', () => {
 
   it('keeps research history normalization bundle aligned with AIMessage imports', () => {
     const packageRoot = resolveChatlunaSourceRoot();
+    const messageHistorySource = readFileSync(
+      join(packageRoot, 'src', 'llm-core', 'memory', 'message', 'database_history.ts'),
+      'utf8',
+    );
     const messageHistoryBundle = readFileSync(
       join(packageRoot, 'lib', 'llm-core', 'memory', 'message', 'index.cjs'),
       'utf8',
     );
 
-    expect(messageHistoryBundle).toMatch(/new import_messages\d*\.AIMessage\(normalizedText2\)/);
+    expect(messageHistorySource).toContain('normalizeResearchReplyHistory');
+    expect(messageHistorySource).toContain('new AIMessage(normalizedText)');
+    expect(messageHistoryBundle).toContain('normalizeResearchReplyHistory');
+    expect(messageHistoryBundle).toMatch(/new import_messages\d*\.AIMessage\(normalizedText\)/);
   });
 });

@@ -53,11 +53,11 @@ async function loadReplyToolMemoryEntries(
 ): Promise<ToolMemoryEntry[]> {
   const database = ctx.database as unknown as {
     get: (
-      table: 'chathub_conversation',
+      table: 'chatluna_conversation',
       query: { id: string },
     ) => Promise<Array<{ additional_kwargs?: string }>>;
   };
-  const [conversation] = await database.get('chathub_conversation', {
+  const [conversation] = await database.get('chatluna_conversation', {
     id: conversationId,
   });
   const rawAdditionalArgs =

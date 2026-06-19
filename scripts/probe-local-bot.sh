@@ -470,8 +470,7 @@ async function main() {
           const shouldUseIsolatedRoom =
             Boolean(probeIsolatedRoom) ||
             requestedProbeTab != null ||
-            requestedProbeRoomModel != null ||
-            runtimeProfile.requestMode === 'responses'
+            requestedProbeRoomModel != null
 
           let resolvedProbeTab = requestedProbeTab
           let resolvedProbeRoomModel = requestedProbeRoomModel

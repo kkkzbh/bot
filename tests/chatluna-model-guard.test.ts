@@ -635,9 +635,9 @@ describe('syncRoomModelToMainChatRuntime', () => {
       model: 'openai/gpt-5.4-mini',
     };
     const clearCache = vi.fn(async () => undefined);
-    const upsertRoom = vi.fn(async () => undefined);
+    const updateConversationModel = vi.fn(async () => undefined);
 
-    await expect(syncRoomModelToMainChatRuntime({ room, clearCache, upsertRoom })).resolves.toMatchObject({
+    await expect(syncRoomModelToMainChatRuntime({ room, clearCache, updateConversationModel })).resolves.toMatchObject({
       changed: true,
       originalModel: 'openai/gpt-5.4-mini',
       generation: 1,
@@ -649,7 +649,7 @@ describe('syncRoomModelToMainChatRuntime', () => {
     });
     expect(room.model).toBe('openai/claude-haiku-4.5');
     expect(clearCache).toHaveBeenCalledWith(room);
-    expect(upsertRoom).toHaveBeenCalledWith(room);
+    expect(updateConversationModel).toHaveBeenCalledWith('conv-1', 'openai/claude-haiku-4.5');
   });
 });
 

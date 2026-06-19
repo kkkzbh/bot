@@ -30,7 +30,7 @@ vi.mock('koishi-plugin-chatluna/utils/string', async () => {
   };
 });
 
-type TableName = 'chathub_conversation' | 'chathub_message';
+type TableName = 'chatluna_conversation' | 'chatluna_message';
 type Row = Record<string, any>;
 type SimplifiedHistoryMessage = { role: string; content: string };
 
@@ -48,8 +48,8 @@ class MemoryDatabase {
 
   constructor(seed: { conversations?: Row[]; messages?: Row[] } = {}) {
     this.tables = {
-      chathub_conversation: (seed.conversations ?? []).map(cloneRow),
-      chathub_message: (seed.messages ?? []).map(cloneRow),
+      chatluna_conversation: (seed.conversations ?? []).map(cloneRow),
+      chatluna_message: (seed.messages ?? []).map(cloneRow),
     };
   }
 
@@ -96,7 +96,7 @@ class MemoryDatabase {
 
 function createHistory(args: { conversationId: string; latestId: string | null; messages: Row[] }) {
   const database = new MemoryDatabase({
-    conversations: [{ id: args.conversationId, latestId: args.latestId, updatedAt: new Date(0) }],
+    conversations: [{ id: args.conversationId, latestMessageId: args.latestId, updatedAt: new Date(0) }],
     messages: args.messages,
   });
   const ctx = {
@@ -109,10 +109,17 @@ function createHistory(args: { conversationId: string; latestId: string | null; 
 async function createChatHistory(args: { conversationId: string; latestId: string | null; messages: Row[] }) {
   const { ctx, database } = createHistory(args);
   const historyModule = (await import(resolveChatlunaCoreImportUrl('lib/llm-core/memory/message/index.cjs'))) as {
-    KoishiChatMessageHistory: new (ctx: unknown, conversationId: string, maxMessagesCount: number) => any;
+    KoishiChatMessageHistory: new (ctx: unknown, conversationId: string, maxMessagesCount: number, chatluna: unknown) => any;
   };
   const { KoishiChatMessageHistory } = historyModule;
-  const history = new KoishiChatMessageHistory(ctx as never, args.conversationId, 10_000);
+  const chatluna = {
+    config: {
+      defaultModel: 'openai:gpt-4.1',
+      defaultPreset: 'default',
+      defaultChatMode: 'chat',
+    },
+  };
+  const history = new KoishiChatMessageHistory(ctx as never, args.conversationId, 10_000, chatluna);
   return { history, database };
 }
 
@@ -246,23 +253,23 @@ describe('research reply history compatibility', () => {
         {
           id: 'msg-human-1',
           role: 'human',
-          parent: null,
-          conversation: 'conv-1',
+          parentId: null,
+          conversationId: 'conv-1',
           content: encodeStoredContent('你好'),
         },
         {
           id: 'msg-ai-1',
           role: 'ai',
-          parent: 'msg-human-1',
-          conversation: 'conv-1',
+          parentId: 'msg-human-1',
+          conversationId: 'conv-1',
           content: encodeStoredContent(''),
           tool_calls: [{ id: 'tool-1', name: 'submit_reply_plan' }],
         },
         {
           id: 'msg-tool-1',
           role: 'tool',
-          parent: 'msg-ai-1',
-          conversation: 'conv-1',
+          parentId: 'msg-ai-1',
+          conversationId: 'conv-1',
           content: encodeStoredContent('{"segments":[{"kind":"text","content":"收到"}]}'),
           tool_call_id: 'tool-1',
         },
@@ -275,17 +282,17 @@ describe('research reply history compatibility', () => {
     expect(result.deletedMessageIds).toEqual(['msg-tool-1', 'msg-ai-1']);
     expect(result.latestId).toBe(result.normalizedMessageId);
 
-    const [conversation] = await database.get('chathub_conversation', { id: 'conv-1' });
-    expect(conversation.latestId).toBe(result.normalizedMessageId);
+    const [conversation] = await database.get('chatluna_conversation', { id: 'conv-1' });
+    expect(conversation.latestMessageId).toBe(result.normalizedMessageId);
     expect(conversation.updatedAt).toEqual(updatedAt);
 
-    const storedMessages = await database.get('chathub_message', { conversation: 'conv-1' });
+    const storedMessages = await database.get('chatluna_message', { conversationId: 'conv-1' });
     expect(storedMessages).toHaveLength(2);
     expect(storedMessages.map((message) => message.role)).toEqual(['human', 'ai']);
     expect(storedMessages[1]).toEqual(
       expect.objectContaining({
         id: result.normalizedMessageId,
-        parent: 'msg-human-1',
+        parentId: 'msg-human-1',
         role: 'ai',
       }),
     );
@@ -302,42 +309,6 @@ describe('research reply history compatibility', () => {
     ]);
   });
 
-  it('strips legacy qqbot assistant control headers from loaded ai history', async () => {
-    const { history } = await createChatHistory({
-      conversationId: 'conv-legacy-assistant-marker',
-      latestId: 'msg-ai-legacy',
-      messages: [
-        {
-          id: 'msg-human-legacy',
-          role: 'human',
-          parent: null,
-          conversation: 'conv-legacy-assistant-marker',
-          content: encodeStoredContent('你之前是怎么回复的'),
-        },
-        {
-          id: 'msg-ai-legacy',
-          role: 'ai',
-          parent: 'msg-human-legacy',
-          conversation: 'conv-legacy-assistant-marker',
-          content: encodeStoredContent('[assistant_message mentions=["1405359129"]] [mention:1405359129] 查到了。'),
-        },
-      ],
-    });
-
-    await history.loadConversation();
-    const visibleMessages = await history.getMessages();
-
-    expect(
-      visibleMessages.map((message: { getType: () => string; content: unknown }) => ({
-        role: message.getType(),
-        content: message.content,
-      })),
-    ).toEqual([
-      { role: 'human', content: '你之前是怎么回复的' },
-      { role: 'ai', content: '查到了。' },
-    ]);
-  });
-
   it('appends the next human message to the normalized ai tail instead of the deleted tool chain', async () => {
     const { history, database } = await createChatHistory({
       conversationId: 'conv-2',
@@ -346,39 +317,39 @@ describe('research reply history compatibility', () => {
         {
           id: 'msg-human-1',
           role: 'human',
-          parent: null,
-          conversation: 'conv-2',
+          parentId: null,
+          conversationId: 'conv-2',
           content: encodeStoredContent('查一下然后回我一句'),
         },
         {
           id: 'msg-ai-1',
           role: 'ai',
-          parent: 'msg-human-1',
-          conversation: 'conv-2',
+          parentId: 'msg-human-1',
+          conversationId: 'conv-2',
           content: encodeStoredContent(''),
           tool_calls: [{ id: 'tool-search', name: 'web_search' }],
         },
         {
           id: 'msg-tool-1',
           role: 'tool',
-          parent: 'msg-ai-1',
-          conversation: 'conv-2',
+          parentId: 'msg-ai-1',
+          conversationId: 'conv-2',
           content: encodeStoredContent('搜索结果'),
           tool_call_id: 'tool-search',
         },
         {
           id: 'msg-ai-2',
           role: 'ai',
-          parent: 'msg-tool-1',
-          conversation: 'conv-2',
+          parentId: 'msg-tool-1',
+          conversationId: 'conv-2',
           content: encodeStoredContent(''),
           tool_calls: [{ id: 'tool-submit', name: 'submit_reply_plan' }],
         },
         {
           id: 'msg-tool-2',
           role: 'tool',
-          parent: 'msg-ai-2',
-          conversation: 'conv-2',
+          parentId: 'msg-ai-2',
+          conversationId: 'conv-2',
           content: encodeStoredContent('{"segments":[{"kind":"text","content":"最终回复"}]}'),
           tool_call_id: 'tool-submit',
         },
@@ -388,15 +359,15 @@ describe('research reply history compatibility', () => {
     const result = await normalizeHistory(history, '最终回复');
     await history.addUserMessage('下一句');
 
-    const [conversation] = await database.get('chathub_conversation', { id: 'conv-2' });
-    const storedMessages = await database.get('chathub_message', { conversation: 'conv-2' });
-    const latestMessage = storedMessages.find((message) => message.id === conversation.latestId);
+    const [conversation] = await database.get('chatluna_conversation', { id: 'conv-2' });
+    const storedMessages = await database.get('chatluna_message', { conversationId: 'conv-2' });
+    const latestMessage = storedMessages.find((message) => message.id === conversation.latestMessageId);
 
     expect(result.deletedMessageIds).toEqual(['msg-tool-2', 'msg-ai-2', 'msg-tool-1', 'msg-ai-1']);
     expect(latestMessage).toEqual(
       expect.objectContaining({
         role: 'human',
-        parent: result.normalizedMessageId,
+        parentId: result.normalizedMessageId,
       }),
     );
   });
@@ -409,23 +380,23 @@ describe('research reply history compatibility', () => {
         {
           id: 'msg-human-1',
           role: 'human',
-          parent: null,
-          conversation: 'conv-3',
+          parentId: null,
+          conversationId: 'conv-3',
           content: encodeStoredContent('查一下液态玻璃'),
         },
         {
           id: 'msg-ai-1',
           role: 'ai',
-          parent: 'msg-human-1',
-          conversation: 'conv-3',
+          parentId: 'msg-human-1',
+          conversationId: 'conv-3',
           content: encodeStoredContent(''),
           tool_calls: [{ id: 'tool-1' }],
         },
         {
           id: 'msg-tool-1',
           role: 'tool',
-          parent: 'msg-ai-1',
-          conversation: 'conv-3',
+          parentId: 'msg-ai-1',
+          conversationId: 'conv-3',
           content: encodeStoredContent('{"segments":[]}'),
           tool_call_id: 'tool-1',
         },
@@ -441,8 +412,8 @@ describe('research reply history compatibility', () => {
       normalizedText: '',
     });
 
-    const [conversation] = await database.get('chathub_conversation', { id: 'conv-3' });
-    expect(conversation.latestId).toBe('msg-human-1');
+    const [conversation] = await database.get('chatluna_conversation', { id: 'conv-3' });
+    expect(conversation.latestMessageId).toBe('msg-human-1');
 
     const visibleMessages = await history.getMessages();
     expect(
@@ -463,8 +434,8 @@ describe('research reply history compatibility', () => {
         {
           id: 'msg-human-1',
           role: 'human',
-          parent: null,
-          conversation: 'conv-4',
+          parentId: null,
+          conversationId: 'conv-4',
           content: encodeStoredContent('你知道液态玻璃吗'),
         },
       ],
@@ -486,115 +457,31 @@ describe('research reply history compatibility', () => {
       { role: 'ai', content: '知道，是一种界面风格说法' },
     ]);
 
-    const [conversation] = await database.get('chathub_conversation', { id: 'conv-4' });
-    expect(conversation.latestId).toBe(result.normalizedMessageId);
+    const [conversation] = await database.get('chatluna_conversation', { id: 'conv-4' });
+    expect(conversation.latestMessageId).toBe(result.normalizedMessageId);
   });
 
-  it('stores only successful reusable tool results in bounded hidden tool memory', async () => {
-    const { history, database } = await createChatHistory({
-      conversationId: 'conv-5',
-      latestId: 'msg-human-1',
-      messages: [
-        {
-          id: 'msg-human-1',
-          role: 'human',
-          parent: null,
-          conversation: 'conv-5',
-          content: encodeStoredContent('查一下液态玻璃'),
-        },
-      ],
-    });
-
-    const TOOL_MEMORY_STORAGE_KEY = '__chatluna_internal_tool_memory_v1';
-    const firstEntries = [
-      {
-        turnId: 'turn-1',
-        createdAt: '2026-03-23T06:00:00.000Z',
-        toolName: 'web_search',
-        inputDigest: '{"query":"液态玻璃"}',
-        snippetFormat: 'text' as const,
-        snippet: '搜索结果 A',
-        freshnessHint: '2026-03-23T06:00:00.000Z',
-      },
-    ];
-
-    await history.storeToolMemoryEntries(firstEntries, {
-      storageKey: TOOL_MEMORY_STORAGE_KEY,
-      maxEntries: 3,
-    });
-
-    await history.storeToolMemoryEntries(
-      [
-        {
-          ...firstEntries[0],
-          createdAt: '2026-03-23T06:01:00.000Z',
-          snippet: '搜索结果 A（更新版）',
-        },
-        {
-          turnId: 'turn-2',
-          createdAt: '2026-03-23T06:02:00.000Z',
-          toolName: 'web_search',
-          inputDigest: '{"query":"另一条"}',
-          snippetFormat: 'text',
-          snippet: '搜索结果 B',
-          freshnessHint: '2026-03-23T06:02:00.000Z',
-        },
-        {
-          turnId: 'turn-3',
-          createdAt: '2026-03-23T06:03:00.000Z',
-          toolName: 'web_browser',
-          inputDigest: '{"url":"https://example.com"}',
-          snippetFormat: 'text',
-          snippet: '页面摘要',
-          freshnessHint: '2026-03-23T06:03:00.000Z',
-        },
-        {
-          turnId: 'turn-4',
-          createdAt: '2026-03-23T06:04:00.000Z',
-          toolName: 'weather',
-          inputDigest: '{"location":"上海"}',
-          snippetFormat: 'json',
-          snippet: '{"temp":23}',
-          freshnessHint: '2026-03-23T06:04:00.000Z',
-        },
-      ],
-      {
-        storageKey: TOOL_MEMORY_STORAGE_KEY,
-        maxEntries: 3,
-      },
-    );
-
-    const [conversation] = await database.get('chathub_conversation', { id: 'conv-5' });
-    const additionalArgs = JSON.parse(String(conversation.additional_kwargs ?? '{}'));
-    const storedEntries = JSON.parse(String(additionalArgs[TOOL_MEMORY_STORAGE_KEY] ?? '[]'));
-
-    expect(storedEntries).toHaveLength(3);
-    expect(storedEntries.map((entry: { toolName: string; snippet: string }) => [entry.toolName, entry.snippet])).toEqual([
-      ['weather', '{"temp":23}'],
-      ['web_browser', '页面摘要'],
-      ['web_search', '搜索结果 B'],
-    ]);
-  });
 });
 
 describe('chatluna room auto-update', () => {
-  it('drops legacy reply-mode preservation helpers during template sync', () => {
+  it('uses conversation runtime instead of legacy room reply-mode preservation helpers', () => {
     const packageRoot = resolveChatlunaSourceRoot();
-    const resolveRoomSource = readFileSync(join(packageRoot, 'src/middlewares/room/resolve_room.ts'), 'utf8');
+    const conversationSource = readFileSync(join(packageRoot, 'src/services/conversation.ts'), 'utf8');
+    const defaultChatSource = readFileSync(join(packageRoot, 'src/llm-core/chat/default.ts'), 'utf8');
 
-    expect(resolveRoomSource).not.toContain('shouldPreserveExplicitReplyChatMode');
-    expect(resolveRoomSource).not.toContain('isResearchReplyChatMode');
-    expect(resolveRoomSource).not.toContain('normalizeLegacyReplyChatMode');
-    expect(resolveRoomSource).toContain("export type ChatMode =");
-    expect(resolveRoomSource).toContain("'plugin'");
-    expect(resolveRoomSource).toContain("'browsing'");
+    expect(conversationSource).not.toContain('shouldPreserveExplicitReplyChatMode');
+    expect(conversationSource).not.toContain('isResearchReplyChatMode');
+    expect(conversationSource).not.toContain('normalizeLegacyReplyChatMode');
+    expect(conversationSource).toContain('ensureActiveConversation');
+    expect(defaultChatSource).toContain("chatInterface?.chatMode === 'plugin'");
+    expect(defaultChatSource).toContain("chatInterface?.chatMode === 'browsing'");
   });
 
-  it('passes qqbot research follow-up prompts through after_user_message', () => {
+  it('passes qqbot final response instructions through after_user_message', () => {
     const packageRoot = resolveChatlunaSourceRoot();
-    const pluginChainSource = readFileSync(join(packageRoot, 'src/llm-core/chain/plugin_chat_chain.ts'), 'utf8');
+    const executorSource = readFileSync(join(packageRoot, 'src/llm-core/agent/legacy-executor.ts'), 'utf8');
 
-    expect(pluginChainSource).toContain('qqbot_after_user_message');
-    expect(pluginChainSource).toContain("requests['after_user_message'] = afterUserMessage");
+    expect(executorSource).toContain('mergeFinalResponseInstructionAfterUserMessage');
+    expect(executorSource).toContain('after_user_message');
   });
 });

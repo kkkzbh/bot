@@ -20,4 +20,25 @@ describe('chatluna build script dependency closure', () => {
     expect(content).toContain('Linked ChatLuna packages need build');
     expect(content).toContain('Run: pnpm build');
   });
+
+  it('runs the package manager declared by the linked ChatLuna checkout', () => {
+    const helper = readFileSync(resolve(process.cwd(), 'scripts/lib/chatluna-package-manager.sh'), 'utf8');
+    const buildScript = readFileSync(resolve(process.cwd(), 'scripts/ensure-chatluna-build.sh'), 'utf8');
+
+    expect(helper).toContain('pkg.packageManager');
+    expect(helper).toContain('corepack "yarn@${yarn_version}" "$@"');
+    expect(helper).toContain('npm exec --yes "@yarnpkg/cli-dist@${yarn_version}" -- "$@"');
+    expect(helper).toContain('install --no-immutable');
+    expect(helper).toContain('install --immutable');
+    expect(buildScript).toContain('chatluna_yarn_fast_build "$CHATLUNA_ROOT_DIR" "${BUILD_TARGETS[@]}"');
+    expect(buildScript).not.toContain('yarn@1.22.22');
+  });
+
+  it('requires deploy bundles to carry the generated Yarn 4 ChatLuna lockfile', () => {
+    const content = readFileSync(resolve(process.cwd(), 'scripts/ci/create-deploy-bundle.sh'), 'utf8');
+
+    expect(content).toContain('missing ChatLuna yarn.lock');
+    expect(content).toContain("^__metadata:");
+    expect(content).toContain('ChatLuna yarn.lock is not a Yarn 4 lockfile');
+  });
 });

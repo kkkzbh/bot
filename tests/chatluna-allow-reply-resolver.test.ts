@@ -33,6 +33,6 @@ describe('chatluna allow_reply resolver source and type export', () => {
     expect(content).toContain('workspace_packages');
     expect(content).toContain('visit(dep_dir)');
     expect(content).toContain('package_dir.name');
-    expect(content).toContain('pnpm run fast-build "${BUILD_TARGETS[@]}"');
+    expect(content).toContain('chatluna_yarn_fast_build "$CHATLUNA_ROOT_DIR" "${BUILD_TARGETS[@]}"');
   });
 });

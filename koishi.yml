@@ -261,9 +261,6 @@ plugins:
       draw: false
       music: false
     chatluna-agent:computer-agent: {}
-    chatluna-mcp-client:aq3m2y:
-      servers: '{"mcpServers":{}}'
-      tools: {}
     ./dist/plugins/model-guard:mjddgg: {}
     ./dist/plugins/affinity:affinity:
       enabled: ${{ env.AFFINITY_ENABLED !== 'false' }}
@@ -310,9 +307,6 @@ plugins:
         config:
           authority: ${{ +env.CHATLUNA_COMMAND_AUTHORITY || 3 }}
       chatluna.tool:
-        config:
-          authority: ${{ +env.CHATLUNA_COMMAND_AUTHORITY || 3 }}
-      chatluna.mcp:
         config:
           authority: ${{ +env.CHATLUNA_COMMAND_AUTHORITY || 3 }}
       chatluna.auth:

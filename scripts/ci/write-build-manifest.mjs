@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 function readArg(name, fallback = '') {
@@ -32,6 +32,20 @@ const qqbotSha = envValue('QQBOT_SHA', commandOutput('git', ['rev-parse', 'HEAD'
 const chatlunaSourceDir = envValue('CHATLUNA_SOURCE_DIR', 'chatluna-src');
 const chatlunaSha = envValue('CHATLUNA_SHA', commandOutput('git', ['-C', chatlunaSourceDir, 'rev-parse', 'HEAD']));
 
+function chatlunaPackageManager() {
+  try {
+    const pkg = JSON.parse(readFileSync(resolve(chatlunaSourceDir, 'package.json'), 'utf8'));
+    return typeof pkg.packageManager === 'string' ? pkg.packageManager : '';
+  } catch {
+    return '';
+  }
+}
+
+function chatlunaYarnVersion() {
+  const packageManager = chatlunaPackageManager();
+  return packageManager.startsWith('yarn@') ? packageManager.slice('yarn@'.length) : '';
+}
+
 const manifest = {
   schemaVersion: 1,
   artifact: {
@@ -52,7 +66,7 @@ const manifest = {
     pnpm: commandOutput('pnpm', ['--version']),
     yarn: envValue(
       'YARN_VERSION',
-      commandOutput('corepack', ['yarn@1.22.22', '--version'], commandOutput('yarn', ['--version'], '1.22.22')),
+      chatlunaYarnVersion() || commandOutput('yarn', ['--version']),
     ),
   },
   github: {

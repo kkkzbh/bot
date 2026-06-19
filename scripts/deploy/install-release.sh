@@ -99,6 +99,8 @@ if [[ ! -f "${CHATLUNA_DIR}/packages/core/package.json" ]]; then
   exit 2
 fi
 
+source "${APP_DIR}/scripts/lib/chatluna-package-manager.sh"
+
 bash "${APP_DIR}/scripts/deploy/verify-host-prereqs.sh"
 node "${APP_DIR}/scripts/validate-server-voice-env.mjs" "${SHARED_DIR}/.env.server"
 
@@ -107,10 +109,7 @@ DEPLOY_APP_DIR="${APP_DIR}" \
 QQBOT_SHARED_DIR="${SHARED_DIR}" \
   bash "${APP_DIR}/scripts/prepare-server-runtime-layer.sh"
 
-(
-  cd "${CHATLUNA_DIR}"
-  COREPACK_ENABLE_PROJECT_SPEC=0 YARN_CACHE_FOLDER="${SHARED_DIR}/cache/yarn" corepack yarn@1.22.22 install --frozen-lockfile
-)
+YARN_CACHE_FOLDER="${SHARED_DIR}/cache/yarn" chatluna_yarn_install_immutable "${CHATLUNA_DIR}"
 
 CHATLUNA_ROOT_DIR="${CHATLUNA_DIR}" bash "${APP_DIR}/scripts/ensure-chatluna-build.sh"
 

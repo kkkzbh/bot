@@ -48,6 +48,10 @@ import {
   type PromptEnvelopeMessage,
 } from '../../shared/prompt-context/index.js';
 import {
+  resolveChatLunaRoomLike,
+  type QqbotChatLunaContextOptionsLike,
+} from '../../shared/chatluna-conversation.js';
+import {
   registerReplyToolMemoryFragment,
 } from '../pipeline/protocol.js';
 import { normalizeReplyChatMode } from '../compat.js';
@@ -224,7 +228,7 @@ type RoomLike = {
 };
 
 type MiddlewareContextLike = {
-  options?: {
+  options?: QqbotChatLunaContextOptionsLike & {
     room?: RoomLike;
     messageId?: string;
     inputMessage?: {
@@ -906,7 +910,7 @@ function registerReplyRunRequestModelGuard(args: {
     }
     const message = error instanceof Error ? error.message : String(error ?? 'unknown error');
     logger.error(
-      'reply request_model failed before executor cleanup: runId=%s conversationId=%s error=%s',
+      'reply request_conversation failed before executor cleanup: runId=%s conversationId=%s error=%s',
       runId,
       conversationId ?? '<unknown>',
       message,
@@ -1851,7 +1855,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         }
         suppressReplyErrorNotice(session);
 
-        const room = context.options?.room as ReplyRuntimeRoomLike | undefined;
+        const room = resolveChatLunaRoomLike(context.options) as ReplyRuntimeRoomLike | undefined;
         const conversationId = room?.conversationId?.trim();
         const queueKey = resolveReplyQueueKey(session);
         const actorKey = resolveReplyActorKey(session);
@@ -1900,6 +1904,8 @@ export function apply(ctx: Context, config: Config = {}): void {
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       }) as ChatLunaChainBuilderLike;
     prepareBuilder.after('read_chat_message');
+    prepareBuilder.after('resolve_conversation');
+    prepareBuilder.after('chatluna_model_guard');
     prepareBuilder.before('message_delay');
     prepareBuilder.before('chatluna_time_context');
     prepareBuilder.before('qqbot_memory');
@@ -1913,7 +1919,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
 
-        const conversationId = context.options?.room?.conversationId?.trim();
+        const conversationId = resolveChatLunaRoomLike(context.options)?.conversationId?.trim();
         if (!conversationId) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
 
         await registerReplyToolMemoryFragment(ctx, conversationId, logger);
@@ -1930,7 +1936,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
 
-        const room = context.options?.room;
+        const room = resolveChatLunaRoomLike(context.options);
         const conversationId = room?.conversationId;
         if (!conversationId || !room) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         if (getReplyRouteState(session) !== 'agent') {
@@ -1968,7 +1974,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
 
-        const room = context.options?.room as ReplyRuntimeRoomLike | undefined;
+        const room = resolveChatLunaRoomLike(context.options) as ReplyRuntimeRoomLike | undefined;
         const conversationId = room?.conversationId?.trim();
         const chatlunaService = resolveChatLunaService();
         if (!room || !conversationId || !chatlunaService) {
@@ -2034,7 +2040,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
         const responseMessage = context.options?.responseMessage;
         if (!responseMessage) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        const room = context.options?.room as ReplyRuntimeRoomLike | undefined;
+        const room = resolveChatLunaRoomLike(context.options) as ReplyRuntimeRoomLike | undefined;
         const conversationId = room?.conversationId?.trim();
         ensureReplyPluginRoom(room);
         ensureSupportedStructuredReplyModel(room);
@@ -2221,7 +2227,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           replyRuntime.finishRun(runId);
         }
       }) as ChatLunaChainBuilderLike;
-    executorBuilder.after('request_model');
+    executorBuilder.after('request_conversation');
     executorBuilder.before('censor');
   });
 

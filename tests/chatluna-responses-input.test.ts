@@ -55,8 +55,8 @@ async function loadResponsesUtils() {
 
 describe('chatluna responses input regression', () => {
   it('keeps only valid function call and tool output pairs in responses mode', async () => {
-    const { langchainMessageToResponsesInput } = await loadResponsesUtils();
-    const paired = await langchainMessageToResponsesInput(
+    const { langchainMessageToResponseInput } = await loadResponsesUtils();
+    const paired = await langchainMessageToResponseInput(
       [
         new AIMessage({
           content: '',
@@ -73,6 +73,7 @@ describe('chatluna responses input regression', () => {
         call_id: 'tool-1',
         name: 'search',
         arguments: '{"q":"liquid glass"}',
+        status: 'completed',
       },
       {
         type: 'function_call_output',
@@ -83,8 +84,8 @@ describe('chatluna responses input regression', () => {
   });
 
   it('uses the single real assistant tool call as the only fallback for missing tool_call_id', async () => {
-    const { langchainMessageToResponsesInput } = await loadResponsesUtils();
-    const recovered = await langchainMessageToResponsesInput(
+    const { langchainMessageToResponseInput } = await loadResponsesUtils();
+    const recovered = await langchainMessageToResponseInput(
       [
         new AIMessage({
           content: '',
@@ -95,7 +96,7 @@ describe('chatluna responses input regression', () => {
       {} as never,
     );
 
-    const dropped = await langchainMessageToResponsesInput(
+    const dropped = await langchainMessageToResponseInput(
       [
         new AIMessage({
           content: '',
@@ -115,6 +116,7 @@ describe('chatluna responses input regression', () => {
         call_id: 'tool-1',
         name: 'search',
         arguments: '{"q":"sakiko"}',
+        status: 'completed',
       },
       {
         type: 'function_call_output',
@@ -128,19 +130,21 @@ describe('chatluna responses input regression', () => {
         call_id: 'tool-1',
         name: 'search',
         arguments: '{"q":"a"}',
+        status: 'completed',
       },
       {
         type: 'function_call',
         call_id: 'tool-2',
         name: 'search',
         arguments: '{"q":"b"}',
+        status: 'completed',
       },
     ]);
   });
 
   it('drops orphan tool outputs whose call ids were not emitted in the request', async () => {
-    const { langchainMessageToResponsesInput } = await loadResponsesUtils();
-    const input = await langchainMessageToResponsesInput(
+    const { langchainMessageToResponseInput } = await loadResponsesUtils();
+    const input = await langchainMessageToResponseInput(
       [
         new ToolMessage({ content: '孤儿结果', name: 'search', tool_call_id: 'tool-orphan' }),
       ],
@@ -156,16 +160,16 @@ describe('chatluna responses input regression', () => {
     const sharedAdapterRequesterSource = readFileSync(join(sharedAdapterRoot, 'src', 'requester.ts'), 'utf8');
     const sharedAdapterBundle = readFileSync(join(sharedAdapterRoot, 'lib', 'index.mjs'), 'utf8');
 
-    expect(sharedAdapterSource).toContain('normalizeResponsesMessageContent');
+    expect(sharedAdapterSource).toContain('responseInputContent');
     expect(sharedAdapterSource).toContain("type: 'input_text'");
     expect(sharedAdapterSource).toContain("type: 'input_image'");
-    expect(sharedAdapterRequesterSource).toContain("type === 'image_url' || type === 'input_image'");
+    expect(sharedAdapterRequesterSource).toContain('langchainMessageToResponseInput');
 
-    expect(sharedAdapterBundle).toContain('normalizeResponsesMessageContent');
+    expect(sharedAdapterBundle).toContain('responseInputContent');
     expect(sharedAdapterBundle).toContain('type: "input_text"');
     expect(sharedAdapterBundle).toContain('type: "input_image"');
-    expect(sharedAdapterBundle).toContain('type === "image_url" || type === "input_image"');
-    expect(sharedAdapterSource).toContain('dropping orphan responses tool output');
-    expect(sharedAdapterBundle).toContain('dropping orphan responses tool output');
+    expect(sharedAdapterBundle).toContain('langchainMessageToResponseInput');
+    expect(sharedAdapterSource).toContain('resolveResponseToolOutputCallIds');
+    expect(sharedAdapterBundle).toContain('resolveResponseToolOutputCallIds');
   });
 });

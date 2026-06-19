@@ -13,7 +13,10 @@ require_cmd() {
 require_cmd bash
 require_cmd tar
 require_cmd node
-require_cmd corepack
+if ! command -v corepack >/dev/null 2>&1 && ! command -v npm >/dev/null 2>&1; then
+  echo "[prereq] missing command: corepack or npm" >&2
+  exit 2
+fi
 require_cmd pnpm
 require_cmd systemctl
 require_cmd journalctl

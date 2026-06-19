@@ -59,7 +59,7 @@ describe('probe-local-bot.sh', () => {
     expect(content).toContain('dispatchedInput');
     expect(content).toContain('resolvedProfile');
     expect(content).toContain('firstErrorSignature');
-    expect(content).toContain("runtimeProfile.requestMode === 'responses'");
+    expect(content).not.toContain("runtimeProfile.requestMode === 'responses'");
     expect(content).toContain("PROBE_ASSERT_FAILURES");
     expect(content).toContain('(saki|祥)');
   });

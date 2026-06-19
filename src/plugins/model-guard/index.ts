@@ -8,7 +8,13 @@ import {
 } from '../reply/index.js';
 import {
   resolvePlatform,
+  resolveMainChatModelDescriptor,
 } from '../shared/llm/index.js';
+import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
+import {
+  resolveChatLunaRoomLike,
+  type QqbotChatLunaContextOptionsLike,
+} from '../shared/chatluna-conversation.js';
 import { beginPromptAssemblyTurn, registerPromptFragment } from '../shared/prompt-context/index.js';
 import { resolveSessionDisplayName } from '../shared/session/index.js';
 import { getNaturalTriggerState } from '../triggers/group-natural/index.js';
@@ -16,7 +22,6 @@ import { syncRoomModelToMainChatRuntime } from './hot-switch.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
-  checkConversationRoomAvailability: (ctx: Context, room: unknown) => Promise<boolean>;
 };
 
 export const name = 'chatluna-model-guard';
@@ -32,6 +37,18 @@ type ChainHookBuilder = {
 type ChatLunaLike = {
   awaitLoadPlatform?: (platform: string, timeout?: number) => Promise<void>;
   clearCache?: (room: RoomLike) => Promise<unknown>;
+  conversation?: {
+    createConversation?: (session: Session, options: {
+      bindingKey?: string;
+      title: string;
+      model: string;
+      preset: string;
+      chatMode: string;
+    }) => Promise<NonNullable<QqbotChatLunaContextOptionsLike['conversation']>['conversation']>;
+  };
+  platform?: {
+    findModel?: (fullModelName: string) => { value?: unknown } | null | undefined;
+  };
   chatChain?: {
     middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => ChainHookBuilder;
   };
@@ -50,7 +67,7 @@ type MiddlewareContextLike = {
   command?: string;
   config: unknown;
   send?: (message: string) => Promise<void>;
-  options?: {
+  options?: QqbotChatLunaContextOptionsLike & {
     room?: RoomLike;
     messageId?: string;
     inputMessage?: {
@@ -65,6 +82,69 @@ function trimOptionalText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim();
   return normalized || null;
+}
+
+function updateResolvedConversationModel(options: MiddlewareContextLike['options'], model: unknown): void {
+  const conversation = options?.conversation?.conversation;
+  const nextModel = trimOptionalText(model);
+  if (!conversation || !nextModel) return;
+  conversation.model = nextModel;
+}
+
+function isQqReplySession(session: Session): boolean {
+  return session.platform === 'onebot' && Boolean(session.channelId) && Boolean(session.userId) && session.userId !== session.bot?.selfId;
+}
+
+async function resolveOrEnsureReplyRoom(
+  chatluna: ChatLunaLike,
+  session: Session,
+  context: MiddlewareContextLike,
+): Promise<RoomLike | undefined> {
+  const resolved = resolveChatLunaRoomLike(context.options);
+  if (resolved) return resolved;
+  if (!isQqReplySession(session)) return undefined;
+
+  const conversationService = chatluna.conversation;
+  if (typeof conversationService?.createConversation !== 'function') {
+    throw new Error('ChatLuna conversation service is required before model guard can create a QQ reply conversation.');
+  }
+
+  context.options ??= {};
+  const current = context.options.conversation;
+  const currentRecord = current as (NonNullable<QqbotChatLunaContextOptionsLike['conversation']> & {
+    effectivePreset?: unknown;
+    effectiveChatMode?: unknown;
+    constraint?: { allowNew?: boolean | null } | null;
+  }) | null | undefined;
+  if (currentRecord?.constraint?.allowNew === false) {
+    throw new Error('ChatLuna conversation constraint forbids creating a QQ reply conversation.');
+  }
+  const bindingKey = trimOptionalText(currentRecord?.bindingKey);
+  const preset = trimOptionalText(currentRecord?.effectivePreset) ?? trimOptionalText(currentRecord?.conversation?.preset);
+  const chatMode = trimOptionalText(currentRecord?.effectiveChatMode) ?? trimOptionalText(currentRecord?.conversation?.chatMode);
+  if (!bindingKey || !preset || !chatMode) {
+    throw new Error('ChatLuna resolved conversation context is incomplete for QQ reply activation.');
+  }
+  const profile = mainChatRuntimeState.getProfile();
+  const descriptor = resolveMainChatModelDescriptor({
+    tabId: profile.tabId,
+    model: profile.canonicalModel,
+  });
+  const conversation = await conversationService.createConversation(session, {
+    bindingKey,
+    title: trimOptionalText(currentRecord?.presetLane) ?? 'New Conversation',
+    model: descriptor.canonicalModel,
+    preset,
+    chatMode,
+  });
+  context.options.conversation = {
+    ...(currentRecord ?? {}),
+    mode: 'active',
+    conversationId: conversation?.id ?? null,
+    conversation,
+  };
+
+  return resolveChatLunaRoomLike(context.options);
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
@@ -85,7 +165,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const context = rawContext as MiddlewareContextLike;
         const inputMessage = context.options?.inputMessage;
         if (!inputMessage) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        const conversationId = context.options?.room?.conversationId?.trim();
+        const conversationId = resolveChatLunaRoomLike(context.options)?.conversationId?.trim();
         if (conversationId) {
           beginPromptAssemblyTurn(conversationId);
         }
@@ -145,16 +225,20 @@ export function apply(ctx: Context, config: Config = {}): void {
             return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
           }
 
-          const room = context.options?.room;
+          const session = rawSession as Session;
+          const room = await resolveOrEnsureReplyRoom(chatluna, session, context);
           if (!room) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
 
           const syncResult = await syncRoomModelToMainChatRuntime({
             room,
             clearCache: chatluna.clearCache?.bind(chatluna),
-            upsertRoom: (nextRoom) => (
-              ctx.database as unknown as { upsert: (table: string, rows: unknown[]) => Promise<unknown> }
-            ).upsert('chathub_room', [nextRoom]),
+            updateConversationModel: (conversationId, model) => (
+              ctx.database as unknown as {
+                set: (table: string, query: unknown, row: unknown) => Promise<unknown>;
+              }
+            ).set('chatluna_conversation', { id: conversationId }, { model }),
           });
+          updateResolvedConversationModel(context.options, room.model);
           if (syncResult.changed) {
             logger.info(
               'hot-switched room model for guard (roomId=%s, model=%s, generation=%s, strategy=%s, requestMode=%s).',
@@ -196,16 +280,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             }
           }
 
-          let available = false;
-          try {
-            available = await ChatLunaChains.checkConversationRoomAvailability(ctx, room as never);
-          } catch (error) {
-            logger.warn(
-              'model guard check failed (roomId=%s): %s',
-              String(room.roomId ?? ''),
-              (error as Error).message,
-            );
-          }
+          const available = Boolean(chatluna.platform?.findModel?.(room.model)?.value);
 
           if (!available) {
             const modelName = trimOptionalText(room.model) ?? 'unknown';
@@ -225,7 +300,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
-      .after('resolve_room')
+      .after('resolve_conversation')
       .before('resolve_model');
   });
 }

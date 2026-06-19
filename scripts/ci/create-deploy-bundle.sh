@@ -18,6 +18,16 @@ if [[ ! -f "${CHATLUNA_SOURCE_DIR}/packages/core/package.json" ]]; then
   exit 2
 fi
 
+if [[ ! -f "${CHATLUNA_SOURCE_DIR}/yarn.lock" ]]; then
+  echo "[bundle] missing ChatLuna yarn.lock; run workspace setup before bundling" >&2
+  exit 2
+fi
+
+if ! grep -q '^__metadata:' "${CHATLUNA_SOURCE_DIR}/yarn.lock"; then
+  echo "[bundle] ChatLuna yarn.lock is not a Yarn 4 lockfile" >&2
+  exit 2
+fi
+
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "[bundle] missing command: $1" >&2

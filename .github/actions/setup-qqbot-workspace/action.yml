@@ -22,10 +22,6 @@ inputs:
     description: pnpm version.
     required: false
     default: 9.15.4
-  yarn-version:
-    description: Yarn version used by linked ChatLuna.
-    required: false
-    default: 1.22.22
   install:
     description: Install qqbot and ChatLuna dependencies.
     required: false
@@ -96,8 +92,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        cd chatluna-src
-        COREPACK_ENABLE_PROJECT_SPEC=0 corepack yarn@${{ inputs.yarn-version }} install --frozen-lockfile
+        source ./scripts/lib/chatluna-package-manager.sh
+        chatluna_yarn_install "${GITHUB_WORKSPACE}/chatluna-src"
 
     - name: Ensure linked ChatLuna runtime builds
       if: inputs.install == 'true' && inputs.build-chatluna == 'true'

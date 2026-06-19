@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/chatluna-package-manager.sh"
+
 CHATLUNA_ROOT_DIR="${CHATLUNA_ROOT_DIR:-}"
 MODE="${1:-build}"
 
@@ -130,19 +132,7 @@ if [[ "${#BUILD_TARGETS[@]}" -gt 0 ]]; then
   fi
 
   echo "[info] Building linked ChatLuna packages: ${BUILD_TARGETS[*]}"
-  if command -v corepack >/dev/null 2>&1; then
-    (cd "$CHATLUNA_ROOT_DIR" && COREPACK_ENABLE_PROJECT_SPEC=0 corepack yarn@1.22.22 fast-build "${BUILD_TARGETS[@]}")
-  elif command -v yarn >/dev/null 2>&1; then
-    (cd "$CHATLUNA_ROOT_DIR" && yarn fast-build "${BUILD_TARGETS[@]}")
-  elif command -v npm >/dev/null 2>&1; then
-    (cd "$CHATLUNA_ROOT_DIR" && npm exec --yes yarn@1.22.22 -- fast-build "${BUILD_TARGETS[@]}")
-  elif [[ -f "$CHATLUNA_ROOT_DIR/pnpm-lock.yaml" || -f "$CHATLUNA_ROOT_DIR/pnpm-workspace.yaml" ]]; then
-    echo "[warn] yarn/corepack unavailable and linked ChatLuna declares pnpm; using pnpm." >&2
-    (cd "$CHATLUNA_ROOT_DIR" && pnpm run fast-build "${BUILD_TARGETS[@]}")
-  else
-    echo "[error] yarn/corepack unavailable for linked ChatLuna build." >&2
-    exit 1
-  fi
+  chatluna_yarn_fast_build "$CHATLUNA_ROOT_DIR" "${BUILD_TARGETS[@]}"
 else
   echo "[info] Linked ChatLuna packages are up to date."
 fi

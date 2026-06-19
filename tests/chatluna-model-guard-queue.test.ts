@@ -1,9 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('koishi-plugin-chatluna/chains', () => ({
   ChainMiddlewareRunStatus: { STOP: 1, CONTINUE: 0 },
-  checkConversationRoomAvailability: vi.fn(async () => true),
-  fixConversationRoomAvailability: vi.fn(async () => true),
 }));
 
 const promptAssemblyMocks = vi.hoisted(() => ({
@@ -56,6 +54,12 @@ vi.mock('../src/plugins/shared/prompt-context/index.js', () => ({
 }));
 
 import { apply } from '../src/plugins/model-guard/index.js';
+import { resolveMainChatRuntimeProfileFromEnv } from '../src/plugins/shared/llm/index.js';
+import { mainChatRuntimeState } from '../src/plugins/shared/llm/main-chat-runtime.js';
+
+afterEach(() => {
+  mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({}));
+});
 
 type ChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;
 
@@ -64,22 +68,41 @@ function createChainBuilder(store: Map<string, ChainMiddleware>) {
     middleware: (name: string, middleware: ChainMiddleware) => {
       store.set(name, middleware);
       const builder = {
-        after: () => builder,
-        before: () => builder,
+        after: (target: string) => {
+          constraints.push({ name, kind: 'after', target });
+          return builder;
+        },
+        before: (target: string) => {
+          constraints.push({ name, kind: 'before', target });
+          return builder;
+        },
       };
       return builder;
     },
   };
 }
 
+const constraints: Array<{ name: string; kind: 'after' | 'before'; target: string }> = [];
+
 function createHarness() {
+  constraints.length = 0;
   const middlewares: Array<(session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>> = [];
   const events = new Map<string, Array<(...args: any[]) => unknown>>();
   const chainMiddlewares = new Map<string, ChainMiddleware>();
   const chatluna = {
     platform: {
+      findModel: vi.fn(() => ({ value: true })),
       listAllModels: vi.fn(() => ({
         value: [{ toModelName: () => 'Pro/moonshotai/Kimi-K2.5' }],
+      })),
+    },
+    conversation: {
+      createConversation: vi.fn(async (_session: unknown, options: Record<string, unknown>) => ({
+        id: 'conv-created',
+        bindingKey: options.bindingKey,
+        model: options.model,
+        preset: options.preset,
+        chatMode: options.chatMode,
       })),
     },
     awaitLoadPlatform: vi.fn(async () => undefined),
@@ -88,6 +111,9 @@ function createHarness() {
 
   const ctx = {
     chatluna,
+    database: {
+      set: vi.fn(async () => undefined),
+    },
     get: vi.fn((name: string) => (name === 'chatluna' ? chatluna : undefined)),
     middleware: vi.fn((handler: any) => {
       middlewares.push(handler);
@@ -106,6 +132,8 @@ function createHarness() {
     middlewares,
     events,
     chainMiddlewares,
+    chatluna,
+    database: ctx.database,
     ready: (events.get('ready') ?? [])[0],
   };
 }
@@ -124,5 +152,97 @@ describe('chatluna model guard runtime shape', () => {
     expect(harness.chainMiddlewares.has('chatluna_time_context')).toBe(true);
     expect(harness.chainMiddlewares.has('chatluna_model_guard')).toBe(true);
     expect(harness.chainMiddlewares.has('qqbot_live_replan_gate')).toBe(false);
+    expect(constraints).toContainEqual({
+      name: 'chatluna_model_guard',
+      kind: 'after',
+      target: 'resolve_conversation',
+    });
+    expect(constraints).not.toContainEqual({
+      name: 'chatluna_model_guard',
+      kind: 'after',
+      target: 'resolve_room',
+    });
+  });
+
+  it('updates the live ChatLuna 1.4 conversation model before resolve_model reads it', async () => {
+    mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({
+      CHATLUNA_ACTIVE_TAB: 'copilot',
+      CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+      CHATLUNA_COPILOT_API_KEY: 'bridge-secret',
+      CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/claude-haiku-4.5',
+    }));
+    const harness = createHarness();
+    harness.ready?.();
+
+    const guard = harness.chainMiddlewares.get('chatluna_model_guard');
+    const conversation = {
+      id: 'conv-1',
+      model: '',
+      preset: 'sakiko',
+      chatMode: 'plugin',
+    };
+    const context = {
+      options: {
+        conversation: {
+          conversationId: 'conv-1',
+          conversation,
+        },
+      },
+      send: vi.fn(),
+    };
+
+    await expect(guard?.({ stripped: { content: 'hi' } }, context)).resolves.not.toBe(1);
+    expect(conversation.model).toBe('openai/claude-haiku-4.5');
+    expect(harness.database.set).toHaveBeenCalledWith(
+      'chatluna_conversation',
+      { id: 'conv-1' },
+      { model: 'openai/claude-haiku-4.5' },
+    );
+  });
+
+  it('creates an active QQ reply conversation before resolve_model when resolve_conversation only returned context', async () => {
+    mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({
+      CHATLUNA_ACTIVE_TAB: 'copilot',
+      CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+      CHATLUNA_COPILOT_API_KEY: 'bridge-secret',
+      CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/claude-haiku-4.5',
+    }));
+    const harness = createHarness();
+    harness.ready?.();
+
+    const guard = harness.chainMiddlewares.get('chatluna_model_guard');
+    const session = {
+      platform: 'onebot',
+      channelId: '829573670',
+      userId: '9177543201',
+      bot: { selfId: '2219854433' },
+      stripped: { content: 'saki 找个话题聊聊吧' },
+    };
+    const context = {
+      options: {
+        conversation: {
+          mode: 'context',
+          conversationId: null,
+          bindingKey: 'shared:onebot:guild:829573670',
+          presetLane: null,
+          effectivePreset: 'saki',
+          effectiveChatMode: 'plugin',
+          conversation: null,
+        },
+      },
+      send: vi.fn(),
+    };
+
+    await expect(guard?.(session, context)).resolves.not.toBe(1);
+    expect(harness.chatluna.conversation.createConversation.mock.contexts[0]).toBe(harness.chatluna.conversation);
+    expect(harness.chatluna.conversation.createConversation).toHaveBeenCalledWith(session, {
+      bindingKey: 'shared:onebot:guild:829573670',
+      title: 'New Conversation',
+      model: 'openai/claude-haiku-4.5',
+      preset: 'saki',
+      chatMode: 'plugin',
+    });
+    expect(context.options.conversation.conversation?.model).toBe('openai/claude-haiku-4.5');
+    expect(harness.database.set).not.toHaveBeenCalled();
   });
 });

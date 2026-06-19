@@ -196,13 +196,21 @@ function extractSentMessagePayloads(bot: { sendMessage: { mock: { calls: any[][]
   return bot.sendMessage.mock.calls.map((call: any[]) => extractVisibleMessageText(call[1]));
 }
 
-function createChainBuilder(store: Map<string, ChainMiddleware>) {
+type ChainConstraint = { name: string; kind: 'after' | 'before'; target: string };
+
+function createChainBuilder(store: Map<string, ChainMiddleware>, constraints: ChainConstraint[]) {
   return {
     middleware: (name: string, middleware: ChainMiddleware) => {
       store.set(name, middleware);
       const builder = {
-        after: () => builder,
-        before: () => builder,
+        after: (target: string) => {
+          constraints.push({ name, kind: 'after', target });
+          return builder;
+        },
+        before: (target: string) => {
+          constraints.push({ name, kind: 'before', target });
+          return builder;
+        },
       };
       return builder;
     },
@@ -268,6 +276,7 @@ function createHarness(overrides: {
   const middlewares: Middleware[] = [];
   const events = new Map<string, EventHandler[]>();
   const chainMiddlewares = new Map<string, ChainMiddleware>();
+  const chainConstraints: ChainConstraint[] = [];
   const inject = vi.fn();
 
   const database = {
@@ -322,7 +331,7 @@ function createHarness(overrides: {
   const chatluna = {
     contextManager: { inject },
     chatChain: {
-      ...createChainBuilder(chainMiddlewares),
+      ...createChainBuilder(chainMiddlewares, chainConstraints),
       receiveMessage: vi.fn(async () => false),
     },
     createChatModel: vi.fn(async (model: string) => ({
@@ -402,6 +411,7 @@ function createHarness(overrides: {
     getPolicy: () => chainMiddlewares.get('qqbot_reply_transport_policy'),
     getPromptCompiler: () => chainMiddlewares.get('qqbot_reply_prompt_compiler'),
     getExecutor: () => chainMiddlewares.get('qqbot_reply_plan_executor'),
+    getChainConstraints: () => chainConstraints,
     chatluna,
     inject,
     bot,
@@ -878,7 +888,7 @@ describe('qq voice plugin', () => {
     expect(contextA2.options.inputMessage.content).toBe('A1\nA2');
   });
 
-  it('releases a blocked interrupt queue when request_model fails and keeps the failure in koishi logs only', async () => {
+  it('releases a blocked interrupt queue when request_conversation fails and keeps the failure in koishi logs only', async () => {
     const { ready, getPrepare, bot } = createHarness({ replyInterruptEnabled: true });
 
     await ready();
@@ -932,7 +942,7 @@ describe('qq voice plugin', () => {
     expect(typeof sessionB.state.qqReplyTransport.runId).toBe('string');
     expect(bot.sendMessage).not.toHaveBeenCalled();
     expect(loggerMocks.error).toHaveBeenCalledWith(
-      expect.stringContaining('reply request_model failed before executor cleanup: runId=%s conversationId=%s error=%s'),
+      expect.stringContaining('reply request_conversation failed before executor cleanup: runId=%s conversationId=%s error=%s'),
       expect.any(String),
       'conv-request-error',
       '400 invalid_request_body',
@@ -1030,15 +1040,31 @@ describe('qq voice plugin', () => {
   });
 
   it('registers policy, prompt compiler, and executor middlewares on ready', async () => {
-    const { ready, getPolicy, getPromptCompiler, getExecutor } = createHarness();
+    const { ready, getPrepare, getPolicy, getPromptCompiler, getExecutor, getChainConstraints } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
     await ready();
     await flushMicrotasks();
 
+    expect(getPrepare()).toBeTypeOf('function');
     expect(getPolicy()).toBeTypeOf('function');
     expect(getPromptCompiler()).toBeTypeOf('function');
     expect(getExecutor()).toBeTypeOf('function');
+    expect(getChainConstraints()).toContainEqual({
+      name: 'qqbot_reply_runtime_prepare',
+      kind: 'after',
+      target: 'resolve_conversation',
+    });
+    expect(getChainConstraints()).toContainEqual({
+      name: 'qqbot_reply_runtime_prepare',
+      kind: 'after',
+      target: 'chatluna_model_guard',
+    });
+    expect(getChainConstraints()).not.toContainEqual({
+      name: 'qqbot_reply_runtime_prepare',
+      kind: 'after',
+      target: 'resolve_room',
+    });
   });
 
   it('delays the initial tts health probe until after startup grace period', async () => {
@@ -1060,7 +1086,7 @@ describe('qq voice plugin', () => {
   it('injects recent tool memory as assistant_state before reply planning', async () => {
     const { ready, getToolMemoryState, bot } = createHarness({
       databaseGetImpl: async (table: string, query: Record<string, unknown>) => {
-        if (table === 'chathub_conversation') {
+        if (table === 'chatluna_conversation') {
           return [{
             id: query.id ?? 'conv-memory',
             additional_kwargs: JSON.stringify({
@@ -1078,8 +1104,8 @@ describe('qq voice plugin', () => {
             }),
           }];
         }
-        if (table === 'chathub_message') {
-          return createStoredResearchCompatibilityTail(String(query.conversation ?? 'conv-memory'));
+        if (table === 'chatluna_message') {
+          return createStoredResearchCompatibilityTail(String(query.conversationId ?? 'conv-memory'));
         }
         return [];
       },
@@ -1144,7 +1170,16 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-1'),
+        conversation: {
+          conversationId: 'conv-1',
+          conversation: {
+            id: 'conv-1',
+            legacyRoomId: 7,
+            model: 'Pro/moonshotai/Kimi-K2.5',
+            preset: 'sakiko',
+            chatMode: 'plugin',
+          },
+        },
         inputMessage: {
           content: '请发一条语音给我听',
           additional_kwargs: {},
@@ -1155,7 +1190,7 @@ describe('qq voice plugin', () => {
     await prepare?.(session, context);
     await policy?.(session, context);
     await promptCompiler?.(session, context);
-    expect((context.options.room as any).chatMode).toBe('plugin');
+    expect((context.options.conversation.conversation as any).chatMode).toBe('plugin');
     expect(promptAssemblyMocks.registerPromptFragment).not.toHaveBeenCalledWith(
       'conv-1',
       expect.objectContaining({ source: 'qqbot_reply_transport_capability' }),

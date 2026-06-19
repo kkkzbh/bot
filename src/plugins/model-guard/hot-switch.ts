@@ -27,7 +27,7 @@ function trimOptionalText(value: unknown): string | null {
 export async function syncRoomModelToMainChatRuntime(args: {
   room: MainChatRoomModelLike;
   clearCache?: (room: MainChatRoomModelLike) => Promise<unknown>;
-  upsertRoom?: (room: MainChatRoomModelLike) => Promise<unknown>;
+  updateConversationModel?: (conversationId: string, model: string) => Promise<unknown>;
 }): Promise<MainChatRoomModelSyncResult> {
   const profile = mainChatRuntimeState.getProfile();
   const descriptor = resolveMainChatModelDescriptor({
@@ -38,12 +38,16 @@ export async function syncRoomModelToMainChatRuntime(args: {
   const changed = descriptor.canonicalModel !== originalModel;
 
   if (changed) {
+    const conversationId = trimOptionalText(args.room.conversationId);
+    if (!conversationId) {
+      throw new Error('conversationId is required before syncing the active chat model.');
+    }
     args.room.model = descriptor.canonicalModel;
-    if (args.clearCache && trimOptionalText(args.room.conversationId)) {
+    if (args.clearCache) {
       await args.clearCache(args.room);
     }
-    if (args.upsertRoom) {
-      await args.upsertRoom(args.room);
+    if (args.updateConversationModel) {
+      await args.updateConversationModel(conversationId, descriptor.canonicalModel);
     }
   }
 
