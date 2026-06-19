@@ -10,6 +10,9 @@ describe('chatluna build script dependency closure', () => {
     expect(content).toContain("*package_data.get('dependencies', {}),");
     expect(content).toContain("*package_data.get('peerDependencies', {}),");
     expect(content).toContain('visit(dep_dir)');
+    expect(content).toContain('for target in "${BUILD_TARGETS[@]}"');
+    expect(content).toContain('chatluna_yarn_fast_build "$CHATLUNA_ROOT_DIR" "$target"');
+    expect(content).not.toContain('chatluna_yarn_fast_build "$CHATLUNA_ROOT_DIR" "${BUILD_TARGETS[@]}"');
   });
 
   it('supports a check-only mode for service startup preflight', () => {
@@ -37,7 +40,7 @@ describe('chatluna build script dependency closure', () => {
     expect(action).toContain('yarn-version:');
     expect(action).toContain('CHATLUNA_YARN_VERSION: ${{ inputs.yarn-version }}');
     expect(action.match(/CHATLUNA_YARN_VERSION: \$\{\{ inputs\.yarn-version \}\}/g)).toHaveLength(2);
-    expect(buildScript).toContain('chatluna_yarn_fast_build "$CHATLUNA_ROOT_DIR" "${BUILD_TARGETS[@]}"');
+    expect(buildScript).toContain('chatluna_yarn_fast_build "$CHATLUNA_ROOT_DIR" "$target"');
     expect(buildScript).not.toContain('yarn@1.22.22');
   });
 

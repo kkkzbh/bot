@@ -131,8 +131,10 @@ if [[ "${#BUILD_TARGETS[@]}" -gt 0 ]]; then
     exit 1
   fi
 
-  echo "[info] Building linked ChatLuna packages: ${BUILD_TARGETS[*]}"
-  chatluna_yarn_fast_build "$CHATLUNA_ROOT_DIR" "${BUILD_TARGETS[@]}"
+  echo "[info] Building linked ChatLuna packages in dependency order: ${BUILD_TARGETS[*]}"
+  for target in "${BUILD_TARGETS[@]}"; do
+    chatluna_yarn_fast_build "$CHATLUNA_ROOT_DIR" "$target"
+  done
 else
   echo "[info] Linked ChatLuna packages are up to date."
 fi
