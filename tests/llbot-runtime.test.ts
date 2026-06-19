@@ -7,14 +7,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const {
   VERSION_MARKER,
   applyManagedConfig,
+  buildRemotePathMappings,
   disableWebUIAuthMiddleware,
   ensureQqConfigBridge,
-  patchLlbotMediaPathResolution,
   prepareManagedRuntime,
   prepareRuntimeVersion,
   resolvePmhqQqConfigMountSource,
   resolveRequiredPmhqQqConfigMountSource,
-  rewritePmhqMediaPath,
 } = require('../scripts/lib/llbot-runtime.cjs');
 
 const tempDirs: string[] = [];
@@ -31,22 +30,18 @@ function createTempDir(): string {
 }
 
 describe('llbot host runtime helpers', () => {
-  it('rewrites pmhq media paths from the container qq root into the host qq volume', () => {
+  it('builds the LLBot remote path mapping for the PMHQ QQ volume', () => {
     expect(
-      rewritePmhqMediaPath(
-        '/root/.config/QQ/nt_qq_test/nt_data/Pic/2026-04/Ori/test.png',
-        '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
-      ),
-    ).toBe('/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data/nt_qq_test/nt_data/Pic/2026-04/Ori/test.png');
-  });
-
-  it('leaves non-qq media paths unchanged', () => {
-    expect(
-      rewritePmhqMediaPath(
-        '/tmp/not-qq/test.png',
-        '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
-      ),
-    ).toBe('/tmp/not-qq/test.png');
+      buildRemotePathMappings('/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data'),
+    ).toEqual([
+      {
+        name: 'qqbot-pmhq-qq-config',
+        remotePrefix: '/root/.config/QQ',
+        localPrefix: '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
+        remoteStyle: 'posix',
+        localStyle: 'posix',
+      },
+    ]);
   });
 
   it('inspects pmhq through the real host home when llbot home is isolated', () => {
@@ -170,6 +165,7 @@ describe('llbot host runtime helpers', () => {
       LLONEBOT_WEBUI_PORT: '3080',
       LLONEBOT_WS_PORT: '3001',
       ONEBOT_TOKEN: 'secret',
+      QQBOT_QQ_CONFIG_MOUNT_SOURCE: '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
     });
 
     expect(config.webui).toMatchObject({ enable: true, host: '', port: 3080 });
@@ -184,6 +180,15 @@ describe('llbot host runtime helpers', () => {
     expect(config.ob11.connect[1]).toMatchObject({ enable: false, url: '', token: '' });
     expect(config.ob11.connect[2]).toMatchObject({ enable: false, host: '127.0.0.1', token: '' });
     expect(config.ob11.connect[3]).toMatchObject({ enable: false, url: '', token: '' });
+    expect(config.remotePathMappings).toEqual([
+      {
+        name: 'qqbot-pmhq-qq-config',
+        remotePrefix: '/root/.config/QQ',
+        localPrefix: '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
+        remoteStyle: 'posix',
+        localStyle: 'posix',
+      },
+    ]);
   });
 
   it('disables the webui auth middleware and clears stale tokens when requested', () => {
@@ -262,181 +267,7 @@ describe('llbot host runtime helpers', () => {
     expect(existsSync(join(qqMountSource, 'nt_qq_test', 'nt_data', 'Pic', '2026-04', 'Thumb'))).toBe(true);
   });
 
-  it('patches llbot media path resolution to rewrite pmhq qq paths to the host volume', () => {
-    const dir = createTempDir();
-    const runtimeDir = join(dir, 'runtime');
-    mkdirSync(runtimeDir, { recursive: true });
-    writeFileSync(
-      join(runtimeDir, 'llbot.js'),
-      [
-        'class NTFileApi {',
-        '  async getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {',
-        '    return await invoke(NTMethod.MEDIA_FILE_PATH, [',
-        '      {',
-        '        md5HexStr,',
-        '        fileName,',
-        '        elementType,',
-        '        elementSubType,',
-        '        thumbSize: 0,',
-        '        needCreate: true,',
-        '        downloadType: 1,',
-        '        file_uuid: ""',
-        '      }',
-        '    ]);',
-        '  }',
-        '  /** 上传文件到 QQ 的文件夹 */',
-        '}',
-      ].join('\n'),
-      'utf8',
-    );
-
-    const changed = patchLlbotMediaPathResolution({
-      runtimeDir,
-      qqConfigMountSource: '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
-    });
-
-    const patched = readFileSync(join(runtimeDir, 'llbot.js'), 'utf8');
-    expect(changed).toBe(true);
-    expect(patched).toContain('qqbot-managed-pmhq-media-path-rewrite');
-    expect(patched).toContain('const mediaPath = await invoke(NTMethod.MEDIA_FILE_PATH');
-    expect(patched).toContain('qqbotManagedPmhqMediaRoot');
-    expect(patched).toContain('const qqbotManagedRelativeMediaPath = typeof mediaPath === "string"');
-    expect(patched).toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  /** 上传文件到 QQ 的文件夹 */');
-    expect(patched).not.toContain('require("node:path")');
-    expect(patched).not.toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  }\n  /** 上传文件到 QQ 的文件夹 */');
-  });
-
-  it('keeps the llbot media path patch idempotent across repeated prepare passes', () => {
-    const dir = createTempDir();
-    const runtimeDir = join(dir, 'runtime');
-    mkdirSync(runtimeDir, { recursive: true });
-    writeFileSync(
-      join(runtimeDir, 'llbot.js'),
-      [
-        'class NTFileApi {',
-        '  async getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {',
-        '    return await invoke(NTMethod.MEDIA_FILE_PATH, [',
-        '      {',
-        '        md5HexStr,',
-        '        fileName,',
-        '        elementType,',
-        '        elementSubType,',
-        '        thumbSize: 0,',
-        '        needCreate: true,',
-        '        downloadType: 1,',
-        '        file_uuid: ""',
-        '      }',
-        '    ]);',
-        '  }',
-        '  /** 上传文件到 QQ 的文件夹 */',
-        '}',
-      ].join('\n'),
-      'utf8',
-    );
-
-    expect(
-      patchLlbotMediaPathResolution({
-        runtimeDir,
-        qqConfigMountSource: '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
-      }),
-    ).toBe(true);
-    expect(
-      patchLlbotMediaPathResolution({
-        runtimeDir,
-        qqConfigMountSource: '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
-      }),
-    ).toBe(false);
-    expect(
-      readFileSync(join(runtimeDir, 'llbot.js'), 'utf8').match(/qqbot-managed-pmhq-media-path-rewrite/g),
-    ).toHaveLength(1);
-  });
-
-  it('repairs a malformed previously-patched llbot media path block', () => {
-    const dir = createTempDir();
-    const runtimeDir = join(dir, 'runtime');
-    mkdirSync(runtimeDir, { recursive: true });
-    writeFileSync(
-      join(runtimeDir, 'llbot.js'),
-      [
-        'class NTFileApi {',
-        '  async getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {',
-        '    const mediaPath = await invoke(NTMethod.MEDIA_FILE_PATH, []);',
-        '    return mediaPath;',
-        '  }',
-        '  /* qqbot-managed-pmhq-media-path-rewrite */',
-        '  }',
-        '  /** 上传文件到 QQ 的文件夹 */',
-        '  async uploadFile(filePath) {',
-        '    return filePath;',
-        '  }',
-        '}',
-      ].join('\n'),
-      'utf8',
-    );
-
-    expect(
-      patchLlbotMediaPathResolution({
-        runtimeDir,
-        qqConfigMountSource: '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
-      }),
-    ).toBe(true);
-
-    const patched = readFileSync(join(runtimeDir, 'llbot.js'), 'utf8');
-    expect(patched).toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  /** 上传文件到 QQ 的文件夹 */');
-    expect(patched).not.toContain('require("node:path")');
-    expect(patched).not.toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  }\n  /** 上传文件到 QQ 的文件夹 */');
-  });
-
-  it('patches tab-indented llbot media path resolution from newer bundles', () => {
-    const dir = createTempDir();
-    const runtimeDir = join(dir, 'runtime');
-    mkdirSync(runtimeDir, { recursive: true });
-    writeFileSync(
-      join(runtimeDir, 'llbot.js'),
-      [
-        'class NTFileApi {',
-        '\tasync getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {',
-        '\t\treturn await this.ctx.pmhq.invoke(NTMethod.MEDIA_FILE_PATH, [{',
-        '\t\t\tmd5HexStr,',
-        '\t\t\tfileName,',
-        '\t\t\telementType,',
-        '\t\t\telementSubType,',
-        '\t\t\tthumbSize: 0,',
-        '\t\t\tneedCreate: true,',
-        '\t\t\tdownloadType: 1,',
-        '\t\t\tfile_uuid: ""',
-        '\t\t}]);',
-        '\t}',
-        '\t/** 上传文件到 QQ 的文件夹 */',
-        '}',
-      ].join('\n'),
-      'utf8',
-    );
-
-    const changed = patchLlbotMediaPathResolution({
-      runtimeDir,
-      qqConfigMountSource: '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
-    });
-
-    const patched = readFileSync(join(runtimeDir, 'llbot.js'), 'utf8');
-    expect(changed).toBe(true);
-    expect(patched).toContain('const mediaPath = await this.ctx.pmhq.invoke(NTMethod.MEDIA_FILE_PATH');
-    expect(patched).toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n\t/** 上传文件到 QQ 的文件夹 */');
-  });
-
-  it('fails fast when the llbot media path signature changes upstream', () => {
-    const dir = createTempDir();
-    const runtimeDir = join(dir, 'runtime');
-    mkdirSync(runtimeDir, { recursive: true });
-    writeFileSync(join(runtimeDir, 'llbot.js'), 'console.log("no media path hook here")\n', 'utf8');
-
-    expect(() => patchLlbotMediaPathResolution({
-      runtimeDir,
-      qqConfigMountSource: '/var/lib/containers/storage/volumes/qqbot-stack_qq_volume/_data',
-    })).toThrow(/getRichMediaFilePath/);
-  });
-
-  it('prepareManagedRuntime applies both the llbot bundle patch and the qq config bridge', async () => {
+  it('prepareManagedRuntime applies LLBot remote path mappings and the qq config bridge', async () => {
     const dir = createTempDir();
     const runtimeDir = join(dir, 'runtime');
     const dataDir = join(dir, 'data');
@@ -450,23 +281,6 @@ describe('llbot host runtime helpers', () => {
       [
         'function authMiddleware(req, res, next) {',
         '\treturn res.status(401).end()',
-        '}',
-        'class NTFileApi {',
-        '  async getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {',
-        '    return await invoke(NTMethod.MEDIA_FILE_PATH, [',
-        '      {',
-        '        md5HexStr,',
-        '        fileName,',
-        '        elementType,',
-        '        elementSubType,',
-        '        thumbSize: 0,',
-        '        needCreate: true,',
-        '        downloadType: 1,',
-        '        file_uuid: ""',
-        '      }',
-        '    ]);',
-        '  }',
-        '  /** 上传文件到 QQ 的文件夹 */',
         '}',
       ].join('\n'),
       'utf8',
@@ -494,8 +308,17 @@ describe('llbot host runtime helpers', () => {
     });
 
     const entrypoint = readFileSync(join(runtimeDir, 'llbot.js'), 'utf8');
-    expect(entrypoint).toContain('qqbot-managed-pmhq-media-path-rewrite');
-    expect(entrypoint).toContain('/* qqbot-managed-pmhq-media-path-rewrite */\n  /** 上传文件到 QQ 的文件夹 */');
+    const rewrittenConfig = JSON.parse(readFileSync(join(runtimeDir, 'default_config.json'), 'utf8'));
+    expect(entrypoint).not.toContain('qqbot-managed-pmhq-media-path-rewrite');
+    expect(rewrittenConfig.remotePathMappings).toEqual([
+      {
+        name: 'qqbot-pmhq-qq-config',
+        remotePrefix: '/root/.config/QQ',
+        localPrefix: qqMountSource,
+        remoteStyle: 'posix',
+        localStyle: 'posix',
+      },
+    ]);
     expect(lstatSync(join(homeDir, '.config', 'QQ')).isSymbolicLink()).toBe(true);
     expect(existsSync(join(qqMountSource, 'nt_qq_test', 'nt_data', 'Pic'))).toBe(true);
   });

@@ -12,7 +12,6 @@ const VERSION_MARKER = '.qqbot-llbot-version';
 const ENTRYPOINT_FILE = 'llbot.js';
 const DEFAULT_CONFIG_FILE = 'default_config.json';
 const PMHQ_QQ_CONFIG_DESTINATION = '/root/.config/QQ';
-const PMHQ_MEDIA_PATH_PATCH_MARKER = 'qqbot-managed-pmhq-media-path-rewrite';
 
 function normalizeTruthy(value) {
   return /^(1|true|yes|on)$/i.test(String(value ?? '').trim());
@@ -22,7 +21,23 @@ function buildLlbotReleaseUrl(version) {
   return `https://github.com/LLOneBot/LuckyLilliaBot/releases/download/v${version}/LLBot.zip`;
 }
 
-function applyManagedConfig(config, env = process.env) {
+function buildRemotePathMappings(qqConfigMountSource) {
+  const sourceDir = String(qqConfigMountSource || '').trim();
+  if (!sourceDir) {
+    throw requiredPmhqMountSourceError();
+  }
+  return [
+    {
+      name: 'qqbot-pmhq-qq-config',
+      remotePrefix: PMHQ_QQ_CONFIG_DESTINATION,
+      localPrefix: path.resolve(sourceDir),
+      remoteStyle: 'posix',
+      localStyle: 'posix',
+    },
+  ];
+}
+
+function applyManagedConfig(config, env = process.env, options = {}) {
   const next = structuredClone(config);
   const ws = next.ob11?.connect?.find((item) => item.type === 'ws');
   if (!ws) {
@@ -64,26 +79,16 @@ function applyManagedConfig(config, env = process.env) {
     }
   }
 
+  next.remotePathMappings = buildRemotePathMappings(
+    options.qqConfigMountSource || env.QQBOT_QQ_CONFIG_MOUNT_SOURCE,
+  );
   next.ffmpeg = '/usr/bin/ffmpeg';
   return next;
 }
 
-function rewriteJsonConfig(filePath, env = process.env) {
+function rewriteJsonConfig(filePath, env = process.env, options = {}) {
   const config = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  fs.writeFileSync(filePath, `${JSON.stringify(applyManagedConfig(config, env), null, 2)}\n`, 'utf8');
-}
-
-function rewritePmhqMediaPath(mediaPath, qqConfigMountSource) {
-  const sourceDir = String(qqConfigMountSource || '').trim();
-  if (!sourceDir || typeof mediaPath !== 'string') {
-    return mediaPath;
-  }
-  if (!mediaPath.startsWith(PMHQ_QQ_CONFIG_DESTINATION)) {
-    return mediaPath;
-  }
-
-  const suffix = mediaPath.slice(PMHQ_QQ_CONFIG_DESTINATION.length).replace(/^[/\\]+/, '');
-  return suffix ? path.join(sourceDir, suffix) : sourceDir;
+  fs.writeFileSync(filePath, `${JSON.stringify(applyManagedConfig(config, env, options), null, 2)}\n`, 'utf8');
 }
 
 function requiredPmhqMountSourceError() {
@@ -94,74 +99,6 @@ function requiredPmhqMountSourceError() {
       'When LLBot HOME is isolated, QQBOT_HOST_HOME must point to the real host user home for rootless Podman.',
     ].join(' '),
   );
-}
-
-function patchLlbotMediaPathResolution({ runtimeDir, qqConfigMountSource }) {
-  const sourceDir = String(qqConfigMountSource || '').trim();
-  if (!sourceDir) {
-    throw requiredPmhqMountSourceError();
-  }
-
-  const entrypointPath = path.join(runtimeDir, ENTRYPOINT_FILE);
-  const source = fs.readFileSync(entrypointPath, 'utf8');
-
-  const startMarker = 'async getRichMediaFilePath(md5HexStr, fileName, elementType, elementSubType = 0) {';
-  const start = source.indexOf(startMarker);
-  if (start === -1) {
-    throw new Error('Failed to locate llbot getRichMediaFilePath for managed media path rewrite');
-  }
-
-  const afterStart = source.slice(start);
-  const terminatorMatch = afterStart.match(/\n([ \t]*)\/\*\* 上传文件到 QQ 的文件夹 \*\//);
-  if (!terminatorMatch || terminatorMatch.index === undefined) {
-    throw new Error('Failed to locate llbot getRichMediaFilePath terminator for managed media path rewrite');
-  }
-  const end = start + terminatorMatch.index;
-  const methodLineStart = source.lastIndexOf('\n', start) + 1;
-  const methodIndent = source.slice(methodLineStart, start);
-  const innerIndent = `${methodIndent}${methodIndent.includes('\t') ? '\t' : '  '}`;
-  const originalBlock = source.slice(start, end);
-  const invokeMatch = originalBlock.match(/(?:return|const\s+mediaPath\s*=\s*)\s*await\s+(.+?)\(NTMethod\.MEDIA_FILE_PATH\s*,/s);
-  const invokeExpression = (invokeMatch?.[1] || 'invoke').trim();
-
-  const replacement = [
-    startMarker,
-    `${innerIndent}const mediaPath = await ${invokeExpression}(NTMethod.MEDIA_FILE_PATH, [`,
-    `${innerIndent}  {`,
-    `${innerIndent}    md5HexStr,`,
-    `${innerIndent}    fileName,`,
-    `${innerIndent}    elementType,`,
-    `${innerIndent}    elementSubType,`,
-    `${innerIndent}    thumbSize: 0,`,
-    `${innerIndent}    needCreate: true,`,
-    `${innerIndent}    downloadType: 1,`,
-    `${innerIndent}    file_uuid: ""`,
-    `${innerIndent}  }`,
-    `${innerIndent}]);`,
-    `${innerIndent}const qqbotManagedPmhqMediaRoot = ${JSON.stringify(sourceDir)};`,
-    `${innerIndent}const qqbotManagedPmhqMediaPath = ${JSON.stringify(PMHQ_QQ_CONFIG_DESTINATION)};`,
-    `${innerIndent}const qqbotManagedRelativeMediaPath = typeof mediaPath === "string"`,
-    `${innerIndent}  ? mediaPath.slice(qqbotManagedPmhqMediaPath.length).replace(/^[/\\\\]+/, "")`,
-    `${innerIndent}  : "";`,
-    `${innerIndent}return typeof mediaPath === "string" && mediaPath.startsWith(qqbotManagedPmhqMediaPath)`,
-    `${innerIndent}  ? qqbotManagedRelativeMediaPath`,
-    `${innerIndent}    ? \`${'${'}qqbotManagedPmhqMediaRoot.replace(/[/\\\\]+$/, "")}/${'${'}qqbotManagedRelativeMediaPath}\``,
-    `${innerIndent}    : qqbotManagedPmhqMediaRoot.replace(/[/\\\\]+$/, "")`,
-    `${innerIndent}  : mediaPath;`,
-    `${methodIndent}}`,
-    `${methodIndent}/* ${PMHQ_MEDIA_PATH_PATCH_MARKER} */`,
-  ].join('\n');
-
-  if (originalBlock === replacement) {
-    return false;
-  }
-
-  fs.writeFileSync(
-    entrypointPath,
-    `${source.slice(0, start)}${replacement}${source.slice(end)}`,
-    'utf8',
-  );
-  return true;
 }
 
 function disableWebUIAuthMiddleware({ runtimeDir, dataDir, disableAuth }) {
@@ -414,22 +351,18 @@ async function prepareManagedRuntime(env = process.env) {
   await prepareRuntimeVersion({ runtimeDir, version });
   await ensureRuntimeDataLink(runtimeDir, dataDir);
   const qqConfigMountSource = resolveRequiredPmhqQqConfigMountSource(env);
-  patchLlbotMediaPathResolution({
-    runtimeDir,
-    qqConfigMountSource,
-  });
   await ensureQqConfigBridge({
     runtimeDir,
     homeDir: env.HOME || path.join(runtimeDir, '.host-home'),
     qqConfigMountSource,
   });
 
-  rewriteJsonConfig(path.join(runtimeDir, DEFAULT_CONFIG_FILE), env);
+  rewriteJsonConfig(path.join(runtimeDir, DEFAULT_CONFIG_FILE), env, { qqConfigMountSource });
 
   if (fs.existsSync(dataDir)) {
     for (const name of fs.readdirSync(dataDir)) {
       if (/^config_\d+\.json$/.test(name)) {
-        rewriteJsonConfig(path.join(dataDir, name), env);
+        rewriteJsonConfig(path.join(dataDir, name), env, { qqConfigMountSource });
       }
     }
   }
@@ -464,18 +397,17 @@ if (require.main === module) {
 module.exports = {
   VERSION_MARKER,
   applyManagedConfig,
+  buildRemotePathMappings,
   buildLlbotReleaseUrl,
   disableWebUIAuthMiddleware,
   ensureQqConfigBridge,
   ensureRuntimeDataLink,
   extractReleaseZip,
   fetchReleaseZip,
-  patchLlbotMediaPathResolution,
   resolvePmhqQqConfigMountSource,
   resolveRequiredPmhqQqConfigMountSource,
   normalizeTruthy,
   prepareManagedRuntime,
   prepareRuntimeVersion,
-  rewritePmhqMediaPath,
   rewriteJsonConfig,
 };
