@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import { resolveChatlunaSiblingPackageRoot } from './helpers/chatluna-paths.js';
 
@@ -49,8 +50,15 @@ vi.mock('koishi-plugin-chatluna/services/chat', () => ({
   ChatLunaPlugin: class {},
 }));
 
-async function loadResponsesUtils() {
-  return import('../../chatluna/packages/shared-adapter/src/utils.js');
+type LangchainMessageToResponseInput = (messages: unknown[], model: unknown) => Promise<unknown[]>;
+
+type ResponsesUtilsModule = {
+  langchainMessageToResponseInput: LangchainMessageToResponseInput;
+};
+
+async function loadResponsesUtils(): Promise<ResponsesUtilsModule> {
+  const moduleUrl = pathToFileURL(join(process.cwd(), '..', 'chatluna', 'packages', 'shared-adapter', 'src', 'utils.js')).href;
+  return import(moduleUrl) as Promise<ResponsesUtilsModule>;
 }
 
 describe('chatluna responses input regression', () => {

@@ -218,7 +218,20 @@ describe('chatluna model guard runtime shape', () => {
       bot: { selfId: '2219854433' },
       stripped: { content: 'saki 找个话题聊聊吧' },
     };
-    const context = {
+    const context: {
+      options: {
+        conversation: {
+          mode: string;
+          conversationId: string | null;
+          bindingKey: string;
+          presetLane: string | null;
+          effectivePreset: string;
+          effectiveChatMode: string;
+          conversation: null | { model?: unknown };
+        };
+      };
+      send: ReturnType<typeof vi.fn>;
+    } = {
       options: {
         conversation: {
           mode: 'context',
@@ -233,7 +246,7 @@ describe('chatluna model guard runtime shape', () => {
       send: vi.fn(),
     };
 
-    await expect(guard?.(session, context)).resolves.not.toBe(1);
+    await expect(guard?.(session, context as Record<string, any>)).resolves.not.toBe(1);
     expect(harness.chatluna.conversation.createConversation.mock.contexts[0]).toBe(harness.chatluna.conversation);
     expect(harness.chatluna.conversation.createConversation).toHaveBeenCalledWith(session, {
       bindingKey: 'shared:onebot:guild:829573670',
