@@ -53,6 +53,7 @@ describe('runtime startup contract', () => {
     expect(buildScript).toContain('mktemp -d "${TMP_ROOT}/runtime-build-XXXXXX"');
     expect(buildScript).toContain('pnpm exec tsc -p tsconfig.build.json --outDir "$STAGE_DIST"');
     expect(buildScript).toContain('QQBOT_CONSOLE_OUT_DIR="$STAGE_CONSOLE_DIR" pnpm console:build');
+    expect(buildScript).toContain('cp -R "$ROOT_DIR/src/plugins/affinity/assets/." "$STAGE_DIST/plugins/affinity/assets/"');
     expect(buildScript).toContain('node ./scripts/verify-runtime-artifacts.mjs --config koishi.yml --dist "$STAGE_DIST"');
     expect(buildScript).toContain('mv "$STAGE_DIST" "$NEXT_DIST"');
     expect(buildScript).toContain('mv "$NEXT_DIST" "$DIST_DIR"');

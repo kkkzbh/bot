@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Affinity Panel Prototype</title>
+  <style>
+    :root {
+      --asset-bg: none;
+      --asset-banner: none;
+      --asset-logo: none;
+      --ink: #fff7ec;
+      --muted: #cbbfb8;
+      --faint: rgba(255, 247, 236, 0.58);
+      --panel: rgba(18, 10, 14, 0.78);
+      --panel-strong: rgba(11, 7, 10, 0.86);
+      --wine: #bd3656;
+      --wine-deep: #591225;
+      --teal: #58b7aa;
+      --gold: #c9a24b;
+      --blue: #8aa9d8;
+      --soft-line: rgba(255, 247, 236, 0.12);
+      --gold-line: rgba(201, 162, 75, 0.34);
+      --shadow: rgba(4, 2, 5, 0.64);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background: #10090d;
+      color: var(--ink);
+      font-family: "Noto Sans CJK SC", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+      letter-spacing: 0;
+    }
+
+    .panel {
+      position: relative;
+      width: 900px;
+      height: 1160px;
+      overflow: hidden;
+      background: #12090f;
+      border: 1px solid rgba(201, 162, 75, 0.44);
+      box-shadow: 0 28px 72px var(--shadow);
+      isolation: isolate;
+    }
+
+    .panel-bg,
+    .banner-art,
+    .banner-shade,
+    .content-shade {
+      position: absolute;
+      pointer-events: none;
+    }
+
+    .panel-bg {
+      inset: 0;
+      background-image: var(--asset-bg);
+      background-size: cover;
+      background-position: center;
+      filter: saturate(0.92) contrast(1.1);
+      opacity: 0.96;
+      z-index: 0;
+    }
+
+    .banner-art {
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 420px;
+      background-image: var(--asset-banner);
+      background-size: cover;
+      background-position: 57% 43%;
+      filter: saturate(0.9) contrast(1.05);
+      z-index: 1;
+    }
+
+    .banner-shade {
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 510px;
+      background:
+        linear-gradient(90deg, rgba(6, 4, 7, 0.82), rgba(13, 7, 12, 0.22) 54%, rgba(9, 5, 9, 0.52)),
+        linear-gradient(180deg, rgba(6, 4, 7, 0.24), rgba(9, 5, 8, 0.4) 58%, #12090f 100%);
+      z-index: 2;
+    }
+
+    .content-shade {
+      inset: 360px 0 0;
+      background:
+        radial-gradient(circle at 78% 22%, rgba(136, 170, 219, 0.16), transparent 250px),
+        linear-gradient(180deg, rgba(18, 8, 14, 0), rgba(6, 4, 7, 0.82) 58%, rgba(6, 4, 7, 0.96));
+      z-index: 2;
+    }
+
+    .panel::after {
+      content: "";
+      position: absolute;
+      inset: 18px;
+      border: 1px solid rgba(201, 162, 75, 0.3);
+      z-index: 4;
+      pointer-events: none;
+    }
+
+    .content {
+      position: relative;
+      z-index: 5;
+      height: 100%;
+      padding: 44px 68px 70px;
+    }
+
+    .topbar {
+      position: relative;
+      min-height: 314px;
+    }
+
+    .brand-logo {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 320px;
+      height: 132px;
+      background-image: var(--asset-logo);
+      background-repeat: no-repeat;
+      background-position: right center;
+      background-size: contain;
+      opacity: 0.94;
+      filter:
+        brightness(1.22)
+        saturate(1.12)
+        drop-shadow(0 8px 14px rgba(0, 0, 0, 0.36))
+        drop-shadow(0 0 12px rgba(230, 32, 117, 0.42));
+    }
+
+    .stage-card {
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      width: 276px;
+      padding: 16px 18px 18px;
+      background: rgba(10, 6, 10, 0.58);
+      border: 1px solid rgba(201, 162, 75, 0.48);
+      box-shadow: inset 0 0 0 1px rgba(189, 54, 86, 0.2), 0 18px 32px rgba(0, 0, 0, 0.24);
+    }
+
+    .stage-name {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--ink);
+      font-size: 34px;
+      font-weight: 860;
+      line-height: 1.05;
+    }
+
+    .stage-icon,
+    .axis-icon,
+    .rhythm-icon,
+    .event-icon,
+    .advice-icon {
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 auto;
+      color: var(--gold);
+      line-height: 1;
+      text-shadow: 0 0 14px rgba(201, 162, 75, 0.32);
+    }
+
+    .stage-icon {
+      width: 24px;
+      height: 24px;
+      font-size: 20px;
+    }
+
+    .last-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(255, 247, 236, 0.16);
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .last-line strong {
+      color: #fff7ec;
+      font-size: 24px;
+      font-weight: 820;
+      white-space: nowrap;
+    }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 22px;
+      margin-top: 18px;
+    }
+
+    .compact-section {
+      background:
+        linear-gradient(180deg, rgba(255, 247, 236, 0.07), rgba(255, 247, 236, 0.025)),
+        var(--panel);
+      border: 1px solid var(--soft-line);
+      border-radius: 8px;
+      box-shadow: 0 18px 38px rgba(0, 0, 0, 0.22);
+      backdrop-filter: blur(2px);
+    }
+
+    .axis-board {
+      padding: 20px 24px;
+    }
+
+    .section-title {
+      margin: 0 0 18px;
+      color: #fff7ec;
+      font-size: 25px;
+      font-weight: 820;
+      line-height: 1.1;
+    }
+
+    .axis-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .axis-line {
+      position: relative;
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr) 48px;
+      gap: 18px;
+      align-items: center;
+      min-height: 34px;
+    }
+
+    .axis-head,
+    .axis-value,
+    .axis-track {
+      position: relative;
+      z-index: 1;
+    }
+
+    .axis-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+    }
+
+    .axis-icon {
+      width: 18px;
+      height: 18px;
+      color: var(--axis-color);
+      font-size: 15px;
+      text-shadow: 0 0 12px color-mix(in srgb, var(--axis-color) 48%, transparent);
+    }
+
+    .axis-label {
+      color: inherit;
+      font-size: 18px;
+      font-weight: 680;
+    }
+
+    .axis-value {
+      color: var(--ink);
+      font-size: 23px;
+      font-weight: 860;
+      line-height: 1;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .axis-track {
+      height: 10px;
+      overflow: hidden;
+      background: rgba(255, 247, 236, 0.16);
+      border: 1px solid rgba(255, 247, 236, 0.08);
+      border-radius: 999px;
+    }
+
+    .axis-track span {
+      display: block;
+      width: var(--axis-level, 0%);
+      height: 100%;
+      background: var(--axis-color);
+      border-radius: inherit;
+      box-shadow: 0 0 14px color-mix(in srgb, var(--axis-color) 52%, transparent);
+    }
+
+    .rhythm-strip {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+      overflow: hidden;
+    }
+
+    .rhythm-item {
+      min-height: 84px;
+      padding: 16px 22px;
+      border-left: 1px solid var(--soft-line);
+      text-align: center;
+    }
+
+    .rhythm-item:first-child {
+      border-left: 0;
+    }
+
+    .rhythm-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .rhythm-icon {
+      width: 17px;
+      height: 17px;
+      font-size: 14px;
+    }
+
+    .rhythm-value {
+      margin-top: 10px;
+      color: var(--gold);
+      font-size: 32px;
+      font-weight: 850;
+      line-height: 1;
+    }
+
+    .timeline-board {
+      padding: 22px 24px 16px;
+      background: rgba(9, 5, 8, 0.64);
+      border-left: 1px solid var(--gold-line);
+      border-right: 1px solid rgba(201, 162, 75, 0.16);
+    }
+
+    .timeline {
+      display: grid;
+      gap: 0;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 92px 22px 1fr auto;
+      gap: 16px;
+      align-items: baseline;
+      padding: 14px 0;
+      border-top: 1px solid rgba(255, 247, 236, 0.1);
+    }
+
+    .event:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .event-time {
+      color: var(--gold);
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .event-icon {
+      align-self: center;
+      width: 16px;
+      height: 16px;
+      color: var(--gold);
+      font-size: 13px;
+      opacity: 0.9;
+    }
+
+    .event-title {
+      color: var(--ink);
+      font-size: 23px;
+      font-weight: 760;
+      line-height: 1.28;
+    }
+
+    .event-effect {
+      width: 168px;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.32;
+      display: flex;
+      justify-content: flex-end;
+      align-items: baseline;
+      white-space: nowrap;
+    }
+
+    .effect-token {
+      display: inline-grid;
+      grid-template-columns: minmax(2.2em, auto) 0.8em;
+      justify-items: end;
+      align-items: baseline;
+    }
+
+    .effect-name {
+      color: inherit;
+    }
+
+    .effect-sign {
+      width: 0.8em;
+      font-family: "Noto Sans Mono CJK SC", "Cascadia Mono", "Menlo", monospace;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+    }
+
+    .effect-token.is-positive .effect-name,
+    .effect-token.is-positive .effect-sign {
+      color: #a9dec9;
+    }
+
+    .effect-token.is-negative .effect-name,
+    .effect-token.is-negative .effect-sign {
+      color: #e7a5ad;
+    }
+
+    .effect-separator {
+      width: 1em;
+      color: rgba(255, 247, 236, 0.4);
+      text-align: center;
+    }
+
+    .advice {
+      display: grid;
+      grid-template-columns: 86px 1fr;
+      gap: 18px;
+      align-items: center;
+      padding: 20px 24px;
+      background:
+        linear-gradient(90deg, rgba(189, 54, 86, 0.28), rgba(88, 183, 170, 0.08)),
+        rgba(9, 5, 8, 0.72);
+      border-left: 5px solid var(--wine);
+      border-radius: 8px;
+      box-shadow: 0 18px 38px rgba(0, 0, 0, 0.24);
+    }
+
+    .advice-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--gold);
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .advice-icon {
+      width: 17px;
+      height: 17px;
+      font-size: 14px;
+    }
+
+    .advice-text {
+      color: var(--ink);
+      font-size: 25px;
+      font-weight: 780;
+      line-height: 1.38;
+    }
+
+  </style>
+</head>
+<body>
+  <main class="panel" aria-label="关系面板">
+    <div class="panel-bg"></div>
+    <div class="banner-art"></div>
+    <div class="banner-shade"></div>
+    <div class="content-shade"></div>
+
+    <section class="content">
+      <header class="topbar">
+        <div class="brand-logo" aria-hidden="true"></div>
+        <div class="stage-card">
+          <div class="stage-name">
+            <span class="stage-icon" data-field="stageIcon"></span>
+            <span data-field="stageName"></span>
+          </div>
+          <div class="last-line">
+            <span>上次变化</span>
+            <strong data-field="lastRelationChange"></strong>
+          </div>
+        </div>
+      </header>
+
+      <div class="main-grid">
+        <section class="compact-section axis-board">
+          <div class="axis-grid" id="axisGrid"></div>
+        </section>
+
+        <section class="compact-section rhythm-strip" id="rhythmStrip"></section>
+
+        <section class="timeline-board">
+          <h2 class="section-title">最近变化</h2>
+          <div class="timeline" id="timeline"></div>
+        </section>
+
+        <section class="advice">
+          <div class="advice-label">
+            <span class="advice-icon" data-field="adviceIcon"></span>
+            <span>当前</span>
+          </div>
+          <div class="advice-text" data-field="advice"></div>
+        </section>
+
+      </div>
+    </section>
+  </main>
+
+  <script id="panel-data" type="application/json">
+    {
+      "assets": {
+        "background": "../src/plugins/affinity/assets/panel-bg.png",
+        "banner": "../src/plugins/affinity/assets/panel-banner.png",
+        "logo": "../src/plugins/affinity/assets/panel-logo.png"
+      },
+      "stageIcon": "◆",
+      "stageName": "被记住的人",
+      "lastRelationChange": "12分钟前",
+      "axes": [
+        { "name": "信赖", "value": 43, "tone": "wine", "icon": "◆" },
+        { "name": "熟悉", "value": 58, "tone": "teal", "icon": "✦" },
+        { "name": "安心", "value": 36, "tone": "blue", "icon": "☾" },
+        { "name": "紧张", "value": 18, "tone": "gold", "icon": "!" }
+      ],
+      "rhythm": [
+        { "label": "心情", "value": "专注", "icon": "◇" },
+        { "label": "热度", "value": "偏高", "icon": "▲" },
+        { "label": "体力", "value": "72", "icon": "∿" }
+      ],
+      "recentEvents": [
+        {
+          "time": "3天前",
+          "title": "连续催促回答较多",
+          "icon": "!",
+          "effects": [
+            { "name": "热度", "sign": "+" },
+            { "name": "紧张", "sign": "+" }
+          ]
+        },
+        {
+          "time": "昨天",
+          "title": "没有继续追问她回避的部分",
+          "icon": "☾",
+          "effects": [
+            { "name": "安心", "sign": "+" },
+            { "name": "紧张", "sign": "-" }
+          ]
+        },
+        {
+          "time": "12分钟前",
+          "title": "承接了她主动提起的图论问题",
+          "icon": "✦",
+          "effects": [
+            { "name": "信赖", "sign": "+" },
+            { "name": "熟悉", "sign": "+" }
+          ]
+        }
+      ],
+      "adviceIcon": "◆",
+      "advice": "低频、认真地回应她已经打开的话题。"
+    }
+  </script>
+
+  <script>
+    const data = JSON.parse(document.getElementById("panel-data").textContent);
+    const axisColors = {
+      wine: "#bd3656",
+      teal: "#58b7aa",
+      blue: "#8aa9d8",
+      gold: "#c9a24b",
+    };
+
+    function assetUrl(value) {
+      return value || "";
+    }
+
+    function setAsset(name, value) {
+      const url = assetUrl(value);
+      if (url) document.documentElement.style.setProperty(name, `url("${url}")`);
+    }
+
+    function text(selector, value) {
+      const target = document.querySelector(`[data-field="${selector}"]`);
+      if (target) target.textContent = value || "";
+    }
+
+    function clamp(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return 0;
+      return Math.max(0, Math.min(100, Math.round(number)));
+    }
+
+    function renderAxes() {
+      const grid = document.getElementById("axisGrid");
+      grid.replaceChildren(...(data.axes || []).map((axis) => {
+        const value = clamp(axis.value);
+        const node = document.createElement("article");
+        node.className = "axis-line";
+        node.style.setProperty("--axis-level", `${value}%`);
+        node.style.setProperty("--axis-color", axisColors[axis.tone] || axisColors.teal);
+        node.innerHTML = `
+          <div class="axis-head">
+            <span class="axis-icon"></span>
+            <span class="axis-label"></span>
+          </div>
+          <div class="axis-track"><span></span></div>
+          <div class="axis-value"></div>
+        `;
+        node.querySelector(".axis-icon").textContent = axis.icon || "";
+        node.querySelector(".axis-label").textContent = axis.name || "";
+        node.querySelector(".axis-value").textContent = String(value);
+        return node;
+      }));
+    }
+
+    function renderRhythm() {
+      const strip = document.getElementById("rhythmStrip");
+      strip.replaceChildren(...(data.rhythm || []).map((item) => {
+        const node = document.createElement("article");
+        node.className = "rhythm-item";
+        node.innerHTML = `
+          <div class="rhythm-label">
+            <span class="rhythm-icon"></span>
+            <span class="rhythm-name"></span>
+          </div>
+          <div class="rhythm-value"></div>
+        `;
+        node.querySelector(".rhythm-icon").textContent = item.icon || "";
+        node.querySelector(".rhythm-name").textContent = item.label || "";
+        node.querySelector(".rhythm-value").textContent = item.value || "";
+        return node;
+      }));
+    }
+
+    function renderTimeline() {
+      const timeline = document.getElementById("timeline");
+      timeline.replaceChildren(...(data.recentEvents || []).map((item) => {
+        const node = document.createElement("article");
+        node.className = "event";
+        node.innerHTML = `
+          <div class="event-time"></div>
+          <div class="event-icon"></div>
+          <div class="event-title"></div>
+          <div class="event-effect"></div>
+        `;
+        node.querySelector(".event-time").textContent = item.time || "";
+        node.querySelector(".event-icon").textContent = item.icon || "";
+        node.querySelector(".event-title").textContent = item.title || "";
+        const effectNode = node.querySelector(".event-effect");
+        effectNode.replaceChildren(...(item.effects || []).flatMap((effect, index) => {
+          const token = document.createElement("span");
+          token.className = `effect-token ${effect.sign === "-" ? "is-negative" : "is-positive"}`;
+          const name = document.createElement("span");
+          name.className = "effect-name";
+          name.textContent = effect.name || "";
+          const sign = document.createElement("span");
+          sign.className = "effect-sign";
+          sign.textContent = effect.sign || "";
+          token.replaceChildren(name, sign);
+          if (index === 0) return [token];
+          const separator = document.createElement("span");
+          separator.className = "effect-separator";
+          separator.textContent = "、";
+          return [separator, token];
+        }));
+        return node;
+      }));
+    }
+
+    setAsset("--asset-bg", data.assets?.background);
+    setAsset("--asset-banner", data.assets?.banner);
+    setAsset("--asset-logo", data.assets?.logo);
+
+    for (const key of [
+      "stageIcon",
+      "stageName",
+      "lastRelationChange",
+      "adviceIcon",
+      "advice",
+    ]) {
+      text(key, data[key]);
+    }
+    renderAxes();
+    renderRhythm();
+    renderTimeline();
+  </script>
+</body>
+</html>
