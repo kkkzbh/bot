@@ -36,6 +36,7 @@ describe('chatluna build script dependency closure', () => {
     expect(helper).toContain('install --immutable');
     expect(action).toContain('yarn-version:');
     expect(action).toContain('CHATLUNA_YARN_VERSION: ${{ inputs.yarn-version }}');
+    expect(action.match(/CHATLUNA_YARN_VERSION: \$\{\{ inputs\.yarn-version \}\}/g)).toHaveLength(2);
     expect(buildScript).toContain('chatluna_yarn_fast_build "$CHATLUNA_ROOT_DIR" "${BUILD_TARGETS[@]}"');
     expect(buildScript).not.toContain('yarn@1.22.22');
   });

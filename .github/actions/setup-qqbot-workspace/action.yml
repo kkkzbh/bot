@@ -104,6 +104,8 @@ runs:
     - name: Ensure linked ChatLuna runtime builds
       if: inputs.install == 'true' && inputs.build-chatluna == 'true'
       shell: bash
+      env:
+        CHATLUNA_YARN_VERSION: ${{ inputs.yarn-version }}
       run: bash ./scripts/ensure-chatluna-build.sh
 
     - name: Capture workspace revisions
