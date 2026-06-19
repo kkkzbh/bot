@@ -28,6 +28,7 @@ describe('chatluna build script dependency closure', () => {
 
     expect(helper).toContain('pkg.packageManager');
     expect(helper).toContain('CHATLUNA_YARN_VERSION');
+    expect(helper).toContain('COREPACK_ENABLE_PROJECT_SPEC=0 corepack "yarn@${yarn_version}" "$@"');
     expect(helper).toContain('corepack "yarn@${yarn_version}" "$@"');
     expect(helper).toContain('npm exec --yes "@yarnpkg/cli-dist@${yarn_version}" -- "$@"');
     expect(helper).toContain('install --frozen-lockfile');

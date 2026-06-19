@@ -45,7 +45,7 @@ chatluna_run_yarn_with_package_manager() {
       fi
 
       if command -v corepack >/dev/null 2>&1; then
-        (cd "$root_dir" && corepack "yarn@${yarn_version}" "$@")
+        (cd "$root_dir" && COREPACK_ENABLE_PROJECT_SPEC=0 corepack "yarn@${yarn_version}" "$@")
       elif command -v npm >/dev/null 2>&1; then
         (cd "$root_dir" && npm exec --yes "@yarnpkg/cli-dist@${yarn_version}" -- "$@")
       else
