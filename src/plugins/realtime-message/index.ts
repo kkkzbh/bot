@@ -1,6 +1,6 @@
 import { Context, Logger, Schema, type Session } from 'koishi';
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
-import { isAffinityPanelCommandSession } from '../affinity/command.js';
+import { isAffinityPanelCommandSession } from '../affinity/index.js';
 import { createVoiceRuntimeConfigFromEnv } from '../reply/index.js';
 import {
   buildGroupScopeKey,
