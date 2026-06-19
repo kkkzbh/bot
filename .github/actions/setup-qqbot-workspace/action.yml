@@ -22,6 +22,10 @@ inputs:
     description: pnpm version.
     required: false
     default: 9.15.4
+  yarn-version:
+    description: Yarn version used by linked ChatLuna when the checkout does not declare packageManager.
+    required: false
+    default: 1.22.22
   install:
     description: Install qqbot and ChatLuna dependencies.
     required: false
@@ -90,6 +94,8 @@ runs:
     - name: Install linked ChatLuna dependencies
       if: inputs.install == 'true'
       shell: bash
+      env:
+        CHATLUNA_YARN_VERSION: ${{ inputs.yarn-version }}
       run: |
         set -euo pipefail
         source ./scripts/lib/chatluna-package-manager.sh

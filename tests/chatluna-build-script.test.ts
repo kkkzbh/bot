@@ -21,15 +21,20 @@ describe('chatluna build script dependency closure', () => {
     expect(content).toContain('Run: pnpm build');
   });
 
-  it('runs the package manager declared by the linked ChatLuna checkout', () => {
+  it('runs the package manager declared by the linked ChatLuna checkout or CI input', () => {
     const helper = readFileSync(resolve(process.cwd(), 'scripts/lib/chatluna-package-manager.sh'), 'utf8');
+    const action = readFileSync(resolve(process.cwd(), '.github/actions/setup-qqbot-workspace/action.yml'), 'utf8');
     const buildScript = readFileSync(resolve(process.cwd(), 'scripts/ensure-chatluna-build.sh'), 'utf8');
 
     expect(helper).toContain('pkg.packageManager');
+    expect(helper).toContain('CHATLUNA_YARN_VERSION');
     expect(helper).toContain('corepack "yarn@${yarn_version}" "$@"');
     expect(helper).toContain('npm exec --yes "@yarnpkg/cli-dist@${yarn_version}" -- "$@"');
+    expect(helper).toContain('install --frozen-lockfile');
     expect(helper).toContain('install --no-immutable');
     expect(helper).toContain('install --immutable');
+    expect(action).toContain('yarn-version:');
+    expect(action).toContain('CHATLUNA_YARN_VERSION: ${{ inputs.yarn-version }}');
     expect(buildScript).toContain('chatluna_yarn_fast_build "$CHATLUNA_ROOT_DIR" "${BUILD_TARGETS[@]}"');
     expect(buildScript).not.toContain('yarn@1.22.22');
   });
