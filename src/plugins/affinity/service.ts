@@ -63,7 +63,7 @@ import {
 import {
   createAffinityProactiveVoiceRuntime,
   generateAffinityProactiveViaChatLuna,
-  type AffinityProactiveChatLunaRoom,
+  type AffinityProactiveChatLunaConversation,
   type AffinityProactiveGenerationResult,
 } from './proactive-chatluna.js';
 import { proactiveDirectionUsesConversationContext } from './proactive-task.js';
@@ -85,53 +85,43 @@ type AffinityBotLike = {
   session?: (event?: Record<string, unknown>) => Session;
 };
 
-type ChatLunaRoomRecord = {
-  roomId?: string | number | null;
-  roomName?: string | null;
-  conversationId?: string | null;
-  roomMasterId?: string | null;
-  visibility?: 'public' | 'private' | 'template_clone' | string | null;
+type ChatLunaConversationRecord = {
+  id: string;
+  seq?: number | null;
+  bindingKey?: string | null;
+  title?: string | null;
   preset?: string | null;
   model?: string | null;
   chatMode?: string | null;
-  password?: string | null;
-  autoUpdate?: boolean | number | null;
-  updatedTime?: Date | number | string | null;
-};
-
-type ChatLunaHistoryRoom = {
-  visibility: 'public' | 'private' | 'template_clone';
-  roomMasterId: string;
-  roomName: string;
-  roomId: number;
-  conversationId: string;
-  preset: string;
-  model: string;
-  chatMode: string;
-  password?: string;
-  autoUpdate?: boolean;
-  updatedTime: Date;
+  createdBy?: string | null;
+  createdAt?: Date | number | string | null;
+  updatedAt?: Date | number | string | null;
+  lastChatAt?: Date | number | string | null;
+  status?: string | null;
+  latestMessageId?: string | null;
+  additional_kwargs?: string | null;
+  compression?: string | null;
+  archivedAt?: Date | number | string | null;
+  archiveId?: string | null;
+  legacyRoomId?: number | null;
+  legacyMeta?: string | null;
+  autoTitle?: boolean | number | null;
 };
 
 type ChatLunaHistoryLike = {
-  queryInterfaceWrapper?: (room: unknown, autoCreate?: boolean) => {
-    query: (room: unknown, create?: boolean) => Promise<{
-      chatHistory?: {
-        addMessages?: (messages: unknown[]) => Promise<void>;
-      };
-    }>;
-  } | undefined;
   chat?: (
     session: Session,
-    room: AffinityProactiveChatLunaRoom,
+    conversation: AffinityProactiveChatLunaConversation,
     message: { content?: unknown; additional_kwargs?: Record<string, unknown> },
-    events: Record<string, unknown>,
-    stream: boolean,
-    options: Record<string, unknown>,
-    model?: unknown,
-    requestId?: string,
-    toolMask?: unknown,
+    options?: {
+      event?: Record<string, unknown>;
+      stream?: boolean;
+      variables?: Record<string, unknown>;
+      requestId?: string;
+      toolMask?: unknown;
+    },
   ) => Promise<{ content?: unknown; additional_kwargs?: Record<string, unknown> } | null | undefined>;
+  config?: unknown;
   contextManager?: {
     inject: (options: {
       name: string;
@@ -147,7 +137,6 @@ type ChatHistoryWriterResolution =
   | {
       ok: true;
       conversationId: string;
-      room: ChatLunaHistoryRoom;
       addMessages: (messages: unknown[]) => Promise<void>;
     }
   | {
@@ -156,17 +145,13 @@ type ChatHistoryWriterResolution =
       conversationId?: string;
     };
 
-type ConversationRow = {
-  id?: string | null;
-  latestId?: string | null;
-};
-
 type ConversationMessageRow = {
   id: string;
   role?: string | null;
-  parent?: string | null;
+  parentId?: string | null;
   text?: string | null;
   content?: unknown;
+  createdAt?: Date | number | string | null;
 };
 
 type OpenThreadSummary = {
@@ -182,13 +167,13 @@ type RandomGenerationWithTransport = AffinityRandomGenerationResult & {
   deliveryHistoryText?: string | null;
 };
 
-type ProactiveSourceRoomResolution =
+type ProactiveSourceConversationResolution =
   | {
-      sourceRoom: ChatLunaRoomRecord;
+      sourceConversation: ChatLunaConversationRecord;
       skipReason: null;
     }
   | {
-      sourceRoom: null;
+      sourceConversation: null;
       skipReason: string;
     };
 
@@ -257,37 +242,10 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Math.max(min, Math.min(max, parsed));
 }
 
-function toFiniteNumber(value: unknown, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function normalizeChatLunaVisibility(value: unknown): ChatLunaHistoryRoom['visibility'] {
-  if (value === 'public' || value === 'private' || value === 'template_clone') return value;
-  return 'template_clone';
-}
-
 function normalizeDate(value: unknown): Date {
   if (value instanceof Date && Number.isFinite(value.getTime())) return value;
   const parsed = new Date(value as string | number);
   return Number.isFinite(parsed.getTime()) ? parsed : new Date();
-}
-
-function toChatLunaHistoryRoom(row: ChatLunaRoomRecord | undefined, conversationId: string): ChatLunaHistoryRoom | null {
-  if (!row) return null;
-  return {
-    visibility: normalizeChatLunaVisibility(row.visibility),
-    roomMasterId: normalizeText(row.roomMasterId),
-    roomName: normalizeText(row.roomName) || `affinity-${conversationId}`,
-    roomId: toFiniteNumber(row.roomId, 0),
-    conversationId,
-    preset: normalizeText(row.preset),
-    model: normalizeText(row.model),
-    chatMode: normalizeText(row.chatMode) || 'chat',
-    password: normalizeText(row.password) || undefined,
-    autoUpdate: row.autoUpdate == null ? undefined : Boolean(row.autoUpdate),
-    updatedTime: normalizeDate(row.updatedTime),
-  };
 }
 
 function parseSettings(rows: AffinityConfigRecord[]): AffinitySettings {
@@ -559,7 +517,7 @@ export class AffinityService implements AffinityServiceLike {
     scope: AffinityScopeConfigRecord;
     plan: AffinityRandomPlanRecord;
     channelId: string;
-    sourceRoom: ChatLunaRoomRecord;
+    sourceConversation: ChatLunaConversationRecord | null;
   }): Session {
     const event = {
       platform: normalizeText(args.plan.platform) || normalizeText(args.scope.platform) || normalizeText(args.bot.platform),
@@ -579,17 +537,12 @@ export class AffinityService implements AffinityServiceLike {
       bot: args.bot,
       messageId: `affinity-random-plan:${args.plan.id}:trigger`,
     });
-    const stickerArtifacts = resolveStickerCapabilityArtifacts(normalizeText(args.sourceRoom.preset) || null);
+    const stickerArtifacts = resolveStickerCapabilityArtifacts(normalizeText(args.sourceConversation?.preset) || null);
     session.state = {
       ...(session.state ?? {}),
       qqSticker: stickerArtifacts.state as unknown,
     };
     return session;
-  }
-
-  private async getNextChatLunaRoomId(): Promise<number> {
-    const rooms = await this.database.get('chathub_room', {} as Record<string, never>) as ChatLunaRoomRecord[];
-    return rooms.reduce((current, room) => Math.max(current, toFiniteNumber(room.roomId, 0)), 0) + 1;
   }
 
   private async resolveChatHistoryWriter(conversationId: string): Promise<ChatHistoryWriterResolution> {
@@ -599,8 +552,7 @@ export class AffinityService implements AffinityServiceLike {
     }
 
     const chatluna = this.getChatLuna();
-    const queryInterfaceWrapper = chatluna?.queryInterfaceWrapper?.bind(chatluna);
-    if (typeof queryInterfaceWrapper !== 'function') {
+    if (!chatluna) {
       return {
         ok: false,
         reason: 'chatluna_history_unavailable',
@@ -608,177 +560,100 @@ export class AffinityService implements AffinityServiceLike {
       };
     }
 
-    const [roomRow] = await this.database.get('chathub_room', { conversationId: normalizedConversationId }) as ChatLunaRoomRecord[];
-    const room = toChatLunaHistoryRoom(roomRow, normalizedConversationId);
-    if (!room) {
+    const [conversation] = await this.database.get('chatluna_conversation', { id: normalizedConversationId }) as ChatLunaConversationRecord[];
+    if (!conversation?.id) {
       return {
         ok: false,
-        reason: 'room_unavailable',
+        reason: 'conversation_unavailable',
         conversationId: normalizedConversationId,
       };
     }
 
-    const interfaceWrapper = queryInterfaceWrapper(room, true);
-    const chatInterface = await interfaceWrapper?.query(room, true);
-    const addMessages = chatInterface?.chatHistory?.addMessages;
-    if (typeof addMessages !== 'function') {
-      return {
-        ok: false,
-        reason: 'chat_history_unavailable',
-        conversationId: normalizedConversationId,
-      };
-    }
+    const historyModule = require('koishi-plugin-chatluna/llm-core/memory/message') as {
+      KoishiChatMessageHistory: new (
+        ctx: unknown,
+        conversationId: string,
+        maxMessagesCount: number,
+        chatluna: unknown,
+      ) => { addMessages: (messages: unknown[]) => Promise<void> };
+    };
+    const { KoishiChatMessageHistory } = historyModule;
+    const history = new KoishiChatMessageHistory(
+      { database: this.database, logger } as never,
+      normalizedConversationId,
+      10_000,
+      chatluna as never,
+    );
 
     return {
       ok: true,
       conversationId: normalizedConversationId,
-      room,
-      addMessages,
+      addMessages: (messages) => history.addMessages(messages as never),
     };
   }
 
-  private async createTemporaryProactiveRoom(args: {
-    sourceRoom: ChatLunaRoomRecord;
+  private async createTemporaryProactiveConversation(args: {
+    sourceConversation: ChatLunaConversationRecord;
     session: Session;
     plan: AffinityRandomPlanRecord;
-  }): Promise<ChatLunaHistoryRoom> {
-    const conversationId = `affinity-proactive-${randomUUID()}`;
+  }): Promise<AffinityProactiveChatLunaConversation> {
+    const id = `affinity-proactive-${randomUUID()}`;
     const profile = mainChatRuntimeState.getProfile();
-    const room: ChatLunaHistoryRoom = {
-      ...toChatLunaHistoryRoom(args.sourceRoom, normalizeText(args.sourceRoom.conversationId) || conversationId)!,
-      roomId: await this.getNextChatLunaRoomId(),
-      roomName: `affinity-random-${args.plan.id}`,
-      roomMasterId: normalizeText(args.session.userId) || 'affinity-proactive',
-      conversationId,
-      model: normalizeText(profile.canonicalModel) || normalizeText(args.sourceRoom.model),
+    const now = new Date();
+    const conversation: AffinityProactiveChatLunaConversation = {
+      id,
+      bindingKey:
+        normalizeText(args.sourceConversation.bindingKey) ||
+        `affinity-proactive:${args.plan.scopeKind}:${args.plan.scopeId}`,
+      title: `affinity-random-${args.plan.id}`,
+      model: normalizeText(profile.canonicalModel) || normalizeText(args.sourceConversation.model),
+      preset: normalizeText(args.sourceConversation.preset),
       chatMode: 'plugin',
-      autoUpdate: false,
-      updatedTime: new Date(),
+      createdBy: normalizeText(args.session.userId) || 'affinity-proactive',
+      createdAt: now,
+      updatedAt: now,
+      lastChatAt: now,
+      status: 'active',
+      latestMessageId: null,
+      additional_kwargs: null,
+      compression: null,
+      archivedAt: null,
+      archiveId: null,
+      legacyRoomId: null,
+      legacyMeta: null,
+      autoTitle: false,
     };
-    await this.database.create('chathub_room', room as unknown as Record<string, unknown>);
-    await this.database.create('chathub_room_member', {
-      userId: room.roomMasterId,
-      roomId: room.roomId,
-      roomPermission: 'owner',
-    });
-    await this.database.upsert?.('chathub_user', [
-      {
-        userId: room.roomMasterId,
-        defaultRoomId: room.roomId,
-        groupId: args.session.isDirect ? '0' : normalizeText(args.session.guildId) || '0',
-      },
-    ]);
-    if (!args.session.isDirect && args.session.guildId) {
-      await this.database.create('chathub_room_group_member', {
-        groupId: args.session.guildId,
-        roomId: room.roomId,
-        roomVisibility: room.visibility,
-      });
-    }
-    return room;
+    await this.database.create('chatluna_conversation', conversation as unknown as Record<string, unknown>);
+    return conversation;
   }
 
-  private async deleteTemporaryProactiveRoom(room: ChatLunaHistoryRoom): Promise<void> {
-    await this.database.remove('chathub_room_group_member', { roomId: room.roomId });
-    await this.database.remove('chathub_room_member', { roomId: room.roomId });
-    await this.database.remove('chathub_user', { defaultRoomId: room.roomId });
-    if (room.conversationId) {
-      await this.database.remove('chathub_message', { conversation: room.conversationId });
-      await this.database.remove('chathub_conversation', { id: room.conversationId });
-    }
-    await this.database.remove('chathub_room', { roomId: room.roomId });
+  private async deleteTemporaryProactiveConversation(conversation: AffinityProactiveChatLunaConversation): Promise<void> {
+    await this.database.remove('chatluna_message', { conversationId: conversation.id });
+    await this.database.remove('chatluna_conversation', { id: conversation.id });
   }
 
-  private scoreProactiveFallbackRoom(room: ChatLunaRoomRecord, bot: AffinityBotLike): number {
-    const profile = mainChatRuntimeState.getProfile();
-    let score = 0;
-    if (normalizeText(room.preset) === 'sakiko') score += 100;
-    if (normalizeText(room.model) === normalizeText(profile.canonicalModel)) score += 50;
-    if (normalizeText(room.chatMode) === 'plugin') score += 25;
-    if (normalizeChatLunaVisibility(room.visibility) === 'template_clone') score += 15;
-    if (normalizeText(room.roomMasterId) === normalizeText(bot.selfId)) score += 5;
-    if (normalizeText(room.conversationId)) score += 3;
-    return score;
-  }
-
-  private async findFallbackProactiveSourceRoom(bot: AffinityBotLike): Promise<ChatLunaRoomRecord | null> {
-    const rooms = await this.database.get('chathub_room', {} as Record<string, never>) as ChatLunaRoomRecord[];
-    const candidates = rooms.filter((room) => (
-      normalizeText(room.preset) ||
-      normalizeText(room.model) ||
-      normalizeText(room.conversationId)
-    ));
-    if (!candidates.length) return null;
-    return candidates
-      .sort((left, right) => this.scoreProactiveFallbackRoom(right, bot) - this.scoreProactiveFallbackRoom(left, bot))
-      [0] ?? null;
-  }
-
-  private createSyntheticProactiveSourceRoom(args: {
+  private async resolveProactiveSourceConversation(args: {
     plan: AffinityRandomPlanRecord;
     scope: AffinityScopeConfigRecord;
-    bot: AffinityBotLike;
-  }): ChatLunaRoomRecord {
-    const profile = mainChatRuntimeState.getProfile();
-    return {
-      roomId: 0,
-      roomName: `affinity-manual-${args.scope.scopeKind}-${args.scope.scopeId}`,
-      conversationId: null,
-      roomMasterId:
-        normalizeText(args.plan.botSelfId) ||
-        normalizeText(args.scope.botSelfId) ||
-        normalizeText(args.bot.selfId) ||
-        'affinity-proactive',
-      visibility: 'template_clone',
-      preset: 'sakiko',
-      model: normalizeText(profile.canonicalModel),
-      chatMode: 'plugin',
-      password: null,
-      autoUpdate: false,
-      updatedTime: new Date(),
-    };
-  }
-
-  private async resolveProactiveSourceRoom(args: {
-    plan: AffinityRandomPlanRecord;
-    scope: AffinityScopeConfigRecord;
-    bot: AffinityBotLike;
-    manual: boolean;
-  }): Promise<ProactiveSourceRoomResolution> {
+  }): Promise<ProactiveSourceConversationResolution> {
     const targetConversationId = normalizeText(args.plan.conversationId) || normalizeText(args.scope.conversationId) || null;
-    if (targetConversationId) {
-      const [sourceRoom] = await this.database.get('chathub_room', { conversationId: targetConversationId }) as ChatLunaRoomRecord[];
-      if (sourceRoom) {
-        return {
-          sourceRoom,
-          skipReason: null,
-        };
-      }
-      if (!args.manual) {
-        return {
-          sourceRoom: null,
-          skipReason: 'room_unavailable',
-        };
-      }
-    }
-
-    if (!args.manual) {
+    if (!targetConversationId) {
       return {
-        sourceRoom: null,
+        sourceConversation: null,
         skipReason: 'missing_conversation_id',
       };
     }
 
-    const fallbackRoom = await this.findFallbackProactiveSourceRoom(args.bot);
-    if (fallbackRoom) {
+    const [sourceConversation] = await this.database.get('chatluna_conversation', { id: targetConversationId }) as ChatLunaConversationRecord[];
+    if (!sourceConversation?.id) {
       return {
-        sourceRoom: fallbackRoom,
-        skipReason: null,
+        sourceConversation: null,
+        skipReason: 'conversation_unavailable',
       };
     }
 
     return {
-      sourceRoom: this.createSyntheticProactiveSourceRoom(args),
+      sourceConversation,
       skipReason: null,
     };
   }
@@ -915,10 +790,16 @@ export class AffinityService implements AffinityServiceLike {
         };
       }
 
+      const panelMessageId = `affinity-panel-command:${normalizeText(session.messageId) || randomUUID()}`;
       await writer.addMessages([
         new AIMessage({
           content: buildPanelHistoryContent(view),
-          id: `affinity-panel-command:${normalizeText(session.messageId) || randomUUID()}`,
+          id: panelMessageId,
+          response_metadata: {
+            chatluna: {
+              recordId: panelMessageId,
+            },
+          },
           additional_kwargs: {
             qqbot_affinity_panel_command: {
               ...buildPanelHistoryMetadata(view),
@@ -1550,12 +1431,12 @@ export class AffinityService implements AffinityServiceLike {
   private async loadRecentConversationTurns(conversationId: string | null | undefined): Promise<AffinityRandomContextTurn[]> {
     const normalizedConversationId = normalizeText(conversationId);
     if (!normalizedConversationId) return [];
-    const [conversation] = await this.database.get('chathub_conversation', { id: normalizedConversationId }) as ConversationRow[];
-    if (!conversation?.latestId) return [];
-    const rows = await this.database.get('chathub_message', { conversation: normalizedConversationId }) as ConversationMessageRow[];
+    const [conversation] = await this.database.get('chatluna_conversation', { id: normalizedConversationId }) as ChatLunaConversationRecord[];
+    if (!conversation?.latestMessageId) return [];
+    const rows = await this.database.get('chatluna_message', { conversationId: normalizedConversationId }) as ConversationMessageRow[];
     const messageMap = new Map(rows.map((row) => [row.id, row]));
     const turns: AffinityRandomContextTurn[] = [];
-    let cursor: string | null | undefined = conversation.latestId;
+    let cursor: string | null | undefined = conversation.latestMessageId;
     while (cursor && turns.length < RECENT_CONTEXT_LIMIT) {
       const row = messageMap.get(cursor);
       if (!row) break;
@@ -1578,7 +1459,7 @@ export class AffinityService implements AffinityServiceLike {
           });
         }
       }
-      cursor = row.parent ?? null;
+      cursor = row.parentId ?? null;
     }
     return turns.reverse();
   }
@@ -1743,35 +1624,32 @@ export class AffinityService implements AffinityServiceLike {
     bot: AffinityBotLike;
     input: AffinityRandomGenerationInput;
     channelId: string;
-    manual: boolean;
   }): Promise<AffinityProactiveGenerationResult> {
     const chatluna = this.getChatLuna();
-    const source = await this.resolveProactiveSourceRoom({
+    const source = await this.resolveProactiveSourceConversation({
       plan: args.plan,
       scope: args.scope,
-      bot: args.bot,
-      manual: args.manual,
     });
-    if (!source.sourceRoom) return this.createProactiveSkipGeneration(source.skipReason);
+    if (!source.sourceConversation) return this.createProactiveSkipGeneration(source.skipReason);
 
     const session = this.createProactiveSession({
       bot: args.bot,
       scope: args.scope,
       plan: args.plan,
       channelId: args.channelId,
-      sourceRoom: source.sourceRoom,
+      sourceConversation: source.sourceConversation,
     });
 
-    let tempRoom: ChatLunaHistoryRoom | null = null;
+    let tempConversation: AffinityProactiveChatLunaConversation | null = null;
     try {
-      tempRoom = await this.createTemporaryProactiveRoom({
-        sourceRoom: source.sourceRoom,
+      tempConversation = await this.createTemporaryProactiveConversation({
+        sourceConversation: source.sourceConversation,
         session,
         plan: args.plan,
       });
       return await generateAffinityProactiveViaChatLuna({
         chatluna: chatluna as any,
-        room: tempRoom,
+        conversation: tempConversation,
         session,
         input: args.input,
         requestId: `affinity-random-plan:${args.plan.id}:${args.plan.direction}`,
@@ -1786,12 +1664,12 @@ export class AffinityService implements AffinityServiceLike {
       );
       return this.createProactiveSkipGeneration('chatluna_generation_error');
     } finally {
-      if (tempRoom) {
-        await this.deleteTemporaryProactiveRoom(tempRoom).catch((error: unknown) => {
+      if (tempConversation) {
+        await this.deleteTemporaryProactiveConversation(tempConversation).catch((error: unknown) => {
           logger.warn(
-            'affinity temporary proactive room cleanup failed: planId=%s roomId=%s error=%s',
+            'affinity temporary proactive conversation cleanup failed: planId=%s conversationId=%s error=%s',
             String(args.plan.id),
-            String(tempRoom?.roomId ?? '<unknown>'),
+            String(tempConversation?.id ?? '<unknown>'),
             error instanceof Error ? error.message : String(error),
           );
         });
@@ -1813,25 +1691,15 @@ export class AffinityService implements AffinityServiceLike {
     }
 
     const conversationId = normalizeText(plan.conversationId) || normalizeText(scope.conversationId);
-    const [sourceRoom] = conversationId
-      ? await this.database.get('chathub_room', { conversationId }) as ChatLunaRoomRecord[]
+    const [sourceConversation] = conversationId
+      ? await this.database.get('chatluna_conversation', { id: conversationId }) as ChatLunaConversationRecord[]
       : [];
     const session = this.createProactiveSession({
       bot,
       scope,
       plan,
       channelId,
-      sourceRoom: sourceRoom ?? {
-        roomId: 0,
-        roomName: `affinity-${plan.id}`,
-        conversationId,
-        roomMasterId: normalizeText(plan.botSelfId) || normalizeText(bot.selfId) || 'affinity-proactive',
-        visibility: 'template_clone',
-        preset: null,
-        model: null,
-        chatMode: 'plugin',
-        updatedTime: new Date(),
-      },
+      sourceConversation: sourceConversation ?? null,
     });
     const delivery = await deliverStandaloneReplyPlan({
       runtime: createAffinityProactiveVoiceRuntime(),
@@ -1912,7 +1780,6 @@ export class AffinityService implements AffinityServiceLike {
       bot,
       input: prepared.input,
       channelId,
-      manual,
     });
     if (!generation.shouldSend || !generation.message) {
       await this.writeAudit('random_message_generation_skipped', {
@@ -2061,6 +1928,11 @@ export class AffinityService implements AffinityServiceLike {
         new AIMessage({
           content: historyContent,
           id: `affinity-random-plan:${plan.id}`,
+          response_metadata: {
+            chatluna: {
+              recordId: `affinity-random-plan:${plan.id}`,
+            },
+          },
           additional_kwargs: {
             qqbot_affinity_random_event: {
               version: 'v1',

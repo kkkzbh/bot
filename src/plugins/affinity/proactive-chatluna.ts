@@ -42,14 +42,15 @@ type ChatLunaMessageLike = {
 export type AffinityProactiveChatLunaService = {
   chat?: (
     session: Session,
-    room: AffinityProactiveChatLunaRoom,
+    conversation: AffinityProactiveChatLunaConversation,
     message: ChatLunaMessageLike,
-    events: Record<string, unknown>,
-    stream: boolean,
-    options: Record<string, unknown>,
-    model?: unknown,
-    requestId?: string,
-    toolMask?: unknown,
+    options?: {
+      event?: Record<string, unknown>;
+      stream?: boolean;
+      variables?: Record<string, unknown>;
+      requestId?: string;
+      toolMask?: unknown;
+    },
   ) => Promise<ChatLunaMessageLike | null | undefined>;
   contextManager?: {
     inject: (options: {
@@ -62,13 +63,26 @@ export type AffinityProactiveChatLunaService = {
   };
 };
 
-export type AffinityProactiveChatLunaRoom = {
-  roomId?: number | string | null;
-  roomName?: string | null;
-  conversationId?: string | null;
-  preset?: string | null;
-  model?: string | null;
-  chatMode?: string | null;
+export type AffinityProactiveChatLunaConversation = {
+  id: string;
+  bindingKey: string;
+  title: string;
+  model: string;
+  preset: string;
+  chatMode: string;
+  createdBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+  lastChatAt?: Date | null;
+  status: string;
+  latestMessageId?: string | null;
+  additional_kwargs?: string | null;
+  compression?: string | null;
+  archivedAt?: Date | null;
+  archiveId?: string | null;
+  legacyRoomId?: number | null;
+  legacyMeta?: string | null;
+  autoTitle?: boolean | null;
   [key: string]: unknown;
 };
 
@@ -186,7 +200,7 @@ function skipResult(reason: string): AffinityProactiveGenerationResult {
 
 export async function generateAffinityProactiveViaChatLuna(args: {
   chatluna: AffinityProactiveChatLunaService | undefined;
-  room: AffinityProactiveChatLunaRoom;
+  conversation: AffinityProactiveChatLunaConversation;
   session: Session;
   input: AffinityRandomGenerationInput;
   requestId: string;
@@ -194,7 +208,7 @@ export async function generateAffinityProactiveViaChatLuna(args: {
 }): Promise<AffinityProactiveGenerationResult> {
   const chat = args.chatluna?.chat?.bind(args.chatluna);
   const contextManager = args.chatluna?.contextManager;
-  const conversationId = args.room.conversationId?.trim();
+  const conversationId = args.conversation.id.trim();
   if (typeof chat !== 'function') return skipResult('chatluna_chat_unavailable');
   if (!contextManager || !conversationId) return skipResult('chatluna_context_unavailable');
 
@@ -208,9 +222,7 @@ export async function generateAffinityProactiveViaChatLuna(args: {
     additional_kwargs: {},
   };
   const outputContract = attachReplyOutputContract(message, capabilitySnapshot);
-  const turnInput = buildReplyTurnInput(args.session, {
-    conversationId: conversationId || undefined,
-  }, message);
+  const turnInput = buildReplyTurnInput(args.session, { conversationId }, message);
   const taskFragment = buildProactiveTaskFragment(args.input);
   const envelope = compileReplyPromptEnvelope(buildReplyPromptCompilerInput({
     input: turnInput,
@@ -232,13 +244,14 @@ export async function generateAffinityProactiveViaChatLuna(args: {
   try {
     const response = await chat(
       args.session,
-      args.room,
+      args.conversation,
       message,
-      createNoopChatEvents(),
-      false,
-      {},
-      undefined,
-      args.requestId,
+      {
+        event: createNoopChatEvents(),
+        stream: false,
+        variables: {},
+        requestId: args.requestId,
+      },
     );
     const orchestration = await proactiveReplyOrchestrator.handle(turnInput, args.session, {
       responseMessage: response,

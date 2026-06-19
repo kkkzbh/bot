@@ -130,13 +130,26 @@ function createSession() {
   } as any;
 }
 
-const room = {
-  roomId: 99,
-  roomName: 'affinity-proactive-temp',
-  conversationId: 'conv-temp',
+const conversation = {
+  id: 'conv-temp',
+  bindingKey: 'shared:onebot:bot-1:100',
+  title: 'affinity-proactive-temp',
   preset: 'sakiko',
   model: 'openai/gpt-5.4-medium-thinking',
   chatMode: 'plugin',
+  createdBy: 'affinity-proactive',
+  createdAt: new Date(NOW),
+  updatedAt: new Date(NOW),
+  lastChatAt: new Date(NOW),
+  status: 'active',
+  latestMessageId: null,
+  additional_kwargs: null,
+  compression: null,
+  archivedAt: null,
+  archiveId: null,
+  legacyRoomId: null,
+  legacyMeta: null,
+  autoTitle: false,
 };
 
 function createChatLuna(responseContent: string) {
@@ -272,7 +285,7 @@ describe('affinity proactive task prompt and provider adapter', () => {
 
     const result = await generateAffinityProactiveViaChatLuna({
       chatluna,
-      room,
+      conversation,
       session: createSession(),
       input: input(),
       requestId: 'test-native',
@@ -287,6 +300,8 @@ describe('affinity proactive task prompt and provider adapter', () => {
       kind: 'message',
       parts: [{ kind: 'text', content: expect.stringContaining('缩点题') }],
     }));
+    expect(chatluna.chat.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ id: 'conv-temp' }));
+    expect(chatluna.chat.mock.calls[0]?.[3]).toEqual(expect.objectContaining({ requestId: 'test-native' }));
     const modelMessage = chatluna.chat.mock.calls[0]?.[2] as { additional_kwargs?: Record<string, any> };
     expect(modelMessage.additional_kwargs?.qqbot_final_response_contract).toEqual(expect.objectContaining({
       protocol: 'native_chat_json_schema',
@@ -320,7 +335,7 @@ describe('affinity proactive task prompt and provider adapter', () => {
 
     const result = await generateAffinityProactiveViaChatLuna({
       chatluna,
-      room,
+      conversation,
       session: createSession(),
       input: input({ direction: 'music_rehearsal' }),
       requestId: 'test-media',
@@ -368,7 +383,7 @@ describe('affinity proactive task prompt and provider adapter', () => {
 
     const result = await generateAffinityProactiveViaChatLuna({
       chatluna,
-      room,
+      conversation,
       session: createSession(),
       input: input(),
       requestId: 'test-chat-reply-v1',
@@ -409,7 +424,7 @@ describe('affinity proactive task prompt and provider adapter', () => {
 
     const result = await generateAffinityProactiveViaChatLuna({
       chatluna,
-      room,
+      conversation,
       session: createSession(),
       input: input({ recentTurns: [] }),
       requestId: 'test-no-reply',

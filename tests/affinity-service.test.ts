@@ -6,6 +6,7 @@ import {
   clearPromptAssemblyTurn,
   consumePromptEnvelope,
 } from '../src/plugins/shared/prompt-context/index.js';
+import { decodeStoredMessageJson, decodeStoredMessageText } from '../src/plugins/shared/stored-message.js';
 import type { AffinityEventRecord, AffinityRandomPlanRecord, AffinityScopeConfigRecord } from '../src/types/affinity.js';
 
 vi.mock('koishi', () => {
@@ -32,6 +33,68 @@ vi.mock('koishi', () => {
         attrs: { content },
         toString: () => content,
       }),
+    },
+  };
+});
+
+vi.mock('koishi-plugin-chatluna/llm-core/memory/message', async () => {
+  const { gzipSync } = await import('node:zlib');
+  let fallbackId = 0;
+
+  function toArrayBuffer(buffer: Buffer): ArrayBuffer {
+    return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+  }
+
+  function encodeJson(value: unknown): ArrayBuffer {
+    return toArrayBuffer(gzipSync(JSON.stringify(value)));
+  }
+
+  return {
+    KoishiChatMessageHistory: class {
+      constructor(
+        private readonly ctx: { database: MemoryDatabase },
+        private readonly conversationId: string,
+      ) {}
+
+      async addMessages(messages: any[]): Promise<void> {
+        const [conversation] = await this.ctx.database.get('chatluna_conversation', { id: this.conversationId });
+        let parentId = conversation?.latestMessageId ?? null;
+        const rows: Row[] = [];
+        for (const message of messages) {
+          const recordId = message.response_metadata?.chatluna?.recordId ?? `mock-chatluna-message-${++fallbackId}`;
+          const additional = Object.keys(message.additional_kwargs ?? {}).length
+            ? encodeJson(message.additional_kwargs)
+            : null;
+          rows.push({
+            id: recordId,
+            conversationId: this.conversationId,
+            parentId,
+            role: typeof message.getType === 'function' ? message.getType() : 'ai',
+            text: null,
+            content: encodeJson(message.content),
+            name: message.name ?? null,
+            tool_call_id: message.tool_call_id ?? null,
+            tool_calls: message.tool_calls ?? null,
+            additional_kwargs_binary: additional,
+            response_metadata_binary: encodeJson({
+              ...(message.response_metadata ?? {}),
+              chatluna: {
+                ...(message.response_metadata?.chatluna ?? {}),
+                recordId,
+              },
+            }),
+            rawId: message.id ?? null,
+            createdAt: new Date(),
+          });
+          parentId = recordId;
+        }
+        await this.ctx.database.upsert('chatluna_message', rows);
+        await this.ctx.database.upsert('chatluna_conversation', [{
+          id: this.conversationId,
+          latestMessageId: parentId,
+          updatedAt: new Date(),
+        }]);
+      }
     },
   };
 });
@@ -82,6 +145,20 @@ class MemoryDatabase implements AffinityDatabaseLike {
     rows.push(record);
     this.tables[table] = rows;
     return record;
+  }
+
+  async upsert(table: string, rows: Record<string, unknown>[], keys?: string[]): Promise<void> {
+    const primaryKeys = keys?.length ? keys : ['id'];
+    const tableRows = this.tables[table] ?? [];
+    for (const row of rows) {
+      const existing = tableRows.find((candidate) => primaryKeys.every((key) => candidate[key] === row[key]));
+      if (existing) {
+        Object.assign(existing, row);
+      } else {
+        tableRows.push({ ...row });
+      }
+    }
+    this.tables[table] = tableRows;
   }
 
   async remove(table: string, query: Record<string, unknown>): Promise<void> {
@@ -143,19 +220,27 @@ function createPlan(overrides: Partial<AffinityRandomPlanRecord> = {}): Affinity
   };
 }
 
-function createRoom(conversationId = 'conv-affinity'): Row {
+function createConversation(conversationId = 'conv-affinity'): Row {
   return {
-    roomId: 11,
-    roomName: 'affinity-test-room',
-    conversationId,
-    roomMasterId: 'owner-1',
-    visibility: 'template_clone',
+    id: conversationId,
+    bindingKey: `shared:onebot:bot-1:${conversationId}`,
+    title: 'affinity-test-conversation',
     preset: 'sakiko',
     model: 'openai/gpt-test',
-    chatMode: 'chat',
-    password: null,
-    autoUpdate: false,
-    updatedTime: new Date(NOW),
+    chatMode: 'plugin',
+    createdBy: 'owner-1',
+    createdAt: new Date(NOW),
+    updatedAt: new Date(NOW),
+    lastChatAt: new Date(NOW),
+    status: 'active',
+    latestMessageId: null,
+    additional_kwargs: null,
+    compression: null,
+    archivedAt: null,
+    archiveId: null,
+    legacyRoomId: null,
+    legacyMeta: null,
+    autoTitle: false,
   };
 }
 
@@ -165,8 +250,7 @@ function createHarness(options: {
   randomMemories?: Row[];
   conversations?: Row[];
   messages?: Row[];
-  addMessages?: ReturnType<typeof vi.fn>;
-  includeRoom?: boolean;
+  includeConversation?: boolean;
   chat?: ReturnType<typeof vi.fn>;
   chatResponse?: { content?: unknown; additional_kwargs?: Record<string, unknown> };
   config?: Row[];
@@ -191,21 +275,16 @@ function createHarness(options: {
     affinity_open_thread: [],
     affinity_random_memory: options.randomMemories ?? [],
     affinity_audit: [],
-    chathub_room: options.includeRoom === false || !scope.conversationId ? [] : [createRoom(scope.conversationId)],
-    chathub_conversation: options.conversations ?? [],
-    chathub_message: options.messages ?? [],
+    chatluna_conversation: options.includeConversation === false || !scope.conversationId
+      ? []
+      : options.conversations ?? [createConversation(scope.conversationId)],
+    chatluna_message: options.messages ?? [],
   });
   const bot = {
     selfId: 'bot-1',
     platform: 'onebot',
     sendMessage: vi.fn(async () => undefined),
   };
-  const addMessages = options.addMessages ?? vi.fn(async () => undefined);
-  const query = vi.fn(async () => ({
-    chatHistory: {
-      addMessages,
-    },
-  }));
   const chat = options.chat ?? vi.fn(async () => options.chatResponse ?? ({
     content: JSON.stringify({
       decision: 'reply',
@@ -217,12 +296,11 @@ function createHarness(options: {
     inject: vi.fn(),
   };
   const chatluna = {
-    queryInterfaceWrapper: vi.fn(() => ({ query })),
     chat,
     contextManager,
   };
   const service = new AffinityService(db, () => [bot], () => 0.5, () => chatluna as any);
-  return { db, service, bot, addMessages, query, chatluna, chat, contextManager };
+  return { db, service, bot, chatluna, chat, contextManager };
 }
 
 function parseAuditDetail(row: Row | undefined): Record<string, unknown> {
@@ -252,7 +330,7 @@ describe('affinity service panel view', () => {
   });
 
   it('writes a successful panel command into the matching ChatLuna history as an AI message', async () => {
-    const { db, service, addMessages, chatluna } = createHarness();
+    const { db, service } = createHarness();
     const userKey = 'onebot:u-1';
     db.tables.affinity_user_state.push({
       id: 10,
@@ -314,20 +392,19 @@ describe('affinity service panel view', () => {
     const result = await service.syncPanelCommandToChatHistory(session, view);
 
     expect(result).toEqual({ synced: true, conversationId: 'conv-affinity' });
-    expect(addMessages).toHaveBeenCalledTimes(1);
-    expect(chatluna.queryInterfaceWrapper).toHaveBeenCalledWith(
-      expect.objectContaining({ conversationId: 'conv-affinity', roomId: 11 }),
-      true,
-    );
-    const [messages] = addMessages.mock.calls[0];
-    const [message] = messages;
-    expect(message.getType()).toBe('ai');
-    expect(message.id).toBe('affinity-panel-command:msg-panel-1');
-    expect(message.content).toContain('发送了一张好感面板');
-    expect(message.content).toContain('阶段「被记住的人」');
-    expect(message.content).toContain(view.fixedLine);
-    expect(message.content).not.toContain('不应进入面板 history 的原文');
-    expect(message.additional_kwargs.qqbot_affinity_panel_command).toEqual(expect.objectContaining({
+    const message = db.tables.chatluna_message.find((row) => row.id === 'affinity-panel-command:msg-panel-1');
+    expect(message).toEqual(expect.objectContaining({
+      conversationId: 'conv-affinity',
+      parentId: null,
+      role: 'ai',
+    }));
+    const content = await decodeStoredMessageText(message?.content);
+    expect(content).toContain('发送了一张好感面板');
+    expect(content).toContain('阶段「被记住的人」');
+    expect(content).toContain(view.fixedLine);
+    expect(content).not.toContain('不应进入面板 history 的原文');
+    const additional = await decodeStoredMessageJson<Record<string, any>>(message?.additional_kwargs_binary);
+    expect(additional?.qqbot_affinity_panel_command).toEqual(expect.objectContaining({
       version: 'v1',
       characterId: CHARACTER_ID,
       userKey,
@@ -338,6 +415,10 @@ describe('affinity service panel view', () => {
       fixedLine: view.fixedLine,
       imageAlt: '好感面板',
     }));
+    expect(db.tables.chatluna_conversation[0]).toEqual(expect.objectContaining({
+      id: 'conv-affinity',
+      latestMessageId: 'affinity-panel-command:msg-panel-1',
+    }));
     const syncAudit = db.tables.affinity_audit.find((row) => row.eventType === 'panel_history_synced');
     expect(parseAuditDetail(syncAudit)).toEqual(expect.objectContaining({
       conversationId: 'conv-affinity',
@@ -347,9 +428,9 @@ describe('affinity service panel view', () => {
   });
 
   it('records why a panel command cannot be synced when the current scope has no conversation id', async () => {
-    const { db, service, addMessages } = createHarness({
+    const { db, service } = createHarness({
       scope: { conversationId: null },
-      includeRoom: false,
+      includeConversation: false,
     });
     const session = {
       platform: 'onebot',
@@ -364,7 +445,7 @@ describe('affinity service panel view', () => {
     const result = await service.syncPanelCommandToChatHistory(session, view);
 
     expect(result).toEqual({ synced: false, reason: 'missing_conversation_id' });
-    expect(addMessages).not.toHaveBeenCalled();
+    expect(db.tables.chatluna_message).toHaveLength(0);
     const skippedAudit = db.tables.affinity_audit.find((row) => row.eventType === 'panel_history_sync_skipped');
     expect(parseAuditDetail(skippedAudit)).toEqual(expect.objectContaining({
       reason: 'missing_conversation_id',
@@ -447,7 +528,7 @@ describe('affinity service random history sync', () => {
     clearPromptAssemblyTurn('conv-affinity');
   });
 
-  it('sends a manual random plan for a non-whitelisted group through a temporary ChatLuna room', async () => {
+  it('sends a manual random plan for a non-whitelisted group through a temporary ChatLuna conversation', async () => {
     const db = new MemoryDatabase({
       affinity_config: [{
         id: 1,
@@ -462,21 +543,14 @@ describe('affinity service random history sync', () => {
       affinity_open_thread: [],
       affinity_random_memory: [],
       affinity_audit: [],
-      chathub_room: [],
-      chathub_conversation: [],
-      chathub_message: [],
+      chatluna_conversation: [createConversation('conv-manual')],
+      chatluna_message: [],
     });
     const bot = {
       selfId: 'bot-1',
       platform: 'onebot',
       sendMessage: vi.fn(async () => undefined),
     };
-    const addMessages = vi.fn(async () => undefined);
-    const query = vi.fn(async () => ({
-      chatHistory: {
-        addMessages,
-      },
-    }));
     const chat = vi.fn(async () => ({
       content: JSON.stringify({
         decision: 'reply',
@@ -488,7 +562,6 @@ describe('affinity service random history sync', () => {
       inject: vi.fn(),
     };
     const chatluna = {
-      queryInterfaceWrapper: vi.fn(() => ({ query })),
       chat,
       contextManager,
     };
@@ -502,6 +575,7 @@ describe('affinity service random history sync', () => {
       botSelfId: 'bot-1',
       channelId: '1012912433',
       guildId: '1012912433',
+      conversationId: 'conv-manual',
     }, NOW);
 
     expect(result).toEqual({
@@ -517,7 +591,7 @@ describe('affinity service random history sync', () => {
       scopeId: '1012912433',
       status: 'pending',
       scheduledAt: NOW + 5000,
-      conversationId: null,
+      conversationId: 'conv-manual',
     }));
     await expect(service.getNextPendingRandomPlanAt(NOW)).resolves.toBe(NOW + 5000);
 
@@ -533,18 +607,12 @@ describe('affinity service random history sync', () => {
       messageText: RANDOM_MESSAGE,
     }));
     expect(db.tables.affinity_random_memory).toHaveLength(1);
-    expect(addMessages).not.toHaveBeenCalled();
-    expect(chatluna.queryInterfaceWrapper).not.toHaveBeenCalled();
-    const historySkipAudit = db.tables.affinity_audit.find((row) => row.eventType === 'random_history_sync_skipped');
-    expect(parseAuditDetail(historySkipAudit)).toEqual(expect.objectContaining({
-      planId: result.planId,
-      reason: 'missing_conversation_id',
-    }));
+    expect(db.tables.chatluna_message.some((row) => row.id === `affinity-random-plan:${result.planId}`)).toBe(true);
     const sentAudit = db.tables.affinity_audit.find((row) => row.eventType === 'random_plan_sent');
     expect(parseAuditDetail(sentAudit)).toEqual(expect.objectContaining({
       planId: result.planId,
-      historySynced: false,
-      historySkipReason: 'missing_conversation_id',
+      historySynced: true,
+      conversationId: 'conv-manual',
     }));
   });
 
@@ -584,7 +652,7 @@ describe('affinity service random history sync', () => {
   });
 
   it('writes a sent proactive random event into the matching ChatLuna history as an AI message', async () => {
-    const { db, service, bot, addMessages, chatluna, chat } = createHarness();
+    const { db, service, bot, chat } = createHarness();
 
     await service.runDueRandomPlans(NOW);
 
@@ -599,19 +667,17 @@ describe('affinity service random history sync', () => {
       messageText: RANDOM_MESSAGE,
       contextSummary: '最近没有可用群聊上下文。',
     }));
-    expect(addMessages).toHaveBeenCalledTimes(1);
-    expect(chatluna.queryInterfaceWrapper).toHaveBeenCalledWith(
-      expect.objectContaining({ conversationId: 'conv-affinity', roomId: 11 }),
-      true,
-    );
-
-    const [messages] = addMessages.mock.calls[0];
-    const [message] = messages;
-    expect(message.getType()).toBe('ai');
-    expect(message.content).toContain('"decision":"reply"');
-    expect(message.content).toContain(RANDOM_MESSAGE);
-    expect(message.id).toBe('affinity-random-plan:2');
-    expect(message.additional_kwargs.qqbot_affinity_random_event).toEqual(expect.objectContaining({
+    const message = db.tables.chatluna_message.find((row) => row.id === 'affinity-random-plan:2');
+    expect(message).toEqual(expect.objectContaining({
+      conversationId: 'conv-affinity',
+      parentId: null,
+      role: 'ai',
+    }));
+    const content = await decodeStoredMessageText(message?.content);
+    expect(content).toContain('"decision":"reply"');
+    expect(content).toContain(RANDOM_MESSAGE);
+    const additional = await decodeStoredMessageJson<Record<string, any>>(message?.additional_kwargs_binary);
+    expect(additional?.qqbot_affinity_random_event).toEqual(expect.objectContaining({
       version: 'v1',
       characterId: CHARACTER_ID,
       planId: 2,
@@ -620,6 +686,11 @@ describe('affinity service random history sync', () => {
       scopeId: '829573670',
       contextSeedSummary: '最近没有可用群聊上下文。',
       eventTypeHint: 'greeting_contextual',
+    }));
+    expect(db.tables.chatluna_conversation.some((row) => String(row.id).startsWith('affinity-proactive-'))).toBe(false);
+    expect(db.tables.chatluna_conversation[0]).toEqual(expect.objectContaining({
+      id: 'conv-affinity',
+      latestMessageId: 'affinity-random-plan:2',
     }));
 
     const syncAudit = db.tables.affinity_audit.find((row) => row.eventType === 'random_history_synced');
@@ -635,11 +706,43 @@ describe('affinity service random history sync', () => {
     }));
   });
 
-  it('keeps the random plan sent when ChatLuna history writing fails', async () => {
-    const addMessages = vi.fn(async () => {
-      throw new Error('history down');
+  it('creates and cleans a temporary ChatLuna conversation for scheduled proactive generation', async () => {
+    let tempConversationId = '';
+    let dbRef: MemoryDatabase | null = null;
+    const chat = vi.fn(async (_session: any, conversation: any) => {
+      tempConversationId = conversation.id;
+      expect(tempConversationId).toMatch(/^affinity-proactive-/u);
+      expect(dbRef?.tables.chatluna_conversation.some((row) => row.id === tempConversationId)).toBe(true);
+      return {
+        content: JSON.stringify({
+          decision: 'reply',
+          outbound_messages: [{ type: 'message', content: RANDOM_MESSAGE }],
+        }),
+        additional_kwargs: {},
+      };
     });
-    const { db, service, bot } = createHarness({ addMessages });
+    const { db, service, bot } = createHarness({ chat });
+    dbRef = db;
+
+    await service.runDueRandomPlans(NOW);
+
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+    expect(db.tables.affinity_random_plan[0]).toEqual(expect.objectContaining({
+      status: 'sent',
+      skipReason: null,
+      messageText: RANDOM_MESSAGE,
+    }));
+    expect(db.tables.chatluna_conversation.some((row) => row.id === tempConversationId)).toBe(false);
+    expect(db.tables.chatluna_message.some((row) => row.conversationId === tempConversationId)).toBe(false);
+  });
+
+  it('keeps the random plan sent when ChatLuna history writing fails', async () => {
+    const { db, service, bot } = createHarness();
+    db.upsert = vi.fn(async (table: string, rows: Record<string, unknown>[], keys?: string[]) => {
+      if (table === 'chatluna_message') throw new Error('history down');
+      return MemoryDatabase.prototype.upsert.call(db, table, rows, keys);
+    });
 
     await service.runDueRandomPlans(NOW);
 
@@ -660,9 +763,10 @@ describe('affinity service random history sync', () => {
   });
 
   it('skips proactive generation instead of text fallback when the scope has no conversation id', async () => {
-    const { db, service, bot, addMessages, chatluna } = createHarness({
+    const { db, service, bot } = createHarness({
       scope: { conversationId: null },
       plan: { conversationId: null },
+      includeConversation: false,
     });
 
     await service.runDueRandomPlans(NOW);
@@ -673,8 +777,7 @@ describe('affinity service random history sync', () => {
       skipReason: 'missing_conversation_id',
       messageText: null,
     }));
-    expect(addMessages).not.toHaveBeenCalled();
-    expect(chatluna.queryInterfaceWrapper).not.toHaveBeenCalled();
+    expect(db.tables.chatluna_message).toHaveLength(0);
     const skippedAudit = db.tables.affinity_audit.find((row) => row.eventType === 'random_message_generation_skipped');
     expect(parseAuditDetail(skippedAudit)).toEqual(expect.objectContaining({
       reason: 'missing_conversation_id',
@@ -683,7 +786,7 @@ describe('affinity service random history sync', () => {
   });
 
   it('skips the proactive plan instead of falling back to a fixed sentence when generation declines', async () => {
-    const { db, service, bot, addMessages, chat } = createHarness({
+    const { db, service, bot, chat } = createHarness({
       chatResponse: {
         content: JSON.stringify({
           decision: 'no_reply',
@@ -697,7 +800,7 @@ describe('affinity service random history sync', () => {
 
     expect(chat).toHaveBeenCalledTimes(1);
     expect(bot.sendMessage).not.toHaveBeenCalled();
-    expect(addMessages).not.toHaveBeenCalled();
+    expect(db.tables.chatluna_message).toHaveLength(0);
     expect(db.tables.affinity_random_plan[0]).toEqual(expect.objectContaining({
       status: 'skipped',
       skipReason: 'provider_no_reply',
@@ -755,7 +858,7 @@ describe('affinity service random history sync', () => {
 
   it('uses real ChatLuna history context through the main reply chain to generate a declarative proactive continuation', async () => {
     const declarativeMessage = '前面那道缩点题，我想了一下。只要缩完以后还能绕回去，那几个点原本就应该属于同一个强连通分量。';
-    const { db, service, bot, addMessages, chat, contextManager } = createHarness({
+    const { db, service, bot, chat, contextManager } = createHarness({
       plan: { direction: 'local_thread' },
       chatResponse: {
         content: JSON.stringify({
@@ -769,21 +872,21 @@ describe('affinity service random history sync', () => {
         }),
         additional_kwargs: {},
       },
-      conversations: [{ id: 'conv-affinity', latestId: 'msg-bob', updatedAt: NOW }],
+      conversations: [{ ...createConversation('conv-affinity'), latestMessageId: 'msg-bob', updatedAt: new Date(NOW) }],
       messages: [
         {
           id: 'msg-alice',
           role: 'human',
-          conversation: 'conv-affinity',
-          parent: null,
+          conversationId: 'conv-affinity',
+          parentId: null,
           text: '[speaker_id=u1 speaker_name="Alice"] SCC 缩点以后为什么一定没有环？',
           content: null,
         },
         {
           id: 'msg-bob',
           role: 'human',
-          conversation: 'conv-affinity',
-          parent: 'msg-alice',
+          conversationId: 'conv-affinity',
+          parentId: 'msg-alice',
           text: '[speaker_id=u2 speaker_name="Bob"] 因为有环会被缩在一个点里吧，但我不确定。',
           content: null,
         },
@@ -832,10 +935,17 @@ describe('affinity service random history sync', () => {
       title: 'random:local_thread',
       summary: declarativeMessage,
     }));
-    const [messages] = addMessages.mock.calls[0];
-    expect(messages[0].content).toContain('"decision":"reply"');
-    expect(messages[0].content).toContain(declarativeMessage);
-    expect(messages[0].additional_kwargs.qqbot_affinity_random_event).toEqual(expect.objectContaining({
+    const historyMessage = db.tables.chatluna_message.find((row) => row.id === 'affinity-random-plan:2');
+    expect(historyMessage).toEqual(expect.objectContaining({
+      conversationId: 'conv-affinity',
+      parentId: 'msg-bob',
+      role: 'ai',
+    }));
+    const historyText = await decodeStoredMessageText(historyMessage?.content);
+    expect(historyText).toContain('"decision":"reply"');
+    expect(historyText).toContain(declarativeMessage);
+    const additional = await decodeStoredMessageJson<Record<string, any>>(historyMessage?.additional_kwargs_binary);
+    expect(additional?.qqbot_affinity_random_event).toEqual(expect.objectContaining({
       visibleText: declarativeMessage,
       eventTypeHint: 'answer_random_prompt',
     }));
@@ -851,13 +961,13 @@ describe('affinity service random history sync', () => {
         }),
         additional_kwargs: {},
       },
-      conversations: [{ id: 'conv-affinity', latestId: 'msg-alice', updatedAt: NOW }],
+      conversations: [{ ...createConversation('conv-affinity'), latestMessageId: 'msg-alice', updatedAt: new Date(NOW) }],
       messages: [
         {
           id: 'msg-alice',
           role: 'human',
-          conversation: 'conv-affinity',
-          parent: null,
+          conversationId: 'conv-affinity',
+          parentId: null,
           text: '[speaker_id=u1 speaker_name="Alice"] 我去吃饭了，晚点再说。',
           content: null,
         },
