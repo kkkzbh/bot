@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AffinityService, type AffinityDatabaseLike } from '../src/plugins/affinity/service.js';
-import { CHARACTER_ID, getShanghaiDayKey } from '../src/plugins/affinity/rules.js';
+import { CHARACTER_ID, getShanghaiDayKey, getShanghaiDayStartMs } from '../src/plugins/affinity/rules.js';
 import {
   beginPromptAssemblyTurn,
   clearPromptAssemblyTurn,
@@ -759,6 +759,61 @@ describe('affinity service random history sync', () => {
     expect(parseAuditDetail(sentAudit)).toEqual(expect.objectContaining({
       historySynced: false,
       historySkipReason: 'write_failed',
+    }));
+  });
+
+  it('requeues scheduled proactive plans when OneBot transport is temporarily unavailable', async () => {
+    const { db, service, bot, chat } = createHarness();
+    bot.sendMessage.mockRejectedValueOnce(new Error('bot._request is not a function'));
+
+    await service.runDueRandomPlans(NOW);
+
+    const retryAt = NOW + 10 * 60 * 1000;
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+    expect(db.tables.affinity_random_plan[0]).toEqual(expect.objectContaining({
+      status: 'pending',
+      scheduledAt: retryAt,
+      skipReason: 'transport_unavailable',
+      messageText: null,
+      sentAt: null,
+    }));
+    expect(db.tables.affinity_open_thread).toHaveLength(0);
+    expect(db.tables.affinity_random_memory).toHaveLength(0);
+    expect(db.tables.affinity_audit.some((row) => row.eventType === 'random_message_generation_skipped')).toBe(false);
+    const requeueAudit = db.tables.affinity_audit.find((row) => row.eventType === 'random_plan_requeued');
+    expect(parseAuditDetail(requeueAudit)).toEqual(expect.objectContaining({
+      planId: 2,
+      direction: 'daily_greeting',
+      reason: 'transport_unavailable',
+      retryAt,
+      delayMs: 10 * 60 * 1000,
+    }));
+    await expect(service.getNextPendingRandomPlanAt(NOW)).resolves.toBe(retryAt);
+  });
+
+  it('skips a transport-unavailable scheduled plan only after the daily proactive window is exhausted', async () => {
+    const exhaustedAt = getShanghaiDayStartMs(NOW) + 22 * 60 * 60 * 1000;
+    const { db, service, bot } = createHarness({
+      plan: {
+        scheduledAt: exhaustedAt - 1,
+        updatedAt: exhaustedAt - 1,
+      },
+    });
+    bot.sendMessage.mockRejectedValueOnce(new Error('bot._request is not a function'));
+
+    await service.runDueRandomPlans(exhaustedAt);
+
+    expect(db.tables.affinity_random_plan[0]).toEqual(expect.objectContaining({
+      status: 'skipped',
+      skipReason: 'transport_unavailable',
+      scheduledAt: exhaustedAt - 1,
+    }));
+    expect(db.tables.affinity_audit.some((row) => row.eventType === 'random_plan_requeued')).toBe(false);
+    const skippedAudit = db.tables.affinity_audit.find((row) => row.eventType === 'random_message_generation_skipped');
+    expect(parseAuditDetail(skippedAudit)).toEqual(expect.objectContaining({
+      planId: 2,
+      reason: 'transport_unavailable',
     }));
   });
 

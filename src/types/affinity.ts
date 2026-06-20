@@ -47,6 +47,7 @@ export type AffinityAuditEventType =
   | 'random_message_generation_skipped'
   | 'random_memory_updated'
   | 'random_plan_created'
+  | 'random_plan_requeued'
   | 'random_plan_sent'
   | 'random_plan_skipped'
   | 'random_history_synced'

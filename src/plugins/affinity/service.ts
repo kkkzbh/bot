@@ -43,6 +43,7 @@ import {
   createInitialState,
   createRandomScheduleTimes,
   formatStateForPrompt,
+  getShanghaiDayStartMs,
   getShanghaiDayKey,
   pickRandomDirection,
   resolveAffinityEvent,
@@ -179,6 +180,7 @@ type ProactiveSourceConversationResolution =
 
 const RANDOM_MEMORY_TTL_MS = 45 * 24 * 60 * 60 * 1000;
 const RANDOM_OPEN_THREAD_TTL_MS = 3 * 60 * 60 * 1000;
+const RANDOM_TRANSPORT_RETRY_DELAY_MS = 10 * 60 * 1000;
 const RECENT_CONTEXT_LIMIT = 18;
 const RECENT_MEMORY_LIMIT = 12;
 
@@ -1803,17 +1805,27 @@ export class AffinityService implements AffinityServiceLike {
       generation,
     });
     if (!delivery.sent || !delivery.messageText) {
+      const deliveryReason = delivery.reason ?? 'delivery_failed';
+      if (!manual && deliveryReason === 'transport_unavailable') {
+        const requeued = await this.requeuePlanAfterTransportUnavailable({
+          plan,
+          settings,
+          now,
+          risk: generation.risk,
+        });
+        if (requeued) return;
+      }
       await this.writeAudit('random_message_generation_skipped', {
         scopeKind: plan.scopeKind,
         scopeId: plan.scopeId,
         detail: {
           planId: plan.id,
           direction: plan.direction,
-          reason: delivery.reason ?? 'delivery_failed',
+          reason: deliveryReason,
           risk: generation.risk,
         },
       });
-      await this.skipPlan(plan, delivery.reason ?? 'delivery_failed', now);
+      await this.skipPlan(plan, deliveryReason, now);
       return;
     }
     const messageText = delivery.messageText;
@@ -1982,6 +1994,46 @@ export class AffinityService implements AffinityServiceLike {
       bots[0] ??
       null
     );
+  }
+
+  private resolveTransportRetryAt(settings: AffinitySettings, now: number): number | null {
+    const dayStart = getShanghaiDayStartMs(now);
+    const windowEnd = dayStart + Math.floor(settings.randomWindowEndHour) * 3_600_000;
+    const latestRetryAt = windowEnd - 1;
+    if (latestRetryAt <= now) return null;
+    return Math.min(now + RANDOM_TRANSPORT_RETRY_DELAY_MS, latestRetryAt);
+  }
+
+  private async requeuePlanAfterTransportUnavailable(args: {
+    plan: AffinityRandomPlanRecord;
+    settings: AffinitySettings;
+    now: number;
+    risk: string | null;
+  }): Promise<boolean> {
+    const retryAt = this.resolveTransportRetryAt(args.settings, args.now);
+    if (retryAt == null) return false;
+    await this.database.set('affinity_random_plan', { id: args.plan.id }, {
+      status: 'pending',
+      scheduledAt: retryAt,
+      messageText: null,
+      skipReason: 'transport_unavailable',
+      sentAt: null,
+      updatedAt: args.now,
+    });
+    await this.writeAudit('random_plan_requeued', {
+      scopeKind: args.plan.scopeKind,
+      scopeId: args.plan.scopeId,
+      detail: {
+        planId: args.plan.id,
+        direction: args.plan.direction,
+        reason: 'transport_unavailable',
+        retryAt,
+        delayMs: retryAt - args.now,
+        risk: args.risk,
+      },
+    });
+    this.scheduleRefresh();
+    return true;
   }
 
   private async skipPlan(plan: AffinityRandomPlanRecord, reason: string, now: number): Promise<void> {

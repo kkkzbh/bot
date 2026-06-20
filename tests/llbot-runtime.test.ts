@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +28,87 @@ function createTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'qqbot-llbot-runtime-'));
   tempDirs.push(dir);
   return dir;
+}
+
+function prepareLauncherRuntime(script: string): {
+  dir: string;
+  runtimeDir: string;
+  dataDir: string;
+  qqMountSource: string;
+} {
+  const dir = createTempDir();
+  const runtimeDir = join(dir, 'runtime');
+  const dataDir = join(dir, 'data');
+  const qqMountSource = join(dir, 'pmhq-qq');
+  mkdirSync(runtimeDir, { recursive: true });
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(qqMountSource, { recursive: true });
+  writeFileSync(join(runtimeDir, VERSION_MARKER), '7.12.15\n', 'utf8');
+  writeFileSync(
+    join(runtimeDir, 'default_config.json'),
+    JSON.stringify({
+      webui: { enable: false, host: '127.0.0.1', port: 3000 },
+      ob11: {
+        enable: false,
+        connect: [
+          { type: 'ws', enable: false, host: '127.0.0.1', port: 9000, token: 'old' },
+          { type: 'ws-reverse', enable: true, url: 'ws://old', token: 'old' },
+        ],
+      },
+    }),
+    'utf8',
+  );
+  writeFileSync(
+    join(runtimeDir, 'llbot.js'),
+    [
+      'function authMiddleware(req, res, next) {',
+      '\tnext();',
+      '}',
+      script,
+    ].join('\n'),
+    'utf8',
+  );
+  return { dir, runtimeDir, dataDir, qqMountSource };
+}
+
+async function runLlbotHostLauncher(env: NodeJS.ProcessEnv): Promise<{
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('bash', ['scripts/run-llbot-host.sh'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ...env,
+        QQBOT_ENV_FILE: '',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error('launcher test timed out'));
+    }, 8000);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      resolve({ code, stdout, stderr });
+    });
+  });
 }
 
 describe('llbot host runtime helpers', () => {
@@ -321,5 +403,42 @@ describe('llbot host runtime helpers', () => {
     ]);
     expect(lstatSync(join(homeDir, '.config', 'QQ')).isSymbolicLink()).toBe(true);
     expect(existsSync(join(qqMountSource, 'nt_qq_test', 'nt_data', 'Pic'))).toBe(true);
+  });
+
+  it('keeps the host launcher running only after the OB11 websocket port is ready', async () => {
+    const { runtimeDir, dataDir, qqMountSource } = prepareLauncherRuntime([
+      'const net = require("node:net");',
+      'const port = Number(process.env.LLONEBOT_WS_PORT);',
+      'const server = net.createServer();',
+      'server.listen(port, "0.0.0.0", () => setTimeout(() => server.close(() => process.exit(0)), 300));',
+    ].join('\n'));
+
+    const result = await runLlbotHostLauncher({
+      LLBOT_VERSION: '7.12.15',
+      LLBOT_RUNTIME_DIR: runtimeDir,
+      LLONEBOT_DATA_DIR: dataDir,
+      QQBOT_QQ_CONFIG_MOUNT_SOURCE: qqMountSource,
+      LLONEBOT_WS_PORT: '30191',
+      LLBOT_OB11_READY_TIMEOUT_SEC: '3',
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).not.toContain('did not become ready');
+  });
+
+  it('fails the host launcher when LLBot never exposes the OB11 websocket port', async () => {
+    const { runtimeDir, dataDir, qqMountSource } = prepareLauncherRuntime('setTimeout(() => undefined, 5000);');
+
+    const result = await runLlbotHostLauncher({
+      LLBOT_VERSION: '7.12.15',
+      LLBOT_RUNTIME_DIR: runtimeDir,
+      LLONEBOT_DATA_DIR: dataDir,
+      QQBOT_QQ_CONFIG_MOUNT_SOURCE: qqMountSource,
+      LLONEBOT_WS_PORT: '30192',
+      LLBOT_OB11_READY_TIMEOUT_SEC: '1',
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('LLBot OB11 websocket port 30192 did not become ready within 1s');
   });
 });
