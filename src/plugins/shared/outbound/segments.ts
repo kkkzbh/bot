@@ -234,8 +234,7 @@ function resolveSessionStrandScope(session: SessionStrandLike): string | null {
   const groupId = session.channelId?.trim() || session.guildId?.trim();
   if (groupId) return `group:${groupId}`;
 
-  const fallbackPrivateId = session.userId?.trim();
-  return fallbackPrivateId ? `private:${fallbackPrivateId}` : null;
+  return null;
 }
 
 export function resolveSessionStrandKey(session: SessionStrandLike): string | null {
@@ -246,7 +245,9 @@ export function resolveReplyQueueKey(session: SessionStrandLike): string | null 
   const platform = session.platform?.trim();
   if (!platform) return null;
 
-  const botSelfId = session.bot?.selfId?.trim() || 'default-bot';
+  const botSelfId = session.bot?.selfId?.trim();
+  if (!botSelfId) return null;
+
   const scope = resolveSessionStrandScope(session);
   if (!scope) return null;
 

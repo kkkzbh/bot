@@ -140,6 +140,28 @@ describe('realtime message cache helpers', () => {
     ).toEqual(['msg-2', 'msg-3']);
   });
 
+  it('requires complete group session identity for cache scope keys', () => {
+    expect(buildGroupScopeKey({
+      platform: 'onebot',
+      bot: { selfId: 'bot-1' },
+      guildId: '100',
+      channelId: '100',
+      isDirect: false,
+    })).toBe('onebot:bot-1:group:100');
+    expect(buildGroupScopeKey({
+      platform: '',
+      bot: { selfId: 'bot-1' },
+      guildId: '100',
+      isDirect: false,
+    })).toBeNull();
+    expect(buildGroupScopeKey({
+      platform: 'onebot',
+      bot: { selfId: '' },
+      guildId: '100',
+      isDirect: false,
+    })).toBeNull();
+  });
+
   it('filters cached entries by order, modality, keyword, speaker, and time', () => {
     const entries = [
       createEntry({

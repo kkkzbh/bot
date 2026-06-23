@@ -275,6 +275,25 @@ describe('group natural trigger middleware', () => {
     expect(result.naturalTrigger).toBeNull();
   });
 
+  it('does not trigger without complete group session identity', async () => {
+    const { middleware } = createHarness({ replyIntervalMs: 0 });
+
+    await expect(runAndCapture(
+      middleware,
+      createSession({
+        platform: '',
+        content: '祥子 在吗',
+      }),
+    )).resolves.toEqual(expect.objectContaining({ naturalTrigger: null }));
+    await expect(runAndCapture(
+      middleware,
+      createSession({
+        bot: { selfId: '' },
+        content: '祥子 在吗',
+      }),
+    )).resolves.toEqual(expect.objectContaining({ naturalTrigger: null }));
+  });
+
   it('does not register realtime promotion or media middleware on ready', async () => {
     const { runReady, chatChainMiddlewares, messageTransformer } = createHarness();
 

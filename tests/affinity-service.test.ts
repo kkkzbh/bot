@@ -103,10 +103,15 @@ vi.mock('koishi-plugin-chatluna/llm-core/memory/message', async () => {
 
 vi.mock('../src/plugins/realtime-message/index.js', () => ({
   buildGroupScopeKey: vi.fn((session: any) => {
-    const platform = session.platform || 'default-platform';
-    const botSelfId = session.bot?.selfId || 'default-bot';
-    const groupId = session.guildId || session.channelId;
-    return groupId ? `${platform}:${botSelfId}:group:${groupId}` : null;
+    const platform = typeof session.platform === 'string' ? session.platform.trim() : '';
+    const botSelfId = typeof session.bot?.selfId === 'string' ? session.bot.selfId.trim() : '';
+    const groupId = typeof session.guildId === 'string' && session.guildId.trim()
+      ? session.guildId.trim()
+      : typeof session.channelId === 'string'
+        ? session.channelId.trim()
+        : '';
+    if (!platform || !botSelfId || !groupId || session.isDirect) return null;
+    return `${platform}:${botSelfId}:group:${groupId}`;
   }),
   realtimeMessageCache: {
     get: vi.fn(() => []),

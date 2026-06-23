@@ -1,4 +1,5 @@
 import { resolveSessionDisplayName } from '../shared/session/index.js';
+import { buildGroupSessionScopeKey } from '../shared/group-id.js';
 import type {
   RealtimeMessageEntry,
   RealtimeMessageEntryKind,
@@ -15,11 +16,6 @@ function normalizeText(value: unknown): string {
 }
 
 function normalizeMessageId(value: unknown): string | null {
-  const normalized = normalizeText(value);
-  return normalized || null;
-}
-
-function normalizeGroupId(value: unknown): string | null {
   const normalized = normalizeText(value);
   return normalized || null;
 }
@@ -96,14 +92,7 @@ export class RealtimeMessageCache {
 export const realtimeMessageCache = new RealtimeMessageCache();
 
 export function buildGroupScopeKey(session: RealtimeMessageSessionLike): string | null {
-  if (session.isDirect) return null;
-
-  const groupId = normalizeGroupId(session.guildId) ?? normalizeGroupId(session.channelId);
-  if (!groupId) return null;
-
-  const platform = normalizeText(session.platform) || 'default-platform';
-  const botSelfId = normalizeText(session.bot?.selfId) || 'default-bot';
-  return `${platform}:${botSelfId}:group:${groupId}`;
+  return buildGroupSessionScopeKey(session);
 }
 
 function sanitizeContextText(text: string): string {

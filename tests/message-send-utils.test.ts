@@ -219,6 +219,27 @@ describe('message send utils', () => {
     ).toBe('onebot:bot-1:private:private-u1');
   });
 
+  it('does not invent reply queue keys for incomplete session identity', () => {
+    expect(
+      resolveReplyQueueKey({
+        platform: 'onebot',
+        isDirect: false,
+        channelId: 'group-100',
+        userId: 'u1',
+        bot: { selfId: '' },
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveReplyQueueKey({
+        platform: 'onebot',
+        isDirect: false,
+        userId: 'u1',
+        bot: { selfId: 'bot-1' },
+      }),
+    ).toBeNull();
+  });
+
   it('distinguishes group actors while keeping private actors aligned with queue scope', () => {
     expect(
       resolveReplyActorKey({

@@ -1,6 +1,6 @@
 import { Context, Logger, Schema, Session } from 'koishi';
 import type { FeaturePolicyServiceLike } from '../../../types/feature-policy.js';
-import { normalizeGroupId, parseGroupSet } from '../../shared/group-id.js';
+import { buildGroupSessionScopeKey, normalizeGroupId, parseGroupSet } from '../../shared/group-id.js';
 import {
   containsAlias,
   createEmptySpamState,
@@ -284,8 +284,8 @@ async function shouldTriggerByModel(content: string, runtime: RuntimeConfig): Pr
   }
 }
 
-function buildSpamKey(session: Session): string {
-  return `${buildNaturalTriggerGroupScopeKey(session) ?? session.channelId ?? ''}:${session.userId ?? ''}`;
+function buildSpamKey(groupScopeKey: string, session: Session): string {
+  return `${groupScopeKey}:user:${session.userId ?? ''}`;
 }
 
 function resolveGroupId(session: Session): string | null {
@@ -293,11 +293,7 @@ function resolveGroupId(session: Session): string | null {
 }
 
 function buildNaturalTriggerGroupScopeKey(session: Session): string | null {
-  const groupId = resolveGroupId(session);
-  if (!groupId) return null;
-  const platform = session.platform?.trim() || 'default-platform';
-  const botSelfId = session.bot?.selfId?.trim() || 'default-bot';
-  return `${platform}:${botSelfId}:group:${groupId}`;
+  return buildGroupSessionScopeKey(session);
 }
 
 function shouldHandleGroup(session: Session, runtime: RuntimeConfig): boolean {
@@ -349,10 +345,10 @@ export function apply(ctx: Context, config: Config): void {
     const imageInput = hasImageInput(session);
     if (!content && !imageInput) return next();
 
-    const now = Date.now();
-    const spamKey = buildSpamKey(session);
     const groupScopeKey = buildNaturalTriggerGroupScopeKey(session);
     if (!groupScopeKey) return next();
+    const now = Date.now();
+    const spamKey = buildSpamKey(groupScopeKey, session);
     const spamState = spamStates.get(spamKey) ?? createEmptySpamState();
     const spamResult = recordSpamMessage(spamState, now, {
       windowMs: runtime.spamWindowMs,
