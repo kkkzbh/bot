@@ -269,6 +269,7 @@ function createHarness(overrides: {
   replyInterruptEnabled?: boolean;
   createChatModelImpl?: (model: string) => Promise<{ invoke: (input: unknown, options?: Record<string, unknown>) => Promise<{ content?: unknown }> }>;
   databaseGetImpl?: (table: string, query: Record<string, unknown>) => Promise<any[]>;
+  databaseSetImpl?: (table: string, query: Record<string, unknown>, data: Record<string, unknown>) => Promise<unknown>;
   databaseUpsertImpl?: (table: string, rows: Record<string, unknown>[]) => Promise<unknown>;
   databaseRemoveImpl?: (table: string, query: Record<string, unknown>) => Promise<unknown>;
   normalizeResearchReplyHistoryImpl?: (room: Record<string, unknown>, finalVisibleText: string) => Promise<unknown>;
@@ -280,19 +281,28 @@ function createHarness(overrides: {
   const chainMiddlewares = new Map<string, ChainMiddleware>();
   const chainConstraints: ChainConstraint[] = [];
   const inject = vi.fn();
+  const defaultConversations: Record<string, unknown>[] = [{ id: 'conv-1', latestMessageId: 'msg-tool-1' }];
+  const defaultMessages: Record<string, unknown>[] = createStoredResearchCompatibilityTail('conv-1');
+  const defaultRows = (table: string, query: Record<string, unknown>) => {
+    if (table === 'chatluna_conversation') {
+      return defaultConversations.filter((row) =>
+        Object.entries(query).every(([key, value]) => row[key] === value),
+      );
+    }
+    if (table === 'chatluna_message') {
+      return defaultMessages.filter((row) =>
+        Object.entries(query).every(([key, value]) => row[key] === value),
+      );
+    }
+    return [];
+  };
 
   const database = {
     get: vi.fn(async (table: string, query: Record<string, unknown>) => {
       if (overrides.databaseGetImpl) {
         return overrides.databaseGetImpl(table, query);
       }
-      if (table === 'chatluna_conversation') {
-        return [{ id: query.id ?? 'conv-1', latestMessageId: 'msg-tool-1' }];
-      }
-      if (table === 'chatluna_message') {
-        return createStoredResearchCompatibilityTail(String(query.conversationId ?? 'conv-1'));
-      }
-      return [];
+      return defaultRows(table, query);
     }),
     upsert: vi.fn(async (table: string, rows: Record<string, unknown>[]) => {
       if (overrides.databaseUpsertImpl) {
@@ -300,9 +310,28 @@ function createHarness(overrides: {
       }
       return undefined;
     }),
+    set: vi.fn(async (table: string, query: Record<string, unknown>, data: Record<string, unknown>) => {
+      if (overrides.databaseSetImpl) {
+        return overrides.databaseSetImpl(table, query, data);
+      }
+      for (const row of defaultRows(table, query)) {
+        Object.assign(row, data);
+      }
+      return undefined;
+    }),
     remove: vi.fn(async (table: string, query: Record<string, unknown>) => {
       if (overrides.databaseRemoveImpl) {
         return overrides.databaseRemoveImpl(table, query);
+      }
+      const rows = table === 'chatluna_conversation'
+        ? defaultConversations
+        : table === 'chatluna_message'
+          ? defaultMessages
+          : [];
+      for (let index = rows.length - 1; index >= 0; index--) {
+        if (Object.entries(query).every(([key, value]) => rows[index][key] === value)) {
+          rows.splice(index, 1);
+        }
       }
       return undefined;
     }),

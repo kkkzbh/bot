@@ -2201,7 +2201,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const historyMigration = await migrateStructuredReplyHistoryRows(ctx.database as never);
     if (historyMigration.migrated > 0) {
       logger.info(
-        'migrated %d reply history row(s): structured=%d, legacyDirectHumans=%d, submitPlans=%d, emptySubmitTools=%d, protocolPrompts=%d, failedToolErrors=%d, emptyAssistants=%d.',
+        'migrated %d reply history row(s): structured=%d, legacyDirectHumans=%d, submitPlans=%d, emptySubmitTools=%d, protocolPrompts=%d, failedToolErrors=%d, danglingToolTails=%d, emptyAssistants=%d.',
         historyMigration.migrated,
         historyMigration.structuredRowsMigrated,
         historyMigration.legacyDirectHumanRowsTagged,
@@ -2209,6 +2209,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         historyMigration.emptySubmitReplyPlanToolsRemoved,
         historyMigration.protocolViolationPromptsRemoved,
         historyMigration.failedToolCallErrorRowsRemoved,
+        historyMigration.danglingToolCallTailRowsRemoved,
         historyMigration.emptyAssistantRowsRemoved,
       );
     }

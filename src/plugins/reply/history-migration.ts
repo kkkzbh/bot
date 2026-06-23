@@ -21,6 +21,7 @@ export interface StructuredReplyHistoryMigrationResult {
   emptySubmitReplyPlanToolsRemoved: number;
   protocolViolationPromptsRemoved: number;
   failedToolCallErrorRowsRemoved: number;
+  danglingToolCallTailRowsRemoved: number;
   emptyAssistantRowsRemoved: number;
 }
 
@@ -327,6 +328,7 @@ const CONVERSATION_ROW_FIELDS = [
   'bindingKey',
   'createdBy',
   'title',
+  'latestMessageId',
   'legacyMeta',
 ] as const;
 
@@ -464,6 +466,7 @@ export async function migrateStructuredReplyHistoryRows(
   let emptySubmitReplyPlanToolsRemoved = 0;
   let protocolViolationPromptsRemoved = 0;
   let failedToolCallErrorRowsRemoved = 0;
+  let danglingToolCallTailRowsRemoved = 0;
   let emptyAssistantRowsRemoved = 0;
 
   for (const row of allRows) {
@@ -588,6 +591,51 @@ export async function migrateStructuredReplyHistoryRows(
     failedToolCallErrorRowsRemoved += 2;
   }
 
+  for (;;) {
+    const postFailedToolRows = await database.get('chatluna_message', {}, [...HISTORY_ROW_FIELDS]);
+    const postFailedToolRowsByParent = buildRowsByParent(postFailedToolRows);
+    const postFailedToolConversations = await database.get('chatluna_conversation', {}, [...CONVERSATION_ROW_FIELDS]);
+    const latestMessageIds = new Set(
+      postFailedToolConversations
+        .map((conversation) => normalizeId(conversation.latestMessageId))
+        .filter(Boolean),
+    );
+    let passRemoved = 0;
+
+    for (const row of postFailedToolRows) {
+      const id = normalizeId(row.id);
+      if (!id || row.role !== 'ai') continue;
+      if (!(await isStoredContentEmpty(row.content))) continue;
+
+      const toolCalls = parseToolCalls(row.tool_calls);
+      if (toolCalls.length !== 1) continue;
+
+      const toolCallId = normalizeId(toolCalls[0].id);
+      const toolCallName = getToolCallName(toolCalls[0]);
+      if (!toolCallId || !toolCallName) continue;
+
+      const children = postFailedToolRowsByParent.get(id) ?? [];
+      if (children.length !== 1) continue;
+
+      const toolRow = children[0];
+      const toolId = normalizeId(toolRow.id);
+      if (!toolId || toolRow.role !== 'tool') continue;
+      if (!latestMessageIds.has(toolId)) continue;
+      if (normalizeId(toolRow.tool_call_id) !== toolCallId) continue;
+      if (normalizeText(toolRow.name) !== toolCallName) continue;
+      if ((postFailedToolRowsByParent.get(toolId) ?? []).length > 0) continue;
+
+      const parentId = normalizeId(row.parentId) || null;
+      await database.set('chatluna_conversation', { latestMessageId: toolId }, { latestMessageId: parentId });
+      await database.remove('chatluna_message', { id: toolId });
+      await database.remove('chatluna_message', { id });
+      passRemoved += 2;
+    }
+
+    if (passRemoved === 0) break;
+    danglingToolCallTailRowsRemoved += passRemoved;
+  }
+
   const remainingRows = await database.get('chatluna_message', {}, [...HISTORY_ROW_FIELDS]);
   const remainingRowsByParent = buildRowsByParent(remainingRows);
   const remainingRowsById = buildRowsById(remainingRows);
@@ -624,6 +672,7 @@ export async function migrateStructuredReplyHistoryRows(
     emptySubmitReplyPlanToolsRemoved +
     protocolViolationPromptsRemoved +
     failedToolCallErrorRowsRemoved +
+    danglingToolCallTailRowsRemoved +
     emptyAssistantRowsRemoved;
 
   return {
@@ -635,6 +684,7 @@ export async function migrateStructuredReplyHistoryRows(
     emptySubmitReplyPlanToolsRemoved,
     protocolViolationPromptsRemoved,
     failedToolCallErrorRowsRemoved,
+    danglingToolCallTailRowsRemoved,
     emptyAssistantRowsRemoved,
   };
 }
