@@ -348,6 +348,96 @@ function parseAuditDetail(row: Row | undefined): Record<string, unknown> {
   return JSON.parse(String(row?.detail ?? '{}')) as Record<string, unknown>;
 }
 
+describe('affinity service settings', () => {
+  it('uses defaults only when stored config rows are absent', async () => {
+    const { service } = createHarness({ config: [] });
+
+    await expect(service.getSettings()).resolves.toEqual(expect.objectContaining({
+      enabled: true,
+      proactiveEnabled: true,
+      randomWindowStartHour: 8,
+      randomWindowEndHour: 22,
+      randomCountWeights: [0.25, 0.6, 0.1, 0.05],
+      enabledDirections: ['local_thread', 'daily_greeting', 'music_rehearsal', 'contest_discussion', 'computer_knowledge', 'relationship_scene'],
+      webSourceEnabled: false,
+      analysisModel: expect.objectContaining({
+        baseUrl: '',
+        apiKey: '',
+        model: '',
+        requestMode: 'chat_completions',
+        structuredOutputProtocol: 'chat_reply_v1',
+        timeoutMs: 5000,
+      }),
+    }));
+  });
+
+  it.each([
+    {
+      key: 'enabled',
+      value: 'yes',
+      message: 'affinity_config.enabled must be "true" or "false".',
+    },
+    {
+      key: 'randomWindowStartHour',
+      value: 'early',
+      message: 'affinity_config.randomWindowStartHour must be a finite number.',
+    },
+    {
+      key: 'randomWindowEndHour',
+      value: '25',
+      message: 'affinity_config.randomWindowEndHour must be between 1 and 24.',
+    },
+    {
+      key: 'randomCountWeights',
+      value: '[0.2,',
+      message: 'affinity_config.randomCountWeights must contain valid JSON.',
+    },
+    {
+      key: 'randomCountWeights',
+      value: JSON.stringify([0.25, 0.6, 0.1]),
+      message: 'affinity_config.randomCountWeights must be an array of four numbers.',
+    },
+    {
+      key: 'randomCountWeights',
+      value: JSON.stringify([0.25, 0.6, 0.1, 2]),
+      message: 'affinity_config.randomCountWeights[3] must be between 0 and 1.',
+    },
+    {
+      key: 'enabledDirections',
+      value: JSON.stringify(['local_thread', 'unknown_direction']),
+      message: 'affinity_config.enabledDirections[1] is invalid.',
+    },
+    {
+      key: 'analysisModel',
+      value: JSON.stringify({ baseUrl: 1 }),
+      message: 'affinity_config.analysisModel.baseUrl must be a string.',
+    },
+    {
+      key: 'analysisModel',
+      value: JSON.stringify({
+        baseUrl: '',
+        apiKey: '',
+        model: '',
+        requestMode: 'legacy_chat',
+        structuredOutputProtocol: 'chat_reply_v1',
+        timeoutMs: 5000,
+      }),
+      message: 'affinity_config.analysisModel.requestMode must be chat_completions or responses.',
+    },
+  ])('rejects corrupted persisted affinity config row $key=$value', async ({ key, value, message }) => {
+    const { service } = createHarness({
+      config: [{
+        id: 1,
+        key,
+        value,
+        updatedAt: NOW,
+      }],
+    });
+
+    await expect(service.getSettings()).rejects.toThrow(message);
+  });
+});
+
 describe('affinity service panel view', () => {
   it('builds an initial panel for a new user without writing relationship state or events', async () => {
     const { db, service } = createHarness();

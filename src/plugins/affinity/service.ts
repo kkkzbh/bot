@@ -15,7 +15,9 @@ import {
 } from '../reply/index.js';
 import { resolveStickerCapabilityArtifacts } from '../sticker/index.js';
 import type {
+  AffinityAnalysisRequestMode,
   AffinityAnalysisModelConfig,
+  AffinityAnalysisStructuredOutputProtocol,
   AffinityAuditRecord,
   AffinityConfigRecord,
   AffinityEventRecord,
@@ -227,6 +229,22 @@ const DEFAULT_SETTINGS: AffinitySettings = {
 };
 
 const SESSION_RESULT_KEY = Symbol('qqbot-affinity-result');
+const VALID_RANDOM_DIRECTIONS = new Set<AffinityRandomDirection>([
+  'local_thread',
+  'daily_greeting',
+  'music_rehearsal',
+  'contest_discussion',
+  'computer_knowledge',
+  'web_hot_topic',
+  'relationship_scene',
+]);
+const VALID_ANALYSIS_REQUEST_MODES = new Set<AffinityAnalysisRequestMode>(['chat_completions', 'responses']);
+const VALID_ANALYSIS_OUTPUT_PROTOCOLS = new Set<AffinityAnalysisStructuredOutputProtocol>([
+  'native_chat_json_schema',
+  'native_responses_json_schema',
+  'chat_reply_v1',
+  'json_mode',
+]);
 
 function normalizeText(value: unknown): string {
   return String(value ?? '').trim();
@@ -262,6 +280,149 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Math.max(min, Math.min(max, parsed));
 }
 
+function parseStoredBooleanSetting(
+  byKey: Map<string, string | null | undefined>,
+  key: string,
+  fallback: boolean,
+): boolean {
+  if (!byKey.has(key)) return fallback;
+  const raw = byKey.get(key);
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new Error(`affinity_config.${key} must be "true" or "false".`);
+}
+
+function parseStoredNumberSetting(
+  byKey: Map<string, string | null | undefined>,
+  key: string,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (!byKey.has(key)) return fallback;
+  const raw = byKey.get(key);
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new Error(`affinity_config.${key} must be a finite number.`);
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    throw new Error(`affinity_config.${key} must be a finite number.`);
+  }
+  if (value < min || value > max) {
+    throw new Error(`affinity_config.${key} must be between ${min} and ${max}.`);
+  }
+  return value;
+}
+
+function parseStoredJsonSetting(
+  byKey: Map<string, string | null | undefined>,
+  key: string,
+  fallback: unknown,
+): unknown {
+  if (!byKey.has(key)) return fallback;
+  const raw = byKey.get(key);
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new Error(`affinity_config.${key} must contain JSON.`);
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`affinity_config.${key} must contain valid JSON.`);
+  }
+}
+
+function requirePlainObject(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function readRequiredString(record: Record<string, unknown>, key: string, label: string): string {
+  const value = record[key];
+  if (typeof value !== 'string') {
+    throw new Error(`${label}.${key} must be a string.`);
+  }
+  return value;
+}
+
+function readRequiredPositiveNumber(record: Record<string, unknown>, key: string, label: string): number {
+  const value = record[key];
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${label}.${key} must be a positive number.`);
+  }
+  return value;
+}
+
+function parseStoredAnalysisRequestMode(
+  value: unknown,
+  label: string,
+): AffinityAnalysisRequestMode {
+  if (VALID_ANALYSIS_REQUEST_MODES.has(value as AffinityAnalysisRequestMode)) {
+    return value as AffinityAnalysisRequestMode;
+  }
+  throw new Error(`${label}.requestMode must be chat_completions or responses.`);
+}
+
+function parseStoredAnalysisOutputProtocol(
+  value: unknown,
+  label: string,
+): AffinityAnalysisStructuredOutputProtocol {
+  if (VALID_ANALYSIS_OUTPUT_PROTOCOLS.has(value as AffinityAnalysisStructuredOutputProtocol)) {
+    return value as AffinityAnalysisStructuredOutputProtocol;
+  }
+  throw new Error(`${label}.structuredOutputProtocol is invalid.`);
+}
+
+function parseStoredAnalysisModelConfig(value: unknown): Partial<AffinityAnalysisModelConfig> {
+  const label = 'affinity_config.analysisModel';
+  const record = requirePlainObject(value, label);
+  return {
+    baseUrl: readRequiredString(record, 'baseUrl', label),
+    apiKey: readRequiredString(record, 'apiKey', label),
+    model: readRequiredString(record, 'model', label),
+    requestMode: parseStoredAnalysisRequestMode(record.requestMode, label),
+    structuredOutputProtocol: parseStoredAnalysisOutputProtocol(record.structuredOutputProtocol, label),
+    timeoutMs: readRequiredPositiveNumber(record, 'timeoutMs', label),
+  };
+}
+
+function parseStoredWeightValue(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number.`);
+  }
+  if (value < 0 || value > 1) {
+    throw new Error(`${label} must be between 0 and 1.`);
+  }
+  return value;
+}
+
+function parseStoredRandomCountWeights(value: unknown): [number, number, number, number] {
+  const label = 'affinity_config.randomCountWeights';
+  if (!Array.isArray(value) || value.length !== 4) {
+    throw new Error(`${label} must be an array of four numbers.`);
+  }
+  return [
+    parseStoredWeightValue(value[0], `${label}[0]`),
+    parseStoredWeightValue(value[1], `${label}[1]`),
+    parseStoredWeightValue(value[2], `${label}[2]`),
+    parseStoredWeightValue(value[3], `${label}[3]`),
+  ];
+}
+
+function parseStoredEnabledDirections(value: unknown): AffinityRandomDirection[] {
+  const label = 'affinity_config.enabledDirections';
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array.`);
+  }
+  return value.map((item, index) => {
+    if (typeof item === 'string' && VALID_RANDOM_DIRECTIONS.has(item as AffinityRandomDirection)) {
+      return item as AffinityRandomDirection;
+    }
+    throw new Error(`${label}[${index}] is invalid.`);
+  });
+}
+
 function normalizeDate(value: unknown): Date {
   if (value instanceof Date && Number.isFinite(value.getTime())) return value;
   const parsed = new Date(value as string | number);
@@ -270,35 +431,23 @@ function normalizeDate(value: unknown): Date {
 
 function parseSettings(rows: AffinityConfigRecord[]): AffinitySettings {
   const byKey = new Map(rows.map((row) => [row.key, row.value]));
-  const rawAnalysisModel = parseJson<PartialAnalysisModelConfig>(byKey.get('analysisModel'), DEFAULT_SETTINGS.analysisModel);
-  const analysisModel: Partial<AffinityAnalysisModelConfig> = {
-    baseUrl: rawAnalysisModel.baseUrl ?? '',
-    apiKey: rawAnalysisModel.apiKey ?? '',
-    model: rawAnalysisModel.model ?? '',
-    requestMode: rawAnalysisModel.requestMode === 'responses' ? 'responses' : 'chat_completions',
-    structuredOutputProtocol:
-      rawAnalysisModel.structuredOutputProtocol === 'native_chat_json_schema' ||
-      rawAnalysisModel.structuredOutputProtocol === 'native_responses_json_schema' ||
-      rawAnalysisModel.structuredOutputProtocol === 'json_mode'
-        ? rawAnalysisModel.structuredOutputProtocol
-        : 'chat_reply_v1',
-    timeoutMs: Number(rawAnalysisModel.timeoutMs ?? 5000),
-  };
-  const randomCountWeights = parseJson<number[]>(byKey.get('randomCountWeights'), [...DEFAULT_SETTINGS.randomCountWeights]);
-  const enabledDirections = parseJson<AffinityRandomDirection[]>(byKey.get('enabledDirections'), [...DEFAULT_SETTINGS.enabledDirections]);
+  const analysisModel = parseStoredAnalysisModelConfig(
+    parseStoredJsonSetting(byKey, 'analysisModel', DEFAULT_SETTINGS.analysisModel),
+  );
+  const randomCountWeights = parseStoredRandomCountWeights(
+    parseStoredJsonSetting(byKey, 'randomCountWeights', [...DEFAULT_SETTINGS.randomCountWeights]),
+  );
+  const enabledDirections = parseStoredEnabledDirections(
+    parseStoredJsonSetting(byKey, 'enabledDirections', [...DEFAULT_SETTINGS.enabledDirections]),
+  );
   return {
-    enabled: byKey.has('enabled') ? byKey.get('enabled') !== 'false' : DEFAULT_SETTINGS.enabled,
-    proactiveEnabled: byKey.has('proactiveEnabled') ? byKey.get('proactiveEnabled') !== 'false' : DEFAULT_SETTINGS.proactiveEnabled,
-    randomWindowStartHour: clampNumber(byKey.get('randomWindowStartHour'), 0, 23, DEFAULT_SETTINGS.randomWindowStartHour),
-    randomWindowEndHour: clampNumber(byKey.get('randomWindowEndHour'), 1, 24, DEFAULT_SETTINGS.randomWindowEndHour),
-    randomCountWeights: [
-      clampNumber(randomCountWeights[0], 0, 1, DEFAULT_SETTINGS.randomCountWeights[0]),
-      clampNumber(randomCountWeights[1], 0, 1, DEFAULT_SETTINGS.randomCountWeights[1]),
-      clampNumber(randomCountWeights[2], 0, 1, DEFAULT_SETTINGS.randomCountWeights[2]),
-      clampNumber(randomCountWeights[3], 0, 1, DEFAULT_SETTINGS.randomCountWeights[3]),
-    ],
-    enabledDirections: enabledDirections.length ? enabledDirections : [...DEFAULT_SETTINGS.enabledDirections],
-    webSourceEnabled: byKey.has('webSourceEnabled') ? byKey.get('webSourceEnabled') === 'true' : DEFAULT_SETTINGS.webSourceEnabled,
+    enabled: parseStoredBooleanSetting(byKey, 'enabled', DEFAULT_SETTINGS.enabled),
+    proactiveEnabled: parseStoredBooleanSetting(byKey, 'proactiveEnabled', DEFAULT_SETTINGS.proactiveEnabled),
+    randomWindowStartHour: parseStoredNumberSetting(byKey, 'randomWindowStartHour', 0, 23, DEFAULT_SETTINGS.randomWindowStartHour),
+    randomWindowEndHour: parseStoredNumberSetting(byKey, 'randomWindowEndHour', 1, 24, DEFAULT_SETTINGS.randomWindowEndHour),
+    randomCountWeights,
+    enabledDirections,
+    webSourceEnabled: parseStoredBooleanSetting(byKey, 'webSourceEnabled', DEFAULT_SETTINGS.webSourceEnabled),
     analysisModel,
   };
 }
