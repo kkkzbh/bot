@@ -42,13 +42,13 @@ export async function syncRoomModelToMainChatRuntime(args: {
     if (!conversationId) {
       throw new Error('conversationId is required before syncing the active chat model.');
     }
-    args.room.model = descriptor.canonicalModel;
     if (args.clearCache) {
       await args.clearCache(args.room);
     }
     if (args.updateConversationModel) {
       await args.updateConversationModel(conversationId, descriptor.canonicalModel);
     }
+    args.room.model = descriptor.canonicalModel;
   }
 
   return {

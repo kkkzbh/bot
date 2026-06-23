@@ -219,6 +219,39 @@ describe('chatluna model guard runtime shape', () => {
     );
   });
 
+  it('stops instead of continuing with a partially synced room model when persistence fails', async () => {
+    mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({
+      CHATLUNA_ACTIVE_TAB: 'copilot',
+      CHATLUNA_COPILOT_BASE_URL: 'http://127.0.0.1:5140/api/internal/copilot/v1',
+      CHATLUNA_COPILOT_API_KEY: 'bridge-secret',
+      CHATLUNA_COPILOT_DEFAULT_MODEL: 'openai/claude-haiku-4.5',
+    }));
+    const harness = createHarness();
+    harness.database.set.mockRejectedValueOnce(new Error('database write failed'));
+    harness.ready?.();
+
+    const guard = harness.chainMiddlewares.get('chatluna_model_guard');
+    const conversation = {
+      id: 'conv-1',
+      model: 'openai/gpt-5.4-mini',
+      preset: 'sakiko',
+      chatMode: 'plugin',
+    };
+    const context = {
+      options: {
+        conversation: {
+          conversationId: 'conv-1',
+          conversation,
+        },
+      },
+      send: vi.fn(),
+    };
+
+    await expect(guard?.({ stripped: { content: 'hi' } }, context)).resolves.toBe(1);
+    expect(conversation.model).toBe('openai/gpt-5.4-mini');
+    expect(context.send).toHaveBeenCalledWith('主聊天模型同步失败，请稍后重试。');
+  });
+
   it('creates an active QQ reply conversation before resolve_model when resolve_conversation only returned context', async () => {
     mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({
       CHATLUNA_ACTIVE_TAB: 'copilot',

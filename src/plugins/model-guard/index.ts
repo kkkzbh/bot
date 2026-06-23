@@ -295,6 +295,14 @@ export function apply(ctx: Context, config: Config = {}): void {
           }
         } catch (error) {
           logger.warn('model guard middleware failed: %s', (error as Error).message);
+          if (context.send) {
+            try {
+              await context.send('主聊天模型同步失败，请稍后重试。');
+            } catch (sendError) {
+              logger.warn('model guard failure notice failed: %s', (sendError as Error).message);
+            }
+          }
+          return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
         }
 
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
