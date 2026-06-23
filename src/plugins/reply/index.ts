@@ -23,7 +23,6 @@ export { ReplyOrchestratorService } from './pipeline/orchestrator.js';
 export type { TurnContext } from './pipeline/types.js';
 export {
   buildReplyPromptCompilerInput,
-  buildReplyCapabilityPromptFragments,
   buildReplyRuntimeContractFragments,
   buildReplyStructuredReplyContractFragments,
   compileReplyPromptEnvelope,

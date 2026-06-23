@@ -119,27 +119,6 @@ export function buildReplyRuntimeContractFragments(options: {
   ];
 }
 
-export function buildReplyCapabilityPromptFragments(
-  turnContext: Pick<TurnContext, 'capabilitySnapshot' | 'continuationContext'>,
-  options: { includeContinuationContext?: boolean } = {},
-): PromptFragment[] {
-  const fragments: PromptFragment[] = [];
-
-  if (options.includeContinuationContext !== false && turnContext.continuationContext) {
-    fragments.push(
-      createPromptJsonFragment(
-        'qqbot_reply_continuation_context',
-        'Reply Continuation Context',
-        'assistant_state',
-        'turn',
-        turnContext.continuationContext,
-      ),
-    );
-  }
-
-  return fragments;
-}
-
 export function buildReplyPromptCompilerInput(
   turnContext: Pick<TurnContext, 'input' | 'capabilitySnapshot' | 'continuationContext'>,
   workingContext: PromptFragment[],
@@ -152,10 +131,7 @@ export function buildReplyPromptCompilerInput(
       ...options,
       voiceOutputLanguage,
     }),
-    workingContext: [
-      ...workingContext,
-      ...buildReplyCapabilityPromptFragments(turnContext),
-    ],
+    workingContext: [...workingContext],
   };
 }
 

@@ -338,6 +338,53 @@ describe('prompt assembly', () => {
     expect(compiledContent).toContain('|本当にうれしいです。');
   });
 
+  it('keeps reply interrupt continuation state in a single prompt fragment', () => {
+    const envelope = compileReplyPromptEnvelope(
+      buildReplyPromptCompilerInput(
+        {
+          input: {
+            text: '继续刚才的话题',
+            hasImageInput: false,
+            imageCount: 0,
+            displayName: '小祥',
+            userId: 'u1',
+            isDirect: false,
+          },
+          capabilitySnapshot: null,
+          continuationContext: {
+            alreadySentText: '前半句已经发出',
+            pendingUnitTexts: ['后半句尚未发送'],
+            supplementalMessages: ['补充消息'],
+          },
+        },
+        [
+          {
+            source: 'qqbot_reply_interrupt_state',
+            title: 'Reply Interrupt State',
+            authority: 'assistant_state',
+            trust: 'trusted',
+            ttl: 'turn',
+            payload: {
+              kind: 'text',
+              value: [
+                '这是一次回复中断后的重生成。',
+                '以下内容已经发给用户，不要重复：',
+                '前半句已经发出',
+              ].join('\n'),
+            },
+          },
+        ],
+      ),
+    );
+
+    const sources = envelope?.fragments.map((fragment) => fragment.source) ?? [];
+    expect(sources).toContain('qqbot_reply_interrupt_state');
+    expect(sources).not.toContain('qqbot_reply_continuation_context');
+
+    const compiledContent = envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '';
+    expect(compiledContent.match(/前半句已经发出/gu)).toHaveLength(1);
+  });
+
   it('consumes a turn envelope exactly once', () => {
     beginPromptAssemblyTurn('conv-1');
     registerPromptFragment('conv-1', {
