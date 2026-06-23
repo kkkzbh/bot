@@ -8,6 +8,8 @@ function printUsage() {
     [
       'Usage: node scripts/deepseek-json-probe.mjs [options]',
       '',
+      'Reads CHATLUNA_DEEPSEEK_BASE_URL and CHATLUNA_DEEPSEEK_API_KEY from the env file.',
+      '',
       'Options:',
       '  --env-file <path>        Env file to load. Default: .env.local',
       '  --model <name>           Model name to request. Default: deepseek-chat',
@@ -112,10 +114,10 @@ async function resolveUserPrompt(options) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const env = parseEnvText(await readFile(options.envFile, 'utf8'));
-  const baseUrl = (env.OPENAI_BASE_URL ?? '').trim().replace(/\/+$/u, '');
-  const apiKey = (env.OPENAI_API_KEY ?? '').trim();
-  if (!baseUrl) throw new Error(`OPENAI_BASE_URL is missing in ${options.envFile}.`);
-  if (!apiKey) throw new Error(`OPENAI_API_KEY is missing in ${options.envFile}.`);
+  const baseUrl = (env.CHATLUNA_DEEPSEEK_BASE_URL ?? '').trim().replace(/\/+$/u, '');
+  const apiKey = (env.CHATLUNA_DEEPSEEK_API_KEY ?? '').trim();
+  if (!baseUrl) throw new Error(`CHATLUNA_DEEPSEEK_BASE_URL is missing in ${options.envFile}.`);
+  if (!apiKey) throw new Error(`CHATLUNA_DEEPSEEK_API_KEY is missing in ${options.envFile}.`);
 
   const userPrompt = await resolveUserPrompt(options);
   const payload = {

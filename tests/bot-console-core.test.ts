@@ -673,6 +673,44 @@ describe('bot-console manager', () => {
     await expect(manager.saveEnv({ HACKED: '1' } as any)).rejects.toThrow('不支持这个配置项');
   });
 
+  it('does not treat legacy OPENAI env keys as managed runtime configuration', async () => {
+    expect(readManagedEnvPatchFromContent([
+      'OPENAI_BASE_URL=https://legacy.example/v1',
+      'OPENAI_API_KEY=sk-legacy',
+      'OPENAI_MODEL=legacy-model',
+      'CHATLUNA_ACTIVE_TAB=openai',
+      'CHATLUNA_OPENAI_BASE_URL=https://current.example/v1',
+      'CHATLUNA_OPENAI_API_KEY=sk-current',
+      'CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking',
+    ].join('\n'))).toEqual({
+      CHATLUNA_ACTIVE_TAB: 'openai',
+      CHATLUNA_OPENAI_BASE_URL: 'https://current.example/v1',
+      CHATLUNA_OPENAI_API_KEY: 'sk-current',
+      CHATLUNA_OPENAI_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+    });
+
+    expect(resolveDefaultLlmCredentials({
+      OPENAI_BASE_URL: 'https://legacy.example/v1',
+      OPENAI_API_KEY: 'sk-legacy',
+      OPENAI_MODEL: 'legacy-model',
+      CHATLUNA_ACTIVE_TAB: 'openai',
+      CHATLUNA_OPENAI_BASE_URL: 'https://current.example/v1',
+      CHATLUNA_OPENAI_API_KEY: 'sk-current',
+      CHATLUNA_OPENAI_DEFAULT_MODEL: 'openai/gpt-5.4-medium-thinking',
+    })).toEqual({
+      baseUrl: 'https://current.example/v1',
+      apiKey: 'sk-current',
+      model: 'openai/gpt-5.4-medium-thinking',
+    });
+
+    const dir = createTempDir();
+    const envFilePath = join(dir, '.env.local');
+    writeFileSync(envFilePath, 'CHATLUNA_DEFAULT_MODEL=Pro/moonshotai/Kimi-K2.5\n', 'utf8');
+
+    const manager = new BotConsoleManager({ rootDir: dir, envFilePath });
+    await expect(manager.saveEnv({ OPENAI_MODEL: 'legacy-model' } as any)).rejects.toThrow('不支持这个配置项：OPENAI_MODEL');
+  });
+
   it('accepts QQBOT_REPLY_INTERRUPT_ENABLED through managed env saves', async () => {
     const dir = createTempDir();
     const envFilePath = join(dir, '.env.local');

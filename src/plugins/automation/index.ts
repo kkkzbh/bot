@@ -50,7 +50,7 @@ const AUTOMATION_RECENT_CONTEXT_LIMIT = 8;
 const automationReplyOrchestrator = new ReplyOrchestratorService();
 
 export const name = 'task-automation';
-export const inject = { required: ['database', 'chatluna'], optional: ['toolPolicy'] } as const;
+export const inject = { required: ['database', 'chatluna', 'toolPolicy'] } as const;
 export { normalizeGroupId, parseGroupSet } from './scheduler.js';
 
 export interface Config {
@@ -137,7 +137,7 @@ type ChatLunaServiceLike = {
 type ContextWithAutomation = Context & {
   database: any;
   chatluna: ChatLunaServiceLike;
-  toolPolicy?: ToolPolicyServiceLike;
+  toolPolicy: ToolPolicyServiceLike;
   bots: ChatLunaBot[];
 };
 
@@ -853,8 +853,8 @@ async function resolveAutomationToolMask(
   session: Session,
   sourceRoom: AutomationRoomRow,
 ): Promise<ToolMask | undefined> {
-  const toolPolicy = (ctx as any).toolPolicy;
-  return toolPolicy?.resolveToolMask(session as any, 'automation', {
+  const { toolPolicy } = ctx as unknown as { toolPolicy: ToolPolicyServiceLike };
+  return toolPolicy.resolveToolMask(session as any, 'automation', {
     roomId: sourceRoom.roomId,
     conversationId: sourceRoom.conversationId?.trim() || null,
     groupId: session.guildId ?? null,

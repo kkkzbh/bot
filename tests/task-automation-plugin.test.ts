@@ -75,7 +75,7 @@ vi.mock('koishi', () => {
   };
 });
 
-import { apply } from '../src/plugins/automation/index.js';
+import { apply, inject as automationInject } from '../src/plugins/automation/index.js';
 import { apply as applySticker } from '../src/plugins/sticker/index.js';
 import { mainChatRuntimeState } from '../src/plugins/shared/llm/main-chat-runtime.js';
 import { resolveMainChatRuntimeProfileFromEnv } from '../src/plugins/shared/llm/main-chat-tabs.js';
@@ -299,6 +299,11 @@ function createJob(overrides: Record<string, any> = {}) {
 
 describe('task automation tools and execution', () => {
   const originalActiveTab = process.env.CHATLUNA_ACTIVE_TAB;
+
+  it('requires tool policy instead of running automation with unrestricted tools', () => {
+    expect(automationInject.required).toContain('toolPolicy');
+    expect('optional' in automationInject ? automationInject.optional : []).not.toContain('toolPolicy');
+  });
 
   beforeEach(() => {
     vi.useFakeTimers();

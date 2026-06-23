@@ -37,9 +37,6 @@ export const FIELD_LABELS: Record<string, string> = {
   CHATLUNA_MIMO_BASE_URL: 'MIMO 接口地址',
   CHATLUNA_MIMO_API_KEY: 'MIMO 接口密钥',
   CHATLUNA_MIMO_DEFAULT_MODEL: 'MIMO 默认模型',
-  OPENAI_BASE_URL: '通用模型接口地址',
-  OPENAI_API_KEY: '通用模型接口密钥',
-  OPENAI_MODEL: '通用默认模型',
   CHATLUNA_DEFAULT_PRESET: '默认预设',
   CHAT_NATURAL_TRIGGER_GROUPS: '自然触发白名单群',
   CHAT_NATURAL_TRIGGER_ALIASES: '触发别名',
@@ -50,7 +47,7 @@ export const FIELD_HINTS: Record<string, string> = {
   CHATLUNA_BASE_URL:
     '普通聊天默认走这里配置的接口地址。它只影响 ChatLuna 主聊天链路，不会覆盖任务自动化、自然触发判定和记忆抽取。',
   CHATLUNA_API_KEY:
-    '普通聊天默认走这里配置的接口密钥。主聊天切换供应商时，优先改这里，不要直接改 OPENAI_*。',
+    '普通聊天默认走这里配置的接口密钥。主聊天切换供应商时，优先改这里。',
   CHATLUNA_COMMON_FS:
     '控制是否向 ChatLuna 注入整组 file_* 与 bash 工具。当前模式下 bash 以宿主机高权限运行且允许联网，关闭后这些工具不会真正提供给模型。',
   CHATLUNA_COMMON_FS_SCOPE_PATH:

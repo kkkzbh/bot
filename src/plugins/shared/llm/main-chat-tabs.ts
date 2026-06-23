@@ -1339,12 +1339,7 @@ export function validateMainChatTabModel(
 
 /**
  * Resolve the credentials any auxiliary feature should use when it doesn't have a dedicated provider.
- *
- * Order of preference:
- * 1. The currently active main chat tab (single source of truth).
- * 2. Legacy OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL env vars (kept for back-compat).
- *
- * Other plugins (e.g. voice STT, replies) should call this instead of reading OPENAI_* directly.
+ * The active main chat tab is the single source of truth.
  */
 export function resolveDefaultLlmCredentials(env: Record<string, string> | NodeJS.ProcessEnv): {
   baseUrl: string;
@@ -1352,12 +1347,9 @@ export function resolveDefaultLlmCredentials(env: Record<string, string> | NodeJ
   model: string;
 } {
   const profile = resolveMainChatRuntimeProfileFromEnv(env);
-  const legacyBaseUrl = trimOptionalEnvValue(env.OPENAI_BASE_URL);
-  const legacyApiKey = trimOptionalEnvValue(env.OPENAI_API_KEY);
-  const legacyModel = trimOptionalEnvValue(env.OPENAI_MODEL);
   return {
-    baseUrl: profile.baseUrl?.trim() || legacyBaseUrl || '',
-    apiKey: profile.apiKey?.trim() || legacyApiKey || '',
-    model: profile.canonicalModel?.trim() || legacyModel || '',
+    baseUrl: profile.baseUrl.trim(),
+    apiKey: profile.apiKey.trim(),
+    model: profile.canonicalModel.trim(),
   };
 }

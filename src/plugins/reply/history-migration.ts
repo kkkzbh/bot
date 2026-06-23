@@ -20,6 +20,7 @@ export interface StructuredReplyHistoryMigrationResult {
   submitReplyPlansMigrated: number;
   emptySubmitReplyPlanToolsRemoved: number;
   protocolViolationPromptsRemoved: number;
+  emptyAssistantRowsRemoved: number;
 }
 
 function normalizeLegacyStructuredReply(raw: unknown): StructuredReply | null {
@@ -306,6 +307,51 @@ async function isStoredContentEmpty(content: unknown): Promise<boolean> {
 }
 
 const LEGACY_REPLY_PLAN_VIOLATION_PREFIX = 'Protocol violation: reply-agent must finish by calling submit_reply_plan.';
+const HISTORY_ROW_FIELDS = [
+  'id',
+  'conversationId',
+  'parentId',
+  'role',
+  'name',
+  'content',
+  'tool_call_id',
+  'tool_calls',
+] as const;
+
+function buildRowsByParent(rows: Record<string, unknown>[]): Map<string, Record<string, unknown>[]> {
+  const rowsByParent = new Map<string, Record<string, unknown>[]>();
+  for (const row of rows) {
+    const parentId = normalizeId(row.parentId);
+    const bucket = rowsByParent.get(parentId) ?? [];
+    bucket.push(row);
+    rowsByParent.set(parentId, bucket);
+  }
+  return rowsByParent;
+}
+
+function buildRowsById(rows: Record<string, unknown>[]): Map<string, Record<string, unknown>> {
+  const rowsById = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const id = normalizeId(row.id);
+    if (id) rowsById.set(id, row);
+  }
+  return rowsById;
+}
+
+function resolveNearestKeptParentId(
+  row: Record<string, unknown>,
+  rowsById: Map<string, Record<string, unknown>>,
+  removedIds: Set<string>,
+): string | null {
+  let parentId = normalizeId(row.parentId) || null;
+  const seen = new Set<string>();
+  while (parentId && removedIds.has(parentId) && !seen.has(parentId)) {
+    seen.add(parentId);
+    const parent = rowsById.get(parentId);
+    parentId = parent ? normalizeId(parent.parentId) || null : null;
+  }
+  return parentId;
+}
 
 export async function migrateStructuredReplyHistoryRows(
   database: DatabaseLike,
@@ -326,27 +372,13 @@ export async function migrateStructuredReplyHistoryRows(
     structuredRowsMigrated += 1;
   }
 
-  const allRows = await database.get('chatluna_message', {}, [
-    'id',
-    'conversationId',
-    'parentId',
-    'role',
-    'name',
-    'content',
-    'tool_call_id',
-    'tool_calls',
-  ]);
-  const rowsByParent = new Map<string, Record<string, unknown>[]>();
-  for (const row of allRows) {
-    const parentId = normalizeId(row.parentId);
-    const bucket = rowsByParent.get(parentId) ?? [];
-    bucket.push(row);
-    rowsByParent.set(parentId, bucket);
-  }
+  const allRows = await database.get('chatluna_message', {}, [...HISTORY_ROW_FIELDS]);
+  const rowsByParent = buildRowsByParent(allRows);
 
   let submitReplyPlansMigrated = 0;
   let emptySubmitReplyPlanToolsRemoved = 0;
   let protocolViolationPromptsRemoved = 0;
+  let emptyAssistantRowsRemoved = 0;
 
   for (const row of allRows) {
     const id = normalizeId(row.id);
@@ -411,11 +443,41 @@ export async function migrateStructuredReplyHistoryRows(
     protocolViolationPromptsRemoved += 1;
   }
 
+  const remainingRows = await database.get('chatluna_message', {}, [...HISTORY_ROW_FIELDS]);
+  const remainingRowsByParent = buildRowsByParent(remainingRows);
+  const remainingRowsById = buildRowsById(remainingRows);
+  const emptyAssistantRows = [];
+  for (const row of remainingRows) {
+    const id = normalizeId(row.id);
+    if (!id || row.role !== 'ai') continue;
+    if (!(await isStoredContentEmpty(row.content))) continue;
+    if (parseToolCalls(row.tool_calls).length > 0) continue;
+    emptyAssistantRows.push(row);
+  }
+  const emptyAssistantIds = new Set(emptyAssistantRows.map((row) => normalizeId(row.id)).filter(Boolean));
+
+  for (const row of emptyAssistantRows) {
+    const id = normalizeId(row.id);
+    if (!id) continue;
+
+    const parentId = resolveNearestKeptParentId(row, remainingRowsById, emptyAssistantIds);
+    for (const child of remainingRowsByParent.get(id) ?? []) {
+      const childId = normalizeId(child.id);
+      if (childId && !emptyAssistantIds.has(childId)) {
+        await database.set('chatluna_message', { id: childId }, { parentId });
+      }
+    }
+    await database.set('chatluna_conversation', { latestMessageId: id }, { latestMessageId: parentId });
+    await database.remove('chatluna_message', { id });
+    emptyAssistantRowsRemoved += 1;
+  }
+
   const migrated =
     structuredRowsMigrated +
     submitReplyPlansMigrated +
     emptySubmitReplyPlanToolsRemoved +
-    protocolViolationPromptsRemoved;
+    protocolViolationPromptsRemoved +
+    emptyAssistantRowsRemoved;
 
   return {
     scanned: rows.length,
@@ -424,5 +486,6 @@ export async function migrateStructuredReplyHistoryRows(
     submitReplyPlansMigrated,
     emptySubmitReplyPlanToolsRemoved,
     protocolViolationPromptsRemoved,
+    emptyAssistantRowsRemoved,
   };
 }
