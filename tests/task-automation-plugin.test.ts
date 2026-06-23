@@ -726,6 +726,40 @@ describe('task automation tools and execution', () => {
     );
   });
 
+  it('fails scheduled automation when recent-context prompt injection is unavailable', async () => {
+    const harness = createHarness({
+      chathub_room: [createRoom({ roomName: '当前群房间', conversationId: 'conv-ctx' })],
+      chatluna_conversation: [
+        {
+          id: 'conv-ctx',
+          latestMessageId: 'm1',
+        },
+      ],
+      chatluna_message: [
+        {
+          id: 'm1',
+          conversationId: 'conv-ctx',
+          role: 'human',
+          parentId: null,
+          content: '第一句用户消息',
+        },
+      ],
+      automation_job: [createJob({ runAt: Date.now() - 1, sourceConversationId: 'conv-ctx' })],
+    });
+    delete (harness.ctx.chatluna as { contextManager?: unknown }).contextManager;
+    await harness.runReady();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(harness.ctx.chatluna.chat).not.toHaveBeenCalled();
+    expect(await harness.database.get('automation_job_run', { jobId: 1 })).toEqual([
+      expect.objectContaining({
+        status: 'failed',
+        error: 'automation prompt injection requires chatluna.contextManager.',
+      }),
+    ]);
+  });
+
   it('sends real mention messages from inline mention content without mentionCreator wrapper', async () => {
     const harness = createHarness({
       chathub_room: [createRoom({ roomName: '当前群房间' })],

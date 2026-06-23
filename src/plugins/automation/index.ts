@@ -964,7 +964,9 @@ function injectAutomationPromptFragments(
     additional_kwargs?: Record<string, unknown>;
   }>;
   const contextManager = ((ctx as any).chatluna as { contextManager?: { inject: (options: any) => void } } | undefined)?.contextManager;
-  if (!contextManager) return;
+  if (!contextManager) {
+    throw new Error('automation prompt injection requires chatluna.contextManager.');
+  }
   const injectOptions: {
     name: string;
     value: unknown;
