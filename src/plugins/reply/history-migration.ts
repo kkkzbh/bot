@@ -363,6 +363,7 @@ const TRANSIENT_ADDITIONAL_KWARG_KEYS = [
   'qqbot_reply_mode',
   'qqbot_request_budget_policy',
   'overrideRequestParams',
+  '__chatluna_provider_response_diagnostic_v1',
 ] as const;
 
 const CONVERSATION_ROW_FIELDS = [

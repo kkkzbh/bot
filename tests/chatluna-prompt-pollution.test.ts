@@ -710,6 +710,11 @@ describe('chatluna prompt pollution regression', () => {
           qqbot_request_budget_policy: { imageDetail: 'low' },
           qqbot_override_request_params: { temperature: 0 },
           overrideRequestParams: { response_format: { type: 'json_schema' } },
+          __chatluna_provider_response_diagnostic_v1: {
+            requestMode: 'tool_calling',
+            providerToolCallCount: 1,
+            rawMessageKeys: ['content', 'tool_calls'],
+          },
         })),
       },
       {
