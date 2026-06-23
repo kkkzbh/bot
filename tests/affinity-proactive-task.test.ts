@@ -152,6 +152,25 @@ const conversation = {
   autoTitle: false,
 };
 
+function createTestVoiceRuntime() {
+  return createVoiceRuntimeConfig({
+    inputEnabled: false,
+    outputEnabled: false,
+    asrBaseUrl: '',
+    asrApiKey: '',
+    ttsBaseUrl: '',
+    ttsApiKey: '',
+    inputMaxSeconds: 60,
+    outputMaxWords: 1000,
+    outputMaxSeconds: 600,
+    voiceOutputLanguage: 'auto',
+    transcribeTimeoutMs: 1000,
+    synthTimeoutMs: 1000,
+    replyInterruptCollectWindowMs: 1000,
+    replyInterruptMaxPendingInputs: 1,
+  });
+}
+
 function createChatLuna(responseContent: string) {
   const chat = vi.fn(async (..._args: any[]) => ({
     content: responseContent,
@@ -289,6 +308,7 @@ describe('affinity proactive task prompt and provider adapter', () => {
       session: createSession(),
       input: input(),
       requestId: 'test-native',
+      runtime: createTestVoiceRuntime(),
     });
 
     expect(result).toEqual(expect.objectContaining({
@@ -387,6 +407,7 @@ describe('affinity proactive task prompt and provider adapter', () => {
       session: createSession(),
       input: input(),
       requestId: 'test-chat-reply-v1',
+      runtime: createTestVoiceRuntime(),
     });
 
     expect(result).toEqual(expect.objectContaining({
@@ -428,6 +449,7 @@ describe('affinity proactive task prompt and provider adapter', () => {
       session: createSession(),
       input: input({ recentTurns: [] }),
       requestId: 'test-no-reply',
+      runtime: createTestVoiceRuntime(),
     });
 
     expect(result).toEqual(expect.objectContaining({
@@ -436,5 +458,27 @@ describe('affinity proactive task prompt and provider adapter', () => {
       skipReason: 'provider_no_reply',
       transportPlan: null,
     }));
+  });
+
+  it('rejects missing ChatLuna contextManager instead of generating without the proactive prompt envelope', async () => {
+    const chatluna = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({
+          decision: 'reply',
+          outbound_messages: [{ type: 'message', content: '这不该被调用。' }],
+        }),
+        additional_kwargs: {},
+      })),
+    };
+
+    await expect(generateAffinityProactiveViaChatLuna({
+      chatluna,
+      conversation,
+      session: createSession(),
+      input: input(),
+      requestId: 'test-missing-context-manager',
+      runtime: createTestVoiceRuntime(),
+    })).rejects.toThrow('affinity proactive generation requires chatluna.contextManager.');
+    expect(chatluna.chat).not.toHaveBeenCalled();
   });
 });

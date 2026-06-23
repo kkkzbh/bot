@@ -16,8 +16,6 @@ import {
   buildReplyPromptCompilerInput,
   buildReplyTurnInput,
   compileReplyPromptEnvelope,
-  createVoiceRuntimeConfig,
-  createVoiceRuntimeConfigFromEnv,
   isVoiceOutputConfigured,
   ReplyOrchestratorService,
   type RuntimeConfig as ReplyVoiceRuntimeConfig,
@@ -103,29 +101,6 @@ function createNoopChatEvents(): Record<string, () => Promise<void>> {
   };
 }
 
-export function createAffinityProactiveVoiceRuntime(env: NodeJS.ProcessEnv = process.env): ReplyVoiceRuntimeConfig {
-  try {
-    return createVoiceRuntimeConfigFromEnv(env);
-  } catch {
-    return createVoiceRuntimeConfig({
-      inputEnabled: false,
-      outputEnabled: false,
-      asrBaseUrl: '',
-      asrApiKey: '',
-      ttsBaseUrl: '',
-      ttsApiKey: '',
-      inputMaxSeconds: 60,
-      outputMaxWords: 1000,
-      outputMaxSeconds: 600,
-      voiceOutputLanguage: 'auto',
-      transcribeTimeoutMs: 1000,
-      synthTimeoutMs: 1000,
-      replyInterruptCollectWindowMs: 1000,
-      replyInterruptMaxPendingInputs: 1,
-    });
-  }
-}
-
 function resolveStickerAvailableCount(session: Session): number {
   const state = (session as Session & { state?: Record<string, unknown> }).state;
   const sticker = state?.qqSticker;
@@ -202,15 +177,22 @@ export async function generateAffinityProactiveViaChatLuna(args: {
   session: Session;
   input: AffinityRandomGenerationInput;
   requestId: string;
-  runtime?: ReplyVoiceRuntimeConfig;
+  runtime: ReplyVoiceRuntimeConfig;
 }): Promise<AffinityProactiveGenerationResult> {
   const chat = args.chatluna?.chat?.bind(args.chatluna);
   const contextManager = args.chatluna?.contextManager;
   const conversationId = args.conversation.id.trim();
-  if (typeof chat !== 'function') return skipResult('chatluna_chat_unavailable');
-  if (!contextManager || !conversationId) return skipResult('chatluna_context_unavailable');
+  if (typeof chat !== 'function') {
+    throw new Error('affinity proactive generation requires chatluna.chat.');
+  }
+  if (!contextManager) {
+    throw new Error('affinity proactive generation requires chatluna.contextManager.');
+  }
+  if (!conversationId) {
+    throw new Error('affinity proactive generation requires a conversation id.');
+  }
 
-  const runtime = args.runtime ?? createAffinityProactiveVoiceRuntime();
+  const runtime = args.runtime;
   const capabilitySnapshot = buildCapabilitySnapshot({
     runtime,
     session: args.session,

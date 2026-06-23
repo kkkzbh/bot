@@ -8,6 +8,7 @@ import {
   consumePromptEnvelope,
 } from '../src/plugins/shared/prompt-context/index.js';
 import { decodeStoredMessageJson, decodeStoredMessageText } from '../src/plugins/shared/stored-message.js';
+import { createVoiceRuntimeConfig } from '../src/plugins/reply/index.js';
 import type { AffinityEventRecord, AffinityRandomPlanRecord, AffinityScopeConfigRecord } from '../src/types/affinity.js';
 
 vi.mock('koishi', () => {
@@ -253,6 +254,25 @@ function createConversation(conversationId = 'conv-affinity'): Row {
   };
 }
 
+function createAffinityTestVoiceRuntime() {
+  return createVoiceRuntimeConfig({
+    inputEnabled: false,
+    outputEnabled: false,
+    asrBaseUrl: '',
+    asrApiKey: '',
+    ttsBaseUrl: '',
+    ttsApiKey: '',
+    inputMaxSeconds: 60,
+    outputMaxWords: 1000,
+    outputMaxSeconds: 600,
+    voiceOutputLanguage: 'auto',
+    transcribeTimeoutMs: 1000,
+    synthTimeoutMs: 1000,
+    replyInterruptCollectWindowMs: 1000,
+    replyInterruptMaxPendingInputs: 1,
+  });
+}
+
 function createHarness(options: {
   scope?: Partial<AffinityScopeConfigRecord>;
   plan?: Partial<AffinityRandomPlanRecord>;
@@ -263,6 +283,7 @@ function createHarness(options: {
   chat?: ReturnType<typeof vi.fn>;
   chatResponse?: { content?: unknown; additional_kwargs?: Record<string, unknown> };
   config?: Row[];
+  proactiveVoiceRuntime?: () => ReturnType<typeof createAffinityTestVoiceRuntime>;
 } = {}) {
   const scope = createScope(options.scope);
   const plan = createPlan({
@@ -308,7 +329,13 @@ function createHarness(options: {
     chat,
     contextManager,
   };
-  const service = new AffinityService(db, () => [bot], () => 0.5, () => chatluna as any);
+  const service = new AffinityService(
+    db,
+    () => [bot],
+    () => 0.5,
+    () => chatluna as any,
+    options.proactiveVoiceRuntime ?? createAffinityTestVoiceRuntime,
+  );
   return { db, service, bot, chatluna, chat, contextManager };
 }
 
@@ -574,7 +601,13 @@ describe('affinity service random history sync', () => {
       chat,
       contextManager,
     };
-    const service = new AffinityService(db, () => [bot], () => 0.5, () => chatluna as any);
+    const service = new AffinityService(
+      db,
+      () => [bot],
+      () => 0.5,
+      () => chatluna as any,
+      createAffinityTestVoiceRuntime,
+    );
 
     const result = await service.createManualRandomPlan({
       scopeKind: 'group',
@@ -1014,6 +1047,29 @@ describe('affinity service random history sync', () => {
     expect(additional?.qqbot_affinity_random_event).toEqual(expect.objectContaining({
       visibleText: declarativeMessage,
       eventTypeHint: 'answer_random_prompt',
+    }));
+  });
+
+  it('marks a proactive plan failed when the explicit voice runtime provider is misconfigured', async () => {
+    const { db, service, chat } = createHarness({
+      proactiveVoiceRuntime: () => {
+        throw new Error('QQ_VOICE_OUTPUT_LANGUAGE 未配置。');
+      },
+    });
+
+    await service.runDueRandomPlans(NOW);
+
+    expect(chat).not.toHaveBeenCalled();
+    expect(db.tables.affinity_random_plan[0]).toEqual(expect.objectContaining({
+      status: 'failed',
+      skipReason: 'QQ_VOICE_OUTPUT_LANGUAGE 未配置。',
+    }));
+    const detail = parseAuditDetail(db.tables.affinity_audit.find((row) => row.eventType === 'random_message_generation_skipped'));
+    expect(detail).toEqual(expect.objectContaining({
+      planId: 2,
+      direction: 'daily_greeting',
+      reason: 'QQ_VOICE_OUTPUT_LANGUAGE 未配置。',
+      status: 'failed',
     }));
   });
 

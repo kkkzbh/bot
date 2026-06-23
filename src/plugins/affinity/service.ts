@@ -7,7 +7,11 @@ import type { ReplyTransportPlan } from '../shared/outbound/index.js';
 import { resolveSessionDisplayName } from '../shared/session/index.js';
 import { decodeStoredMessageText } from '../shared/stored-message.js';
 import { buildGroupScopeKey, realtimeMessageCache } from '../realtime-message/index.js';
-import { deliverStandaloneReplyPlan } from '../reply/index.js';
+import {
+  createVoiceRuntimeConfigFromEnv,
+  deliverStandaloneReplyPlan,
+  type RuntimeConfig as ReplyVoiceRuntimeConfig,
+} from '../reply/index.js';
 import { resolveStickerCapabilityArtifacts } from '../sticker/index.js';
 import type {
   AffinityAnalysisModelConfig,
@@ -62,7 +66,6 @@ import {
   type AffinityRandomMemoryItem,
 } from './proactive-types.js';
 import {
-  createAffinityProactiveVoiceRuntime,
   generateAffinityProactiveViaChatLuna,
   type AffinityProactiveChatLunaConversation,
   type AffinityProactiveGenerationResult,
@@ -133,6 +136,8 @@ type ChatLunaHistoryLike = {
     }) => void;
   };
 };
+
+type ProactiveVoiceRuntimeProvider = () => ReplyVoiceRuntimeConfig;
 
 type ChatHistoryWriterResolution =
   | {
@@ -491,6 +496,7 @@ export class AffinityService implements AffinityServiceLike {
     private readonly getBots: () => AffinityBotLike[],
     private readonly random: () => number = Math.random,
     private readonly getChatLuna: () => ChatLunaHistoryLike | undefined = () => undefined,
+    private readonly getProactiveVoiceRuntime: ProactiveVoiceRuntimeProvider = createVoiceRuntimeConfigFromEnv,
   ) {}
 
   private createProactiveSkipGeneration(reason: string): AffinityProactiveGenerationResult {
@@ -506,6 +512,35 @@ export class AffinityService implements AffinityServiceLike {
       transportPlan: null,
       outputProtocol: null,
     };
+  }
+
+  private requireProactiveChatLuna(): ChatLunaHistoryLike {
+    const chatluna = this.getChatLuna();
+    if (typeof chatluna?.chat !== 'function') {
+      throw new Error('affinity proactive generation requires chatluna.chat.');
+    }
+    if (!chatluna.contextManager) {
+      throw new Error('affinity proactive generation requires chatluna.contextManager.');
+    }
+    return chatluna;
+  }
+
+  private async failPlan(plan: AffinityRandomPlanRecord, reason: string, now: number): Promise<void> {
+    await this.database.set('affinity_random_plan', { id: plan.id }, {
+      status: 'failed',
+      skipReason: reason,
+      updatedAt: now,
+    });
+    await this.writeAudit('random_message_generation_skipped', {
+      scopeKind: plan.scopeKind,
+      scopeId: plan.scopeId,
+      detail: {
+        planId: plan.id,
+        direction: plan.direction,
+        reason,
+        status: 'failed',
+      },
+    });
   }
 
   private createProactiveSession(args: {
@@ -1616,12 +1651,13 @@ export class AffinityService implements AffinityServiceLike {
     input: AffinityRandomGenerationInput;
     channelId: string;
   }): Promise<AffinityProactiveGenerationResult> {
-    const chatluna = this.getChatLuna();
     const source = await this.resolveProactiveSourceConversation({
       plan: args.plan,
       scope: args.scope,
     });
     if (!source.sourceConversation) return this.createProactiveSkipGeneration(source.skipReason);
+    const chatluna = this.requireProactiveChatLuna();
+    const runtime = this.getProactiveVoiceRuntime();
 
     const session = this.createProactiveSession({
       bot: args.bot,
@@ -1644,7 +1680,7 @@ export class AffinityService implements AffinityServiceLike {
         session,
         input: args.input,
         requestId: `affinity-random-plan:${args.plan.id}:${args.plan.direction}`,
-        runtime: createAffinityProactiveVoiceRuntime(),
+        runtime,
       });
     } catch (error) {
       logger.warn(
@@ -1693,7 +1729,7 @@ export class AffinityService implements AffinityServiceLike {
       sourceConversation: sourceConversation ?? null,
     });
     const delivery = await deliverStandaloneReplyPlan({
-      runtime: createAffinityProactiveVoiceRuntime(),
+      runtime: this.getProactiveVoiceRuntime(),
       session,
       plan: transportPlan,
     });
@@ -1765,13 +1801,19 @@ export class AffinityService implements AffinityServiceLike {
       await this.skipPlan(plan, prepared.skipReason ?? 'random_context_unavailable', now);
       return;
     }
-    const generation: RandomGenerationWithTransport = await this.generateProactiveReply({
-      plan,
-      scope,
-      bot,
-      input: prepared.input,
-      channelId,
-    });
+    let generation: RandomGenerationWithTransport;
+    try {
+      generation = await this.generateProactiveReply({
+        plan,
+        scope,
+        bot,
+        input: prepared.input,
+        channelId,
+      });
+    } catch (error) {
+      await this.failPlan(plan, error instanceof Error ? error.message : String(error), now);
+      return;
+    }
     if (!generation.shouldSend || !generation.message) {
       await this.writeAudit('random_message_generation_skipped', {
         scopeKind: plan.scopeKind,
