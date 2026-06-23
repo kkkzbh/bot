@@ -1348,8 +1348,50 @@ describe('affinity service random history sync', () => {
     expect(content).toContain('activeRandomThreads');
     expect(content).toContain('random:daily_greeting');
     expect(content).toContain(RANDOM_MESSAGE);
+    expect(content).toContain('"planId": 2');
+    expect(content).toContain('"direction": "daily_greeting"');
     expect(content).toContain('contextSeedSummary');
     expect(content).toContain('answer_random_prompt');
+    expect(content).not.toContain('"payload": {}');
     expect(content).toContain('eventResult');
+  });
+
+  it('rejects corrupted random thread payload before relationship writes or prompt injection', async () => {
+    const { db, service } = createHarness();
+    db.tables.affinity_open_thread.push({
+      id: 77,
+      characterId: CHARACTER_ID,
+      scopeKind: 'group',
+      scopeId: '829573670',
+      userKey: null,
+      threadType: 'random:daily_greeting',
+      title: 'random:daily_greeting',
+      summary: RANDOM_MESSAGE,
+      status: 'open',
+      payloadJson: '{"planId":',
+      expiresAt: Date.now() + 3_600_000,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const session = {
+      isDirect: false,
+      platform: 'onebot',
+      guildId: '829573670',
+      channelId: '829573670',
+      userId: 'u-1',
+      messageId: 'reply-corrupt-thread',
+      content: '这个算法是不是缩点以后再拓扑排序？',
+      stripped: { content: '这个算法是不是缩点以后再拓扑排序？' },
+      author: { nick: 'Alice' },
+      bot: { selfId: 'bot-1' },
+    } as any;
+
+    await expect(service.processIncomingSession(session)).rejects.toThrow('affinity_open_thread.payloadJson must contain valid JSON.');
+    expect(db.tables.affinity_user_state).toHaveLength(0);
+    expect(db.tables.affinity_event).toHaveLength(0);
+
+    beginPromptAssemblyTurn('conv-affinity');
+    await expect(service.injectPromptForTurn('conv-affinity', session)).rejects.toThrow('affinity_open_thread.payloadJson must contain valid JSON.');
+    expect(consumePromptEnvelope('conv-affinity')).toBeNull();
   });
 });

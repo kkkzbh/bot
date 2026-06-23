@@ -20,6 +20,7 @@ import type {
   AffinityAnalysisStructuredOutputProtocol,
   AffinityAuditRecord,
   AffinityConfigRecord,
+  AffinityEventType,
   AffinityEventRecord,
   AffinityManualRandomPlanInput,
   AffinityManualRandomPlanResponse,
@@ -169,6 +170,15 @@ type OpenThreadSummary = {
   summary?: string;
   payloadJson?: string | null;
   expiresAt?: number;
+  randomPayload?: RandomThreadPayload;
+};
+
+type RandomThreadPayload = {
+  planId: number;
+  direction: AffinityRandomDirection;
+  contextSeedSummary: string | null;
+  eventTypeHint: AffinityEventType | 'none';
+  reason: string;
 };
 
 type RandomGenerationWithTransport = AffinityRandomGenerationResult & {
@@ -238,6 +248,22 @@ const VALID_RANDOM_DIRECTIONS = new Set<AffinityRandomDirection>([
   'web_hot_topic',
   'relationship_scene',
 ]);
+const VALID_EVENT_TYPE_HINTS = new Set<AffinityEventType | 'none'>([
+  'none',
+  'greeting_contextual',
+  'offer_tea',
+  'music_help',
+  'care_subtle',
+  'keep_promise',
+  'boundary_respect',
+  'light_tease',
+  'contest_discussion',
+  'computer_knowledge',
+  'answer_random_prompt',
+  'over_interaction',
+  'pressure_or_spam',
+  'promise_broken',
+]);
 const VALID_ANALYSIS_REQUEST_MODES = new Set<AffinityAnalysisRequestMode>(['chat_completions', 'responses']);
 const VALID_ANALYSIS_OUTPUT_PROTOCOLS = new Set<AffinityAnalysisStructuredOutputProtocol>([
   'native_chat_json_schema',
@@ -268,6 +294,49 @@ function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function parseRequiredJsonRecord(raw: string | null | undefined, label: string): Record<string, unknown> {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new Error(`${label} must contain JSON.`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`${label} must contain valid JSON.`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseRandomThreadPayload(raw: string | null | undefined): RandomThreadPayload {
+  const label = 'affinity_open_thread.payloadJson';
+  const record = parseRequiredJsonRecord(raw, label);
+  if (typeof record.planId !== 'number' || !Number.isInteger(record.planId) || record.planId <= 0) {
+    throw new Error(`${label}.planId must be a positive integer.`);
+  }
+  if (typeof record.direction !== 'string' || !VALID_RANDOM_DIRECTIONS.has(record.direction as AffinityRandomDirection)) {
+    throw new Error(`${label}.direction is invalid.`);
+  }
+  if (record.contextSeedSummary != null && typeof record.contextSeedSummary !== 'string') {
+    throw new Error(`${label}.contextSeedSummary must be a string or null.`);
+  }
+  if (typeof record.eventTypeHint !== 'string' || !VALID_EVENT_TYPE_HINTS.has(record.eventTypeHint as AffinityEventType | 'none')) {
+    throw new Error(`${label}.eventTypeHint is invalid.`);
+  }
+  if (typeof record.reason !== 'string' || !record.reason.trim()) {
+    throw new Error(`${label}.reason must be a non-empty string.`);
+  }
+  return {
+    planId: record.planId,
+    direction: record.direction as AffinityRandomDirection,
+    contextSeedSummary: record.contextSeedSummary ?? null,
+    eventTypeHint: record.eventTypeHint as AffinityEventType | 'none',
+    reason: record.reason,
+  };
 }
 
 function stringifyJson(value: unknown): string {
@@ -1242,10 +1311,10 @@ export class AffinityService implements AffinityServiceLike {
     const now = Date.now();
     const userKey = userKeyFromSession(session);
     if (!userKey) return null;
+    const openThreads = await this.listOpenThreads(scope.scopeKind, scope.scopeId, userKey, now);
     const stateRow = await this.getOrCreateUserState(session, userKey, now);
     const state = stateFromRecord(stateRow, now);
     const analysisConfig = this.resolveAnalysisConfig(settings);
-    const openThreads = await this.listOpenThreads(scope.scopeKind, scope.scopeId, userKey, now);
     const openThreadSummaries = openThreads.map((thread) => `${thread.title ?? 'open'}: ${thread.summary ?? ''}`.trim());
     const analysis = await analyzeAffinityEvent({
       text,
@@ -1294,7 +1363,7 @@ export class AffinityService implements AffinityServiceLike {
           .map((thread) => ({
             title: thread.title ?? 'random',
             summary: thread.summary ?? '',
-            payload: parseJson<Record<string, unknown>>(thread.payloadJson ?? '', {}),
+            payload: thread.randomPayload ?? parseRandomThreadPayload(thread.payloadJson),
           }))
       : [];
     await this.injectPromptForUser(conversationId, userKey, getSessionAffinityResult(session), activeRandomThreads);
@@ -1542,7 +1611,14 @@ export class AffinityService implements AffinityServiceLike {
     return rows
       .filter((row) => !row.userKey || row.userKey === userKey)
       .filter((row) => Number(row.expiresAt ?? 0) > now)
-      .slice(0, 6);
+      .slice(0, 6)
+      .map((row) => {
+        if (!normalizeText(row.title).startsWith('random:')) return row;
+        return {
+          ...row,
+          randomPayload: parseRandomThreadPayload(row.payloadJson),
+        };
+      });
   }
 
   private async updateRandomMemoryFromReply(args: {
@@ -1564,9 +1640,8 @@ export class AffinityService implements AffinityServiceLike {
 
     const thread = args.openThreads.find((item) => normalizeText(item.title).startsWith('random:'));
     if (!thread?.payloadJson) return;
-    const payload = parseJson<{ planId?: number | string; direction?: string }>(thread.payloadJson, {});
-    const planId = Number(payload.planId);
-    if (!Number.isFinite(planId)) return;
+    const payload = thread.randomPayload ?? parseRandomThreadPayload(thread.payloadJson);
+    const planId = payload.planId;
 
     const [memory] = await this.database.get('affinity_random_memory', {
       characterId: CHARACTER_ID,
