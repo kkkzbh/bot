@@ -1,5 +1,4 @@
 import { Context, Logger, Schema, type Session } from 'koishi';
-import * as chatlunaMessageHistoryModule from 'koishi-plugin-chatluna/llm-core/memory/message';
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
 import { isAffinityPanelCommandSession } from '../affinity/index.js';
 import { createVoiceRuntimeConfigFromEnv } from '../reply/index.js';
@@ -119,7 +118,9 @@ async function createChatHistoryWriter(
     throw new Error(`realtime-message conversation is unavailable: ${conversationId}`);
   }
 
-  const { KoishiChatMessageHistory } = chatlunaMessageHistoryModule as unknown as ChatHistoryModule;
+  const { KoishiChatMessageHistory } = await import(
+    'koishi-plugin-chatluna/llm-core/memory/message'
+  ) as unknown as ChatHistoryModule;
   const history = new KoishiChatMessageHistory(
     { database, logger } as never,
     conversationId,
