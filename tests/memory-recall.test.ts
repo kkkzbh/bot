@@ -190,4 +190,26 @@ describe('memory recall', () => {
     expect(resultB.prompt).toContain('B 喜欢铺开解释');
     expect(resultB.prompt).not.toContain('A 喜欢简洁直接');
   });
+
+  it('fails closed when denied-context memory has a corrupted context list', async () => {
+    const db = new MemoryDbMock();
+    db.tables.memory_fact.push(
+      fact({
+        id: 9,
+        content: '这条 corrupted deny list 记忆不应该进入上下文',
+        visibility: 'denied_contexts',
+        scopeType: 'denied_contexts',
+        deniedContextKeys: '{bad json',
+      }),
+    );
+
+    const result = await retrieveMemoryForContext(new MemoryStore(db as any), groupA, 'corrupted deny list', {
+      topK: 8,
+      promptBudgetTokens: 1200,
+      now: 100,
+    });
+
+    expect(result.prompt ?? '').not.toContain('corrupted deny list');
+    expect(result.facts).toEqual([]);
+  });
 });

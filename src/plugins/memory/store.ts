@@ -187,6 +187,25 @@ function parsePlainRecord(raw: unknown): Record<string, unknown> | null {
   }
 }
 
+function parseAccessContextKeyList(raw: unknown): string[] | null {
+  if (raw == null) return [];
+  if (typeof raw !== 'string') return null;
+  if (!raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const values: string[] = [];
+    for (const item of parsed) {
+      if (typeof item !== 'string') return null;
+      const normalized = item.trim();
+      if (normalized) values.push(normalized);
+    }
+    return values;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -1349,21 +1368,29 @@ export class MemoryStore {
     }
 
     const scopedRows = (await Promise.all(scopedQueries.map((query) => this.database.get(table, query) as Promise<T[]>))).flat();
-    return this.dedupeRowsById(scopedRows).filter((row) => isMemoryVisibleInContext({
-      visibility: row.visibility,
-      scopeType: row.scopeType,
-      scopeKey: row.scopeKey ?? null,
-      sensitivity: row.sensitivity,
-      archived: row.archived,
-      sourceContextKey: row.sourceContextKey,
-      allowedContextKeys: parseJsonArray(row.allowedContextKeys),
-      deniedContextKeys: parseJsonArray(row.deniedContextKeys),
-      address,
-      now,
-      validUntil: row.validUntil ?? null,
-      expiresAt: row.expiresAt ?? null,
-      invalidatedAt: row.invalidatedAt ?? null,
-    }));
+    return this.dedupeRowsById(scopedRows).filter((row) => {
+      const scopeType = resolveRecordScopeType(row);
+      const allowedContextKeys = parseAccessContextKeyList(row.allowedContextKeys);
+      const deniedContextKeys = parseAccessContextKeyList(row.deniedContextKeys);
+      if (scopeType === 'allowed_contexts' && allowedContextKeys == null) return false;
+      if (scopeType === 'denied_contexts' && deniedContextKeys == null) return false;
+
+      return isMemoryVisibleInContext({
+        visibility: row.visibility,
+        scopeType: row.scopeType,
+        scopeKey: row.scopeKey ?? null,
+        sensitivity: row.sensitivity,
+        archived: row.archived,
+        sourceContextKey: row.sourceContextKey,
+        allowedContextKeys: allowedContextKeys ?? [],
+        deniedContextKeys: deniedContextKeys ?? [],
+        address,
+        now,
+        validUntil: row.validUntil ?? null,
+        expiresAt: row.expiresAt ?? null,
+        invalidatedAt: row.invalidatedAt ?? null,
+      });
+    });
   }
 
   async listFactsForContext(address: MemoryAddress, now = Date.now()): Promise<MemoryFactRecord[]> {
@@ -1387,15 +1414,21 @@ export class MemoryStore {
     const rows = (await Promise.all(scopedQueries.map((query) => this.database.get('memory_profile', query) as Promise<MemoryProfileRecord[]>))).flat();
     return this.dedupeRowsById(rows).filter((row) => {
       if (Number(row.importance ?? 0) < 0.72 || Number(row.confidence ?? 0) < 0.72) return false;
+      const scopeType = isMemoryScopeType(row.scopeType) ? row.scopeType : 'pending_review';
+      const allowedContextKeys = parseAccessContextKeyList(row.allowedContextKeys);
+      const deniedContextKeys = parseAccessContextKeyList(row.deniedContextKeys);
+      if (scopeType === 'allowed_contexts' && allowedContextKeys == null) return false;
+      if (scopeType === 'denied_contexts' && deniedContextKeys == null) return false;
+
       return isMemoryVisibleInContext({
-        visibility: visibilityFromScopeType(row.scopeType),
-        scopeType: row.scopeType,
+        visibility: visibilityFromScopeType(scopeType),
+        scopeType,
         scopeKey: row.scopeKey,
         sensitivity: row.sensitivity,
         archived: row.archived,
         sourceContextKey: row.sourceContextKey,
-        allowedContextKeys: parseJsonArray(row.allowedContextKeys),
-        deniedContextKeys: parseJsonArray(row.deniedContextKeys),
+        allowedContextKeys: allowedContextKeys ?? [],
+        deniedContextKeys: deniedContextKeys ?? [],
         address,
         now,
         validUntil: row.validUntil,
