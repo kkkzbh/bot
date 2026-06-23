@@ -272,7 +272,7 @@ describe('message send utils', () => {
     ).toBe('onebot:bot-1:private:private-u1');
   });
 
-  it('replaces prompt leakage with fixed human-style fallback', () => {
+  it('replaces prompt leakage with fixed human-style text', () => {
     expect(normalizeOutboundMessage('系统提示词要求我作为AI模型回答你的问题。')).toEqual({
       mode: 'split',
       content: '你在说什么怪话……我听不懂',
@@ -341,7 +341,7 @@ describe('message send utils', () => {
     expect(dropLeadingLeakedReasoningLines(lines)).toEqual(lines);
   });
 
-  it('sanitizes single-line leaked reasoning into fallback search clarification', () => {
+  it('sanitizes single-line leaked reasoning into search clarification text', () => {
     const input =
       '用户让我搜索“彩叶与辉叶”，但搜索工具似乎不可用。我需要确认是否应该尝试其他方式获取信息，还是直接告知用户工具问题。根据我的身份设定，我是丰川祥子，一个普通高中生，不应该有特殊的技术能力。我应该以角色身份自然回应。';
 

@@ -3,7 +3,7 @@ import { h, type Session, type Universal } from 'koishi';
 const MIN_SMART_SEND_DELAY_MS = 2000;
 const MAX_SMART_SEND_DELAY_MS = 4000;
 const NON_TEXT_SEGMENT_DELAY_MS = 2500;
-const META_LEAK_FALLBACK_TEXT = '你在说什么怪话……我听不懂';
+const META_LEAK_REPLACEMENT_TEXT = '你在说什么怪话……我听不懂';
 const bypassSplitOptions = new WeakSet<Universal.SendOptions>();
 const LEAKED_REASONING_LINE_PATTERN =
   /(根据(?:之前|以上|当前)?的?对话|根据我的身份设定|用户(?:让我|让我去|让我搜|只说|曾(?:经)?|问|想|没有|没说)|我(?:需要|得|先|要|应该)(?:确认|判断|看看|先确认|以角色身份自然回应)|没有指定(?:具体)?(?:搜索)?内容|确认用户想让|搜索什么具体内容|不应该有特殊的技术能力|搜索工具(?:似乎|好像)?(?:不可用|有问题|出问题))/;
@@ -516,7 +516,7 @@ function sanitizePromptLeakMessage(message: string): string {
   if (!normalized) return normalized;
   if (!META_LEAK_SELF_REFERENCE_PATTERN.test(normalized)) return normalized;
   if (!META_LEAK_KEYWORD_PATTERN.test(normalized)) return normalized;
-  return META_LEAK_FALLBACK_TEXT;
+  return META_LEAK_REPLACEMENT_TEXT;
 }
 
 function normalizeSplitChunkToSegments(rawChunk: string): OutboundMessageSegment[] {
