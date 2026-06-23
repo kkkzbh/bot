@@ -839,6 +839,84 @@ describe('chatluna prompt pollution regression', () => {
     expect(messages[1].additional_kwargs_binary).toBeNull();
   });
 
+  it('strips empty provider tool_calls kwargs from visible assistant history', async () => {
+    const messages = [
+      {
+        id: 'human-provider-tool-calls',
+        role: 'human',
+        parentId: null,
+        name: 'user',
+        content: await gzipAsync(JSON.stringify('继续')),
+        tool_calls: null,
+        additional_kwargs_binary: null,
+      },
+      {
+        id: 'ai-provider-tool-calls',
+        role: 'ai',
+        parentId: 'human-provider-tool-calls',
+        name: null,
+        content: await gzipAsync(JSON.stringify('继续说。')),
+        tool_calls: '[]',
+        additional_kwargs_binary: await gzipAsync(JSON.stringify({
+          tool_calls: null,
+        })),
+      },
+      {
+        id: 'ai-real-tool-call',
+        role: 'ai',
+        parentId: 'ai-provider-tool-calls',
+        name: null,
+        content: await gzipAsync(JSON.stringify('')),
+        tool_calls: JSON.stringify([{ id: 'call-search', name: 'web_search', args: { input: 'example' } }]),
+        additional_kwargs_binary: await gzipAsync(JSON.stringify({
+          tool_calls: [{ id: 'raw-call-search', function: { name: 'web_search', arguments: '{"input":"example"}' } }],
+        })),
+      },
+    ];
+    const conversations = [{ id: 'conv-provider-tool-calls', latestMessageId: 'ai-real-tool-call' }];
+    const database = {
+      get: async (table: string, query: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        return rows.filter((row) =>
+          Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value),
+        );
+      },
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        for (const row of rows) {
+          if (Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value)) {
+            Object.assign(row, update);
+          }
+        }
+      },
+      remove: async () => undefined,
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 3,
+      migrated: 1,
+      structuredRowsMigrated: 0,
+      legacyDirectHumanRowsTagged: 0,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
+      danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 1,
+      invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
+      emptyAssistantRowsRemoved: 0,
+    });
+
+    expect(messages[1].additional_kwargs_binary).toBeNull();
+    await expect(
+      gunzipAsync(messages[2].additional_kwargs_binary as Buffer).then((value) => JSON.parse(value.toString())),
+    ).resolves.toEqual({
+      tool_calls: [{ id: 'raw-call-search', function: { name: 'web_search', arguments: '{"input":"example"}' } }],
+    });
+  });
+
   it('collapses legacy submit_reply_plan tool-call history into visible assistant text', async () => {
     const messages = [
       {

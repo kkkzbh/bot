@@ -309,6 +309,10 @@ function hasStoredToolCallsColumnValue(value: unknown): boolean {
   return true;
 }
 
+function isEmptyProviderToolCalls(value: unknown): boolean {
+  return value == null || (Array.isArray(value) && value.length < 1);
+}
+
 function getToolCallName(call: LegacySubmitReplyPlanCall): string {
   return normalizeText(call.name ?? call.function?.name);
 }
@@ -367,6 +371,7 @@ const TRANSIENT_ADDITIONAL_KWARG_KEYS = [
 ] as const;
 
 const PROVIDER_REASONING_CONTENT_KEY = 'reasoning_content';
+const PROVIDER_TOOL_CALLS_KEY = 'tool_calls';
 
 const CONVERSATION_ROW_FIELDS = [
   'id',
@@ -558,6 +563,13 @@ export async function migrateStructuredReplyHistoryRows(
       Object.prototype.hasOwnProperty.call(cleanedAdditionalKwargs, PROVIDER_REASONING_CONTENT_KEY)
     ) {
       delete cleanedAdditionalKwargs[PROVIDER_REASONING_CONTENT_KEY];
+      changed = true;
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(cleanedAdditionalKwargs, PROVIDER_TOOL_CALLS_KEY) &&
+      isEmptyProviderToolCalls(cleanedAdditionalKwargs[PROVIDER_TOOL_CALLS_KEY])
+    ) {
+      delete cleanedAdditionalKwargs[PROVIDER_TOOL_CALLS_KEY];
       changed = true;
     }
     if (!changed) continue;
