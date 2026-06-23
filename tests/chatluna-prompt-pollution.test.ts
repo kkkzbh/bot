@@ -301,6 +301,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 0,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -374,6 +375,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 0,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -391,6 +393,61 @@ describe('chatluna prompt pollution regression', () => {
       '补一句',
     ].join('\n')));
     await expect(gunzipAsync(rows[1].content).then((value) => value.toString())).resolves.toBe(JSON.stringify('普通历史'));
+  });
+
+  it('clears non-AI tool_calls metadata without touching real assistant tool calls', async () => {
+    const rows = [
+      {
+        id: 'human-dirty-tool-calls',
+        role: 'human',
+        content: await gzipAsync(JSON.stringify('旧 human 行')),
+        tool_calls: '{}',
+      },
+      {
+        id: 'ai-real-tool-call',
+        role: 'ai',
+        content: await gzipAsync(JSON.stringify('')),
+        tool_calls: JSON.stringify([{ id: 'call-search', name: 'web_search', args: { input: 'example' } }]),
+      },
+    ];
+    const updates: Array<{ table: string; query: Record<string, unknown>; update: Record<string, unknown> }> = [];
+    const database = {
+      get: async (table: string, _query: Record<string, unknown>) => table === 'chatluna_message' ? rows : [],
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        updates.push({ table, query, update });
+        const row = rows.find((item) => item.id === query.id);
+        Object.assign(row ?? {}, update);
+      },
+      remove: async () => undefined,
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 2,
+      migrated: 1,
+      structuredRowsMigrated: 0,
+      legacyDirectHumanRowsTagged: 0,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
+      danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 1,
+      emptyAssistantRowsRemoved: 0,
+    });
+    expect(updates).toEqual([
+      {
+        table: 'chatluna_message',
+        query: { id: 'human-dirty-tool-calls' },
+        update: { tool_calls: null },
+      },
+    ]);
+    expect(rows[0]).toEqual(expect.objectContaining({ tool_calls: null }));
+    expect(rows[1]).toEqual(expect.objectContaining({
+      tool_calls: JSON.stringify([{ id: 'call-search', name: 'web_search', args: { input: 'example' } }]),
+    }));
   });
 
   it('normalizes legacy CHAT_REPLY_V1 history rows to visible assistant text without mention headers', async () => {
@@ -447,6 +504,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 0,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -567,6 +625,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 0,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 1,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -670,6 +729,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 0,
       transientAdditionalKwargsRowsCleaned: 1,
       invisibleMessageNamesCleared: 1,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -783,6 +843,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 0,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -892,6 +953,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 0,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -981,6 +1043,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 0,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -1077,6 +1140,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 0,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -1162,6 +1226,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 2,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -1246,6 +1311,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 2,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -1335,6 +1401,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 2,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -1442,6 +1509,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 0,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
       emptyAssistantRowsRemoved: 3,
     });
 

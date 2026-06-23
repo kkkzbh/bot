@@ -25,6 +25,7 @@ export interface StructuredReplyHistoryMigrationResult {
   completedToolTraceRowsMigrated: number;
   transientAdditionalKwargsRowsCleaned: number;
   invisibleMessageNamesCleared: number;
+  nonAiToolCallsCleared: number;
   emptyAssistantRowsRemoved: number;
 }
 
@@ -302,6 +303,14 @@ function parseToolCalls(value: unknown): LegacySubmitReplyPlanCall[] {
   }
 }
 
+function hasStoredToolCallMetadata(value: unknown): boolean {
+  if (value == null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value !== 'string') return true;
+  const trimmed = value.trim();
+  return trimmed !== '' && trimmed !== '[]' && trimmed.toLowerCase() !== 'null';
+}
+
 function getToolCallName(call: LegacySubmitReplyPlanCall): string {
   return normalizeText(call.name ?? call.function?.name);
 }
@@ -513,6 +522,7 @@ export async function migrateStructuredReplyHistoryRows(
   let completedToolTraceRowsMigrated = 0;
   let transientAdditionalKwargsRowsCleaned = 0;
   let invisibleMessageNamesCleared = 0;
+  let nonAiToolCallsCleared = 0;
   let emptyAssistantRowsRemoved = 0;
 
   for (const row of allRows) {
@@ -523,6 +533,11 @@ export async function migrateStructuredReplyHistoryRows(
     if (name && !stripFormatControls(name)) {
       await database.set('chatluna_message', { id }, { name: null });
       invisibleMessageNamesCleared += 1;
+    }
+
+    if (row.role !== 'ai' && hasStoredToolCallMetadata(row.tool_calls)) {
+      await database.set('chatluna_message', { id }, { tool_calls: null });
+      nonAiToolCallsCleared += 1;
     }
 
     const additionalKwargs = await decodeStoredJsonObject(row.additional_kwargs_binary);
@@ -817,6 +832,7 @@ export async function migrateStructuredReplyHistoryRows(
     completedToolTraceRowsMigrated +
     transientAdditionalKwargsRowsCleaned +
     invisibleMessageNamesCleared +
+    nonAiToolCallsCleared +
     emptyAssistantRowsRemoved;
 
   return {
@@ -832,6 +848,7 @@ export async function migrateStructuredReplyHistoryRows(
     completedToolTraceRowsMigrated,
     transientAdditionalKwargsRowsCleaned,
     invisibleMessageNamesCleared,
+    nonAiToolCallsCleared,
     emptyAssistantRowsRemoved,
   };
 }
