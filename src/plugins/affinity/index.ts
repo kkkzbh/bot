@@ -24,7 +24,7 @@ const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
 };
 
 export const name = 'affinity';
-export const inject = { required: ['database', 'puppeteer'], optional: ['chatluna'] } as const;
+export const inject = { required: ['database', 'puppeteer', 'chatluna'] } as const;
 
 const logger = new Logger(name);
 const allowReplyResolverName = 'qqbot-affinity';
@@ -70,7 +70,7 @@ type MiddlewareContextLike = {
 
 type ContextWithAffinity = Context & {
   database: any;
-  chatluna?: ChatLunaLike;
+  chatluna: ChatLunaLike;
   bots?: Array<{
     selfId?: string;
     platform?: string;
@@ -109,12 +109,16 @@ export function registerAffinityPanelCommand(
   });
 }
 
-function resolveChatLunaService(ctx: ContextWithAffinity): ChatLunaLike | undefined {
+function resolveChatLunaService(ctx: ContextWithAffinity): ChatLunaLike {
   const carrier = ctx as unknown as { get?: (name: string) => unknown; chatluna?: ChatLunaLike };
   const fromGetter = typeof carrier.get === 'function'
     ? carrier.get.call(ctx, 'chatluna') as ChatLunaLike | undefined
     : undefined;
-  return fromGetter ?? carrier.chatluna;
+  const chatluna = fromGetter ?? carrier.chatluna;
+  if (!chatluna) {
+    throw new Error('affinity requires chatluna service.');
+  }
+  return chatluna;
 }
 
 function requireBooleanConfig(config: Config, key: keyof Config): boolean {
@@ -389,7 +393,7 @@ export function apply(ctx: Context, config: Config): void {
   const registerChatLunaHooks = (): boolean => {
     if (chatlunaHooksRegistered) return true;
     const chatluna = resolveChatLunaService(serviceCtx);
-    if (!chatluna?.chatChain) return false;
+    if (!chatluna.chatChain) return false;
     if (typeof chatluna.registerAllowReplyResolver !== 'function') {
       throw new Error('affinity requires chatluna.registerAllowReplyResolver.');
     }

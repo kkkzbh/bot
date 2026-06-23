@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { apply, isAffinityPanelCommandSession, registerAffinityPanelCommand } from '../src/plugins/affinity/index.js';
+import { apply, inject as affinityInject, isAffinityPanelCommandSession, registerAffinityPanelCommand } from '../src/plugins/affinity/index.js';
 import type { AffinityPanelView, AffinityServiceLike } from '../src/types/affinity.js';
 
 vi.mock('koishi', () => {
@@ -94,6 +94,11 @@ function createPuppeteerHarness() {
 }
 
 describe('affinity panel command', () => {
+  it('requires ChatLuna because affinity prompt and allow-reply hooks are runtime-critical', () => {
+    expect(affinityInject.required).toContain('chatluna');
+    expect('optional' in affinityInject ? affinityInject.optional : []).not.toContain('chatluna');
+  });
+
   it('wires the exact 好感 command skip before incoming relationship analysis', () => {
     const source = readFileSync(join(process.cwd(), 'src/plugins/affinity/index.ts'), 'utf8');
     expect(source).toContain('if (!isAffinityPanelCommandSession(session))');
