@@ -792,6 +792,27 @@ describe('qq voice plugin', () => {
     });
   });
 
+  it('requires ONEBOT_SELF_ID for voice bridge bot resolution instead of selecting the first onebot bot', async () => {
+    vi.stubEnv('ONEBOT_SELF_ID', '');
+    vi.stubEnv('QQ_VOICE_OUTPUT_ENABLED', 'true');
+    vi.stubEnv('QQ_VOICE_TTS_BASE_URL', 'http://tts.local');
+    vi.stubEnv('QQ_VOICE_TTS_API_KEY', 'qqbot-voice-tts-token');
+    const { bot } = createHarness();
+
+    await expect(
+      sendVoiceByBridge({ bots: [bot] } as never, {
+        chatType: 'private',
+        targetId: 'u1',
+        text: '你好',
+      }),
+    ).rejects.toMatchObject({
+      status: 503,
+      code: 'bot_unavailable',
+      message: 'ONEBOT_SELF_ID is required for voice bridge bot resolution',
+    });
+    expect(bot.internal.canSendRecord).not.toHaveBeenCalled();
+  });
+
   it('returns record_unavailable from the voice bridge when can_send_record is false', async () => {
     vi.stubEnv('ONEBOT_SELF_ID', 'bot-1');
     vi.stubEnv('QQ_VOICE_OUTPUT_ENABLED', 'true');

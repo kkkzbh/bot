@@ -104,20 +104,16 @@ function resolveOneBotBot(ctx: Context): OneBotBotLike {
   const configuredSelfId = String(process.env.ONEBOT_SELF_ID ?? '').trim();
   const onebotBots = ctx.bots.filter((bot) => bot.platform === 'onebot') as unknown as OneBotBotLike[];
 
-  if (configuredSelfId) {
-    const exact = onebotBots.find((bot) => String(bot.selfId ?? '').trim() === configuredSelfId);
-    if (exact) {
-      return exact;
-    }
-    throw new QqVoiceBridgeHttpError(503, 'bot_unavailable', `configured ONEBOT_SELF_ID is not online: ${configuredSelfId}`);
+  if (!configuredSelfId) {
+    throw new QqVoiceBridgeHttpError(503, 'bot_unavailable', 'ONEBOT_SELF_ID is required for voice bridge bot resolution');
   }
 
-  const fallback = onebotBots[0];
-  if (fallback) {
-    return fallback;
+  const exact = onebotBots.find((bot) => String(bot.selfId ?? '').trim() === configuredSelfId);
+  if (exact) {
+    return exact;
   }
 
-  throw new QqVoiceBridgeHttpError(503, 'bot_unavailable', 'no online onebot bot is available');
+  throw new QqVoiceBridgeHttpError(503, 'bot_unavailable', `configured ONEBOT_SELF_ID is not online: ${configuredSelfId}`);
 }
 
 export function parseQqVoiceBridgeRequest(payload: unknown): QqVoiceBridgeRequest {
