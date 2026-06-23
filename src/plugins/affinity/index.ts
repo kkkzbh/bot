@@ -368,7 +368,6 @@ export function apply(ctx: Context, config: Config): void {
 
   let disposeAllowReplyResolver: (() => void) | null = null;
   let randomScheduler: AffinityRandomPlanScheduler | null = null;
-  let chatlunaRetryTimer: ReturnType<typeof setInterval> | null = null;
   let chatlunaHooksRegistered = false;
   service.setScheduleRefreshCallback(() => randomScheduler?.refreshSoon('service-change'));
 
@@ -391,13 +390,14 @@ export function apply(ctx: Context, config: Config): void {
     if (chatlunaHooksRegistered) return true;
     const chatluna = resolveChatLunaService(serviceCtx);
     if (!chatluna?.chatChain) return false;
-    if (chatluna.registerAllowReplyResolver) {
-      disposeAllowReplyResolver = chatluna.registerAllowReplyResolver(allowReplyResolverName, ({ session }) => {
-        const result = getSessionAffinityResult(session);
-        if (result?.shouldAllowReply) return true;
-      });
-      logger.info('affinity allow reply resolver registered.');
+    if (typeof chatluna.registerAllowReplyResolver !== 'function') {
+      throw new Error('affinity requires chatluna.registerAllowReplyResolver.');
     }
+    disposeAllowReplyResolver = chatluna.registerAllowReplyResolver(allowReplyResolverName, ({ session }) => {
+      const result = getSessionAffinityResult(session);
+      if (result?.shouldAllowReply) return true;
+    });
+    logger.info('affinity allow reply resolver registered.');
 
     chatluna.chatChain
       .middleware('qqbot_affinity_prompt_context', async (rawSession, rawContext) => {
@@ -417,20 +417,7 @@ export function apply(ctx: Context, config: Config): void {
   };
 
   ctx.on('ready', () => {
-    if (!registerChatLunaHooks()) {
-      let attempts = 0;
-      logger.warn('chatluna service is unavailable, retry affinity prompt registration.');
-      chatlunaRetryTimer = setInterval(() => {
-        attempts += 1;
-        if (registerChatLunaHooks() || attempts >= 20) {
-          if (chatlunaRetryTimer) clearInterval(chatlunaRetryTimer);
-          chatlunaRetryTimer = null;
-          if (!chatlunaHooksRegistered) {
-            logger.warn('chatluna service is unavailable after retry, skip affinity prompt registration.');
-          }
-        }
-      }, 1000);
-    }
+    registerChatLunaHooks();
 
     if (runtime.enabled) {
       randomScheduler = new AffinityRandomPlanScheduler(service, {
@@ -442,13 +429,13 @@ export function apply(ctx: Context, config: Config): void {
     logger.info('affinity service registered.');
   });
 
+  ctx.on('chatluna/chat-chain-added', () => {
+    registerChatLunaHooks();
+  });
+
   ctx.on('dispose', () => {
     disposeAllowReplyResolver?.();
     disposeAllowReplyResolver = null;
-    if (chatlunaRetryTimer) {
-      clearInterval(chatlunaRetryTimer);
-      chatlunaRetryTimer = null;
-    }
     randomScheduler?.dispose();
     randomScheduler = null;
   });

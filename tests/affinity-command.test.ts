@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { isAffinityPanelCommandSession, registerAffinityPanelCommand } from '../src/plugins/affinity/index.js';
+import { apply, isAffinityPanelCommandSession, registerAffinityPanelCommand } from '../src/plugins/affinity/index.js';
 import type { AffinityPanelView, AffinityServiceLike } from '../src/types/affinity.js';
 
 vi.mock('koishi', () => {
@@ -98,6 +98,67 @@ describe('affinity panel command', () => {
     const source = readFileSync(join(process.cwd(), 'src/plugins/affinity/index.ts'), 'utf8');
     expect(source).toContain('if (!isAffinityPanelCommandSession(session))');
     expect(source).toContain('await service.processIncomingSession(session);');
+  });
+
+  it('registers ChatLuna hooks from the chat-chain-added lifecycle event', async () => {
+    const listeners = new Map<string, Array<() => unknown>>();
+    const middlewares = new Map<string, unknown>();
+    const registerAllowReplyResolver = vi.fn(() => vi.fn());
+    const chatluna: Record<string, unknown> = {
+      registerAllowReplyResolver,
+    };
+    const chain = {
+      middleware: vi.fn((name: string, middleware: unknown) => {
+        middlewares.set(name, middleware);
+        const builder = {
+          after: () => builder,
+          before: () => builder,
+        };
+        return builder;
+      }),
+    };
+    const command = vi.fn(() => ({
+      action: vi.fn(),
+    }));
+    const ctx = {
+      model: {
+        extend: vi.fn(),
+      },
+      database: {},
+      puppeteer: {},
+      chatluna,
+      command,
+      middleware: vi.fn(),
+      on: vi.fn((name: string, listener: () => unknown) => {
+        const bucket = listeners.get(name) ?? [];
+        bucket.push(listener);
+        listeners.set(name, bucket);
+      }),
+    };
+    const runHook = async (name: string) => {
+      for (const listener of listeners.get(name) ?? []) {
+        await listener();
+      }
+    };
+
+    apply(ctx as never, {
+      enabled: false,
+      proactiveEnabled: false,
+      pollIntervalMs: 1000,
+      randomWindowStartHour: 0,
+      randomWindowEndHour: 1,
+    });
+
+    await runHook('ready');
+
+    expect(registerAllowReplyResolver).not.toHaveBeenCalled();
+    expect(middlewares.has('qqbot_affinity_prompt_context')).toBe(false);
+
+    chatluna.chatChain = chain;
+    await runHook('chatluna/chat-chain-added');
+
+    expect(registerAllowReplyResolver).toHaveBeenCalledWith('qqbot-affinity', expect.any(Function));
+    expect(middlewares.get('qqbot_affinity_prompt_context')).toBeTypeOf('function');
   });
 
   it('identifies the exact 好感 command so incoming affinity analysis can skip it', () => {
