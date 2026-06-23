@@ -222,8 +222,8 @@ function createStoredResearchCompatibilityTail(conversationId: string) {
     {
       id: 'msg-human-1',
       role: 'human',
-      parent: null,
-      conversation: conversationId,
+      parentId: null,
+      conversationId,
       text: '上一轮用户输入',
       content: null,
       name: null,
@@ -235,8 +235,8 @@ function createStoredResearchCompatibilityTail(conversationId: string) {
     {
       id: 'msg-ai-1',
       role: 'ai',
-      parent: 'msg-human-1',
-      conversation: conversationId,
+      parentId: 'msg-human-1',
+      conversationId,
       text: '',
       content: null,
       name: null,
@@ -248,8 +248,8 @@ function createStoredResearchCompatibilityTail(conversationId: string) {
     {
       id: 'msg-tool-1',
       role: 'tool',
-      parent: 'msg-ai-1',
-      conversation: conversationId,
+      parentId: 'msg-ai-1',
+      conversationId,
       text: '{"segments":[{"kind":"text","content":"旧回复"}]}',
       content: null,
       name: 'submit_reply_plan',
@@ -286,11 +286,11 @@ function createHarness(overrides: {
       if (overrides.databaseGetImpl) {
         return overrides.databaseGetImpl(table, query);
       }
-      if (table === 'chathub_conversation') {
-        return [{ id: query.id ?? 'conv-1', latestId: 'msg-tool-1' }];
+      if (table === 'chatluna_conversation') {
+        return [{ id: query.id ?? 'conv-1', latestMessageId: 'msg-tool-1' }];
       }
-      if (table === 'chathub_message') {
-        return createStoredResearchCompatibilityTail(String(query.conversation ?? 'conv-1'));
+      if (table === 'chatluna_message') {
+        return createStoredResearchCompatibilityTail(String(query.conversationId ?? 'conv-1'));
       }
       return [];
     }),

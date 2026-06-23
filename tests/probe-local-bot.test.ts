@@ -121,15 +121,15 @@ describe('cleanup-probe-chat-state.sh', () => {
         dbPath,
         `
 create table chathub_room (roomId integer primary key, roomName text, conversationId text, roomMasterId text, visibility text, preset text, model text, chatMode text, password text, autoUpdate integer, updatedTime integer);
-create table chathub_conversation (id text primary key, latestId text, additional_kwargs text, updatedAt integer);
+create table chatluna_conversation (id text primary key, latestMessageId text, updatedAt integer);
 create table chathub_room_member (userId text, roomId integer, roomPermission text, mute integer, primary key (userId, roomId));
 create table chathub_user (userId text, defaultRoomId integer, groupId text, primary key (userId, groupId));
-create table chathub_message (id text primary key, text text, parent text, role text, conversation text, additional_kwargs text, additional_kwargs_binary blob, tool_call_id text, tool_calls text, name text, rawId text, content blob);
+create table chatluna_message (id text primary key, parentId text, role text, conversationId text, content blob);
 insert into chathub_room values (147, 'codex-probe 的模版克隆房间', 'conv-147', '9177543101', 'template_clone', '', '', '', '', 0, 0);
-insert into chathub_conversation values ('conv-147', null, null, 0);
+insert into chatluna_conversation values ('conv-147', null, 0);
 insert into chathub_room_member values ('9177543101', 147, 'owner', 0);
 insert into chathub_user values ('9177543101', 147, '839573671');
-insert into chathub_message values ('msg-1', 'hello', null, 'human', 'conv-147', null, null, '', '{}', null, null, null);
+insert into chatluna_message values ('msg-1', null, 'human', 'conv-147', 'hello');
         `,
       ],
       { encoding: 'utf8' },
@@ -145,8 +145,8 @@ insert into chathub_message values ('msg-1', 'hello', null, 'human', 'conv-147',
     });
 
     expect(sqlite(dbPath, "select count(*) from chathub_room where roomId = 147;")).toBe('0');
-    expect(sqlite(dbPath, "select count(*) from chathub_conversation where id = 'conv-147';")).toBe('0');
-    expect(sqlite(dbPath, "select count(*) from chathub_message where conversation = 'conv-147';")).toBe('0');
+    expect(sqlite(dbPath, "select count(*) from chatluna_conversation where id = 'conv-147';")).toBe('0');
+    expect(sqlite(dbPath, "select count(*) from chatluna_message where conversationId = 'conv-147';")).toBe('0');
     expect(sqlite(dbPath, "select count(*) from chathub_room_member where roomId = 147;")).toBe('0');
     expect(sqlite(dbPath, "select count(*) from chathub_user where userId = '9177543101' and groupId = '839573671';")).toBe('0');
   });

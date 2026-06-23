@@ -40,11 +40,19 @@ create table chathub_room (
   autoUpdate integer null default 0,
   updatedTime integer not null default 0
 );
-create table chathub_conversation (
+create table chatluna_conversation (
   id text primary key,
-  latestId text null,
-  additional_kwargs text null,
-  updatedAt integer null
+  title text null,
+  model text null,
+  preset text null,
+  chatMode text null,
+  createdBy text null,
+  createdAt integer null,
+  updatedAt integer null,
+  lastChatAt integer null,
+  status text null,
+  latestMessageId text null,
+  autoTitle integer null
 );
 create table chathub_room_member (
   userId text null,
@@ -80,8 +88,8 @@ describe('prepare-debug-chat-state.sh', () => {
       `
 insert into chathub_room (roomId, roomName, conversationId, roomMasterId, visibility, preset, model, chatMode, password, autoUpdate, updatedTime)
 values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'Pro/moonshotai/Kimi-K2.5', 'plugin', 'pw', 0, 1);
-insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
-values ('template-conv', null, null, 1);
+insert into chatluna_conversation (id, latestMessageId, updatedAt)
+values ('template-conv', null, 1);
       `,
     );
 
@@ -113,6 +121,12 @@ CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
         "select roomName || '|' || preset || '|' || model || '|' || chatMode from chathub_room where roomMasterId = '91000999';",
       ),
     ).toBe('codex-debug-91000999|sakiko|openai/gpt-5.4-medium-thinking|plugin');
+    expect(
+      sqlite(
+        dbPath,
+        "select title || '|' || preset || '|' || model || '|' || chatMode || '|' || status from chatluna_conversation where id = 'codex-debug:91000999';",
+      ),
+    ).toBe('codex-debug-91000999|sakiko|openai/gpt-5.4-medium-thinking|plugin|active');
   });
 
   it('updates an existing probe room to the current runtime model when the active tab changes', () => {
@@ -126,8 +140,8 @@ CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
       `
 insert into chathub_room (roomId, roomName, conversationId, roomMasterId, visibility, preset, model, chatMode, password, autoUpdate, updatedTime)
 values (125, 'codex-debug-91000999', 'codex-debug:91000999', '91000999', 'private', 'sakiko', 'Pro/moonshotai/Kimi-K2.5', 'tool_research_then_reply', 'pw', 1, 1);
-insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
-values ('codex-debug:91000999', null, null, 1);
+insert into chatluna_conversation (id, latestMessageId, updatedAt)
+values ('codex-debug:91000999', null, 1);
 insert into chathub_user (userId, defaultRoomId, groupId)
 values ('91000999', 125, null);
       `,
@@ -160,6 +174,12 @@ CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
         "select preset || '|' || model || '|' || chatMode || '|' || autoUpdate from chathub_room where roomId = 125;",
       ),
     ).toBe('sakiko|openai/gpt-5.4-medium-thinking|plugin|0');
+    expect(
+      sqlite(
+        dbPath,
+        "select title || '|' || preset || '|' || model || '|' || chatMode || '|' || coalesce(latestMessageId, '') from chatluna_conversation where id = 'codex-debug:91000999';",
+      ),
+    ).toBe('codex-debug-91000999:125|sakiko|openai/gpt-5.4-medium-thinking|plugin|');
   });
 
   it('uses the copilot tab model when copilot is the active built-in tab', () => {
@@ -173,8 +193,8 @@ CHATLUNA_OPENAI_DEFAULT_MODEL=openai/gpt-5.4-medium-thinking
       `
 insert into chathub_room (roomId, roomName, conversationId, roomMasterId, visibility, preset, model, chatMode, password, autoUpdate, updatedTime)
 values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'Pro/moonshotai/Kimi-K2.5', 'plugin', 'pw', 0, 1);
-insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
-values ('template-conv', null, null, 1);
+insert into chatluna_conversation (id, latestMessageId, updatedAt)
+values ('template-conv', null, 1);
       `,
     );
 
@@ -219,8 +239,8 @@ CHATLUNA_COPILOT_DEFAULT_MODEL=openai/gpt-5.4-mini
       `
 insert into chathub_room (roomId, roomName, conversationId, roomMasterId, visibility, preset, model, chatMode, password, autoUpdate, updatedTime)
 values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'Pro/moonshotai/Kimi-K2.5', 'plugin', 'pw', 0, 1);
-insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
-values ('template-conv', null, null, 1);
+insert into chatluna_conversation (id, latestMessageId, updatedAt)
+values ('template-conv', null, 1);
       `,
     );
 
@@ -266,8 +286,8 @@ CHATLUNA_COPILOT_DEFAULT_MODEL=claude-haiku-4.5
       `
 insert into chathub_room (roomId, roomName, conversationId, roomMasterId, visibility, preset, model, chatMode, password, autoUpdate, updatedTime)
 values (1, 'template-room', 'template-conv', '0', 'private', 'sakiko', 'openai/gpt-5.4-mini', 'plugin', 'pw', 0, 1);
-insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
-values ('template-conv', null, null, 1);
+insert into chatluna_conversation (id, latestMessageId, updatedAt)
+values ('template-conv', null, 1);
       `,
     );
 

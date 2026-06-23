@@ -726,8 +726,8 @@ async function deleteConversationRoomRecord(ctx: ContextWithAutomation, room: Au
   await db.remove('chathub_room_member', { roomId: room.roomId });
   await db.remove('chathub_user', { defaultRoomId: room.roomId });
   if (room.conversationId) {
-    await db.remove('chathub_message', { conversation: room.conversationId });
-    await db.remove('chathub_conversation', { id: room.conversationId });
+    await db.remove('chatluna_message', { conversationId: room.conversationId });
+    await db.remove('chatluna_conversation', { id: room.conversationId });
   }
   await db.remove('chathub_room', { roomId: room.roomId });
 }
@@ -870,21 +870,21 @@ async function loadRecentConversationTurns(
   if (!normalizedConversationId) return [];
 
   const db = (ctx as any).database;
-  const [conversation] = (await db.get('chathub_conversation', { id: normalizedConversationId })) as Array<{
+  const [conversation] = (await db.get('chatluna_conversation', { id: normalizedConversationId })) as Array<{
     id?: string;
-    latestId?: string | null;
+    latestMessageId?: string | null;
   }>;
-  if (!conversation?.id || !conversation.latestId) return [];
+  if (!conversation?.id || !conversation.latestMessageId) return [];
 
-  const rows = (await db.get('chathub_message', { conversation: normalizedConversationId })) as Array<{
+  const rows = (await db.get('chatluna_message', { conversationId: normalizedConversationId })) as Array<{
     id: string;
     role?: string | null;
-    parent?: string | null;
+    parentId?: string | null;
     content?: unknown;
   }>;
   const messageMap = new Map(rows.map((row) => [row.id, row]));
   const turns: Array<{ role: 'human' | 'ai'; text: string }> = [];
-  let cursor: string | null | undefined = conversation.latestId;
+  let cursor: string | null | undefined = conversation.latestMessageId;
   while (cursor && turns.length < maxMessages) {
     const row = messageMap.get(cursor);
     if (!row) break;
@@ -901,7 +901,7 @@ async function loadRecentConversationTurns(
         logger.warn('failed to decode automation recent context message %s: %s', row.id, (error as Error).message);
       }
     }
-    cursor = row.parent ?? null;
+    cursor = row.parentId ?? null;
   }
   return turns.reverse();
 }

@@ -63,7 +63,7 @@ conversation_id="$(
 
 conversation_cleanup_sql=""
 if [[ -n "$conversation_id" ]]; then
-  conversation_cleanup_sql=$'delete from chathub_message where conversation='"'${conversation_id}'"$';\n'"delete from chathub_conversation where id='${conversation_id}';"
+  conversation_cleanup_sql=$'delete from chatluna_message where conversationId='"'${conversation_id}'"$';\n'"delete from chatluna_conversation where id='${conversation_id}';"
 fi
 
 sqlite3 "$db_path" <<SQL

@@ -197,6 +197,25 @@ try:
 
     updated_room_ids = []
 
+    def ensure_conversation(conversation_id: str, title: str) -> None:
+        conn.execute(
+            """
+            insert into chatluna_conversation (
+              id, title, model, preset, chatMode, createdBy,
+              createdAt, updatedAt, lastChatAt, status, latestMessageId, autoTitle
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', null, 0)
+            on conflict(id) do update set
+              title = excluded.title,
+              model = excluded.model,
+              preset = excluded.preset,
+              chatMode = excluded.chatMode,
+              updatedAt = excluded.updatedAt,
+              status = excluded.status,
+              autoTitle = excluded.autoTitle
+            """,
+            (conversation_id, title, model, preset, chat_mode, fake_user_id, now, now, now),
+        )
+
     with conn:
         if rooms:
             for row in rooms:
@@ -210,13 +229,7 @@ try:
                     """,
                     (conversation_id, preset, model, chat_mode, now, room_id),
                 )
-                conn.execute(
-                    """
-                    insert or ignore into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
-                    values (?, null, null, ?)
-                    """,
-                    (conversation_id, now),
-                )
+                ensure_conversation(conversation_id, f'{room_prefix}-{fake_user_id}:{room_id}')
                 conn.execute(
                     """
                     insert or ignore into chathub_room_member (userId, roomId, roomPermission, mute)
@@ -230,13 +243,7 @@ try:
                 "select coalesce(max(roomId), 0) + 1 from chathub_room"
             ).fetchone()[0]
             conversation_id = f'codex-debug:{fake_user_id}'
-            conn.execute(
-                """
-                insert into chathub_conversation (id, latestId, additional_kwargs, updatedAt)
-                values (?, null, null, ?)
-                """,
-                (conversation_id, now),
-            )
+            ensure_conversation(conversation_id, f'{room_prefix}-{fake_user_id}')
             conn.execute(
                 """
                 insert into chathub_room (

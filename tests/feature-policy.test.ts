@@ -68,18 +68,6 @@ function createDatabase(seed: Record<string, Row[]> = {}) {
       const rows = ensure(table);
       tables.set(table, rows.filter(row => !matches(row, query)));
     },
-    async upsert(table: string, rows: Record<string, unknown>[]) {
-      const current = ensure(table);
-      const key = table === 'chathub_conversation' ? 'id' : 'roomId';
-      for (const row of rows) {
-        const existing = current.find(item => item[key] === row[key]);
-        if (existing) {
-          Object.assign(existing, row);
-        } else {
-          current.push({ ...row });
-        }
-      }
-    },
   };
 }
 
@@ -125,14 +113,12 @@ describe('feature policy service', () => {
     } as any)).toThrow('feature-policy requires database service.');
   });
 
-  it('registers feature policy and chathub table models', () => {
+  it('registers feature policy and ChatLuna room table models', () => {
     const { extend } = createHarness();
     const tables = extend.mock.calls.map((call) => call[0]);
 
     expect(tables).toEqual(
       expect.arrayContaining([
-        'chathub_conversation',
-        'chathub_message',
         'chathub_room',
         'chathub_room_group_member',
         'chathub_user',
@@ -266,10 +252,10 @@ describe('feature policy service', () => {
         { roomId: 2, roomName: '群房间', conversationId: 'conv-group', visibility: 'template_clone', updatedTime: 20 },
       ],
       chathub_room_group_member: [{ groupId: '20002', roomId: 2 }],
-      chathub_conversation: [{ id: 'conv-group', latestId: 'msg-2', updatedAt: 1 }],
-      chathub_message: [
-        { id: 'msg-1', conversation: 'conv-group' },
-        { id: 'msg-2', conversation: 'conv-group' },
+      chatluna_conversation: [{ id: 'conv-group', latestMessageId: 'msg-2', updatedAt: 1 }],
+      chatluna_message: [
+        { id: 'msg-1', conversationId: 'conv-group' },
+        { id: 'msg-2', conversationId: 'conv-group' },
       ],
     });
     const service = ctx.featurePolicy as NonNullable<typeof ctx.featurePolicy>;
@@ -290,9 +276,9 @@ describe('feature policy service', () => {
       conversationId: 'conv-group',
     });
     expect(result.deletedMessages).toBe(2);
-    await expect(database.get('chathub_message', { conversation: 'conv-group' })).resolves.toEqual([]);
-    await expect(database.get('chathub_conversation', { id: 'conv-group' })).resolves.toEqual([
-      expect.objectContaining({ id: 'conv-group', latestId: null }),
+    await expect(database.get('chatluna_message', { conversationId: 'conv-group' })).resolves.toEqual([]);
+    await expect(database.get('chatluna_conversation', { id: 'conv-group' })).resolves.toEqual([
+      expect.objectContaining({ id: 'conv-group', latestMessageId: null }),
     ]);
   });
 
@@ -317,13 +303,13 @@ describe('feature policy service', () => {
         { roomId: 2, roomName: '群房间', conversationId: 'conv-group', visibility: 'template_clone', updatedTime: 20 },
       ],
       chathub_room_group_member: [{ groupId: '20002', roomId: 2 }],
-      chathub_conversation: [
-        { id: 'conv-private', latestId: 'msg-private', updatedAt: 1 },
-        { id: 'conv-group', latestId: 'msg-group', updatedAt: 2 },
+      chatluna_conversation: [
+        { id: 'conv-private', latestMessageId: 'msg-private', updatedAt: 1 },
+        { id: 'conv-group', latestMessageId: 'msg-group', updatedAt: 2 },
       ],
-      chathub_message: [
-        { id: 'msg-private', conversation: 'conv-private' },
-        { id: 'msg-group', conversation: 'conv-group' },
+      chatluna_message: [
+        { id: 'msg-private', conversationId: 'conv-private' },
+        { id: 'msg-group', conversationId: 'conv-group' },
       ],
     });
     const service = ctx.featurePolicy as NonNullable<typeof ctx.featurePolicy>;
@@ -340,8 +326,8 @@ describe('feature policy service', () => {
       }),
     );
     await expect(database.get('chathub_room', { roomId: 1 })).resolves.toEqual([]);
-    await expect(database.get('chathub_message', { conversation: 'conv-private' })).resolves.toEqual([]);
-    await expect(database.get('chathub_conversation', { id: 'conv-private' })).resolves.toEqual([]);
+    await expect(database.get('chatluna_message', { conversationId: 'conv-private' })).resolves.toEqual([]);
+    await expect(database.get('chatluna_conversation', { id: 'conv-private' })).resolves.toEqual([]);
     await expect(database.get('chathub_user', { userId: 'u1' })).resolves.toEqual([
       expect.objectContaining({ userId: 'u1', defaultRoomId: null }),
     ]);
@@ -359,8 +345,8 @@ describe('feature policy service', () => {
     );
     await expect(database.get('chathub_room', { roomId: 2 })).resolves.toEqual([]);
     await expect(database.get('chathub_room_group_member', { roomId: 2 })).resolves.toEqual([]);
-    await expect(database.get('chathub_message', { conversation: 'conv-group' })).resolves.toEqual([]);
-    await expect(database.get('chathub_conversation', { id: 'conv-group' })).resolves.toEqual([]);
+    await expect(database.get('chatluna_message', { conversationId: 'conv-group' })).resolves.toEqual([]);
+    await expect(database.get('chatluna_conversation', { id: 'conv-group' })).resolves.toEqual([]);
     await expect(database.get('feature_scope_override', { id: 1 })).resolves.toEqual([
       expect.objectContaining({ id: 1, scopeId: '20002' }),
     ]);
@@ -381,8 +367,8 @@ describe('feature policy service', () => {
     const { getClearAction } = createHarness({
       chathub_user: [{ userId: 'u1', defaultRoomId: 11, groupId: '0' }],
       chathub_room: [{ roomId: 11, roomName: '我的私聊', conversationId: 'conv-private', visibility: 'private', updatedTime: 100 }],
-      chathub_conversation: [{ id: 'conv-private', latestId: 'msg-private', updatedAt: 1 }],
-      chathub_message: [{ id: 'msg-private', conversation: 'conv-private' }],
+      chatluna_conversation: [{ id: 'conv-private', latestMessageId: 'msg-private', updatedAt: 1 }],
+      chatluna_message: [{ id: 'msg-private', conversationId: 'conv-private' }],
     });
 
     const clear = getClearAction();

@@ -87,7 +87,7 @@ try:
     if conversation_ids:
         placeholders = ",".join("?" for _ in conversation_ids)
         message_count = conn.execute(
-            f"select count(*) from chathub_message where conversation in ({placeholders})",
+            f"select count(*) from chatluna_message where conversationId in ({placeholders})",
             conversation_ids,
         ).fetchone()[0]
 
@@ -110,11 +110,11 @@ try:
         if conversation_ids:
             conv_placeholders = ",".join("?" for _ in conversation_ids)
             conn.execute(
-                f"delete from chathub_message where conversation in ({conv_placeholders})",
+                f"delete from chatluna_message where conversationId in ({conv_placeholders})",
                 conversation_ids,
             )
             conn.execute(
-                f"delete from chathub_conversation where id in ({conv_placeholders})",
+                f"delete from chatluna_conversation where id in ({conv_placeholders})",
                 conversation_ids,
             )
 

@@ -534,6 +534,14 @@ describe('task automation tools and execution', () => {
         }),
       }),
     ]);
+    const removedTempConversation = harness.database.remove.mock.calls.find(([table, query]) => {
+      return table === 'chatluna_conversation' && typeof query?.id === 'string' && query.id !== 'conv-1';
+    });
+    expect(removedTempConversation).toBeDefined();
+    const tempConversationId = removedTempConversation?.[1].id;
+    expect(harness.database.remove).toHaveBeenCalledWith('chatluna_message', { conversationId: tempConversationId });
+    expect(harness.database.remove).not.toHaveBeenCalledWith('chathub_message', expect.anything());
+    expect(harness.database.remove).not.toHaveBeenCalledWith('chathub_conversation', expect.anything());
   });
 
   it('keeps the CHAT_REPLY_V1 contract in automation metadata for tool continuations', async () => {
@@ -660,32 +668,32 @@ describe('task automation tools and execution', () => {
   it('injects shared chat style guidance and recent source conversation context before execution', async () => {
     const harness = createHarness({
       chathub_room: [createRoom({ roomName: '当前群房间', conversationId: 'conv-ctx' })],
-      chathub_conversation: [
+      chatluna_conversation: [
         {
           id: 'conv-ctx',
-          latestId: 'm3',
+          latestMessageId: 'm3',
         },
       ],
-      chathub_message: [
+      chatluna_message: [
         {
           id: 'm1',
-          conversation: 'conv-ctx',
+          conversationId: 'conv-ctx',
           role: 'human',
-          parent: null,
+          parentId: null,
           content: '第一句用户消息',
         },
         {
           id: 'm2',
-          conversation: 'conv-ctx',
+          conversationId: 'conv-ctx',
           role: 'ai',
-          parent: 'm1',
+          parentId: 'm1',
           content: '上一轮助手回复',
         },
         {
           id: 'm3',
-          conversation: 'conv-ctx',
+          conversationId: 'conv-ctx',
           role: 'human',
-          parent: 'm2',
+          parentId: 'm2',
           content: '第二句用户消息',
         },
       ],

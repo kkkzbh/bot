@@ -72,7 +72,7 @@ if [[ -z "$room_id" || -z "$conversation_id" ]]; then
 fi
 
 message_count="$(
-  sqlite3 "$db_path" "select count(*) from chathub_message where conversation = '$conversation_id';"
+  sqlite3 "$db_path" "select count(*) from chatluna_message where conversationId = '$conversation_id';"
 )"
 
 room_member_count="$(
@@ -91,8 +91,8 @@ sqlite3 "$db_path" <<SQL
 BEGIN IMMEDIATE;
 delete from chathub_room_member where roomId = $room_id;
 delete from chathub_room_group_member where roomId = $room_id;
-delete from chathub_message where conversation = '$conversation_id';
-delete from chathub_conversation where id = '$conversation_id';
+delete from chatluna_message where conversationId = '$conversation_id';
+delete from chatluna_conversation where id = '$conversation_id';
 update chathub_user set defaultRoomId = null where defaultRoomId = $room_id;
 delete from chathub_room where roomId = $room_id;
 COMMIT;

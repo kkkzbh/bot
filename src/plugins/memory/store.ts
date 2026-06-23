@@ -46,14 +46,14 @@ import type { MemoryConversationTurn } from './providers/schemas.js';
 
 export interface StoredConversationRecord {
   id: string;
-  latestId?: string | null;
+  latestMessageId?: string | null;
 }
 
 export interface StoredMessageRecord {
   id: string;
   role?: string | null;
-  parent?: string | null;
-  conversation?: string | null;
+  parentId?: string | null;
+  conversationId?: string | null;
   content?: unknown;
   additional_kwargs?: unknown;
   additional_kwargs_binary?: unknown;
@@ -512,8 +512,8 @@ export class MemoryStore {
   }
 
   async getConversationLatestMessageId(conversationId: string): Promise<string | null> {
-    const [conversation] = await this.database.get('chathub_conversation', { id: conversationId }) as StoredConversationRecord[];
-    return normalizeText(conversation?.latestId) || null;
+    const [conversation] = await this.database.get('chatluna_conversation', { id: conversationId }) as StoredConversationRecord[];
+    return normalizeText(conversation?.latestMessageId) || null;
   }
 
   private async getExtractCursor(ownerUserKey: string, contextKey: string): Promise<string | null> {
@@ -771,7 +771,7 @@ export class MemoryStore {
 
   async readConversationWindow(payload: ExtractJobPayload): Promise<MemoryConversationTurn[]> {
     if (!payload.conversationId || !payload.latestAnchorMessageId) return [];
-    const rows = await this.database.get('chathub_message', { conversation: payload.conversationId }) as StoredMessageRecord[];
+    const rows = await this.database.get('chatluna_message', { conversationId: payload.conversationId }) as StoredMessageRecord[];
     const messageMap = new Map(rows.map((row) => [row.id, row]));
     const window: MemoryConversationTurn[] = [];
     const maxMessages = Math.max(1, Number(payload.maxMessages ?? 1));
@@ -804,7 +804,7 @@ export class MemoryStore {
           logger.warn('failed to decode stored message content for %s: %s', row.id, (error as Error).message);
         }
       }
-      cursor = row.parent ?? null;
+      cursor = row.parentId ?? null;
     }
     return window.reverse().slice(-maxMessages);
   }

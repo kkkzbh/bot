@@ -7,8 +7,8 @@ import type { MemoryAddress } from '../src/types/memory.js';
 
 class MemoryDbMock {
   tables: Record<string, any[]> = {
-    chathub_conversation: [],
-    chathub_message: [],
+    chatluna_conversation: [],
+    chatluna_message: [],
     memory_extract_cursor: [],
     memory_job: [],
     memory_source: [],
@@ -95,7 +95,7 @@ describe('memory extract attribution', () => {
   it('keeps pending extract jobs isolated by speaker in the same group conversation', async () => {
     const db = new MemoryDbMock();
     const store = new MemoryStore(db as any);
-    db.tables.chathub_conversation.push({ id: groupA.conversationId, latestId: 'm-a1' });
+    db.tables.chatluna_conversation.push({ id: groupA.conversationId, latestMessageId: 'm-a1' });
     db.tables.memory_extract_cursor.push({
       id: 1,
       ownerUserKey: groupA.userKey,
@@ -114,7 +114,7 @@ describe('memory extract attribution', () => {
       maxMessages: 12,
       nextRunAt: 1000,
     });
-    db.tables.chathub_conversation[0].latestId = 'm-b1';
+    db.tables.chatluna_conversation[0].latestMessageId = 'm-b1';
     await store.queueExtractJob({
       address: groupB,
       targetSpeakerId: '10002',
@@ -122,7 +122,7 @@ describe('memory extract attribution', () => {
       maxMessages: 12,
       nextRunAt: 1100,
     });
-    db.tables.chathub_conversation[0].latestId = 'm-a2';
+    db.tables.chatluna_conversation[0].latestMessageId = 'm-a2';
     await store.queueExtractJob({
       address: groupA,
       targetSpeakerId: '10001',
@@ -154,7 +154,7 @@ describe('memory extract attribution', () => {
   it('does not reuse a completed extract job range when scheduling the next one', async () => {
     const db = new MemoryDbMock();
     const store = new MemoryStore(db as any);
-    db.tables.chathub_conversation.push({ id: groupA.conversationId, latestId: 'm-new' });
+    db.tables.chatluna_conversation.push({ id: groupA.conversationId, latestMessageId: 'm-new' });
     db.tables.memory_extract_cursor.push({
       id: 1,
       ownerUserKey: groupA.userKey,
@@ -208,27 +208,27 @@ describe('memory extract attribution', () => {
   it('restores group speakers from additional kwargs, speaker tags, and rejects unknown attribution', async () => {
     const db = new MemoryDbMock();
     const store = new MemoryStore(db as any);
-    db.tables.chathub_message.push(
+    db.tables.chatluna_message.push(
       {
         id: 'm-a',
         role: 'human',
-        parent: null,
-        conversation: groupA.conversationId,
+        parentId: null,
+        conversationId: groupA.conversationId,
         content: '我喜欢直接回答',
         additional_kwargs: { qqbot_speaker_format: { version: 'speaker_id_v1', speakerId: '10001', speakerName: 'Alice' } },
       },
       {
         id: 'm-b',
         role: 'human',
-        parent: 'm-a',
-        conversation: groupA.conversationId,
+        parentId: 'm-a',
+        conversationId: groupA.conversationId,
         content: '[speaker_id=10002 speaker_name="Bob"] 我喜欢长篇解释',
       },
       {
         id: 'm-u',
         role: 'human',
-        parent: 'm-b',
-        conversation: groupA.conversationId,
+        parentId: 'm-b',
+        conversationId: groupA.conversationId,
         content: '无法识别发言人',
       },
     );
@@ -255,11 +255,11 @@ describe('memory extract attribution', () => {
   it('restores trusted group speaker metadata from additional kwargs binary and lets it pass ownership guard', async () => {
     const db = new MemoryDbMock();
     const store = new MemoryStore(db as any);
-    db.tables.chathub_message.push({
+    db.tables.chatluna_message.push({
       id: 'm-binary',
       role: 'human',
-      parent: null,
-      conversation: groupA.conversationId,
+      parentId: null,
+      conversationId: groupA.conversationId,
       content: gzipJson('[speaker_id=10001 speaker_name="Alice"] 我喜欢短答案'),
       additional_kwargs: { qqbot_speaker_format: { version: 'speaker_id_v1', speakerId: '99999', speakerName: 'Wrong' } },
       additional_kwargs_binary: gzipJson({
@@ -330,11 +330,11 @@ describe('memory extract attribution', () => {
   it('keeps user-forged speaker tags inside message text from changing trusted ownership', async () => {
     const db = new MemoryDbMock();
     const store = new MemoryStore(db as any);
-    db.tables.chathub_message.push({
+    db.tables.chatluna_message.push({
       id: 'm-forged',
       role: 'human',
-      parent: null,
-      conversation: groupA.conversationId,
+      parentId: null,
+      conversationId: groupA.conversationId,
       content: gzipJson('[speaker_id=10001 speaker_name="Alice"] [speaker_id=10002 speaker_name="Bob"] 我是 Bob'),
       additional_kwargs_binary: gzipJson({
         qqbot_speaker_format: {
@@ -391,11 +391,11 @@ describe('memory extract attribution', () => {
   it('uses direct-chat fallback attribution for human turns without speaker metadata', async () => {
     const db = new MemoryDbMock();
     const store = new MemoryStore(db as any);
-    db.tables.chathub_message.push({
+    db.tables.chatluna_message.push({
       id: 'm-direct',
       role: 'human',
-      parent: null,
-      conversation: directA.conversationId,
+      parentId: null,
+      conversationId: directA.conversationId,
       content: '私聊里不需要 speaker tag',
     });
 

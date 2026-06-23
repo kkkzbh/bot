@@ -28,46 +28,8 @@ export const SCOPED_FEATURE_KEYS = [
 
 export const PRIVATE_DEFAULT_SCOPE_ID = 'private-default';
 
-function registerChatHubTableModels(model: { extend?: (...args: any[]) => unknown } | undefined): void {
+function registerChatLunaRoomTableModels(model: { extend?: (...args: any[]) => unknown } | undefined): void {
   if (typeof model?.extend !== 'function') return;
-
-  model.extend(
-    'chathub_conversation',
-    {
-      id: { type: 'char', length: 255 },
-      latestId: { type: 'char', length: 255, nullable: true },
-      additional_kwargs: { type: 'text', nullable: true },
-      updatedAt: { type: 'timestamp', nullable: false, initial: new Date() },
-    },
-    {
-      autoInc: false,
-      primary: 'id',
-      unique: ['id'],
-    },
-  );
-
-  model.extend(
-    'chathub_message',
-    {
-      id: { type: 'char', length: 255 },
-      text: { type: 'text', nullable: true },
-      content: { type: 'binary', nullable: true },
-      parent: { type: 'char', length: 255, nullable: true },
-      role: { type: 'char', length: 20 },
-      conversation: { type: 'char', length: 255 },
-      additional_kwargs: { type: 'text', nullable: true },
-      additional_kwargs_binary: { type: 'binary', nullable: true },
-      tool_call_id: 'string',
-      tool_calls: 'json',
-      name: { type: 'char', length: 255, nullable: true },
-      rawId: { type: 'char', length: 255, nullable: true },
-    },
-    {
-      autoInc: false,
-      primary: 'id',
-      unique: ['id'],
-    },
-  );
 
   model.extend(
     'chathub_room',
@@ -137,14 +99,13 @@ type ChathubUserRow = {
   groupId?: string | null;
 };
 
-type ChathubConversationRow = {
+type ChatLunaConversationRow = {
   id?: string | null;
-  latestId?: string | null;
-  additional_kwargs?: string | null;
+  latestMessageId?: string | null;
   updatedAt?: number | string | null;
 };
 
-type ChathubMessageRow = {
+type ChatLunaMessageRow = {
   id?: string | null;
 };
 
@@ -153,7 +114,6 @@ type DatabaseLike = {
   set(table: string, query: Record<string, unknown>, data: Record<string, unknown>): Promise<unknown>;
   create(table: string, row: Record<string, unknown>): Promise<Record<string, unknown>>;
   remove(table: string, query: Record<string, unknown>): Promise<unknown>;
-  upsert(table: string, rows: Record<string, unknown>[], keys?: string[]): Promise<unknown>;
 };
 
 function isScopedFeatureKey(value: string): value is ScopedFeatureKey {
@@ -447,20 +407,15 @@ class FeaturePolicyService implements FeaturePolicyServiceLike {
     }
 
     const [messages, conversations] = await Promise.all([
-      this.database.get('chathub_message', { conversation: conversationId }) as Promise<ChathubMessageRow[]>,
-      this.database.get('chathub_conversation', { id: conversationId }) as Promise<ChathubConversationRow[]>,
+      this.database.get('chatluna_message', { conversationId }) as Promise<ChatLunaMessageRow[]>,
+      this.database.get('chatluna_conversation', { id: conversationId }) as Promise<ChatLunaConversationRow[]>,
     ]);
 
     const updatedAt = Date.now();
-    await this.database.remove('chathub_message', { conversation: conversationId });
-    await this.database.upsert('chathub_conversation', [
-      {
-        ...(conversations[0] ?? { id: conversationId }),
-        id: conversationId,
-        latestId: null,
-        updatedAt,
-      },
-    ]);
+    await this.database.remove('chatluna_message', { conversationId });
+    if (conversations.length > 0) {
+      await this.database.set('chatluna_conversation', { id: conversationId }, { latestMessageId: null, updatedAt });
+    }
 
     return {
       ok: true,
@@ -480,8 +435,8 @@ class FeaturePolicyService implements FeaturePolicyServiceLike {
 
     const [rooms, messages, conversations, users] = await Promise.all([
       this.database.get('chathub_room', { roomId }) as Promise<RoomRow[]>,
-      this.database.get('chathub_message', { conversation: conversationId }) as Promise<ChathubMessageRow[]>,
-      this.database.get('chathub_conversation', { id: conversationId }) as Promise<ChathubConversationRow[]>,
+      this.database.get('chatluna_message', { conversationId }) as Promise<ChatLunaMessageRow[]>,
+      this.database.get('chatluna_conversation', { id: conversationId }) as Promise<ChatLunaConversationRow[]>,
       this.database.get('chathub_user', { defaultRoomId: roomId }) as Promise<ChathubUserRow[]>,
     ]);
 
@@ -500,8 +455,8 @@ class FeaturePolicyService implements FeaturePolicyServiceLike {
 
     await Promise.all([
       this.database.remove('chathub_room_group_member', { roomId }),
-      this.database.remove('chathub_message', { conversation: conversationId }),
-      this.database.remove('chathub_conversation', { id: conversationId }),
+      this.database.remove('chatluna_message', { conversationId }),
+      this.database.remove('chatluna_conversation', { id: conversationId }),
       this.database.remove('chathub_room', { roomId }),
       isPrivateRoom && users.length > 0
         ? this.database.set('chathub_user', { defaultRoomId: roomId }, { defaultRoomId: null, updatedAt })
@@ -577,7 +532,7 @@ export function apply(ctx: Context): void {
 
   const model = (ctx as { model?: { extend?: (...args: any[]) => unknown } }).model;
   if (typeof model?.extend === 'function') {
-    registerChatHubTableModels(model);
+    registerChatLunaRoomTableModels(model);
     model.extend(
       'feature_scope_override',
       {
