@@ -89,6 +89,7 @@ import {
   type ReplyRunMode,
   type ReplyRuntimeRoomLike,
 } from '../runtime/index.js';
+import { migrateStructuredReplyHistoryRows } from '../history-migration.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -797,6 +798,7 @@ function buildTextOnlyAssistantHistoryText(
 ): string {
   const normalized = text.trim();
   if (!normalized) return '';
+  if (outputProtocol !== 'chat_reply_v1') return normalized;
 
   return buildStructuredReplyAssistantHistoryText(
     {
@@ -1829,6 +1831,11 @@ export function apply(ctx: Context, config: Config = {}): void {
   );
 
   ctx.on('ready', async () => {
+    const historyMigration = await migrateStructuredReplyHistoryRows(ctx.database as never);
+    if (historyMigration.migrated > 0) {
+      logger.info('migrated %d structured reply history row(s).', historyMigration.migrated);
+    }
+
     if (isVoiceOutputConfigured(runtime)) {
       const ttsState = getTtsCapabilityState(runtime, sharedReplyTransportTtsCapabilityStates);
       ttsState.failureBackoffUntil = Math.max(ttsState.failureBackoffUntil, Date.now() + INITIAL_TTS_PROBE_DELAY_MS);
@@ -2201,10 +2208,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
           if (result.status !== 'transport_unavailable') {
             try {
-              const assistantHistoryText =
-                result.status === 'delivered'
-                  ? orchestration.assistantHistoryText
-                  : buildTextOnlyAssistantHistoryText(result.historyText, outputProtocol);
+              const assistantHistoryText = buildTextOnlyAssistantHistoryText(result.historyText, outputProtocol);
               await normalizeResearchReplyHistory(ctx, room, assistantHistoryText);
             } catch (error) {
               logger.warn('research reply history normalization failed: %s', (error as Error).message);

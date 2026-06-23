@@ -1,4 +1,5 @@
 import { Context, Logger, Schema, type Session } from 'koishi';
+import * as chatlunaMessageHistoryModule from 'koishi-plugin-chatluna/llm-core/memory/message';
 import type { FeaturePolicyServiceLike } from '../../types/feature-policy.js';
 import { isAffinityPanelCommandSession } from '../affinity/index.js';
 import { createVoiceRuntimeConfigFromEnv } from '../reply/index.js';
@@ -65,8 +66,26 @@ type MiddlewareContextLike = {
   };
 };
 
-type ContextWithRealtime = Context & {
+type DatabaseLike = {
+  get: (table: string, query: Record<string, unknown>, fields?: string[]) => Promise<Array<Record<string, unknown>>>;
+};
+
+type ChatHistoryWriter = {
+  addMessages: (messages: unknown[]) => Promise<void>;
+};
+
+type ChatHistoryModule = {
+  KoishiChatMessageHistory: new (
+    ctx: unknown,
+    conversationId: string,
+    maxMessagesCount: number,
+    chatluna: unknown,
+  ) => ChatHistoryWriter;
+};
+
+type ContextWithRealtime = {
   featurePolicy?: FeaturePolicyServiceLike;
+  database?: DatabaseLike;
   chatluna: {
     platform?: {
       registerTool?: (...args: any[]) => () => void;
@@ -74,13 +93,6 @@ type ContextWithRealtime = Context & {
     chatChain?: {
       middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => ChainHookBuilder;
     };
-    queryInterfaceWrapper?: (room: unknown, autoCreate?: boolean) => {
-      query: (room: unknown, create?: boolean) => Promise<{
-        chatHistory?: {
-          addMessages?: (messages: unknown[]) => Promise<void>;
-        };
-      }>;
-    } | undefined;
     messageTransformer?: {
       transform: (
         session: unknown,
@@ -92,6 +104,33 @@ type ContextWithRealtime = Context & {
     };
   };
 };
+
+async function createChatHistoryWriter(
+  serviceCtx: ContextWithRealtime,
+  conversationId: string,
+): Promise<ChatHistoryWriter> {
+  const database = serviceCtx.database;
+  if (!database) {
+    throw new Error('realtime-message requires Koishi database service.');
+  }
+
+  const [conversation] = await database.get('chatluna_conversation', { id: conversationId }, ['id']);
+  if (!conversation?.id) {
+    throw new Error(`realtime-message conversation is unavailable: ${conversationId}`);
+  }
+
+  const { KoishiChatMessageHistory } = chatlunaMessageHistoryModule as unknown as ChatHistoryModule;
+  const history = new KoishiChatMessageHistory(
+    { database, logger } as never,
+    conversationId,
+    10_000,
+    serviceCtx.chatluna as never,
+  );
+
+  return {
+    addMessages: (messages) => history.addMessages(messages as never),
+  };
+}
 
 function requireBooleanEnv(key: string): boolean {
   const value = process.env[key];
@@ -214,20 +253,17 @@ async function captureRealtimeEntry(
 
 export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
-  const serviceCtx = ctx as ContextWithRealtime;
+  const serviceCtx = ctx as unknown as ContextWithRealtime;
   const featurePolicy = serviceCtx.featurePolicy;
   let promotionRegistered = false;
+  let toolsRegistered = false;
   let toolDisposers: Array<() => void> = [];
 
-  const ensurePromotionRegistered = (): void => {
-    if (promotionRegistered) return;
+  const ensurePromotionRegistered = (): boolean => {
+    if (promotionRegistered) return true;
 
     const chain = serviceCtx.chatluna.chatChain;
-    const queryInterfaceWrapper = serviceCtx.chatluna.queryInterfaceWrapper?.bind(serviceCtx.chatluna);
-    if (!chain || typeof queryInterfaceWrapper !== 'function') {
-      logger.warn('chatluna chat chain is unavailable, skip realtime message promotion middleware registration.');
-      return;
-    }
+    if (!chain) return false;
 
     chain
       .middleware('qqbot_realtime_message_promotion', async (rawSession, rawContext) => {
@@ -260,13 +296,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           return CHAT_CHAIN_CONTINUE;
         }
 
-        const interfaceWrapper = queryInterfaceWrapper(room, true);
-        const chatInterface = await interfaceWrapper?.query(room, true);
-        const chatHistory = chatInterface?.chatHistory;
-        if (typeof chatHistory?.addMessages !== 'function') {
-          logger.warn('realtime message promotion skipped: chat history is unavailable (conversationId=%s).', conversationId);
-          return CHAT_CHAIN_CONTINUE;
-        }
+        const chatHistory = await createChatHistoryWriter(serviceCtx, conversationId);
 
         const messages = await Promise.all(
           entries.map(async (entry) => {
@@ -295,6 +325,22 @@ export function apply(ctx: Context, config: Config = {}): void {
 
     promotionRegistered = true;
     logger.info('realtime message promotion middleware registered.');
+    return true;
+  };
+
+  const ensureToolsRegistered = (): void => {
+    if (toolsRegistered) return;
+    toolDisposers = registerRealtimeMessageTools(serviceCtx, {
+      resolveRealtimeEnabled: (session) => resolveRealtimeFeatureEnabled(featurePolicy, session),
+    });
+    toolsRegistered = true;
+  };
+
+  const ensureChatLunaRuntimeRegistered = (): boolean => {
+    const ready = ensurePromotionRegistered();
+    if (!ready) return false;
+    ensureToolsRegistered();
+    return true;
   };
 
   ctx.middleware(async (rawSession, next) => {
@@ -318,11 +364,12 @@ export function apply(ctx: Context, config: Config = {}): void {
   });
 
   ctx.on('ready', () => {
-    ensurePromotionRegistered();
-    toolDisposers = registerRealtimeMessageTools(serviceCtx, {
-      resolveRealtimeEnabled: (session) => resolveRealtimeFeatureEnabled(featurePolicy, session),
-    });
+    ensureChatLunaRuntimeRegistered();
     logger.info('realtime message loaded: maxInjectCount=%d', runtime.maxInjectCount);
+  });
+
+  ctx.on('chatluna/chat-chain-added', () => {
+    ensureChatLunaRuntimeRegistered();
   });
 
   ctx.on('dispose', () => {
@@ -330,6 +377,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       dispose();
     }
     toolDisposers = [];
+    toolsRegistered = false;
     realtimeMessageCache.clear();
   });
 }

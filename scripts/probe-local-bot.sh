@@ -555,6 +555,7 @@ async function main() {
           const cleanupWarnings = []
           let directGroupCaptureAllowed = false
           let isolatedRoom = null
+          let isolatedPreviousBinding = null
           const isProbeSend = (channelId, options) => {
             if (String(channelId) !== fakeChannelId) return false
             const session = options && typeof options === 'object' ? options.session : null
@@ -576,49 +577,73 @@ async function main() {
           }
 
           if (shouldUseIsolatedRoom) {
-            const {
-              createConversationRoom,
-              deleteConversationRoom,
-              getConversationRoomCount,
-            } = requireRuntimeModule(
-              path.resolve(process.cwd(), '../chatluna/packages/core/lib/chains/index.cjs')
-            )
-            const roomRows = await this.app.database.get('chathub_room', {})
-            const roomGroupRows = await this.app.database.get('chathub_room_group_member', {
-              groupId: fakeChannelId,
-            })
-            const scopedRoomIds = new Set(
-              Array.isArray(roomGroupRows) ? roomGroupRows.map((row) => row.roomId) : []
-            )
-            const templateRoom =
-              roomRows.find((room) => scopedRoomIds.has(room.roomId) && room.visibility === 'template_clone') ||
-              roomRows.find((room) => scopedRoomIds.has(room.roomId) && room.visibility === 'public') ||
-              roomRows.find((room) => room.visibility === 'template_clone') ||
-              roomRows.find((room) => room.chatMode === 'plugin' && typeof room.preset === 'string' && room.preset.length > 0) ||
-              {
-                preset: 'sakiko',
-                password: '',
-                visibility: 'public',
-              }
-            const roomId = Number(await getConversationRoomCount(this.app)) + 1
-            const sessionLike = {
-              userId: String(fakeUserId),
-              isDirect: false,
-              guildId: fakeChannelId,
-            }
+            const db = this.app.database
+            const bindingPrefix = 'shared:' + bot.platform + ':' + bot.selfId + ':' + fakeChannelId + ':preset:'
+            const bindings = await db.get('chatluna_binding', {})
+            const scopedBinding =
+              (Array.isArray(bindings) ? bindings : []).find((row) => typeof row.bindingKey === 'string' && row.bindingKey.startsWith(bindingPrefix)) ||
+              null
+            const activeConversation =
+              scopedBinding && typeof scopedBinding.activeConversationId === 'string'
+                ? ((await db.get('chatluna_conversation', { id: scopedBinding.activeConversationId }))[0] || null)
+                : null
+            const presetLane =
+              scopedBinding && typeof scopedBinding.bindingKey === 'string'
+                ? scopedBinding.bindingKey.slice(bindingPrefix.length).trim()
+                : ''
+            const preset =
+              (activeConversation && typeof activeConversation.preset === 'string' && activeConversation.preset.trim()) ||
+              presetLane ||
+              'saki'
+            const bindingKey = bindingPrefix + preset
+            isolatedPreviousBinding = ((await db.get('chatluna_binding', { bindingKey }))[0] || null)
+            const sameBindingConversations = await db.get('chatluna_conversation', { bindingKey })
+            const seq = (Array.isArray(sameBindingConversations) ? sameBindingConversations : [])
+              .reduce((current, row) => Math.max(current, Number(row.seq ?? 0)), 0) + 1
+            const now = new Date()
+            const conversationId = crypto.randomUUID()
             isolatedRoom = {
-              ...templateRoom,
-              roomId,
+              roomId: null,
               roomName: 'probe-' + fakeGroupId + '-' + fakeUserId,
-              roomMasterId: String(fakeUserId),
-              conversationId: crypto.randomUUID(),
-              visibility: 'private',
-              autoUpdate: false,
+              conversationId,
+              bindingKey,
+              previousBinding: isolatedPreviousBinding,
               updatedTime: new Date(),
               chatMode: 'plugin',
+              preset,
               model: resolvedProbeProfile.canonicalModel,
             }
-            await createConversationRoom(this.app, sessionLike, isolatedRoom)
+            await db.create('chatluna_conversation', {
+              id: conversationId,
+              seq,
+              bindingKey,
+              title: isolatedRoom.roomName,
+              model: resolvedProbeProfile.canonicalModel,
+              preset,
+              chatMode: 'plugin',
+              createdBy: String(fakeUserId),
+              createdAt: now,
+              updatedAt: now,
+              lastChatAt: now,
+              status: 'active',
+              latestMessageId: null,
+              additional_kwargs: null,
+              compression: null,
+              archivedAt: null,
+              archiveId: null,
+              legacyRoomId: null,
+              legacyMeta: null,
+              autoTitle: false,
+            })
+            await db.upsert('chatluna_binding', [{
+              bindingKey,
+              activeConversationId: conversationId,
+              lastConversationId:
+                isolatedPreviousBinding && isolatedPreviousBinding.activeConversationId && isolatedPreviousBinding.activeConversationId !== conversationId
+                  ? isolatedPreviousBinding.activeConversationId
+                  : (isolatedPreviousBinding ? isolatedPreviousBinding.lastConversationId ?? null : null),
+              updatedAt: now,
+            }])
           }
 
           const originalSendMessage = bot.sendMessage
@@ -757,9 +782,9 @@ async function main() {
               visibleText: item.visibleText,
               at: item.at,
             }))
-            const effectiveProbeRoom =
+            const effectiveProbeConversation =
               isolatedRoom
-                ? ((await this.app.database.get('chathub_room', { roomId: isolatedRoom.roomId }))[0] || null)
+                ? ((await this.app.database.get('chatluna_conversation', { id: isolatedRoom.conversationId }))[0] || null)
                 : null
             const result = {
               ok: true,
@@ -789,8 +814,8 @@ async function main() {
                 roomId: isolatedRoom ? isolatedRoom.roomId : null,
                 roomName: isolatedRoom ? isolatedRoom.roomName : null,
                 effectiveModel:
-                  effectiveProbeRoom && typeof effectiveProbeRoom.model === 'string'
-                    ? effectiveProbeRoom.model
+                  effectiveProbeConversation && typeof effectiveProbeConversation.model === 'string'
+                    ? effectiveProbeConversation.model
                     : null,
               },
               warnings: cleanupWarnings,
@@ -824,10 +849,14 @@ async function main() {
             }
             if (isolatedRoom) {
               try {
-                const { deleteConversationRoom } = requireRuntimeModule(
-                  path.resolve(process.cwd(), '../chatluna/packages/core/lib/chains/index.cjs')
-                )
-                await deleteConversationRoom(this.app, isolatedRoom)
+                const db = this.app.database
+                await db.remove('chatluna_message', { conversationId: isolatedRoom.conversationId })
+                await db.remove('chatluna_conversation', { id: isolatedRoom.conversationId })
+                if (isolatedPreviousBinding) {
+                  await db.upsert('chatluna_binding', [isolatedPreviousBinding])
+                } else {
+                  await db.remove('chatluna_binding', { bindingKey: isolatedRoom.bindingKey })
+                }
               } catch (error) {
                 cleanupWarnings.push('isolated room cleanup failed: ' + String((error && error.message) || error))
               }

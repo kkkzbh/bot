@@ -500,15 +500,8 @@ function createRawChatReplyV1Response(lines: string[]) {
   };
 }
 
-function expectedStructuredAssistantHistory(input: string | Record<string, unknown>): string {
-  const reply =
-    typeof input === 'string'
-      ? {
-          decision: 'reply',
-          outbound_messages: [{ type: 'message', content: input }],
-        }
-      : input;
-  return JSON.stringify(reply);
+function expectedVisibleAssistantHistory(input: string): string {
+  return input;
 }
 
 function extractSchemaMessageTitles(schema: Record<string, any> | undefined): string[] {
@@ -1521,7 +1514,7 @@ describe('qq voice plugin', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('executes a text structured reply through the executor and normalizes the tail to structured history', async () => {
+  it('executes a text structured reply through the executor and normalizes the tail to visible history', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -1556,7 +1549,7 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-text' }),
-      expectedStructuredAssistantHistory('今晚先这样吧'),
+      expectedVisibleAssistantHistory('今晚先这样吧'),
     );
   });
 
@@ -1828,15 +1821,7 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-mention' }),
-      expectedStructuredAssistantHistory({
-        decision: 'reply',
-        outbound_messages: [
-            {
-              type: 'message',
-              content: '@小祥 先问下这件事。',
-            },
-        ],
-      }),
+      expectedVisibleAssistantHistory('先问下这件事。'),
     );
   });
 
@@ -1884,15 +1869,7 @@ describe('qq voice plugin', () => {
     expect(extractVisibleMessageText(calls[0]?.[1])).toBe('@小祥 先问下这件事。');
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-handwritten-mention' }),
-      expectedStructuredAssistantHistory({
-        decision: 'reply',
-        outbound_messages: [
-          {
-            type: 'message',
-            content: '@小祥 先问下这件事。',
-          },
-        ],
-      }),
+      expectedVisibleAssistantHistory('@小祥 先问下这件事。'),
     );
   });
 
@@ -1940,15 +1917,7 @@ describe('qq voice plugin', () => {
     expect(extractVisibleMessageText(calls[0]?.[1])).toBe('先问下这件事。');
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-mention-only' }),
-      expectedStructuredAssistantHistory({
-        decision: 'reply',
-        outbound_messages: [
-          {
-            type: 'message',
-            content: '先问下这件事。',
-          },
-        ],
-      }),
+      expectedVisibleAssistantHistory('先问下这件事。'),
     );
   });
 
@@ -2115,7 +2084,7 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage.content).toBe('这个话题我不方便在群里展开，换个别的吧。');
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-sensitive' }),
-      expectedStructuredAssistantHistory('这个话题我不方便在群里展开，换个别的吧。'),
+      expectedVisibleAssistantHistory('这个话题我不方便在群里展开，换个别的吧。'),
     );
   });
 
@@ -2171,10 +2140,7 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-voice' }),
-      expectedStructuredAssistantHistory({
-        decision: 'reply',
-        outbound_messages: [{ type: 'voice', content: '收到。' }],
-      }),
+      expectedVisibleAssistantHistory('（发送语音：收到。）'),
     );
   });
 
@@ -2325,13 +2291,7 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-sticker' }),
-      expectedStructuredAssistantHistory({
-        decision: 'reply',
-        outbound_messages: [
-          { type: 'message', content: '……随你' },
-          { type: 'meme', content: '无语地看对方一眼' },
-        ],
-      }),
+      expectedVisibleAssistantHistory('……随你\n（发送表情包：无语少女）'),
     );
   });
 
@@ -2464,7 +2424,7 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-1' }),
-      expectedStructuredAssistantHistory('echo hi\npwd'),
+      expectedVisibleAssistantHistory('echo hi\npwd'),
     );
   });
 
@@ -2517,14 +2477,7 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-structured-multiline' }),
-      expectedStructuredAssistantHistory({
-        decision: 'reply',
-        outbound_messages: [
-          { type: 'message', content: '先看这个清单。' },
-          { type: 'structured_block', content: '- 牛奶\n- 面包' },
-          { type: 'message', content: '照着买。' },
-        ],
-      }),
+      expectedVisibleAssistantHistory('先看这个清单。\n- 牛奶\n- 面包\n照着买。'),
     );
   });
 

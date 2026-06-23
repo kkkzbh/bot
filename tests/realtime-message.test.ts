@@ -3,6 +3,11 @@ import { apply, inject } from '../src/plugins/realtime-message/index.js';
 import { realtimeMessageCache, buildGroupScopeKey } from '../src/plugins/realtime-message/cache.js';
 import { REALTIME_MESSAGE_HISTORY_TOOL } from '../src/plugins/realtime-message/tool.js';
 
+const mockRealtimeHistoryAddMessages = vi.hoisted(() => vi.fn(async (_messages: unknown[]) => undefined));
+const mockRealtimeHistoryInstances = vi.hoisted(
+  () => [] as Array<{ ctx: unknown; conversationId: string; maxMessagesCount: number; chatluna: unknown }>,
+);
+
 vi.mock('koishi', () => {
   type MockSchemaNode = {
     default: () => MockSchemaNode;
@@ -78,6 +83,16 @@ vi.mock('koishi', () => {
   };
 });
 
+vi.mock('koishi-plugin-chatluna/llm-core/memory/message', () => ({
+  KoishiChatMessageHistory: class {
+    constructor(ctx: unknown, conversationId: string, maxMessagesCount: number, chatluna: unknown) {
+      mockRealtimeHistoryInstances.push({ ctx, conversationId, maxMessagesCount, chatluna });
+    }
+
+    addMessages = mockRealtimeHistoryAddMessages;
+  },
+}));
+
 type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
 type ChatChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;
 type EventListener = (...args: any[]) => unknown;
@@ -87,19 +102,21 @@ function createHarness(
     maxInjectCount?: number;
     realtimeEnabled?: boolean;
     voiceInputEnabled?: boolean;
-    bindSensitiveQueryInterfaceWrapper?: boolean;
+    chatChainAvailableInitially?: boolean;
   } = {},
 ) {
   const middlewares: Middleware[] = [];
   const listeners = new Map<string, EventListener[]>();
   const chatChainMiddlewares = new Map<string, ChatChainMiddleware>();
-  const addMessages = vi.fn(async () => undefined);
-  const query = vi.fn(async () => ({
-    chatHistory: {
-      addMessages,
-    },
-  }));
-  const queryInterfaceWrapper = vi.fn(() => ({ query }));
+  const addMessages = mockRealtimeHistoryAddMessages;
+  const database = {
+    get: vi.fn(async (table: string, query: Record<string, unknown>) => {
+      if (table === 'chatluna_conversation') {
+        return [{ id: String(query.id ?? '') }];
+      }
+      return [];
+    }),
+  };
   const messageTransformer = {
     transform: vi.fn(async (_session: Record<string, any>, message: unknown[]) => {
       const image = (message as Array<{ type?: string; attrs?: Record<string, unknown> }>).find(
@@ -144,17 +161,10 @@ function createHarness(
   };
   const chatluna: Record<string, unknown> = {
     platform: { registerTool },
-    chatChain,
     messageTransformer,
   };
-  if (options.bindSensitiveQueryInterfaceWrapper) {
-    chatluna.queryCount = 0;
-    chatluna.queryInterfaceWrapper = function () {
-      this.queryCount = Number(this.queryCount ?? 0) + 1;
-      return { query };
-    };
-  } else {
-    chatluna.queryInterfaceWrapper = queryInterfaceWrapper;
+  if (options.chatChainAvailableInitially !== false) {
+    chatluna.chatChain = chatChain;
   }
 
   const ctx: Record<string, unknown> = {
@@ -168,6 +178,7 @@ function createHarness(
     }),
     chatluna,
     featurePolicy,
+    database,
   };
 
   apply(ctx as never, {
@@ -183,11 +194,14 @@ function createHarness(
   return {
     middleware: middlewares[0],
     addMessages,
+    database,
     messageTransformer,
-    queryInterfaceWrapper,
     chatluna,
     chatChainMiddlewares,
     tools,
+    setChatChainAvailable() {
+      chatluna.chatChain = chatChain;
+    },
     setRealtimeEnabled(value: boolean) {
       realtimeEnabled = value;
     },
@@ -196,6 +210,9 @@ function createHarness(
     },
     async runReady() {
       await runHook('ready');
+    },
+    async runChatChainAdded() {
+      await runHook('chatluna/chat-chain-added');
     },
     async runDispose() {
       await runHook('dispose');
@@ -249,8 +266,10 @@ async function callTool(harness: ReturnType<typeof createHarness>, session: Reco
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.clearAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  mockRealtimeHistoryInstances.length = 0;
   realtimeMessageCache.clear();
 });
 
@@ -377,6 +396,21 @@ describe('realtime message plugin', () => {
     expect(realtimeMessageCache.get('onebot:bot-1:group:100')).toEqual([]);
   });
 
+  it('registers promotion and tools after ChatLuna adds the chat chain', async () => {
+    const harness = createHarness({ chatChainAvailableInitially: false });
+
+    await harness.runReady();
+
+    expect(harness.chatChainMiddlewares.get('qqbot_realtime_message_promotion')).toBeUndefined();
+    expect(harness.tools.has(REALTIME_MESSAGE_HISTORY_TOOL)).toBe(false);
+
+    harness.setChatChainAvailable();
+    await harness.runChatChainAdded();
+
+    expect(harness.chatChainMiddlewares.get('qqbot_realtime_message_promotion')).toBeTypeOf('function');
+    expect(harness.tools.has(REALTIME_MESSAGE_HISTORY_TOOL)).toBe(true);
+  });
+
   it('promotes the latest inject window, excludes the trigger message, and clears old cache after each round', async () => {
     const { middleware, runReady, chatChainMiddlewares, addMessages } = createHarness({ maxInjectCount: 2 });
     await runReady();
@@ -446,10 +480,8 @@ describe('realtime message plugin', () => {
     ]);
   });
 
-  it('keeps chatluna queryInterfaceWrapper bound to the service instance during promotion', async () => {
-    const { middleware, runReady, chatChainMiddlewares, addMessages, chatluna } = createHarness({
-      bindSensitiveQueryInterfaceWrapper: true,
-    });
+  it('creates the realtime history writer from the active ChatLuna conversation', async () => {
+    const { middleware, runReady, chatChainMiddlewares, addMessages, chatluna, database } = createHarness();
     await runReady();
 
     await middleware(
@@ -480,7 +512,14 @@ describe('realtime message plugin', () => {
       }),
     ).resolves.toBe(2);
 
-    expect(chatluna.queryCount).toBe(1);
+    expect(database.get).toHaveBeenCalledWith('chatluna_conversation', { id: 'conv-bind-1' }, ['id']);
+    expect(mockRealtimeHistoryInstances).toEqual([
+      expect.objectContaining({
+        conversationId: 'conv-bind-1',
+        maxMessagesCount: 10_000,
+        chatluna,
+      }),
+    ]);
     expect(addMessages).toHaveBeenCalledTimes(1);
   });
 

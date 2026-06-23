@@ -127,7 +127,9 @@ export function registerRealtimeMessageTools(
   deps: RealtimeToolDeps,
 ): Array<() => void> {
   const registerTool = ctx.chatluna.platform?.registerTool?.bind(ctx.chatluna.platform);
-  if (!registerTool) return [];
+  if (!registerTool) {
+    throw new Error('realtime-message requires chatluna runtime tool registry.');
+  }
 
   return [registerTool(REALTIME_MESSAGE_HISTORY_TOOL, createRealtimeMessageToolEntry(deps))];
 }

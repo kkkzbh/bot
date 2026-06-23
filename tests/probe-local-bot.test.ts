@@ -60,6 +60,11 @@ describe('probe-local-bot.sh', () => {
     expect(content).toContain('resolvedProfile');
     expect(content).toContain('firstErrorSignature');
     expect(content).not.toContain("runtimeProfile.requestMode === 'responses'");
+    expect(content).not.toContain('getConversationRoomCount');
+    expect(content).not.toContain('createConversationRoom');
+    expect(content).not.toContain('deleteConversationRoom');
+    expect(content).toContain("db.create('chatluna_conversation'");
+    expect(content).toContain("db.upsert('chatluna_binding'");
     expect(content).toContain("PROBE_ASSERT_FAILURES");
     expect(content).toContain('(saki|祥)');
   });

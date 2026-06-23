@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { gunzip, gzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import { buildReplyPromptCompilerInput, compileReplyPromptEnvelope } from '../src/plugins/reply/prompt/compiler.js';
+import { migrateStructuredReplyHistoryRows } from '../src/plugins/reply/history-migration.js';
 import {
   beginPromptAssemblyTurn,
   clearPromptAssemblyTurn,
@@ -9,6 +12,9 @@ import {
   registerPromptFragment,
 } from '../src/plugins/shared/prompt-context/index.js';
 import { resolveChatlunaSiblingPackageRoot, resolveChatlunaSourceRoot } from './helpers/chatluna-paths.js';
+
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
 
 describe('chatluna prompt pollution regression', () => {
   afterEach(() => {
@@ -237,5 +243,57 @@ describe('chatluna prompt pollution regression', () => {
     expect(messageHistorySource).toContain('new AIMessage(normalizedText)');
     expect(messageHistoryBundle).toContain('normalizeResearchReplyHistory');
     expect(messageHistoryBundle).toMatch(/new import_messages\d*\.AIMessage\(normalizedText\)/);
+  });
+
+  it('migrates legacy structured reply assistant history rows to visible text', async () => {
+    const rows = [
+      {
+        id: 'legacy-json-ai',
+        role: 'ai',
+        content: await gzipAsync(JSON.stringify(JSON.stringify({
+          decision: 'reply',
+          outbound_messages: [
+            { type: 'message', content: '你好' },
+            { type: 'voice', content: '收到' },
+            { type: 'image', assetRef: 'img-1', alt: '截图' },
+            { type: 'meme', content: '无语' },
+          ],
+        }))),
+      },
+      {
+        id: 'plain-ai',
+        role: 'ai',
+        content: await gzipAsync(JSON.stringify('普通历史')),
+      },
+    ];
+    const updates: Array<{ table: string; query: Record<string, unknown>; update: Record<string, unknown> }> = [];
+    const database = {
+      get: async () => rows,
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        updates.push({ table, query, update });
+        const row = rows.find((item) => item.id === query.id);
+        Object.assign(row ?? {}, update);
+      },
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 2,
+      migrated: 1,
+    });
+
+    expect(updates).toEqual([
+      {
+        table: 'chatluna_message',
+        query: { id: 'legacy-json-ai' },
+        update: { content: expect.any(Buffer) },
+      },
+    ]);
+    await expect(gunzipAsync(rows[0].content).then((value) => value.toString())).resolves.toBe(JSON.stringify([
+      '你好',
+      '（发送语音：收到）',
+      '（发送图片：截图）',
+      '（发送表情包：无语）',
+    ].join('\n')));
+    await expect(gunzipAsync(rows[1].content).then((value) => value.toString())).resolves.toBe(JSON.stringify('普通历史'));
   });
 });
