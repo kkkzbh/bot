@@ -274,11 +274,16 @@ describe('chatluna prompt pollution regression', () => {
         const row = rows.find((item) => item.id === query.id);
         Object.assign(row ?? {}, update);
       },
+      remove: async () => undefined,
     };
 
     await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
       scanned: 2,
       migrated: 1,
+      structuredRowsMigrated: 1,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
     });
 
     expect(updates).toEqual([
@@ -295,5 +300,252 @@ describe('chatluna prompt pollution regression', () => {
       '（发送表情包：无语）',
     ].join('\n')));
     await expect(gunzipAsync(rows[1].content).then((value) => value.toString())).resolves.toBe(JSON.stringify('普通历史'));
+  });
+
+  it('migrates legacy rich-text reply history rows to visible text', async () => {
+    const rows = [
+      {
+        id: 'legacy-rich-json-ai',
+        role: 'ai',
+        content: await gzipAsync(JSON.stringify(JSON.stringify({
+          decision: 'reply',
+          messages: [
+            {
+              modality: 'rich_text',
+              segments: [
+                { kind: 'mention', userId: '241389951' },
+                { kind: 'text', text: ' 我查到了' },
+              ],
+            },
+            { modality: 'meme', content: '无语' },
+          ],
+        }))),
+      },
+      {
+        id: 'plain-ai',
+        role: 'ai',
+        content: await gzipAsync(JSON.stringify('普通历史')),
+      },
+    ];
+    const updates: Array<{ table: string; query: Record<string, unknown>; update: Record<string, unknown> }> = [];
+    const database = {
+      get: async () => rows,
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        updates.push({ table, query, update });
+        const row = rows.find((item) => item.id === query.id);
+        Object.assign(row ?? {}, update);
+      },
+      remove: async () => undefined,
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 2,
+      migrated: 1,
+      structuredRowsMigrated: 1,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+    });
+
+    expect(updates).toEqual([
+      {
+        table: 'chatluna_message',
+        query: { id: 'legacy-rich-json-ai' },
+        update: { content: expect.any(Buffer) },
+      },
+    ]);
+    await expect(gunzipAsync(rows[0].content).then((value) => value.toString())).resolves.toBe(JSON.stringify([
+      '@241389951 我查到了',
+      '（发送表情包：无语）',
+    ].join('\n')));
+    await expect(gunzipAsync(rows[1].content).then((value) => value.toString())).resolves.toBe(JSON.stringify('普通历史'));
+  });
+
+  it('normalizes legacy CHAT_REPLY_V1 history rows to the current history nonce without mention headers', async () => {
+    const rows = [
+      {
+        id: 'legacy-chat-reply-v1-ai',
+        role: 'ai',
+        content: await gzipAsync(JSON.stringify([
+          'CHAT_REPLY_V1 abc12345',
+          'DECISION reply',
+          'BEGIN message',
+          'MENTIONS none',
+          'CONTENT',
+          '|今晚先这样吧',
+          'END',
+          'DONE abc12345',
+        ].join('\n'))),
+      },
+      {
+        id: 'current-chat-reply-v1-ai',
+        role: 'ai',
+        content: await gzipAsync(JSON.stringify([
+          'CHAT_REPLY_V1 history',
+          'DECISION reply',
+          'BEGIN message',
+          'CONTENT',
+          '|已经是当前格式',
+          'END',
+          'DONE history',
+        ].join('\n'))),
+      },
+    ];
+    const updates: Array<{ table: string; query: Record<string, unknown>; update: Record<string, unknown> }> = [];
+    const database = {
+      get: async () => rows,
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        updates.push({ table, query, update });
+        const row = rows.find((item) => item.id === query.id);
+        Object.assign(row ?? {}, update);
+      },
+      remove: async () => undefined,
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 2,
+      migrated: 1,
+      structuredRowsMigrated: 1,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+    });
+
+    expect(updates).toEqual([
+      {
+        table: 'chatluna_message',
+        query: { id: 'legacy-chat-reply-v1-ai' },
+        update: { content: expect.any(Buffer) },
+      },
+    ]);
+    await expect(gunzipAsync(rows[0].content).then((value) => value.toString())).resolves.toBe(JSON.stringify([
+      'CHAT_REPLY_V1 history',
+      'DECISION reply',
+      'BEGIN message',
+      'CONTENT',
+      '|今晚先这样吧',
+      'END',
+      'DONE history',
+    ].join('\n')));
+    await expect(gunzipAsync(rows[1].content).then((value) => value.toString())).resolves.toBe(JSON.stringify([
+      'CHAT_REPLY_V1 history',
+      'DECISION reply',
+      'BEGIN message',
+      'CONTENT',
+      '|已经是当前格式',
+      'END',
+      'DONE history',
+    ].join('\n')));
+  });
+
+  it('collapses legacy submit_reply_plan tool-call history into visible assistant text', async () => {
+    const messages = [
+      {
+        id: 'human-1',
+        role: 'human',
+        parentId: null,
+        name: 'user',
+        content: await gzipAsync(JSON.stringify('祥子 这是什么')),
+      },
+      {
+        id: 'violation-prompt',
+        role: 'human',
+        parentId: 'human-1',
+        name: null,
+        content: await gzipAsync(JSON.stringify(
+          'Protocol violation: reply-agent must finish by calling submit_reply_plan.\nYou may continue thinking.',
+        )),
+      },
+      {
+        id: 'ai-plan',
+        role: 'ai',
+        parentId: 'violation-prompt',
+        name: null,
+        content: await gzipAsync(JSON.stringify('')),
+        tool_calls: JSON.stringify([
+          {
+            id: 'call-submit',
+            name: 'submit_reply_plan',
+            args: {
+              segments: [
+                { kind: 'sticker', content: '无语地看对方一眼' },
+                { kind: 'text', content: '这是程序设计竞赛。' },
+              ],
+            },
+          },
+        ]),
+      },
+      {
+        id: 'tool-plan',
+        role: 'tool',
+        parentId: 'ai-plan',
+        name: 'submit_reply_plan',
+        tool_call_id: 'call-submit',
+        content: await gzipAsync(JSON.stringify('')),
+      },
+      {
+        id: 'human-2',
+        role: 'human',
+        parentId: 'tool-plan',
+        name: 'user',
+        content: await gzipAsync(JSON.stringify('继续')),
+      },
+    ];
+    const conversations = [
+      {
+        id: 'conv-legacy-plan',
+        latestMessageId: 'tool-plan',
+      },
+    ];
+    const removed: Array<{ table: string; query: Record<string, unknown> }> = [];
+    const database = {
+      get: async (table: string, query: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        return rows.filter((row) =>
+          Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value),
+        );
+      },
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        for (const row of rows) {
+          if (Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value)) {
+            Object.assign(row, update);
+          }
+        }
+      },
+      remove: async (table: string, query: Record<string, unknown>) => {
+        removed.push({ table, query });
+        if (table !== 'chatluna_message') return;
+        const index = messages.findIndex((row) => row.id === query.id);
+        if (index >= 0) messages.splice(index, 1);
+      },
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 1,
+      migrated: 3,
+      structuredRowsMigrated: 0,
+      submitReplyPlansMigrated: 1,
+      emptySubmitReplyPlanToolsRemoved: 1,
+      protocolViolationPromptsRemoved: 1,
+    });
+
+    expect(messages.some((row) => row.id === 'tool-plan')).toBe(false);
+    expect(messages.some((row) => row.id === 'violation-prompt')).toBe(false);
+    expect(messages.find((row) => row.id === 'ai-plan')).toEqual(
+      expect.objectContaining({
+        parentId: 'human-1',
+        tool_calls: [],
+      }),
+    );
+    expect(messages.find((row) => row.id === 'human-2')).toEqual(expect.objectContaining({ parentId: 'ai-plan' }));
+    expect(conversations[0].latestMessageId).toBe('ai-plan');
+    expect(removed).toEqual([
+      { table: 'chatluna_message', query: { id: 'tool-plan' } },
+      { table: 'chatluna_message', query: { id: 'violation-prompt' } },
+    ]);
+    await expect(
+      gunzipAsync(messages.find((row) => row.id === 'ai-plan')!.content).then((value) => value.toString()),
+    ).resolves.toBe(JSON.stringify('（发送表情包：无语地看对方一眼）\n这是程序设计竞赛。'));
   });
 });

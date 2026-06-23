@@ -2219,7 +2219,14 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.on('ready', async () => {
     const historyMigration = await migrateStructuredReplyHistoryRows(ctx.database as never);
     if (historyMigration.migrated > 0) {
-      logger.info('migrated %d structured reply history row(s).', historyMigration.migrated);
+      logger.info(
+        'migrated %d reply history row(s): structured=%d, submitPlans=%d, emptySubmitTools=%d, protocolPrompts=%d.',
+        historyMigration.migrated,
+        historyMigration.structuredRowsMigrated,
+        historyMigration.submitReplyPlansMigrated,
+        historyMigration.emptySubmitReplyPlanToolsRemoved,
+        historyMigration.protocolViolationPromptsRemoved,
+      );
     }
 
     if (isVoiceOutputConfigured(runtime)) {
