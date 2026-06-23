@@ -734,17 +734,27 @@ function formatWebTopicForPrompt(topic: Awaited<ReturnType<typeof fetchWebHotTop
   });
 }
 
-function parseSpeakerTaggedText(text: string): { speakerName: string | null; text: string } {
-  const match = text.match(/^\[speaker_id=[^\]]*speaker_name=("[^"]*"|'[^']*'|[^\]\s]+)[^\]]*\]\s*([\s\S]*)$/u);
-  if (!match) return { speakerName: null, text };
-  const rawName = match[1] ?? '';
-  let speakerName = rawName.replace(/^['"]|['"]$/g, '');
+const SPEAKER_TAG_PATTERN = /^\[speaker_id=([^\]\s]+)(?:\s+speaker_name=("(?:\\.|[^"\\])*"|'[^']*'|[^\]\s]+))?[^\]]*\]\s*([\s\S]*)$/u;
+
+function parseSpeakerNameToken(rawName: string | undefined): string | null {
+  const normalized = normalizeText(rawName);
+  if (!normalized) return null;
+  if (!normalized.startsWith('"')) return null;
   try {
-    speakerName = JSON.parse(rawName) as string;
+    const parsed = JSON.parse(normalized) as unknown;
+    return typeof parsed === 'string' ? parsed : null;
   } catch {
-    // Plain fallback above is enough for older speaker tags.
+    return null;
   }
-  return { speakerName: normalizeText(speakerName) || null, text: normalizeText(match[2]) };
+}
+
+function parseSpeakerTaggedText(text: string): { speakerName: string | null; text: string } {
+  const match = text.match(SPEAKER_TAG_PATTERN);
+  if (!match) return { speakerName: null, text };
+  return {
+    speakerName: normalizeText(parseSpeakerNameToken(match[2])) || null,
+    text: normalizeText(match[3]),
+  };
 }
 
 function buildScopeLabel(scope: AffinityScopeConfigRecord): string | null {

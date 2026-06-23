@@ -1255,6 +1255,36 @@ describe('affinity service random history sync', () => {
     }));
   });
 
+  it('strips speaker tags without names before injecting proactive history context', async () => {
+    const { service, contextManager } = createHarness({
+      plan: { direction: 'local_thread' },
+      chatResponse: {
+        content: JSON.stringify({
+          decision: 'no_reply',
+          outbound_messages: null,
+        }),
+        additional_kwargs: {},
+      },
+      conversations: [{ ...createConversation('conv-affinity'), latestMessageId: 'msg-legacy-tag', updatedAt: new Date(NOW) }],
+      messages: [
+        {
+          id: 'msg-legacy-tag',
+          role: 'human',
+          conversationId: 'conv-affinity',
+          parentId: null,
+          content: encodeStoredMessageContent('[speaker_id=u1] 我去吃饭了，晚点再说。'),
+        },
+      ],
+    });
+
+    await service.runDueRandomPlans(NOW);
+
+    const injectedMessages = contextManager.inject.mock.calls[0]?.[0]?.value as Array<{ content: string }>;
+    const injectedText = injectedMessages.map((message) => message.content).join('\n\n');
+    expect(injectedText).toContain('我去吃饭了，晚点再说。');
+    expect(injectedText).not.toContain('[speaker_id=u1]');
+  });
+
   it('marks a proactive plan failed when the explicit voice runtime provider is misconfigured', async () => {
     const { db, service, chat } = createHarness({
       proactiveVoiceRuntime: () => {
