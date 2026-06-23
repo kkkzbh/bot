@@ -99,7 +99,7 @@ export function registerAffinityPanelCommand(
     try {
       const panelView = await service.buildPanelView(session);
       const image = await renderAffinityPanelImage(ctx.puppeteer, panelView);
-      await session.send(image as never);
+      await session.send(image);
       await session.send(panelView.fixedLine);
       await service.syncPanelCommandToChatHistory(session, panelView);
     } catch (error) {

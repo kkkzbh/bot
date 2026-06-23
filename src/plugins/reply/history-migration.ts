@@ -1,10 +1,10 @@
-import { gunzip, gzip } from 'node:zlib';
+import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
+import { decodeStoredMessageJson } from '../shared/stored-message.js';
 import { ChatReplyV1Parser } from './pipeline/chat-reply-v1.js';
 import type { StructuredReply, StructuredReplyMessage } from './pipeline/types.js';
 
 const gzipAsync = promisify(gzip);
-const gunzipAsync = promisify(gunzip);
 
 type DatabaseLike = {
   get: (table: string, query: Record<string, unknown>, fields?: string[]) => Promise<Array<Record<string, unknown>>>;
@@ -241,17 +241,8 @@ function normalizeLegacyAssistantMentionHeaderHistory(raw: string): string | nul
 }
 
 async function decodeStoredStringContent(content: unknown): Promise<string | null> {
-  if (!content) return null;
-
-  let decoded: string;
   try {
-    decoded = (await gunzipAsync(content as never)).toString();
-  } catch {
-    return null;
-  }
-
-  try {
-    const storedContent = JSON.parse(decoded) as unknown;
+    const storedContent = await decodeStoredMessageJson(content);
     return typeof storedContent === 'string' ? storedContent : null;
   } catch {
     return null;
@@ -259,17 +250,8 @@ async function decodeStoredStringContent(content: unknown): Promise<string | nul
 }
 
 async function decodeStoredJsonObject(content: unknown): Promise<Record<string, unknown> | null> {
-  if (!content) return null;
-
-  let decoded: string;
   try {
-    decoded = (await gunzipAsync(content as never)).toString();
-  } catch {
-    return null;
-  }
-
-  try {
-    const storedContent = JSON.parse(decoded) as unknown;
+    const storedContent = await decodeStoredMessageJson(content);
     return storedContent && typeof storedContent === 'object' && !Array.isArray(storedContent)
       ? storedContent as Record<string, unknown>
       : null;

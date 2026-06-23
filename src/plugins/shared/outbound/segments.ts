@@ -1,4 +1,4 @@
-import { h, type Session, type Universal } from 'koishi';
+import { h, type Fragment, type Session, type Universal } from 'koishi';
 
 const MIN_SMART_SEND_DELAY_MS = 2000;
 const MAX_SMART_SEND_DELAY_MS = 4000;
@@ -118,7 +118,7 @@ export interface ReplyTransportPlan {
   segments: ReplyTransportSegment[];
 }
 
-export type BotMessageContent = string | ReturnType<typeof h> | Array<ReturnType<typeof h>>;
+export type BotMessageContent = Fragment;
 
 export type ReplyMessagePart =
   | {
@@ -299,9 +299,9 @@ export function createSessionMessageDispatchers(session: Session): {
 } {
   return {
     sendWhole: async (content: BotMessageContent) =>
-      session.send(toExplicitMessageContent(content) as never, createBypassLineSplitOptions(session)),
+      session.send(toExplicitMessageContent(content), createBypassLineSplitOptions(session)),
     sendLine: async (line: BotMessageContent) =>
-      session.send(toExplicitMessageContent(line) as never, createBypassLineSplitOptions(session)),
+      session.send(toExplicitMessageContent(line), createBypassLineSplitOptions(session)),
   };
 }
 
@@ -311,7 +311,7 @@ function toExplicitMessageContent(content: BotMessageContent): Exclude<BotMessag
 
 function toMessageElements(content: BotMessageContent): Array<ReturnType<typeof h>> {
   if (Array.isArray(content)) {
-    return [...content];
+    return content.map((item) => (typeof item === 'string' ? h.text(item) : item));
   }
   if (typeof content === 'string') {
     return [h.text(content)];

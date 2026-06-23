@@ -839,7 +839,7 @@ export function renderAffinityPanelHtml(
 export async function renderAffinityPanelImage(
   puppeteer: AffinityPanelPuppeteerLike,
   view: AffinityPanelView,
-): Promise<unknown> {
+): Promise<ReturnType<typeof h.image>> {
   const page = await puppeteer.page();
   let tempDir: string | null = null;
   try {
