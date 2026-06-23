@@ -404,6 +404,18 @@ describe('chatluna prompt pollution regression', () => {
         tool_calls: '{}',
       },
       {
+        id: 'human-string-null-tool-calls',
+        role: 'human',
+        content: await gzipAsync(JSON.stringify('旧 human null 行')),
+        tool_calls: 'null',
+      },
+      {
+        id: 'human-empty-array-tool-calls',
+        role: 'human',
+        content: await gzipAsync(JSON.stringify('旧 human empty array 行')),
+        tool_calls: '[]',
+      },
+      {
         id: 'ai-real-tool-call',
         role: 'ai',
         content: await gzipAsync(JSON.stringify('')),
@@ -422,8 +434,8 @@ describe('chatluna prompt pollution regression', () => {
     };
 
     await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
-      scanned: 2,
-      migrated: 1,
+      scanned: 4,
+      migrated: 3,
       structuredRowsMigrated: 0,
       legacyDirectHumanRowsTagged: 0,
       submitReplyPlansMigrated: 0,
@@ -434,7 +446,7 @@ describe('chatluna prompt pollution regression', () => {
       completedToolTraceRowsMigrated: 0,
       transientAdditionalKwargsRowsCleaned: 0,
       invisibleMessageNamesCleared: 0,
-      nonAiToolCallsCleared: 1,
+      nonAiToolCallsCleared: 3,
       emptyAssistantRowsRemoved: 0,
     });
     expect(updates).toEqual([
@@ -443,9 +455,21 @@ describe('chatluna prompt pollution regression', () => {
         query: { id: 'human-dirty-tool-calls' },
         update: { tool_calls: null },
       },
+      {
+        table: 'chatluna_message',
+        query: { id: 'human-string-null-tool-calls' },
+        update: { tool_calls: null },
+      },
+      {
+        table: 'chatluna_message',
+        query: { id: 'human-empty-array-tool-calls' },
+        update: { tool_calls: null },
+      },
     ]);
     expect(rows[0]).toEqual(expect.objectContaining({ tool_calls: null }));
-    expect(rows[1]).toEqual(expect.objectContaining({
+    expect(rows[1]).toEqual(expect.objectContaining({ tool_calls: null }));
+    expect(rows[2]).toEqual(expect.objectContaining({ tool_calls: null }));
+    expect(rows[3]).toEqual(expect.objectContaining({
       tool_calls: JSON.stringify([{ id: 'call-search', name: 'web_search', args: { input: 'example' } }]),
     }));
   });

@@ -303,12 +303,10 @@ function parseToolCalls(value: unknown): LegacySubmitReplyPlanCall[] {
   }
 }
 
-function hasStoredToolCallMetadata(value: unknown): boolean {
+function hasStoredToolCallsColumnValue(value: unknown): boolean {
   if (value == null) return false;
-  if (Array.isArray(value)) return value.length > 0;
-  if (typeof value !== 'string') return true;
-  const trimmed = value.trim();
-  return trimmed !== '' && trimmed !== '[]' && trimmed.toLowerCase() !== 'null';
+  if (typeof value === 'string') return value.trim() !== '';
+  return true;
 }
 
 function getToolCallName(call: LegacySubmitReplyPlanCall): string {
@@ -535,7 +533,7 @@ export async function migrateStructuredReplyHistoryRows(
       invisibleMessageNamesCleared += 1;
     }
 
-    if (row.role !== 'ai' && hasStoredToolCallMetadata(row.tool_calls)) {
+    if (row.role !== 'ai' && hasStoredToolCallsColumnValue(row.tool_calls)) {
       await database.set('chatluna_message', { id }, { tool_calls: null });
       nonAiToolCallsCleared += 1;
     }
