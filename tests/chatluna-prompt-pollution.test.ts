@@ -284,6 +284,7 @@ describe('chatluna prompt pollution regression', () => {
       submitReplyPlansMigrated: 0,
       emptySubmitReplyPlanToolsRemoved: 0,
       protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -351,6 +352,7 @@ describe('chatluna prompt pollution regression', () => {
       submitReplyPlansMigrated: 0,
       emptySubmitReplyPlanToolsRemoved: 0,
       protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -418,6 +420,7 @@ describe('chatluna prompt pollution regression', () => {
       submitReplyPlansMigrated: 0,
       emptySubmitReplyPlanToolsRemoved: 0,
       protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -538,6 +541,7 @@ describe('chatluna prompt pollution regression', () => {
       submitReplyPlansMigrated: 1,
       emptySubmitReplyPlanToolsRemoved: 1,
       protocolViolationPromptsRemoved: 1,
+      failedToolCallErrorRowsRemoved: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -558,6 +562,100 @@ describe('chatluna prompt pollution regression', () => {
     await expect(
       gunzipAsync(messages.find((row) => row.id === 'ai-plan')!.content).then((value) => value.toString()),
     ).resolves.toBe(JSON.stringify('（发送表情包：无语地看对方一眼）\n这是程序设计竞赛。'));
+  });
+
+  it('removes generic ChatLuna tool error tails from assistant history', async () => {
+    const messages = [
+      {
+        id: 'human-1',
+        role: 'human',
+        parentId: null,
+        name: 'user',
+        content: await gzipAsync(JSON.stringify('帮我搜一下')),
+      },
+      {
+        id: 'ai-search',
+        role: 'ai',
+        parentId: 'human-1',
+        name: null,
+        content: await gzipAsync(JSON.stringify('')),
+        tool_calls: JSON.stringify([
+          {
+            id: 'call-search',
+            name: 'web_search',
+            args: {
+              input: 'example',
+            },
+          },
+        ]),
+      },
+      {
+        id: 'tool-error',
+        role: 'tool',
+        parentId: 'ai-search',
+        name: 'web_search',
+        tool_call_id: 'call-search',
+        content: await gzipAsync(JSON.stringify(
+          'Something went wrong. Please Try Again. 使用 ChatLuna 时出现错误，错误码为 103。请联系开发者以解决此问题。',
+        )),
+      },
+      {
+        id: 'ai-answer',
+        role: 'ai',
+        parentId: 'tool-error',
+        name: null,
+        content: await gzipAsync(JSON.stringify('我先按已有信息回答。')),
+        tool_calls: '[]',
+      },
+    ];
+    const conversations = [
+      {
+        id: 'conv-tool-error',
+        latestMessageId: 'ai-answer',
+      },
+    ];
+    const removed: Array<{ table: string; query: Record<string, unknown> }> = [];
+    const database = {
+      get: async (table: string, query: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        return rows.filter((row) =>
+          Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value),
+        );
+      },
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        for (const row of rows) {
+          if (Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value)) {
+            Object.assign(row, update);
+          }
+        }
+      },
+      remove: async (table: string, query: Record<string, unknown>) => {
+        removed.push({ table, query });
+        if (table !== 'chatluna_message') return;
+        const index = messages.findIndex((row) => row.id === query.id);
+        if (index >= 0) messages.splice(index, 1);
+      },
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 2,
+      migrated: 2,
+      structuredRowsMigrated: 0,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 2,
+      emptyAssistantRowsRemoved: 0,
+    });
+
+    expect(messages.map((row) => row.id)).toEqual(['human-1', 'ai-answer']);
+    expect(messages.find((row) => row.id === 'ai-answer')).toEqual(expect.objectContaining({ parentId: 'human-1' }));
+    expect(conversations[0].latestMessageId).toBe('ai-answer');
+    expect(removed).toEqual([
+      { table: 'chatluna_message', query: { id: 'tool-error' } },
+      { table: 'chatluna_message', query: { id: 'ai-search' } },
+    ]);
   });
 
   it('removes empty assistant history rows without tool calls', async () => {
@@ -649,6 +747,7 @@ describe('chatluna prompt pollution regression', () => {
       submitReplyPlansMigrated: 0,
       emptySubmitReplyPlanToolsRemoved: 0,
       protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
       emptyAssistantRowsRemoved: 3,
     });
 
