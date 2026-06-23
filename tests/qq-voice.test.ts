@@ -490,6 +490,30 @@ function createPluginRoom(conversationId: string, overrides: Record<string, unkn
   };
 }
 
+function createPluginConversation(conversationId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return createPluginConversationFromRoom(createPluginRoom(conversationId, overrides));
+}
+
+function createPluginConversationFromRoom(room: Record<string, unknown>): Record<string, unknown> {
+  const conversationId = String(room.conversationId ?? '').trim();
+  if (!conversationId) {
+    throw new Error('test conversation requires conversationId');
+  }
+  return {
+    conversationId,
+    effectiveModel: room.model,
+    effectivePreset: room.preset,
+    effectiveChatMode: room.chatMode,
+    conversation: {
+      id: conversationId,
+      legacyRoomId: room.roomId,
+      model: room.model,
+      preset: room.preset,
+      chatMode: room.chatMode,
+    },
+  };
+}
+
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -873,8 +897,8 @@ describe('qq voice plugin', () => {
       content: '第二条',
       strippedContent: '第二条',
     });
-    const prepareContext1 = { options: { room: createPluginRoom('conv-serial') } };
-    const prepareContext2 = { options: { room: createPluginRoom('conv-serial') } };
+    const prepareContext1 = { options: { conversation: createPluginConversation('conv-serial') } };
+    const prepareContext2 = { options: { conversation: createPluginConversation('conv-serial') } };
 
     await prepare?.(session1, prepareContext1);
 
@@ -888,7 +912,7 @@ describe('qq voice plugin', () => {
 
     await executor?.(session1, {
       options: {
-        room: createPluginRoom('conv-serial'),
+        conversation: createPluginConversation('conv-serial'),
         responseMessage: createReplyV2Response('第一条回复'),
       },
     });
@@ -929,19 +953,19 @@ describe('qq voice plugin', () => {
     });
     const contextA1 = {
       options: {
-        room: { ...room },
+        conversation: createPluginConversationFromRoom(room),
         inputMessage: { content: 'A1', additional_kwargs: {} },
       },
     };
     const contextB = {
       options: {
-        room: { ...room },
+        conversation: createPluginConversationFromRoom(room),
         inputMessage: { content: 'B1', additional_kwargs: {} },
       },
     };
     const contextA2 = {
       options: {
-        room: { ...room },
+        conversation: createPluginConversationFromRoom(room),
         inputMessage: { content: 'A2', additional_kwargs: {} },
       },
     };
@@ -973,7 +997,7 @@ describe('qq voice plugin', () => {
 
     await executor?.(sessionB, {
       options: {
-        room: { ...room },
+        conversation: createPluginConversationFromRoom(room),
         responseMessage: createReplyV2Response('回复B'),
       },
     });
@@ -1005,13 +1029,13 @@ describe('qq voice plugin', () => {
     });
     const contextA = {
       options: {
-        room: { ...room },
+        conversation: createPluginConversationFromRoom(room),
         inputMessage: { content: 'A1', additional_kwargs: {} },
       },
     };
     const contextB = {
       options: {
-        room: { ...room },
+        conversation: createPluginConversationFromRoom(room),
         inputMessage: { content: 'B1', additional_kwargs: {} },
       },
     };
@@ -1069,13 +1093,13 @@ describe('qq voice plugin', () => {
     });
     const contextA1 = {
       options: {
-        room: { ...room },
+        conversation: createPluginConversationFromRoom(room),
         inputMessage: { content: '先看一下', additional_kwargs: {} },
       },
     };
     const contextA2 = {
       options: {
-        room: { ...room },
+        conversation: createPluginConversationFromRoom(room),
         inputMessage: {
           content: [
             { type: 'text', text: '这张图里是什么？' },
@@ -1265,7 +1289,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: { conversationId: 'conv-memory' },
+        conversation: createPluginConversation('conv-memory'),
         inputMessage: {
           content: '继续说',
           additional_kwargs: {},
@@ -1324,7 +1348,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: { conversationId: 'conv-memory' },
+        conversation: createPluginConversation('conv-memory'),
         inputMessage: {
           content: '继续说',
           additional_kwargs: {},
@@ -1473,7 +1497,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-chat-reply-v1', { model: 'deepseek/deepseek-v4-pro' }),
+        conversation: createPluginConversation('conv-chat-reply-v1', { model: 'deepseek/deepseek-v4-pro' }),
         inputMessage: {
           content: '我的性格是怎样的？',
           additional_kwargs: {},
@@ -1541,7 +1565,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-private'),
+        conversation: createPluginConversation('conv-private'),
         inputMessage: {
           content: '请@我一下',
           additional_kwargs: {},
@@ -1586,7 +1610,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-group'),
+        conversation: createPluginConversation('conv-group'),
         inputMessage: {
           content: '交个朋友怎么样？',
           additional_kwargs: {},
@@ -1649,13 +1673,12 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: {
-          conversationId: 'conv-chat',
+        conversation: createPluginConversation('conv-chat', {
           roomId: 8,
           model: 'Pro/moonshotai/Kimi-K2.5',
           preset: 'sakiko',
           chatMode: 'chat',
-        },
+        }),
         inputMessage: {
           content: '查一下苹果说的液态玻璃是什么',
           additional_kwargs: {},
@@ -1683,7 +1706,7 @@ describe('qq voice plugin', () => {
     });
     const result = await prepare?.(session, {
       options: {
-        room: createPluginRoom('conv-empty'),
+        conversation: createPluginConversation('conv-empty'),
       },
     });
 
@@ -1745,7 +1768,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-text'),
+        conversation: createPluginConversation('conv-text'),
         responseMessage: createReplyV2Response('今晚先这样吧'),
       },
     };
@@ -1784,7 +1807,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-chat-reply-v1'),
+        conversation: createPluginConversation('conv-chat-reply-v1'),
         inputMessage: {
           content: '普通聊聊',
           additional_kwargs: {
@@ -1887,7 +1910,7 @@ describe('qq voice plugin', () => {
       });
       const context = {
         options: {
-          room: createPluginRoom('conv-five-executor-chat-reply-v1-turns'),
+          conversation: createPluginConversation('conv-five-executor-chat-reply-v1-turns'),
           inputMessage: {
             content: `第 ${turn} 轮用户消息`,
             additional_kwargs: {
@@ -1952,7 +1975,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-transport-down'),
+        conversation: createPluginConversation('conv-transport-down'),
         responseMessage: createReplyV2Response('今晚先这样吧'),
       },
     };
@@ -1994,7 +2017,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-send-failed-before-delivery'),
+        conversation: createPluginConversation('conv-send-failed-before-delivery'),
         responseMessage: createReplyV2Response('今晚先这样吧'),
       },
     };
@@ -2041,7 +2064,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-mention'),
+        conversation: createPluginConversation('conv-mention'),
         responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2093,7 +2116,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-handwritten-mention'),
+        conversation: createPluginConversation('conv-handwritten-mention'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [
@@ -2141,7 +2164,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-mention-only'),
+        conversation: createPluginConversation('conv-mention-only'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [
@@ -2189,7 +2212,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-empty-reply'),
+        conversation: createPluginConversation('conv-empty-reply'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [{ type: 'message', content: '' }],
@@ -2224,7 +2247,7 @@ describe('qq voice plugin', () => {
       });
       const context = {
         options: {
-          room: createPluginRoom('conv-quote-text'),
+          conversation: createPluginConversation('conv-quote-text'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2271,7 +2294,7 @@ describe('qq voice plugin', () => {
       });
       const context = {
         options: {
-          room: createPluginRoom('conv-quote-mention'),
+          conversation: createPluginConversation('conv-quote-mention'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2313,7 +2336,7 @@ describe('qq voice plugin', () => {
 
     const context = {
       options: {
-        room: createPluginRoom('conv-sensitive'),
+        conversation: createPluginConversation('conv-sensitive'),
         responseMessage: createReplyV2Response('如果您问的是中国大陆近年公开报道里、规模较大且最有代表性的群众性抗议，我会先提 2022 年 11 月的“白纸运动”。'),
       },
     };
@@ -2370,7 +2393,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-voice'),
+        conversation: createPluginConversation('conv-voice'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [{ type: 'voice', content: '收到。' }],
@@ -2432,7 +2455,7 @@ describe('qq voice plugin', () => {
       });
       const context = {
         options: {
-          room: createPluginRoom('conv-quote-voice'),
+          conversation: createPluginConversation('conv-quote-voice'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2479,7 +2502,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-voice-fallback'),
+        conversation: createPluginConversation('conv-voice-fallback'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [{ type: 'voice', content: '收到。' }],
@@ -2517,7 +2540,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-sticker'),
+        conversation: createPluginConversation('conv-sticker'),
         responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2571,7 +2594,7 @@ describe('qq voice plugin', () => {
       });
       const context = {
         options: {
-          room: createPluginRoom('conv-quote-sticker'),
+          conversation: createPluginConversation('conv-quote-sticker'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [{ type: 'meme', content: '无语地看对方一眼' }],
@@ -2616,7 +2639,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-sticker-drop'),
+        conversation: createPluginConversation('conv-sticker-drop'),
         responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2657,7 +2680,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-1'),
+        conversation: createPluginConversation('conv-1'),
         responseMessage: createReplyV2Response('echo hi\npwd'),
       },
     };
@@ -2699,7 +2722,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-structured-multiline'),
+        conversation: createPluginConversation('conv-structured-multiline'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [
@@ -2755,7 +2778,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-broken'),
+        conversation: createPluginConversation('conv-broken'),
         responseMessage: createReplyV2Response('收到'),
       },
     };
@@ -2799,7 +2822,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-research', {
+        conversation: createPluginConversation('conv-research', {
           model: 'openai/gpt-5.4-medium-thinking',
         }),
         inputMessage: {
@@ -2838,7 +2861,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-rerun'),
+        conversation: createPluginConversation('conv-rerun'),
         responseMessage: createRawReplyResponse('模型直接说了一句普通文本'),
       },
     };
@@ -2886,7 +2909,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-chat-reply-v1-plain-text'),
+        conversation: createPluginConversation('conv-chat-reply-v1-plain-text'),
         inputMessage: {
           content: '祥 评价一下刘若希',
           additional_kwargs: {
@@ -2942,7 +2965,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-empty-model-output'),
+        conversation: createPluginConversation('conv-empty-model-output'),
         responseMessage: createRawReplyResponse('   ', {
           requestMode: 'chat_completions',
           providerOutputTokens: 46,
@@ -2990,7 +3013,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-fenced-json'),
+        conversation: createPluginConversation('conv-fenced-json'),
         responseMessage: createRawReplyResponse(
           ['```json', '{"decision":"reply","outbound_messages":[{"type":"message","content":"收到"}]}', '```'].join('\n'),
         ),
@@ -3035,7 +3058,7 @@ describe('qq voice plugin', () => {
     });
     const context = {
       options: {
-        room: createPluginRoom('conv-invalid-schema'),
+        conversation: createPluginConversation('conv-invalid-schema'),
         responseMessage: createRawReplyResponse(
           JSON.stringify({
             decision: 'reply',

@@ -28,7 +28,6 @@ type ChatLunaConversationResolutionLike = {
 };
 
 export type QqbotChatLunaContextOptionsLike = {
-  room?: QqbotChatLunaRoomLike;
   conversation?: ChatLunaConversationResolutionLike | null;
 };
 
@@ -46,19 +45,13 @@ export function resolveChatLunaRoomLike(
 
   if (conversationId) {
     return {
-      ...(options?.room ?? {}),
       conversationId,
-      roomId: typeof conversation?.legacyRoomId === 'number' ? conversation.legacyRoomId : options?.room?.roomId,
-      model: normalizeString(options?.conversation?.effectiveModel) ?? normalizeString(conversation?.model) ?? options?.room?.model,
-      preset: normalizeString(options?.conversation?.effectivePreset) ?? normalizeString(conversation?.preset) ?? options?.room?.preset,
-      chatMode: normalizeString(options?.conversation?.effectiveChatMode) ?? normalizeString(conversation?.chatMode) ?? options?.room?.chatMode,
+      roomId: typeof conversation?.legacyRoomId === 'number' ? conversation.legacyRoomId : undefined,
+      model: normalizeString(options?.conversation?.effectiveModel) ?? normalizeString(conversation?.model),
+      preset: normalizeString(options?.conversation?.effectivePreset) ?? normalizeString(conversation?.preset),
+      chatMode: normalizeString(options?.conversation?.effectiveChatMode) ?? normalizeString(conversation?.chatMode),
     };
   }
 
-  const roomConversationId = normalizeString(options?.room?.conversationId);
-  if (!roomConversationId) return undefined;
-  return {
-    ...options?.room,
-    conversationId: roomConversationId,
-  };
+  return undefined;
 }

@@ -11,7 +11,16 @@ describe('memory address', () => {
         channelId: 'dm-1',
         bot: { selfId: '20001' },
       } as any,
-      { options: { room: { conversationId: 'conv-1' } } },
+      {
+        options: {
+          conversation: {
+            conversationId: 'conv-1',
+            conversation: {
+              id: 'conv-1',
+            },
+          },
+        },
+      },
       123,
     );
     expect(address).toMatchObject({
@@ -63,7 +72,16 @@ describe('memory address', () => {
         channelId: 'channel-9',
         bot: { selfId: '20001' },
       } as any,
-      { options: { room: { conversationId: 'conv-2' } } },
+      {
+        options: {
+          conversation: {
+            conversationId: 'conv-2',
+            conversation: {
+              id: 'conv-2',
+            },
+          },
+        },
+      },
       456,
     );
     expect(address).toMatchObject({

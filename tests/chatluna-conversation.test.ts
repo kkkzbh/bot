@@ -4,13 +4,6 @@ import { resolveChatLunaRoomLike } from '../src/plugins/shared/chatluna-conversa
 describe('chatluna conversation resolution adapter', () => {
   it('uses effective conversation runtime fields instead of stale room or conversation values', () => {
     const room = resolveChatLunaRoomLike({
-      room: {
-        conversationId: 'stale-room-conv',
-        roomId: 9,
-        model: 'stale-room-model',
-        preset: 'stale-room-preset',
-        chatMode: 'chat',
-      },
       conversation: {
         conversationId: 'conv-effective',
         effectiveModel: 'effective-model',
