@@ -1,5 +1,6 @@
 import { Context, Logger, Schema, type Session } from 'koishi';
 import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
+import { resolveChatLunaRoomLike } from '../shared/chatluna-conversation.js';
 import { consumePromptEnvelope, registerPromptFragment } from '../shared/prompt-context/index.js';
 import { resolveSessionAvatarUrl, resolveSessionDisplayName, resolveSessionQqNick } from '../shared/session/index.js';
 import { buildMemoryAddress, type MemoryMiddlewareContextLike } from './address.js';
@@ -394,6 +395,7 @@ export function apply(ctx: Context, config: Config): void {
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
       .after('read_chat_message')
+      .after('resolve_conversation')
       .before('lifecycle-handle_command');
 
     chain
@@ -404,7 +406,7 @@ export function apply(ctx: Context, config: Config): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
 
-        const conversationId = context.options?.room?.conversationId?.trim();
+        const conversationId = resolveChatLunaRoomLike(context.options)?.conversationId?.trim();
         if (!conversationId) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
 
         const envelope = consumePromptEnvelope(conversationId);

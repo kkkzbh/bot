@@ -1,13 +1,12 @@
 import type { Session } from 'koishi';
 import type { MemoryAddress } from '../../types/memory.js';
-
-type RoomLike = {
-  conversationId?: string;
-};
+import {
+  resolveChatLunaRoomLike,
+  type QqbotChatLunaContextOptionsLike,
+} from '../shared/chatluna-conversation.js';
 
 export type MemoryMiddlewareContextLike = {
-  options?: {
-    room?: RoomLike;
+  options?: QqbotChatLunaContextOptionsLike & {
     inputMessage?: {
       content?: unknown;
     };
@@ -22,7 +21,7 @@ export function buildMemoryAddress(
   const userId = session.userId?.trim();
   const botSelfId = session.bot?.selfId?.trim() || session.selfId?.trim();
   const platform = session.platform?.trim() || 'unknown';
-  const conversationId = context.options?.room?.conversationId?.trim();
+  const conversationId = resolveChatLunaRoomLike(context.options)?.conversationId?.trim();
   if (!userId || !botSelfId || !conversationId) return null;
 
   if (session.isDirect) {

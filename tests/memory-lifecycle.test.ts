@@ -119,9 +119,11 @@ vi.mock('../src/plugins/memory/store.js', () => ({
 }));
 
 import { apply } from '../src/plugins/memory/index.js';
+import { clearPromptAssemblyTurn, registerPromptFragment } from '../src/plugins/shared/prompt-context/index.js';
 
 type EventHandler = () => Promise<unknown> | unknown;
 type ChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;
+type ChainConstraint = { name: string; kind: 'after' | 'before'; target: string };
 
 function config() {
   return {
@@ -152,13 +154,19 @@ function config() {
   };
 }
 
-function createChainHarness(store: Map<string, ChainMiddleware>) {
+function createChainHarness(store: Map<string, ChainMiddleware>, constraints: ChainConstraint[]) {
   return {
     middleware: vi.fn((name: string, middleware: ChainMiddleware) => {
       store.set(name, middleware);
       const builder = {
-        after: () => builder,
-        before: () => builder,
+        after: (target: string) => {
+          constraints.push({ name, kind: 'after', target });
+          return builder;
+        },
+        before: (target: string) => {
+          constraints.push({ name, kind: 'before', target });
+          return builder;
+        },
       };
       return builder;
     }),
@@ -168,7 +176,8 @@ function createChainHarness(store: Map<string, ChainMiddleware>) {
 function createHarness(options: { chatChainInitially?: boolean; contextManager?: boolean } = {}) {
   const events = new Map<string, EventHandler[]>();
   const chainMiddlewares = new Map<string, ChainMiddleware>();
-  const chatChain = createChainHarness(chainMiddlewares);
+  const chainConstraints: ChainConstraint[] = [];
+  const chatChain = createChainHarness(chainMiddlewares, chainConstraints);
   const chatluna: Record<string, unknown> = {};
   if (options.contextManager !== false) {
     chatluna.contextManager = { inject: vi.fn() };
@@ -201,6 +210,7 @@ function createHarness(options: { chatChainInitially?: boolean; contextManager?:
 
   return {
     chainMiddlewares,
+    chainConstraints,
     chatChain,
     chatluna,
     ctx,
@@ -225,6 +235,11 @@ describe('memory ChatLuna lifecycle', () => {
 
     expect(harness.chainMiddlewares.get('qqbot_memory')).toBeTypeOf('function');
     expect(harness.chainMiddlewares.get('qqbot_prompt_envelope')).toBeTypeOf('function');
+    expect(harness.chainConstraints).toContainEqual({
+      name: 'qqbot_memory',
+      kind: 'after',
+      target: 'resolve_conversation',
+    });
     expect(harness.chatChain.middleware).toHaveBeenCalledTimes(2);
     await vi.waitFor(() => expect(memoryMocks.runLegacyMemoryMigration).toHaveBeenCalledTimes(1));
     expect(storeMocks.instances[0]?.requeueStaleProcessingJobs).toHaveBeenCalledWith(300_000);
@@ -243,5 +258,50 @@ describe('memory ChatLuna lifecycle', () => {
     const harness = createHarness({ contextManager: false });
 
     await expect(harness.runHook('ready')).rejects.toThrow('memory requires chatluna.contextManager.');
+  });
+
+  it('injects prompt envelopes from ChatLuna conversation resolution without legacy room data', async () => {
+    const harness = createHarness();
+    const conversationId = 'conv-resolution-only-memory';
+
+    await harness.runHook('ready');
+
+    registerPromptFragment(conversationId, {
+      source: 'qqbot_memory',
+      title: 'Memory Context',
+      authority: 'assistant_state',
+      trust: 'trusted',
+      ttl: 'turn',
+      payload: {
+        kind: 'text',
+        value: '用户喜欢安静的回答。',
+      },
+    });
+
+    await harness.chainMiddlewares.get('qqbot_prompt_envelope')?.(
+      {
+        userId: '10001',
+        bot: { selfId: '20001' },
+      },
+      {
+        options: {
+          conversation: {
+            conversationId,
+            conversation: {
+              id: conversationId,
+            },
+          },
+        },
+      },
+    );
+
+    expect((harness.chatluna.contextManager as { inject: ReturnType<typeof vi.fn> }).inject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'qqbot_prompt_envelope',
+        conversationId,
+        stage: 'after_scratchpad',
+      }),
+    );
+    clearPromptAssemblyTurn(conversationId);
   });
 });

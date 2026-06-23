@@ -23,6 +23,37 @@ describe('memory address', () => {
     });
   });
 
+  it('uses ChatLuna conversation resolution when legacy room data is absent', () => {
+    const address = buildMemoryAddress(
+      {
+        isDirect: true,
+        platform: 'onebot',
+        userId: '10001',
+        channelId: 'dm-1',
+        bot: { selfId: '20001' },
+      } as any,
+      {
+        options: {
+          conversation: {
+            conversationId: 'conv-effective',
+            conversation: {
+              id: 'conv-effective',
+            },
+          },
+        },
+      },
+      789,
+    );
+
+    expect(address).toMatchObject({
+      userKey: 'onebot:user:10001',
+      contextKey: 'onebot:bot:20001:dm:10001',
+      channelType: 'direct',
+      conversationId: 'conv-effective',
+      observedAt: 789,
+    });
+  });
+
   it('uses guildId then channelId fallback for group contextKey', () => {
     const address = buildMemoryAddress(
       {
