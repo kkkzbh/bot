@@ -16,7 +16,7 @@ export interface MemoryConversationTurn {
   speakerName: string | null;
   ownerUserKey: string | null;
   isTarget: boolean;
-  attributionSource: 'additional_kwargs' | 'speaker_tag' | 'direct_fallback' | 'assistant' | 'unknown';
+  attributionSource: 'additional_kwargs' | 'speaker_tag' | 'direct_session' | 'assistant' | 'unknown';
 }
 
 const VISIBILITIES = new Set<MemoryVisibility>([
@@ -166,7 +166,7 @@ function quoteContent(value: string): string {
 }
 
 function isTrustedTargetTurn(turn: MemoryConversationTurn): boolean {
-  return turn.isTarget && (turn.attributionSource === 'additional_kwargs' || turn.attributionSource === 'direct_fallback');
+  return turn.isTarget && (turn.attributionSource === 'additional_kwargs' || turn.attributionSource === 'direct_session');
 }
 
 function renderTranscriptLine(turn: MemoryConversationTurn): string {

@@ -67,7 +67,7 @@ describe('memory pipeline', () => {
         speakerName: 'Alice',
         ownerUserKey: address.userKey,
         isTarget: true,
-        attributionSource: 'direct_fallback' as const,
+        attributionSource: 'direct_session' as const,
       }]),
       filterTombstonedTurns: vi.fn(async (_ownerUserKey: string, turns: unknown[]) => turns),
       updateExtractCursor: vi.fn(async () => {}),

@@ -276,7 +276,7 @@ export function apply(ctx: Context, config: Config): void {
             speakerName: 'probe',
             ownerUserKey: 'probe:memory',
             isTarget: true,
-            attributionSource: 'direct_fallback',
+            attributionSource: 'direct_session',
           },
         ],
         providerProfile: runtime.extract,

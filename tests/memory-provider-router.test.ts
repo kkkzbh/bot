@@ -45,7 +45,7 @@ describe('memory provider router', () => {
           speakerName: 'Alice',
           ownerUserKey: 'onebot:10001',
           isTarget: true,
-          attributionSource: 'direct_fallback',
+          attributionSource: 'direct_session',
         }],
         { speakerId: '10001', speakerName: 'Alice' },
       ).catch((error: unknown) => {

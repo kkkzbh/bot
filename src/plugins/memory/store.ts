@@ -401,7 +401,7 @@ function evaluateCandidateAttribution(
         evidenceSpeakerIds: uniqueKeywords(actualSpeakerIds),
       };
     }
-    if (turn.attributionSource !== 'additional_kwargs' && turn.attributionSource !== 'direct_fallback') {
+    if (turn.attributionSource !== 'additional_kwargs' && turn.attributionSource !== 'direct_session') {
       return {
         status: 'rejected',
         reason: 'ownership_evidence_untrusted_speaker',
@@ -747,7 +747,7 @@ export class MemoryStore {
         speakerName: payload.targetSpeakerName,
         ownerUserKey: payload.ownerUserKey,
         isTarget: true,
-        attributionSource: 'direct_fallback',
+        attributionSource: 'direct_session',
       };
     }
 

@@ -415,7 +415,7 @@ describe('memory extract attribution', () => {
       speakerId: '10001',
       ownerUserKey: directA.userKey,
       isTarget: true,
-      attributionSource: 'direct_fallback',
+      attributionSource: 'direct_session',
     });
   });
 
