@@ -1133,6 +1133,33 @@ describe('affinity service random history sync', () => {
     expect(injectedText).not.toContain(String(replyAt));
   });
 
+  it('rejects corrupted random memory response summaries before proactive prompt generation', async () => {
+    const { service, contextManager } = createHarness({
+      randomMemories: [
+        {
+          id: 78,
+          characterId: CHARACTER_ID,
+          scopeKind: 'group',
+          scopeId: '829573670',
+          direction: 'contest_discussion',
+          sourcePlanId: 55,
+          messageText: '昨天那道缩点题，我还是有一点在意。',
+          contextSummary: 'SCC 缩点讨论',
+          materialJson: null,
+          responseSummary: '{"broken":',
+          responderNames: JSON.stringify([]),
+          createdAt: NOW - 24 * 60 * 60 * 1000,
+          lastResponseAt: NOW - 10 * 60 * 1000,
+          expiresAt: NOW + 30 * 24 * 60 * 60 * 1000,
+          updatedAt: NOW - 10 * 60 * 1000,
+        },
+      ],
+    });
+
+    await expect(service.runDueRandomPlans(NOW)).rejects.toThrow('affinity_random_memory.responseSummary must contain valid JSON.');
+    expect(contextManager.inject).not.toHaveBeenCalled();
+  });
+
   it('uses real ChatLuna history context through the main reply chain to generate a declarative proactive continuation', async () => {
     const declarativeMessage = '前面那道缩点题，我想了一下。只要缩完以后还能绕回去，那几个点原本就应该属于同一个强连通分量。';
     const { db, service, bot, chat, contextManager } = createHarness({
@@ -1332,6 +1359,31 @@ describe('affinity service random history sync', () => {
       speaker: 'Alice',
       eventType: 'answer_random_prompt',
     }));
+  });
+
+  it('rejects corrupted random memory responder names before relationship writes', async () => {
+    const { db, service } = createHarness();
+    await service.runDueRandomPlans(NOW);
+    db.tables.affinity_open_thread[0].expiresAt = Date.now() + 3_600_000;
+    db.tables.affinity_random_memory[0].responderNames = '{"broken":';
+
+    const session = {
+      isDirect: false,
+      platform: 'onebot',
+      guildId: '829573670',
+      channelId: '829573670',
+      userId: 'u-1',
+      messageId: 'reply-corrupt-memory',
+      content: '这个算法是不是缩点以后再拓扑排序？',
+      stripped: { content: '这个算法是不是缩点以后再拓扑排序？' },
+      author: { nick: 'Alice' },
+      bot: { selfId: 'bot-1' },
+    } as any;
+
+    await expect(service.processIncomingSession(session)).rejects.toThrow('affinity_random_memory.responderNames must contain valid JSON.');
+    expect(db.tables.affinity_user_state).toHaveLength(0);
+    expect(db.tables.affinity_event).toHaveLength(0);
+    expect(db.tables.affinity_audit.some((row) => row.eventType === 'random_memory_updated')).toBe(false);
   });
 
   it('migrates stored random memory prompt text away from platform control tags', async () => {

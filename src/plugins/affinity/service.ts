@@ -288,12 +288,21 @@ function sanitizePromptMemoryText(value: unknown): string {
     .trim();
 }
 
-function parseJson<T>(raw: string | null | undefined, fallback: T): T {
-  try {
-    return raw ? JSON.parse(raw) as T : fallback;
-  } catch {
-    return fallback;
+function parseOptionalJsonArray(raw: string | null | undefined, label: string): unknown[] {
+  if (raw == null) return [];
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new Error(`${label} must contain JSON.`);
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`${label} must contain valid JSON.`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON array.`);
+  }
+  return parsed;
 }
 
 function parseRequiredJsonRecord(raw: string | null | undefined, label: string): Record<string, unknown> {
@@ -633,17 +642,14 @@ function buildPanelHistoryMetadata(view: AffinityPanelView): Record<string, unkn
   };
 }
 
-function parseStringArray(raw: string | null | undefined): string[] {
-  const parsed = parseJson<unknown>(raw, []);
-  return Array.isArray(parsed)
-    ? parsed.map((item) => sanitizePromptMemoryText(item)).filter(Boolean)
-    : [];
+function parseStringArray(raw: string | null | undefined, label = 'affinity_random_memory.responderNames'): string[] {
+  return parseOptionalJsonArray(raw, label)
+    .map((item) => sanitizePromptMemoryText(item))
+    .filter(Boolean);
 }
 
-function parseResponseSummary(raw: string | null | undefined): Array<{ at: number; speaker: string; summary: string }> {
-  const parsed = parseJson<unknown>(raw, []);
-  if (!Array.isArray(parsed)) return [];
-  return parsed
+function parseResponseSummary(raw: string | null | undefined, label = 'affinity_random_memory.responseSummary'): Array<{ at: number; speaker: string; summary: string }> {
+  return parseOptionalJsonArray(raw, label)
     .map((item) => {
       if (!item || typeof item !== 'object') return null;
       const record = item as Record<string, unknown>;
@@ -685,18 +691,13 @@ function formatResponseSummaryForPrompt(raw: string | null | undefined, now: num
     .join('；');
 }
 
-function parseStoredJsonArray(raw: string | null | undefined): unknown[] | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+function parseStoredJsonArray(raw: string | null | undefined, label: string): unknown[] | null {
+  if (raw == null) return null;
+  return parseOptionalJsonArray(raw, label);
 }
 
 function normalizeStoredResponseSummaryJson(raw: string | null | undefined): string | null {
-  const parsed = parseStoredJsonArray(raw);
+  const parsed = parseStoredJsonArray(raw, 'affinity_random_memory.responseSummary');
   if (!parsed) return null;
   const normalized = parsed
     .map((item) => {
@@ -713,7 +714,7 @@ function normalizeStoredResponseSummaryJson(raw: string | null | undefined): str
 }
 
 function normalizeStoredStringArrayJson(raw: string | null | undefined): string | null {
-  const parsed = parseStoredJsonArray(raw);
+  const parsed = parseStoredJsonArray(raw, 'affinity_random_memory.responderNames');
   if (!parsed) return null;
   return stringifyJson(parsed.map((item) => sanitizePromptMemoryText(item)).filter(Boolean));
 }
@@ -1320,6 +1321,7 @@ export class AffinityService implements AffinityServiceLike {
     const userKey = userKeyFromSession(session);
     if (!userKey) return null;
     const openThreads = await this.listOpenThreads(scope.scopeKind, scope.scopeId, userKey, now);
+    await this.validateOpenRandomMemoryPromptState(openThreads);
     const stateRow = await this.getOrCreateUserState(session, userKey, now);
     const state = stateFromRecord(stateRow, now);
     const analysisConfig = this.resolveAnalysisConfig(settings);
@@ -1627,6 +1629,20 @@ export class AffinityService implements AffinityServiceLike {
           randomPayload: parseRandomThreadPayload(row.payloadJson),
         };
       });
+  }
+
+  private async validateOpenRandomMemoryPromptState(openThreads: OpenThreadSummary[]): Promise<void> {
+    for (const thread of openThreads) {
+      if (!normalizeText(thread.title).startsWith('random:')) continue;
+      const payload = thread.randomPayload ?? parseRandomThreadPayload(thread.payloadJson);
+      const [memory] = await this.database.get('affinity_random_memory', {
+        characterId: CHARACTER_ID,
+        sourcePlanId: payload.planId,
+      }) as AffinityRandomMemoryRecord[];
+      if (!memory?.id) continue;
+      parseResponseSummary(memory.responseSummary);
+      parseStringArray(memory.responderNames);
+    }
   }
 
   private async updateRandomMemoryFromReply(args: {
