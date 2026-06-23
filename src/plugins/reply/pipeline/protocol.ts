@@ -8,43 +8,76 @@ export interface ToolMemoryEntry {
   inputDigest: string;
   snippetFormat: 'text' | 'json';
   snippet: string;
-  freshnessHint: string;
 }
 
 const TOOL_MEMORY_STORAGE_KEY = '__chatluna_internal_tool_memory_v1';
 
-function parseStoredToolMemoryEntries(raw: unknown): ToolMemoryEntry[] {
-  if (typeof raw !== 'string' || !raw.trim()) return [];
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
 
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed
-      .map((entry) => {
-        if (!entry || typeof entry !== 'object') return null;
-        const candidate = entry as Record<string, unknown>;
-        const turnId = String(candidate.turnId ?? '').trim();
-        const createdAt = String(candidate.createdAt ?? '').trim();
-        const toolName = String(candidate.toolName ?? '').trim();
-        const inputDigest = String(candidate.inputDigest ?? '').trim();
-        const snippet = String(candidate.snippet ?? '').trim();
-        if (!turnId || !createdAt || !toolName || !snippet) return null;
-
-        return {
-          turnId,
-          createdAt,
-          toolName,
-          inputDigest,
-          snippetFormat: candidate.snippetFormat === 'json' ? 'json' : 'text',
-          snippet,
-          freshnessHint: String(candidate.freshnessHint ?? '').trim() || createdAt,
-        } satisfies ToolMemoryEntry;
-      })
-      .filter((entry): entry is ToolMemoryEntry => entry != null);
-  } catch {
-    return [];
+function readRequiredString(
+  record: Record<string, unknown>,
+  field: string,
+  entryIndex: number,
+): string {
+  const value = record[field];
+  if (typeof value !== 'string') {
+    throw new Error(`tool memory entry ${entryIndex + 1}.${field} must be a string.`);
   }
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error(`tool memory entry ${entryIndex + 1}.${field} must not be empty.`);
+  }
+  return normalized;
+}
+
+function readOptionalString(
+  record: Record<string, unknown>,
+  field: string,
+  entryIndex: number,
+): string {
+  const value = record[field];
+  if (value == null) return '';
+  if (typeof value !== 'string') {
+    throw new Error(`tool memory entry ${entryIndex + 1}.${field} must be a string.`);
+  }
+  return value.trim();
+}
+
+function parseStoredToolMemoryEntries(raw: unknown): ToolMemoryEntry[] {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    throw new Error('tool memory payload must be a non-empty JSON string.');
+  }
+
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error('tool memory payload must be a JSON array.');
+  }
+
+  return parsed.map((entry, index) => {
+    if (!isPlainRecord(entry)) {
+      throw new Error(`tool memory entry ${index + 1} must be an object.`);
+    }
+    const turnId = readRequiredString(entry, 'turnId', index);
+    const createdAt = readRequiredString(entry, 'createdAt', index);
+    const toolName = readRequiredString(entry, 'toolName', index);
+    const inputDigest = readOptionalString(entry, 'inputDigest', index);
+    const snippetFormat = readRequiredString(entry, 'snippetFormat', index);
+    if (snippetFormat !== 'text' && snippetFormat !== 'json') {
+      throw new Error(`tool memory entry ${index + 1}.snippetFormat must be text or json.`);
+    }
+    const snippet = readRequiredString(entry, 'snippet', index);
+
+    return {
+      turnId,
+      createdAt,
+      toolName,
+      inputDigest,
+      snippetFormat,
+      snippet,
+    } satisfies ToolMemoryEntry;
+  });
 }
 
 async function loadReplyToolMemoryEntries(
@@ -67,6 +100,10 @@ async function loadReplyToolMemoryEntries(
   if (!rawAdditionalArgs) return [];
 
   const parsed = JSON.parse(rawAdditionalArgs) as Record<string, unknown>;
+  if (!isPlainRecord(parsed)) {
+    throw new Error('conversation additional_kwargs must be a JSON object.');
+  }
+  if (!Object.prototype.hasOwnProperty.call(parsed, TOOL_MEMORY_STORAGE_KEY)) return [];
   return parseStoredToolMemoryEntries(parsed[TOOL_MEMORY_STORAGE_KEY]);
 }
 

@@ -1278,6 +1278,63 @@ describe('qq voice plugin', () => {
     );
   });
 
+  it('rejects malformed tool memory instead of stringifying object fields into prompt context', async () => {
+    const { ready, getToolMemoryState, bot } = createHarness({
+      databaseGetImpl: async (table: string, query: Record<string, unknown>) => {
+        if (table === 'chatluna_conversation') {
+          return [{
+            id: query.id ?? 'conv-memory',
+            additional_kwargs: JSON.stringify({
+              __chatluna_internal_tool_memory_v1: JSON.stringify([
+                {
+                  turnId: 'turn-1',
+                  createdAt: '2026-03-23T06:00:00.000Z',
+                  toolName: 'web_search',
+                  inputDigest: '{"query":"液态玻璃"}',
+                  snippetFormat: 'text',
+                  snippet: { text: '搜索结果 A' },
+                  freshnessHint: '2026-03-23T06:00:00.000Z',
+                },
+              ]),
+            }),
+          }];
+        }
+        return [];
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const middleware = getToolMemoryState();
+    const session = createSession(bot, {
+      content: '继续说',
+      strippedContent: '继续说',
+    });
+    const context = {
+      options: {
+        room: { conversationId: 'conv-memory' },
+        inputMessage: {
+          content: '继续说',
+          additional_kwargs: {},
+        },
+      },
+    };
+
+    await middleware?.(session, context);
+
+    expect(promptAssemblyMocks.registerPromptFragment).not.toHaveBeenCalledWith(
+      'conv-memory',
+      expect.objectContaining({
+        source: 'qqbot_reply_tool_memory',
+      }),
+    );
+    expect(
+      loggerMocks.warn.mock.calls.some(([message]) => String(message).includes('reply tool memory parse failed')),
+    ).toBe(true);
+  });
+
   it('compiles QQ reply turns into explicit agent prompt envelopes and requests structured output', async () => {
     const { ready, getPrepare, getPolicy, getPromptCompiler, bot, inject } = createHarness();
     vi.stubGlobal(
