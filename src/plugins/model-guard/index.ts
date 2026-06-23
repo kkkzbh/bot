@@ -150,14 +150,13 @@ async function resolveOrEnsureReplyRoom(
 export function apply(ctx: Context, config: Config = {}): void {
   const services = ctx as unknown as ContextServices;
   void config;
+  let modelGuardRegistered = false;
 
-  ctx.on('ready', () => {
+  const ensureModelGuardRegistered = (): boolean => {
+    if (modelGuardRegistered) return true;
     const chatluna = services.chatluna;
     const chain = chatluna?.chatChain;
-    if (!chatluna || !chain) {
-      logger.warn('chatluna service is not available, skip model guard middleware.');
-      return;
-    }
+    if (!chatluna || !chain) return false;
 
     chain
       .middleware('chatluna_time_context', async (rawSession, rawContext) => {
@@ -302,5 +301,15 @@ export function apply(ctx: Context, config: Config = {}): void {
       })
       .after('resolve_conversation')
       .before('resolve_model');
+    modelGuardRegistered = true;
+    return true;
+  };
+
+  ctx.on('ready', () => {
+    ensureModelGuardRegistered();
+  });
+
+  ctx.on('chatluna/chat-chain-added', () => {
+    ensureModelGuardRegistered();
   });
 }

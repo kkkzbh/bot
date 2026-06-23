@@ -84,11 +84,12 @@ function createChainBuilder(store: Map<string, ChainMiddleware>) {
 
 const constraints: Array<{ name: string; kind: 'after' | 'before'; target: string }> = [];
 
-function createHarness() {
+function createHarness(options: { chatChainAvailableInitially?: boolean } = {}) {
   constraints.length = 0;
   const middlewares: Array<(session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>> = [];
   const events = new Map<string, Array<(...args: any[]) => unknown>>();
   const chainMiddlewares = new Map<string, ChainMiddleware>();
+  const chatChain = createChainBuilder(chainMiddlewares);
   const chatluna = {
     platform: {
       findModel: vi.fn(() => ({ value: true })),
@@ -106,7 +107,7 @@ function createHarness() {
       })),
     },
     awaitLoadPlatform: vi.fn(async () => undefined),
-    chatChain: createChainBuilder(chainMiddlewares),
+    chatChain: options.chatChainAvailableInitially === false ? undefined : chatChain,
   };
 
   const ctx = {
@@ -135,6 +136,10 @@ function createHarness() {
     chatluna,
     database: ctx.database,
     ready: (events.get('ready') ?? [])[0],
+    chatChainAdded: (events.get('chatluna/chat-chain-added') ?? [])[0],
+    setChatChainAvailable: () => {
+      chatluna.chatChain = chatChain;
+    },
   };
 }
 
@@ -162,6 +167,20 @@ describe('chatluna model guard runtime shape', () => {
       kind: 'after',
       target: 'resolve_room',
     });
+  });
+
+  it('registers model guard middlewares after ChatLuna adds the chat chain', () => {
+    const harness = createHarness({ chatChainAvailableInitially: false });
+    harness.ready?.();
+
+    expect(harness.chainMiddlewares.has('chatluna_time_context')).toBe(false);
+    expect(harness.chainMiddlewares.has('chatluna_model_guard')).toBe(false);
+
+    harness.setChatChainAvailable();
+    harness.chatChainAdded?.();
+
+    expect(harness.chainMiddlewares.has('chatluna_time_context')).toBe(true);
+    expect(harness.chainMiddlewares.has('chatluna_model_guard')).toBe(true);
   });
 
   it('updates the live ChatLuna 1.4 conversation model before resolve_model reads it', async () => {
