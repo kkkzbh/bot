@@ -59,7 +59,7 @@ class RealtimeMessageHistoryTool extends StructuredTool {
       throw new Error('realtime_message_history requires the current session.');
     }
 
-    const scopeKey = buildGroupScopeKey(session as never);
+    const scopeKey = buildGroupScopeKey(session);
     if (!scopeKey) {
       return JSON.stringify({
         scope: input.scope,
