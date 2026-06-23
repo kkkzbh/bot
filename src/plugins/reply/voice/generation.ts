@@ -1830,27 +1830,17 @@ export function apply(ctx: Context, config: Config = {}): void {
     true,
   );
 
-  ctx.on('ready', async () => {
-    const historyMigration = await migrateStructuredReplyHistoryRows(ctx.database as never);
-    if (historyMigration.migrated > 0) {
-      logger.info('migrated %d structured reply history row(s).', historyMigration.migrated);
-    }
+  let replyRuntimeMiddlewaresRegistered = false;
 
-    if (isVoiceOutputConfigured(runtime)) {
-      const ttsState = getTtsCapabilityState(runtime, sharedReplyTransportTtsCapabilityStates);
-      ttsState.failureBackoffUntil = Math.max(ttsState.failureBackoffUntil, Date.now() + INITIAL_TTS_PROBE_DELAY_MS);
-      initialTtsProbeTimer = setTimeout(() => {
-        void runTtsHealthProbe(runtime, ttsState, true).catch((error) => {
-          logger.warn('initial tts health probe failed: %s', (error as Error).message);
-        });
-      }, INITIAL_TTS_PROBE_DELAY_MS);
-    }
-
+  const ensureReplyRuntimeMiddlewaresRegistered = (): boolean => {
+    if (replyRuntimeMiddlewaresRegistered) return true;
     const chatluna = resolveChatLunaService();
     const chain = chatluna?.chatChain as ChatLunaChainLike | undefined;
-    if (!chain?.middleware) {
-      logger.warn('chatluna service is not available, skip reply transport policy middleware.');
-      return;
+    if (!chatluna || !chain?.middleware) {
+      return false;
+    }
+    if (!chatluna.contextManager) {
+      throw new Error('reply runtime requires chatluna.contextManager.');
     }
 
     const prepareBuilder = chain.middleware('qqbot_reply_runtime_prepare', async (rawSession, rawContext) => {
@@ -2233,6 +2223,31 @@ export function apply(ctx: Context, config: Config = {}): void {
       }) as ChatLunaChainBuilderLike;
     executorBuilder.after('request_conversation');
     executorBuilder.before('censor');
+    replyRuntimeMiddlewaresRegistered = true;
+    return true;
+  };
+
+  ctx.on('ready', async () => {
+    const historyMigration = await migrateStructuredReplyHistoryRows(ctx.database as never);
+    if (historyMigration.migrated > 0) {
+      logger.info('migrated %d structured reply history row(s).', historyMigration.migrated);
+    }
+
+    if (isVoiceOutputConfigured(runtime)) {
+      const ttsState = getTtsCapabilityState(runtime, sharedReplyTransportTtsCapabilityStates);
+      ttsState.failureBackoffUntil = Math.max(ttsState.failureBackoffUntil, Date.now() + INITIAL_TTS_PROBE_DELAY_MS);
+      initialTtsProbeTimer = setTimeout(() => {
+        void runTtsHealthProbe(runtime, ttsState, true).catch((error) => {
+          logger.warn('initial tts health probe failed: %s', (error as Error).message);
+        });
+      }, INITIAL_TTS_PROBE_DELAY_MS);
+    }
+
+    ensureReplyRuntimeMiddlewaresRegistered();
+  });
+
+  ctx.on('chatluna/chat-chain-added', () => {
+    ensureReplyRuntimeMiddlewaresRegistered();
   });
 
   ctx.on('dispose', () => {

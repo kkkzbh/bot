@@ -52,7 +52,6 @@ function createHarness(
   middleware: Middleware;
   chatChainMiddlewares: Map<string, ChatChainMiddleware>;
   messageTransformer: { transform: ReturnType<typeof vi.fn> };
-  queryInterfaceWrapper: ReturnType<typeof vi.fn>;
   registerAllowReplyResolver: ReturnType<typeof vi.fn>;
   disposeAllowReplyResolver: ReturnType<typeof vi.fn>;
   runReady: () => Promise<void>;
@@ -62,7 +61,6 @@ function createHarness(
   const chatChainMiddlewares = new Map<string, ChatChainMiddleware>();
   const listeners = new Map<string, EventListener[]>();
   const disposeAllowReplyResolver = vi.fn();
-  const queryInterfaceWrapper = vi.fn();
   const messageTransformer = {
     transform: vi.fn(),
   };
@@ -82,7 +80,7 @@ function createHarness(
       return builder;
     }),
   };
-  const chatlunaService = { registerAllowReplyResolver, chatChain, queryInterfaceWrapper, messageTransformer };
+  const chatlunaService = { registerAllowReplyResolver, chatChain, messageTransformer };
   const ctx: Record<string, unknown> = {
     middleware: vi.fn((handler: Middleware) => {
       middlewares.push(handler);
@@ -124,7 +122,6 @@ function createHarness(
     middleware: middlewares[0],
     chatChainMiddlewares,
     messageTransformer,
-    queryInterfaceWrapper,
     registerAllowReplyResolver,
     disposeAllowReplyResolver,
     runReady: () => runHook('ready'),
@@ -245,12 +242,11 @@ describe('group natural trigger middleware', () => {
   });
 
   it('does not register realtime promotion or media middleware on ready', async () => {
-    const { runReady, chatChainMiddlewares, queryInterfaceWrapper, messageTransformer } = createHarness();
+    const { runReady, chatChainMiddlewares, messageTransformer } = createHarness();
 
     await runReady();
 
     expect(chatChainMiddlewares.size).toBe(0);
-    expect(queryInterfaceWrapper).not.toHaveBeenCalled();
     expect(messageTransformer.transform).not.toHaveBeenCalled();
   });
 

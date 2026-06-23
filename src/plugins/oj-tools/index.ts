@@ -1,12 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { StructuredTool } from '@langchain/core/tools';
-import { Context, Logger, Schema } from 'koishi';
+import { Context, Schema } from 'koishi';
 import type { ChatLunaTool, ChatLunaToolRunnable } from 'koishi-plugin-chatluna/llm-core/platform/types';
 import { z } from 'zod';
 import { CodeforcesProvider, type ContestQueryMode } from './provider.js';
 import { renderCodeforcesProfileCard, renderCodeforcesRatingChart } from './render.js';
-
-const logger = new Logger('oj-tools');
 
 export const name = 'oj-tools';
 export const inject = { required: ['chatluna', 'chatluna_storage'] } as const;
@@ -311,8 +309,7 @@ function registerOjTools(ctx: ContextWithOjTools, runtime: RuntimeConfig): Array
   const platform = ctx.chatluna.platform;
   const registerTool = platform?.registerTool?.bind(platform);
   if (!registerTool) {
-    logger.warn('chatluna runtime tool registry is unavailable, skip oj-tools registration.');
-    return [];
+    throw new Error('oj-tools requires chatluna.platform.registerTool.');
   }
 
   const provider = new CodeforcesProvider({
@@ -361,11 +358,6 @@ export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
   const serviceCtx = ctx as ContextWithOjTools;
   let disposers = registerOjTools(serviceCtx, runtime);
-
-  ctx.on('ready', () => {
-    if (disposers.length > 0) return;
-    disposers = registerOjTools(serviceCtx, runtime);
-  });
 
   ctx.on('dispose', () => {
     for (const dispose of disposers) {

@@ -1,0 +1,244 @@
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('koishi-plugin-chatluna/chains', () => ({
+  ChainMiddlewareRunStatus: { STOP: 1, CONTINUE: 0 },
+}));
+
+vi.mock('koishi', () => {
+  type MockSchemaNode = {
+    description: () => MockSchemaNode;
+    role: () => MockSchemaNode;
+  };
+
+  const createSchemaNode = (): MockSchemaNode => ({
+    description: () => createSchemaNode(),
+    role: () => createSchemaNode(),
+  });
+
+  class MockLogger {
+    info(): void {}
+    warn(): void {}
+  }
+
+  return {
+    Context: class {},
+    Logger: MockLogger,
+    Schema: {
+      object: () => createSchemaNode(),
+      boolean: () => createSchemaNode(),
+      string: () => createSchemaNode(),
+      natural: () => createSchemaNode(),
+    },
+  };
+});
+
+const memoryMocks = vi.hoisted(() => ({
+  buildMemoryExtractProviderProfile: vi.fn((_profile: unknown, config: unknown) => config),
+  embedTexts: vi.fn(async () => [[0.1, 0.2]]),
+  ensureMemoryTables: vi.fn(),
+  extractMemoryCandidates: vi.fn(async () => ({ ok: true, route: 'probe' })),
+  isEmbedRuntimeConfigured: vi.fn(() => false),
+  isMemoryProviderConfigured: vi.fn(() => true),
+  processMaintenanceJob: vi.fn(async () => undefined),
+  registerMemoryCommands: vi.fn(),
+  runLegacyMemoryMigration: vi.fn(async () => ({
+    factsMigrated: 0,
+    episodesMigrated: 0,
+    profilesMigrated: 0,
+    groupRowsDiscarded: 0,
+  })),
+  runMemoryJobTick: vi.fn(async () => undefined),
+  MemoryStatusService: vi.fn(function MemoryStatusService(this: { recordRoute: ReturnType<typeof vi.fn> }) {
+    this.recordRoute = vi.fn();
+  }),
+}));
+
+const storeMocks = vi.hoisted(() => ({
+  instances: [] as Array<{
+    requeueStaleProcessingJobs: ReturnType<typeof vi.fn>;
+    upsertAddress: ReturnType<typeof vi.fn>;
+    getUserFlags: ReturnType<typeof vi.fn>;
+    queueExtractJob: ReturnType<typeof vi.fn>;
+  }>,
+}));
+
+vi.mock('../src/plugins/shared/llm/main-chat-runtime.js', () => ({
+  mainChatRuntimeState: {
+    getProfile: vi.fn(() => ({ routeId: 'main-chat' })),
+  },
+}));
+
+vi.mock('../src/plugins/memory/commands.js', () => ({
+  registerMemoryCommands: memoryMocks.registerMemoryCommands,
+}));
+
+vi.mock('../src/plugins/memory/migration.js', () => ({
+  runLegacyMemoryMigration: memoryMocks.runLegacyMemoryMigration,
+}));
+
+vi.mock('../src/plugins/memory/pipeline.js', () => ({
+  processMaintenanceJob: memoryMocks.processMaintenanceJob,
+  runMemoryJobTick: memoryMocks.runMemoryJobTick,
+}));
+
+vi.mock('../src/plugins/memory/providers/embedding-client.js', () => ({
+  embedTexts: memoryMocks.embedTexts,
+  isEmbedRuntimeConfigured: memoryMocks.isEmbedRuntimeConfigured,
+}));
+
+vi.mock('../src/plugins/memory/providers/router.js', () => ({
+  buildMemoryExtractProviderProfile: memoryMocks.buildMemoryExtractProviderProfile,
+  extractMemoryCandidates: memoryMocks.extractMemoryCandidates,
+  isMemoryProviderConfigured: memoryMocks.isMemoryProviderConfigured,
+}));
+
+vi.mock('../src/plugins/memory/schema.js', () => ({
+  ensureMemoryTables: memoryMocks.ensureMemoryTables,
+}));
+
+vi.mock('../src/plugins/memory/status.js', () => ({
+  MemoryStatusService: memoryMocks.MemoryStatusService,
+  createUnavailableMemoryStatusSnapshot: vi.fn(),
+}));
+
+vi.mock('../src/plugins/memory/store.js', () => ({
+  extractPlainText: (input: unknown) => String(input ?? '').trim(),
+  MemoryStore: class {
+    requeueStaleProcessingJobs = vi.fn(async () => 0);
+    upsertAddress = vi.fn(async () => undefined);
+    getUserFlags = vi.fn(async () => ({ readEnabled: true, writeEnabled: true }));
+    queueExtractJob = vi.fn(async () => undefined);
+
+    constructor() {
+      storeMocks.instances.push(this);
+    }
+  },
+}));
+
+import { apply } from '../src/plugins/memory/index.js';
+
+type EventHandler = () => Promise<unknown> | unknown;
+type ChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;
+
+function config() {
+  return {
+    enabled: true,
+    readEnabled: true,
+    writeEnabled: true,
+    extractBaseUrl: '',
+    extractApiKey: '',
+    extractModel: '',
+    extractTimeoutMs: 60_000,
+    extractRequestMode: 'chat_completions',
+    extractStructuredOutputProtocol: 'chat_reply_v1',
+    extractSupportsJsonMode: false,
+    embedBaseUrl: '',
+    embedApiKey: '',
+    embedModel: '',
+    embedTimeoutMs: 60_000,
+    queryTopK: 4,
+    promptBudgetTokens: 800,
+    embedBatchSize: 8,
+    extractIdleMs: 10_000,
+    extractMessageBatch: 8,
+    archiveDays: 30,
+    maxJobRetries: 3,
+    jobLockTimeoutMs: 300_000,
+    maxFacts: 5,
+    maxEpisodes: 5,
+  };
+}
+
+function createChainHarness(store: Map<string, ChainMiddleware>) {
+  return {
+    middleware: vi.fn((name: string, middleware: ChainMiddleware) => {
+      store.set(name, middleware);
+      const builder = {
+        after: () => builder,
+        before: () => builder,
+      };
+      return builder;
+    }),
+  };
+}
+
+function createHarness(options: { chatChainInitially?: boolean; contextManager?: boolean } = {}) {
+  const events = new Map<string, EventHandler[]>();
+  const chainMiddlewares = new Map<string, ChainMiddleware>();
+  const chatChain = createChainHarness(chainMiddlewares);
+  const chatluna: Record<string, unknown> = {};
+  if (options.contextManager !== false) {
+    chatluna.contextManager = { inject: vi.fn() };
+  }
+  if (options.chatChainInitially !== false) {
+    chatluna.chatChain = chatChain;
+  }
+
+  const ctx = {
+    database: {},
+    chatluna,
+    get: vi.fn((name: string) => (name === 'chatluna' ? chatluna : undefined)),
+    on: vi.fn((name: string, handler: EventHandler) => {
+      const bucket = events.get(name) ?? [];
+      bucket.push(handler);
+      events.set(name, bucket);
+    }),
+    provide: vi.fn(),
+    set: vi.fn(),
+    setInterval: vi.fn(),
+  };
+
+  apply(ctx as never, config());
+
+  const runHook = async (name: string) => {
+    for (const handler of events.get(name) ?? []) {
+      await handler();
+    }
+  };
+
+  return {
+    chainMiddlewares,
+    chatChain,
+    chatluna,
+    ctx,
+    runHook,
+    setChatChainAvailable: () => {
+      chatluna.chatChain = chatChain;
+    },
+  };
+}
+
+describe('memory ChatLuna lifecycle', () => {
+  it('registers memory middlewares when ChatLuna adds the chat chain', async () => {
+    const harness = createHarness({ chatChainInitially: false });
+
+    await harness.runHook('ready');
+
+    expect(harness.chainMiddlewares.size).toBe(0);
+    expect(memoryMocks.runLegacyMemoryMigration).not.toHaveBeenCalled();
+
+    harness.setChatChainAvailable();
+    await harness.runHook('chatluna/chat-chain-added');
+
+    expect(harness.chainMiddlewares.get('qqbot_memory')).toBeTypeOf('function');
+    expect(harness.chainMiddlewares.get('qqbot_prompt_envelope')).toBeTypeOf('function');
+    expect(harness.chatChain.middleware).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(memoryMocks.runLegacyMemoryMigration).toHaveBeenCalledTimes(1));
+    expect(storeMocks.instances[0]?.requeueStaleProcessingJobs).toHaveBeenCalledWith(300_000);
+    expect(memoryMocks.runMemoryJobTick).toHaveBeenCalledTimes(1);
+    expect(memoryMocks.processMaintenanceJob).toHaveBeenCalledTimes(1);
+    expect(harness.ctx.setInterval).toHaveBeenCalledTimes(1);
+
+    await harness.runHook('chatluna/chat-chain-added');
+
+    expect(harness.chatChain.middleware).toHaveBeenCalledTimes(2);
+    expect(memoryMocks.runLegacyMemoryMigration).toHaveBeenCalledTimes(1);
+    expect(harness.ctx.setInterval).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails fast when ChatLuna exposes a chain without contextManager', async () => {
+    const harness = createHarness({ contextManager: false });
+
+    await expect(harness.runHook('ready')).rejects.toThrow('memory requires chatluna.contextManager.');
+  });
+});

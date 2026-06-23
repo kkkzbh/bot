@@ -200,7 +200,7 @@ type ChainConstraint = { name: string; kind: 'after' | 'before'; target: string 
 
 function createChainBuilder(store: Map<string, ChainMiddleware>, constraints: ChainConstraint[]) {
   return {
-    middleware: (name: string, middleware: ChainMiddleware) => {
+    middleware: vi.fn((name: string, middleware: ChainMiddleware) => {
       store.set(name, middleware);
       const builder = {
         after: (target: string) => {
@@ -213,7 +213,7 @@ function createChainBuilder(store: Map<string, ChainMiddleware>, constraints: Ch
         },
       };
       return builder;
-    },
+    }),
   };
 }
 
@@ -272,6 +272,8 @@ function createHarness(overrides: {
   databaseUpsertImpl?: (table: string, rows: Record<string, unknown>[]) => Promise<unknown>;
   databaseRemoveImpl?: (table: string, query: Record<string, unknown>) => Promise<unknown>;
   normalizeResearchReplyHistoryImpl?: (room: Record<string, unknown>, finalVisibleText: string) => Promise<unknown>;
+  chatChainInitially?: boolean;
+  contextManager?: boolean;
 } = {}) {
   const middlewares: Middleware[] = [];
   const events = new Map<string, EventHandler[]>();
@@ -328,12 +330,11 @@ function createHarness(overrides: {
     bot.internal._request = vi.fn(async () => ({ retcode: 0, data: { yes: true } }));
   }
 
-  const chatluna = {
-    contextManager: { inject },
-    chatChain: {
-      ...createChainBuilder(chainMiddlewares, chainConstraints),
-      receiveMessage: vi.fn(async () => false),
-    },
+  const chatChain = {
+    ...createChainBuilder(chainMiddlewares, chainConstraints),
+    receiveMessage: vi.fn(async () => false),
+  };
+  const chatluna: Record<string, any> = {
     createChatModel: vi.fn(async (model: string) => ({
       value: await (overrides.createChatModelImpl?.(model) ??
         Promise.resolve({
@@ -357,6 +358,12 @@ function createHarness(overrides: {
       };
     }),
   };
+  if (overrides.contextManager !== false) {
+    chatluna.contextManager = { inject };
+  }
+  if (overrides.chatChainInitially !== false) {
+    chatluna.chatChain = chatChain;
+  }
 
   const ctx = {
     bots: [bot],
@@ -412,6 +419,11 @@ function createHarness(overrides: {
     getPromptCompiler: () => chainMiddlewares.get('qqbot_reply_prompt_compiler'),
     getExecutor: () => chainMiddlewares.get('qqbot_reply_plan_executor'),
     getChainConstraints: () => chainConstraints,
+    chatChain,
+    chatChainAdded: (events.get('chatluna/chat-chain-added') ?? [])[0],
+    setChatChainAvailable: () => {
+      chatluna.chatChain = chatChain;
+    },
     chatluna,
     inject,
     bot,
@@ -1058,6 +1070,47 @@ describe('qq voice plugin', () => {
       kind: 'after',
       target: 'resolve_room',
     });
+  });
+
+  it('registers reply runtime middlewares after ChatLuna adds the chat chain', async () => {
+    const {
+      ready,
+      chatChainAdded,
+      setChatChainAvailable,
+      getPrepare,
+      getPolicy,
+      getPromptCompiler,
+      getExecutor,
+      chatChain,
+    } = createHarness({ chatChainInitially: false });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    expect(getPrepare()).toBeUndefined();
+    expect(getPolicy()).toBeUndefined();
+    expect(getPromptCompiler()).toBeUndefined();
+    expect(getExecutor()).toBeUndefined();
+
+    setChatChainAvailable();
+    await chatChainAdded?.();
+
+    expect(getPrepare()).toBeTypeOf('function');
+    expect(getPolicy()).toBeTypeOf('function');
+    expect(getPromptCompiler()).toBeTypeOf('function');
+    expect(getExecutor()).toBeTypeOf('function');
+    expect(chatChain.middleware).toHaveBeenCalledTimes(5);
+
+    await chatChainAdded?.();
+    expect(chatChain.middleware).toHaveBeenCalledTimes(5);
+  });
+
+  it('fails fast when ChatLuna exposes a chain without contextManager', async () => {
+    const { ready } = createHarness({ contextManager: false });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await expect(ready()).rejects.toThrow('reply runtime requires chatluna.contextManager.');
   });
 
   it('delays the initial tts health probe until after startup grace period', async () => {

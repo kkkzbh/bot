@@ -1585,25 +1585,30 @@ export function apply(ctx: Context, config: Config): void {
     serviceCtx.qqbotAttachment = service;
   }
 
-  ctx.on('ready', () => {
+  let attachmentRuntimeRegistered = false;
+  const toolDisposers: Array<() => void> = [];
+
+  const ensureAttachmentRuntimeRegistered = (): boolean => {
+    if (attachmentRuntimeRegistered) return true;
     const chain = serviceCtx.chatluna.chatChain;
     const contextManager = serviceCtx.chatluna.contextManager;
     const registerTool = serviceCtx.chatluna.platform?.registerTool?.bind(serviceCtx.chatluna.platform);
-    if (!chain || !contextManager) {
-      logger.warn('chatluna service unavailable, skip attachment middleware registration.');
-      return;
+    if (!chain) return false;
+    if (!contextManager) {
+      throw new Error('attachment requires chatluna.contextManager.');
+    }
+    if (!registerTool) {
+      throw new Error('attachment requires chatluna.platform.registerTool.');
     }
 
-    if (registerTool) {
-      registerTool(
+    toolDisposers.push(registerTool(
+      'qqbot_attachment_replay',
+      createToolEntry(
         'qqbot_attachment_replay',
-        createToolEntry(
-          'qqbot_attachment_replay',
-          'Replay archived qqbot attachments by ref id and return replayable handles plus processed text.',
-          () => new AttachmentReplayTool(service),
-        ),
-      );
-    }
+        'Replay archived qqbot attachments by ref id and return replayable handles plus processed text.',
+        () => new AttachmentReplayTool(service),
+      ),
+    ));
 
     chain
       .middleware('qqbot_attachment_archive', async (_rawSession, rawContext) => {
@@ -1723,5 +1728,21 @@ export function apply(ctx: Context, config: Config): void {
       runtime.historyWindow,
       runtime.historyTriggerCount,
     );
+    attachmentRuntimeRegistered = true;
+    return true;
+  };
+
+  ctx.on('ready', () => {
+    ensureAttachmentRuntimeRegistered();
+  });
+
+  ctx.on('chatluna/chat-chain-added', () => {
+    ensureAttachmentRuntimeRegistered();
+  });
+
+  ctx.on('dispose', () => {
+    while (toolDisposers.length > 0) {
+      toolDisposers.pop()?.();
+    }
   });
 }

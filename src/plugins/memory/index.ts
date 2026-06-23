@@ -307,13 +307,43 @@ export function apply(ctx: Context, config: Config): void {
     }
   };
 
-  ctx.on('ready', () => {
+  let memoryRuntimeRegistered = false;
+  let startupTasksStarted = false;
+
+  const startMemoryStartupTasks = (): void => {
+    if (startupTasksStarted) return;
+    startupTasksStarted = true;
+    void (async () => {
+      const migrated = await runLegacyMemoryMigration(database);
+      const migratedCount = migrated.factsMigrated + migrated.episodesMigrated + migrated.profilesMigrated;
+      if (migratedCount > 0 || migrated.groupRowsDiscarded > 0) {
+        logger.info(
+          'memory migration imported %d direct rows and discarded %d legacy group rows',
+          migratedCount,
+          migrated.groupRowsDiscarded,
+        );
+      }
+      const recovered = await store.requeueStaleProcessingJobs(runtime.jobLockTimeoutMs);
+      if (recovered > 0) {
+        logger.warn('memory recovered %d stale processing jobs after startup', recovered);
+      }
+      ctx.setInterval(() => void tick(), 10_000);
+      await tick();
+    })().catch((error) => {
+      logger.warn('memory startup recovery failed: %s', error instanceof Error ? error.message : String(error));
+      ctx.setInterval(() => void tick(), 10_000);
+      void tick();
+    });
+  };
+
+  const ensureMemoryRuntimeRegistered = (): boolean => {
+    if (memoryRuntimeRegistered) return true;
     const chatluna = resolveChatLunaService(services);
     const chain = chatluna?.chatChain;
     const contextManager = chatluna?.contextManager;
-    if (!chain || !contextManager) {
-      logger.warn('chatluna service is unavailable, skip memory middleware registration.');
-      return;
+    if (!chain) return false;
+    if (!contextManager) {
+      throw new Error('memory requires chatluna.contextManager.');
     }
 
     chain
@@ -390,26 +420,16 @@ export function apply(ctx: Context, config: Config): void {
       .after('chatluna_time_context')
       .before('lifecycle-handle_command');
 
-    void (async () => {
-      const migrated = await runLegacyMemoryMigration(database);
-      const migratedCount = migrated.factsMigrated + migrated.episodesMigrated + migrated.profilesMigrated;
-      if (migratedCount > 0 || migrated.groupRowsDiscarded > 0) {
-        logger.info(
-          'memory migration imported %d direct rows and discarded %d legacy group rows',
-          migratedCount,
-          migrated.groupRowsDiscarded,
-        );
-      }
-      const recovered = await store.requeueStaleProcessingJobs(runtime.jobLockTimeoutMs);
-      if (recovered > 0) {
-        logger.warn('memory recovered %d stale processing jobs after startup', recovered);
-      }
-      ctx.setInterval(() => void tick(), 10_000);
-      await tick();
-    })().catch((error) => {
-      logger.warn('memory startup recovery failed: %s', error instanceof Error ? error.message : String(error));
-      ctx.setInterval(() => void tick(), 10_000);
-      void tick();
-    });
+    memoryRuntimeRegistered = true;
+    startMemoryStartupTasks();
+    return true;
+  };
+
+  ctx.on('ready', () => {
+    ensureMemoryRuntimeRegistered();
+  });
+
+  ctx.on('chatluna/chat-chain-added', () => {
+    ensureMemoryRuntimeRegistered();
   });
 }

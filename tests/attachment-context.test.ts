@@ -76,7 +76,7 @@ vi.mock('../src/plugins/shared/voice/input.js', () => ({
   transcribeAudio: vi.fn(),
 }));
 
-import { AttachmentService } from '../src/plugins/attachment/index.js';
+import { AttachmentService, apply } from '../src/plugins/attachment/index.js';
 
 function createRecord(input: Partial<QqbotAttachmentRecord> & Pick<QqbotAttachmentRecord, 'refId' | 'conversationId' | 'kind'>): QqbotAttachmentRecord {
   return {
@@ -414,5 +414,127 @@ describe('attachment multimodal projection', () => {
     expect(second.cacheHits).toBe(1);
     expect(second.resolved[0]?.representationKind).toBe('file_url');
     expect((database.tables.qqbot_attachment_provider_cache ?? []).length).toBe(1);
+  });
+});
+
+type AttachmentEventHandler = () => Promise<unknown> | unknown;
+type AttachmentChainMiddleware = (session: unknown, context: unknown) => Promise<number>;
+
+function attachmentConfig() {
+  return {
+    maxInjectCount: 5,
+    maxInjectTotalBytes: 16 * 1024 * 1024,
+    maxInjectPerFileBytes: 6 * 1024 * 1024,
+    maxPdfPreviewPagesPerFile: 6,
+    maxPdfPreviewPagesTotal: 15,
+    maxTextCharsPerFile: 24_000,
+    recentCatalogSize: 12,
+    historyWindow: 80,
+    historyTriggerCount: 120,
+    historyTokenRatio: 0.7,
+    projectionTextChars: 1200,
+    replayTextChars: 4000,
+    replayMaxRefs: 5,
+    voiceAsrBaseUrl: '',
+    voiceAsrApiKey: '',
+    voiceTranscribeTimeoutMs: 45_000,
+  };
+}
+
+function createAttachmentLifecycleHarness(options: { chatChainInitially?: boolean; contextManager?: boolean } = {}) {
+  const events = new Map<string, AttachmentEventHandler[]>();
+  const chainMiddlewares = new Map<string, AttachmentChainMiddleware>();
+  const disposeTool = vi.fn();
+  const chatChain = {
+    middleware: vi.fn((name: string, middleware: AttachmentChainMiddleware) => {
+      chainMiddlewares.set(name, middleware);
+      const builder = {
+        after: () => builder,
+        before: () => builder,
+      };
+      return builder;
+    }),
+  };
+  const chatluna: Record<string, unknown> = {
+    platform: {
+      registerTool: vi.fn(() => disposeTool),
+      findModel: vi.fn(() => ({ value: { capabilities: [] } })),
+    },
+  };
+  if (options.contextManager !== false) {
+    chatluna.contextManager = { inject: vi.fn() };
+  }
+  if (options.chatChainInitially !== false) {
+    chatluna.chatChain = chatChain;
+  }
+
+  const ctx = {
+    model: { extend: vi.fn() },
+    database: createMockDatabase(),
+    chatluna,
+    chatluna_storage: {
+      createTempFile: vi.fn(),
+      getTempFile: vi.fn(),
+    },
+    provide: vi.fn(),
+    set: vi.fn(),
+    on: vi.fn((name: string, handler: AttachmentEventHandler) => {
+      const bucket = events.get(name) ?? [];
+      bucket.push(handler);
+      events.set(name, bucket);
+    }),
+  };
+
+  apply(ctx as never, attachmentConfig());
+
+  const runHook = async (name: string) => {
+    for (const handler of events.get(name) ?? []) {
+      await handler();
+    }
+  };
+
+  return {
+    chainMiddlewares,
+    chatChain,
+    chatluna,
+    ctx,
+    disposeTool,
+    runHook,
+    setChatChainAvailable: () => {
+      chatluna.chatChain = chatChain;
+    },
+  };
+}
+
+describe('attachment ChatLuna lifecycle', () => {
+  it('registers archive/context middlewares when ChatLuna adds the chat chain', async () => {
+    const harness = createAttachmentLifecycleHarness({ chatChainInitially: false });
+
+    await harness.runHook('ready');
+
+    expect(harness.chainMiddlewares.size).toBe(0);
+    expect((harness.chatluna.platform as { registerTool: ReturnType<typeof vi.fn> }).registerTool).not.toHaveBeenCalled();
+
+    harness.setChatChainAvailable();
+    await harness.runHook('chatluna/chat-chain-added');
+
+    expect(harness.chainMiddlewares.get('qqbot_attachment_archive')).toBeTypeOf('function');
+    expect(harness.chainMiddlewares.get('qqbot_attachment_context')).toBeTypeOf('function');
+    expect(harness.chatChain.middleware).toHaveBeenCalledTimes(2);
+    expect((harness.chatluna.platform as { registerTool: ReturnType<typeof vi.fn> }).registerTool).toHaveBeenCalledTimes(1);
+
+    await harness.runHook('chatluna/chat-chain-added');
+
+    expect(harness.chatChain.middleware).toHaveBeenCalledTimes(2);
+    expect((harness.chatluna.platform as { registerTool: ReturnType<typeof vi.fn> }).registerTool).toHaveBeenCalledTimes(1);
+
+    await harness.runHook('dispose');
+    expect(harness.disposeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails fast when ChatLuna exposes a chain without contextManager', async () => {
+    const harness = createAttachmentLifecycleHarness({ contextManager: false });
+
+    await expect(harness.runHook('ready')).rejects.toThrow('attachment requires chatluna.contextManager.');
   });
 });

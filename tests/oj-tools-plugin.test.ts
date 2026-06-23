@@ -86,6 +86,25 @@ describe('oj-tools plugin', () => {
     expect(tools.size).toBe(0);
   });
 
+  it('fails fast when the ChatLuna tool registry is unavailable', () => {
+    const ctx = {
+      chatluna: {
+        platform: {},
+      },
+      chatluna_storage: {
+        createTempFile: vi.fn(),
+      },
+      on: vi.fn(),
+    };
+
+    expect(() => apply(ctx as never, {
+      cacheTtlMs: 300_000,
+      requestIntervalMs: 2_100,
+      ratingChartWidth: 1_789,
+      ratingChartHeight: 838,
+    })).toThrow('oj-tools requires chatluna.platform.registerTool.');
+  });
+
   it('exposes all codeforces tools in tool policy catalog', () => {
     const cfEntries = TOOL_CATALOG.filter((entry) => entry.toolName.startsWith('cf_'));
     expect(cfEntries.map((entry) => entry.toolName).sort()).toEqual([
