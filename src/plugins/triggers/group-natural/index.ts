@@ -106,8 +106,8 @@ interface TriggerDecisionResult {
 
 type ContextWithFeaturePolicy = Context & {
   featurePolicy?: FeaturePolicyServiceLike;
-  chatluna: {
-    registerAllowReplyResolver: (
+  chatluna?: {
+    registerAllowReplyResolver?: (
       name: string,
       resolver: (arg: { session: Session; context: unknown }) => boolean | void | Promise<boolean | void>,
     ) => () => void;
@@ -311,6 +311,11 @@ export function apply(ctx: Context, config: Config): void {
   if (!featurePolicy) {
     throw new Error('group-natural-trigger requires featurePolicy service.');
   }
+  const chatluna = serviceCtx.chatluna;
+  const registerAllowReplyResolver = chatluna?.registerAllowReplyResolver;
+  if (!chatluna || typeof registerAllowReplyResolver !== 'function') {
+    throw new Error('group-natural-trigger requires chatluna.registerAllowReplyResolver.');
+  }
   const focusExpires = new Map<string, number>();
   const spamStates = new Map<string, SpamState>();
   const nextReplyAt = new Map<string, number>();
@@ -318,7 +323,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const ensureAllowReplyResolverRegistered = (): void => {
     if (disposeAllowReplyResolver) return;
-    disposeAllowReplyResolver = serviceCtx.chatluna.registerAllowReplyResolver(allowReplyResolverName, ({ session }) => {
+    disposeAllowReplyResolver = registerAllowReplyResolver.call(chatluna, allowReplyResolverName, ({ session }) => {
       const naturalTrigger = getNaturalTriggerState(session as unknown as Record<string, unknown>);
       if (!naturalTrigger) return;
       logger.info(

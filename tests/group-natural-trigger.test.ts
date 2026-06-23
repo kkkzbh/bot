@@ -205,6 +205,37 @@ describe('group natural trigger middleware', () => {
     ).toThrow('group-natural-trigger requires featurePolicy service.');
   });
 
+  it('fails fast without the ChatLuna allow-reply resolver service', () => {
+    const ctx = {
+      middleware: vi.fn(),
+      on: vi.fn(),
+      chatluna: {},
+      featurePolicy: {
+        resolveFeatureEnabled: vi.fn(),
+      },
+    };
+
+    expect(() =>
+      apply(ctx as never, {
+        enabled: true,
+        enabledGroups: '100',
+        aliases: '祥子',
+        directTriggerProbability: 0,
+        focusWindowMs: 300_000,
+        replyIntervalMs: 2_000,
+        spamWindowMs: 10_000,
+        spamThreshold: 10,
+        spamMuteMs: 180_000,
+        decisionEnabled: false,
+        decisionBaseUrl: 'https://decision.example/v1',
+        decisionApiKey: '',
+        decisionModel: '',
+        decisionTimeoutMs: 4_000,
+        decisionMinConfidence: 0.62,
+      }),
+    ).toThrow('group-natural-trigger requires chatluna.registerAllowReplyResolver.');
+  });
+
   it('fails fast when the enabled config is missing', () => {
     expect(() => createHarness({ enabled: undefined })).toThrow('群聊自然触发配置缺失：enabled');
   });
