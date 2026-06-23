@@ -5,7 +5,7 @@ import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
 import { registerPromptFragment } from '../shared/prompt-context/index.js';
 import type { ReplyTransportPlan } from '../shared/outbound/index.js';
 import { resolveSessionDisplayName } from '../shared/session/index.js';
-import { decodeStoredMessageText, extractPlainText } from '../shared/stored-message.js';
+import { decodeStoredMessageText } from '../shared/stored-message.js';
 import { buildGroupScopeKey, realtimeMessageCache } from '../realtime-message/index.js';
 import { deliverStandaloneReplyPlan } from '../reply/index.js';
 import { resolveStickerCapabilityArtifacts } from '../sticker/index.js';
@@ -150,7 +150,6 @@ type ConversationMessageRow = {
   id: string;
   role?: string | null;
   parentId?: string | null;
-  text?: string | null;
   content?: unknown;
   createdAt?: Date | number | string | null;
 };
@@ -439,10 +438,6 @@ function formatResponseSummaryForPrompt(raw: string | null | undefined, now: num
     .slice(-8)
     .map((item) => `${item.speaker}(${formatAgeForPrompt(now, item.at)}): ${truncateText(item.summary, 80)}`)
     .join('；');
-}
-
-function decodeConversationTextFallback(row: ConversationMessageRow): string {
-  return normalizeText(row.text) || extractPlainText(row.content);
 }
 
 function hotTopicLooksUnsafe(title: string): boolean {
@@ -1442,12 +1437,7 @@ export class AffinityService implements AffinityServiceLike {
       const row = messageMap.get(cursor);
       if (!row) break;
       if (row.role === 'human' || row.role === 'ai') {
-        let text = '';
-        try {
-          text = normalizeText(await decodeStoredMessageText(row.content)) || decodeConversationTextFallback(row);
-        } catch {
-          text = decodeConversationTextFallback(row);
-        }
+        const text = normalizeText(await decodeStoredMessageText(row.content));
         const parsed = parseSpeakerTaggedText(text);
         const normalized = normalizeText(parsed.text || text);
         if (normalized) {

@@ -1,3 +1,4 @@
+import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AffinityService, type AffinityDatabaseLike } from '../src/plugins/affinity/service.js';
 import { CHARACTER_ID, getShanghaiDayKey, getShanghaiDayStartMs } from '../src/plugins/affinity/rules.js';
@@ -112,6 +113,14 @@ vi.mock('../src/plugins/realtime-message/index.js', () => ({
 }));
 
 type Row = Record<string, any>;
+
+function toArrayBuffer(buffer: Buffer): ArrayBuffer {
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+}
+
+function encodeStoredMessageContent(value: unknown): ArrayBuffer {
+  return toArrayBuffer(gzipSync(JSON.stringify(value)));
+}
 
 class MemoryDatabase implements AffinityDatabaseLike {
   readonly tables: Record<string, Row[]>;
@@ -936,16 +945,14 @@ describe('affinity service random history sync', () => {
           role: 'human',
           conversationId: 'conv-affinity',
           parentId: null,
-          text: '[speaker_id=u1 speaker_name="Alice"] SCC 缩点以后为什么一定没有环？',
-          content: null,
+          content: encodeStoredMessageContent('[speaker_id=u1 speaker_name="Alice"] SCC 缩点以后为什么一定没有环？'),
         },
         {
           id: 'msg-bob',
           role: 'human',
           conversationId: 'conv-affinity',
           parentId: 'msg-alice',
-          text: '[speaker_id=u2 speaker_name="Bob"] 因为有环会被缩在一个点里吧，但我不确定。',
-          content: null,
+          content: encodeStoredMessageContent('[speaker_id=u2 speaker_name="Bob"] 因为有环会被缩在一个点里吧，但我不确定。'),
         },
       ],
     });
@@ -1027,8 +1034,7 @@ describe('affinity service random history sync', () => {
           role: 'human',
           conversationId: 'conv-affinity',
           parentId: null,
-          text: '[speaker_id=u1 speaker_name="Alice"] 我去吃饭了，晚点再说。',
-          content: null,
+          content: encodeStoredMessageContent('[speaker_id=u1 speaker_name="Alice"] 我去吃饭了，晚点再说。'),
         },
       ],
     });
