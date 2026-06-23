@@ -12,11 +12,9 @@ import { buildMemoryKey, isMemoryScopeType, scopeKeyForType, scopeTypeFromVisibi
 import type { MemoryDatabaseLike } from './store.js';
 
 export const LEGACY_MEMORY_TABLES = {
-  candidate: 'memory_candidate_v3',
   fact: 'memory_fact_v3',
   episode: 'memory_episode_v3',
   profile: 'memory_profile_v4',
-  source: 'memory_source_v4',
   job: 'memory_job_v3',
 } as const;
 
