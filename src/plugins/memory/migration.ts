@@ -100,6 +100,8 @@ export interface LegacyMemoryMigrationResult {
   profilesMigrated: number;
   groupRowsDiscarded: number;
   skippedRows: number;
+  legacyRowsRemoved: number;
+  legacyJobsRemoved: number;
 }
 
 const PROFILE_KINDS = new Set<MemoryProfileKind>([
@@ -307,6 +309,16 @@ function evidenceSpeakerIds(row: LegacyOwnedRow): string | null {
   return merged.length ? stringifyStringArray(merged) : null;
 }
 
+async function removeLegacyRow(
+  database: MemoryDatabaseLike,
+  table: string,
+  row: { id?: unknown },
+): Promise<boolean> {
+  if (row.id == null) return false;
+  await database.remove(table, { id: row.id });
+  return true;
+}
+
 async function safeGetAll<T>(database: MemoryDatabaseLike, table: string): Promise<T[]> {
   try {
     return await database.get(table, {} as Record<string, never>) as T[];
@@ -503,6 +515,8 @@ export async function runLegacyMemoryMigration(database: MemoryDatabaseLike): Pr
     profilesMigrated: 0,
     groupRowsDiscarded: 0,
     skippedRows: 0,
+    legacyRowsRemoved: 0,
+    legacyJobsRemoved: 0,
   };
 
   const facts = await safeGetAll<LegacyFactRow>(database, LEGACY_MEMORY_TABLES.fact);
@@ -510,10 +524,12 @@ export async function runLegacyMemoryMigration(database: MemoryDatabaseLike): Pr
     if (!shouldMigrateDirectRow(row)) {
       if (ownerUserKey(row) && sourceContextKey(row)) result.groupRowsDiscarded += 1;
       else result.skippedRows += 1;
+      if (await removeLegacyRow(database, LEGACY_MEMORY_TABLES.fact, row)) result.legacyRowsRemoved += 1;
       continue;
     }
     if (await migrateFact(database, row)) result.factsMigrated += 1;
     else result.skippedRows += 1;
+    if (await removeLegacyRow(database, LEGACY_MEMORY_TABLES.fact, row)) result.legacyRowsRemoved += 1;
   }
 
   const episodes = await safeGetAll<LegacyEpisodeRow>(database, LEGACY_MEMORY_TABLES.episode);
@@ -521,10 +537,12 @@ export async function runLegacyMemoryMigration(database: MemoryDatabaseLike): Pr
     if (!shouldMigrateDirectRow(row)) {
       if (ownerUserKey(row) && sourceContextKey(row)) result.groupRowsDiscarded += 1;
       else result.skippedRows += 1;
+      if (await removeLegacyRow(database, LEGACY_MEMORY_TABLES.episode, row)) result.legacyRowsRemoved += 1;
       continue;
     }
     if (await migrateEpisode(database, row)) result.episodesMigrated += 1;
     else result.skippedRows += 1;
+    if (await removeLegacyRow(database, LEGACY_MEMORY_TABLES.episode, row)) result.legacyRowsRemoved += 1;
   }
 
   const profiles = await safeGetAll<LegacyProfileRow>(database, LEGACY_MEMORY_TABLES.profile);
@@ -532,14 +550,21 @@ export async function runLegacyMemoryMigration(database: MemoryDatabaseLike): Pr
     if (!shouldMigrateDirectRow(row)) {
       if (ownerUserKey(row) && sourceContextKey(row)) result.groupRowsDiscarded += 1;
       else result.skippedRows += 1;
+      if (await removeLegacyRow(database, LEGACY_MEMORY_TABLES.profile, row)) result.legacyRowsRemoved += 1;
       continue;
     }
     if (await migrateProfile(database, row)) result.profilesMigrated += 1;
     else result.skippedRows += 1;
+    if (await removeLegacyRow(database, LEGACY_MEMORY_TABLES.profile, row)) result.legacyRowsRemoved += 1;
+  }
+
+  const jobs = await safeGetAll<{ id?: unknown }>(database, LEGACY_MEMORY_TABLES.job);
+  for (const row of jobs) {
+    if (await removeLegacyRow(database, LEGACY_MEMORY_TABLES.job, row)) result.legacyJobsRemoved += 1;
   }
 
   const migrated = result.factsMigrated + result.episodesMigrated + result.profilesMigrated;
-  if (migrated > 0 || result.groupRowsDiscarded > 0) {
+  if (migrated > 0 || result.groupRowsDiscarded > 0 || result.legacyRowsRemoved > 0 || result.legacyJobsRemoved > 0) {
     await database.create('memory_audit_event', {
       userKey: null,
       contextKey: null,

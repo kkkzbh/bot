@@ -46,6 +46,9 @@ const memoryMocks = vi.hoisted(() => ({
     episodesMigrated: 0,
     profilesMigrated: 0,
     groupRowsDiscarded: 0,
+    skippedRows: 0,
+    legacyRowsRemoved: 0,
+    legacyJobsRemoved: 0,
   })),
   runMemoryJobTick: vi.fn(async () => undefined),
   MemoryStatusService: vi.fn(function MemoryStatusService(this: { recordRoute: ReturnType<typeof vi.fn> }) {

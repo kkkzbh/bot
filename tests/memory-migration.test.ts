@@ -129,7 +129,13 @@ describe('memory legacy migration', () => {
       episodesMigrated: 1,
       profilesMigrated: 1,
       groupRowsDiscarded: 1,
+      legacyRowsRemoved: 4,
+      legacyJobsRemoved: 1,
     });
+    expect(db.tables[LEGACY_MEMORY_TABLES.fact]).toEqual([]);
+    expect(db.tables[LEGACY_MEMORY_TABLES.episode]).toEqual([]);
+    expect(db.tables[LEGACY_MEMORY_TABLES.profile]).toEqual([]);
+    expect(db.tables[LEGACY_MEMORY_TABLES.job]).toEqual([]);
     expect(db.tables.memory_fact).toEqual([
       expect.objectContaining({
         ownerUserKey: 'onebot:user:10001',

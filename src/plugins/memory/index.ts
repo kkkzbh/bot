@@ -316,11 +316,18 @@ export function apply(ctx: Context, config: Config): void {
     void (async () => {
       const migrated = await runLegacyMemoryMigration(database);
       const migratedCount = migrated.factsMigrated + migrated.episodesMigrated + migrated.profilesMigrated;
-      if (migratedCount > 0 || migrated.groupRowsDiscarded > 0) {
+      if (
+        migratedCount > 0 ||
+        migrated.groupRowsDiscarded > 0 ||
+        migrated.legacyRowsRemoved > 0 ||
+        migrated.legacyJobsRemoved > 0
+      ) {
         logger.info(
-          'memory migration imported %d direct rows and discarded %d legacy group rows',
+          'memory migration imported %d direct rows, discarded %d legacy group rows, removed %d legacy rows and %d legacy jobs',
           migratedCount,
           migrated.groupRowsDiscarded,
+          migrated.legacyRowsRemoved,
+          migrated.legacyJobsRemoved,
         );
       }
       const recovered = await store.requeueStaleProcessingJobs(runtime.jobLockTimeoutMs);
