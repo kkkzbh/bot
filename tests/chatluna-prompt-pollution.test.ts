@@ -25,6 +25,7 @@ describe('chatluna prompt pollution regression', () => {
     beginPromptAssemblyTurn('conv-prompt-pollution');
     registerPromptFragment('conv-prompt-pollution', {
       source: 'chatluna_time_context',
+      title: 'User Turn Metadata',
       authority: 'reference',
       trust: 'trusted',
       ttl: 'turn',

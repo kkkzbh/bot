@@ -46,6 +46,17 @@ interface PromptTurnDraft {
 }
 
 const turnDrafts = new Map<string, PromptTurnDraft>();
+const SOURCE_PATTERN = /^[a-z][a-z0-9_:-]*$/u;
+const HEADER_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/u;
+const AUTHORITIES = new Set<PromptFragmentAuthority>([
+  'persona_core',
+  'runtime_contract',
+  'reference',
+  'assistant_state',
+]);
+const TRUST_LEVELS = new Set<PromptFragmentTrust>(['trusted', 'untrusted']);
+const TTL_VALUES = new Set<PromptFragmentTtl>(['sticky', 'turn']);
+const PAYLOAD_KINDS = new Set<PromptFragmentPayloadKind>(['text', 'json']);
 
 function normalizeConversationId(conversationId: string): string {
   return conversationId.trim();
@@ -65,9 +76,77 @@ function ensureDraft(conversationId: string): PromptTurnDraft {
   return draft;
 }
 
-function normalizeTitle(title: string, fallback: string): string {
+function normalizeSource(source: unknown): string {
+  if (typeof source !== 'string') {
+    throw new Error('prompt fragment source must be a string.');
+  }
+  const normalized = source.trim();
+  if (!SOURCE_PATTERN.test(normalized)) {
+    throw new Error('prompt fragment source must be a non-empty lowercase token.');
+  }
+  return normalized;
+}
+
+function normalizeTitle(title: unknown, source: string): string {
+  if (typeof title !== 'string') {
+    throw new Error(`prompt fragment ${source} title must be a string.`);
+  }
   const normalized = title.trim();
-  return normalized || fallback;
+  if (!normalized) {
+    throw new Error(`prompt fragment ${source} title is required.`);
+  }
+  if (HEADER_CONTROL_PATTERN.test(normalized)) {
+    throw new Error(`prompt fragment ${source} title must be a single-line label.`);
+  }
+  return normalized;
+}
+
+function normalizeAuthority(authority: unknown, source: string): PromptFragmentAuthority {
+  if (!AUTHORITIES.has(authority as PromptFragmentAuthority)) {
+    throw new Error(`prompt fragment ${source} authority is invalid.`);
+  }
+  return authority as PromptFragmentAuthority;
+}
+
+function normalizeTrust(trust: unknown, source: string): PromptFragmentTrust {
+  if (!TRUST_LEVELS.has(trust as PromptFragmentTrust)) {
+    throw new Error(`prompt fragment ${source} trust is invalid.`);
+  }
+  return trust as PromptFragmentTrust;
+}
+
+function normalizeTtl(ttl: unknown, source: string): PromptFragmentTtl {
+  if (!TTL_VALUES.has(ttl as PromptFragmentTtl)) {
+    throw new Error(`prompt fragment ${source} ttl is invalid.`);
+  }
+  return ttl as PromptFragmentTtl;
+}
+
+function normalizePayload(payload: unknown, source: string): PromptFragmentPayload {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error(`prompt fragment ${source} payload must be an object.`);
+  }
+  const record = payload as { kind?: unknown; value?: unknown };
+  if (!PAYLOAD_KINDS.has(record.kind as PromptFragmentPayloadKind)) {
+    throw new Error(`prompt fragment ${source} payload kind is invalid.`);
+  }
+  return {
+    kind: record.kind as PromptFragmentPayloadKind,
+    value: record.value,
+  };
+}
+
+function normalizeFragment(fragment: PromptFragment, registeredOrder: number): RegisteredPromptFragment {
+  const source = normalizeSource(fragment.source);
+  return {
+    source,
+    title: normalizeTitle(fragment.title, source),
+    authority: normalizeAuthority(fragment.authority, source),
+    trust: normalizeTrust(fragment.trust, source),
+    ttl: normalizeTtl(fragment.ttl, source),
+    payload: normalizePayload(fragment.payload, source),
+    registeredOrder,
+  };
 }
 
 function authorityRank(authority: PromptFragmentAuthority): number {
@@ -91,7 +170,10 @@ function ttlRank(ttl: PromptFragmentTtl): number {
 
 function payloadToContent(payload: PromptFragmentPayload, source: string): string {
   if (payload.kind === 'text') {
-    return String(payload.value ?? '').trim();
+    if (typeof payload.value !== 'string') {
+      throw new Error(`prompt fragment ${source} text payload must be a string.`);
+    }
+    return payload.value.trim();
   }
 
   try {
@@ -204,10 +286,7 @@ function compileRegisteredFragments(fragments: RegisteredPromptFragment[]): Prom
 }
 
 export function compilePromptEnvelopeFromFragments(fragments: PromptFragment[]): PromptEnvelope | null {
-  const normalized = fragments.map((fragment, index) => ({
-    ...fragment,
-    registeredOrder: index,
-  }));
+  const normalized = fragments.map((fragment, index) => normalizeFragment(fragment, index));
   return compileRegisteredFragments(normalized);
 }
 
@@ -247,7 +326,7 @@ export function clearPromptAssemblyTurn(conversationId: string): void {
 
 export function registerPromptFragment(
   conversationId: string,
-  fragment: Omit<PromptFragment, 'title'> & { title?: string },
+  fragment: PromptFragment,
 ): PromptFragment {
   const normalized = normalizeConversationId(conversationId);
   if (!normalized) {
@@ -255,16 +334,7 @@ export function registerPromptFragment(
   }
 
   const draft = ensureDraft(normalized);
-  const normalizedFragment: RegisteredPromptFragment = {
-    ...fragment,
-    source: fragment.source.trim(),
-    title: normalizeTitle(fragment.title ?? '', fragment.source),
-    payload: {
-      kind: fragment.payload.kind,
-      value: fragment.payload.value,
-    },
-    registeredOrder: draft.nextOrder,
-  };
+  const normalizedFragment = normalizeFragment(fragment, draft.nextOrder);
   draft.nextOrder += 1;
   draft.fragments.push(normalizedFragment);
   return normalizedFragment;
