@@ -370,6 +370,29 @@ describe('affinity service panel view', () => {
     expect(db.tables.affinity_event).toHaveLength(0);
   });
 
+  it('rejects sessions without a platform instead of creating unknown relationship keys', async () => {
+    const { db, service } = createHarness();
+    const session = {
+      platform: '',
+      userId: 'new-user',
+      bot: { selfId: 'bot-1' },
+    } as any;
+
+    await expect(service.buildPanelView(session)).rejects.toThrow('无法识别当前用户。');
+    await expect(service.processIncomingSession({
+      ...session,
+      isDirect: false,
+      guildId: '829573670',
+      channelId: '829573670',
+      messageId: 'msg-missing-platform',
+      content: '这个算法是不是缩点以后再拓扑排序？',
+      stripped: { content: '这个算法是不是缩点以后再拓扑排序？' },
+    })).resolves.toBeNull();
+
+    expect(db.tables.affinity_user_state.some((row) => String(row.userKey ?? '').startsWith('unknown:'))).toBe(false);
+    expect(db.tables.affinity_event.some((row) => String(row.userKey ?? '').startsWith('unknown:'))).toBe(false);
+  });
+
   it('writes a successful panel command into the matching ChatLuna history as an AI message', async () => {
     const { db, service } = createHarness();
     const userKey = 'onebot:u-1';

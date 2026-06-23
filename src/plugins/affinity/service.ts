@@ -333,9 +333,9 @@ function scopeFromSession(session: Session): { scopeKind: AffinityScopeKind; sco
 }
 
 function userKeyFromSession(session: Session): string | null {
-  const platform = normalizeText(session.platform) || 'unknown';
+  const platform = normalizeText(session.platform);
   const userId = normalizeText(session.userId);
-  return userId ? `${platform}:${userId}` : null;
+  return platform && userId ? `${platform}:${userId}` : null;
 }
 
 function extractSessionText(session: Session): string {
@@ -1292,7 +1292,7 @@ export class AffinityService implements AffinityServiceLike {
     const created = await this.database.create('affinity_user_state', {
       characterId: CHARACTER_ID,
       userKey,
-      platform: normalizeText(session.platform) || 'unknown',
+      platform: normalizeText(session.platform),
       userId: normalizeText(session.userId),
       displayName,
       trust: initial.trust,
@@ -1347,7 +1347,7 @@ export class AffinityService implements AffinityServiceLike {
       userKey: args.userKey,
       scopeKind: scope.scopeKind,
       scopeId: scope.scopeId,
-      platform: normalizeText(session.platform) || 'unknown',
+      platform: normalizeText(session.platform),
       botSelfId: normalizeText(session.bot?.selfId) || null,
       channelId: normalizeText(session.channelId) || null,
       guildId: normalizeText(session.guildId) || null,
