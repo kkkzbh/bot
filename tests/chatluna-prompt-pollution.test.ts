@@ -166,6 +166,17 @@ describe('chatluna prompt pollution regression', () => {
     expect(openAIRequesterSource).toContain("responseApiCompletion(");
   });
 
+  it('keeps transient qqbot request controls out of persisted ChatLuna message metadata', () => {
+    const packageRoot = resolveChatlunaSourceRoot();
+    const historySource = readFileSync(join(packageRoot, 'src/llm-core/memory/message/database_history.ts'), 'utf8');
+
+    expect(historySource).toContain('TRANSIENT_ADDITIONAL_KWARG_KEYS');
+    expect(historySource).toContain("'qqbot_final_response_contract'");
+    expect(historySource).toContain("'qqbot_input_content_meta'");
+    expect(historySource).toContain("'qqbot_request_budget_policy'");
+    expect(historySource).toContain('delete additionalArgs[key]');
+  });
+
   it('uses a chatluna context manager build that accepts plain prompt message objects', () => {
     const packageRoot = resolveChatlunaSourceRoot();
     const contextManagerSource = readFileSync(join(packageRoot, 'src/llm-core/prompt/context_manager.ts'), 'utf8');
@@ -288,6 +299,8 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
       completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -359,6 +372,8 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
       completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -430,6 +445,8 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
       completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -539,7 +556,7 @@ describe('chatluna prompt pollution regression', () => {
 
     await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
       scanned: 4,
-      migrated: 2,
+      migrated: 3,
       structuredRowsMigrated: 0,
       legacyDirectHumanRowsTagged: 2,
       submitReplyPlansMigrated: 0,
@@ -548,10 +565,17 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
       completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 1,
       emptyAssistantRowsRemoved: 0,
     });
 
     expect(updates).toEqual([
+      {
+        table: 'chatluna_message',
+        query: { id: 'direct-invisible-name' },
+        update: { name: null },
+      },
       {
         table: 'chatluna_message',
         query: { id: 'direct-invisible-name' },
@@ -575,6 +599,92 @@ describe('chatluna prompt pollution regression', () => {
     await expect(
       gunzipAsync(messages.find((row) => row.id === 'group-legacy')!.content).then((value) => value.toString()),
     ).resolves.toBe(JSON.stringify('祥子 是人吗'));
+  });
+
+  it('removes transient qqbot request metadata while preserving durable speaker and attachment metadata', async () => {
+    const messages = [
+      {
+        id: 'human-transient',
+        role: 'human',
+        parentId: null,
+        name: '⁢',
+        content: await gzipAsync(JSON.stringify('[speaker_id=1405359129 speaker_name="高康嘉"] 你好')),
+        additional_kwargs_binary: await gzipAsync(JSON.stringify({
+          qqbot_input_content_meta: { hasImageInput: false, imageCount: 0 },
+          qqbot_speaker_format: {
+            version: 'speaker_id_v1',
+            speakerId: '1405359129',
+            speakerName: '高康嘉',
+            isDirect: false,
+            preformatted: true,
+          },
+          qqbot_attachment_refs: [{ refId: 'att_1', kind: 'image' }],
+          qqbot_reply_mode: 'agent',
+          qqbot_final_response_contract: { name: 'qqbot_structured_reply_v1' },
+          qqbot_final_response_schema: { type: 'object' },
+          qqbot_final_response_instruction: 'finish as json',
+          qqbot_request_budget_policy: { imageDetail: 'low' },
+          qqbot_override_request_params: { temperature: 0 },
+          overrideRequestParams: { response_format: { type: 'json_schema' } },
+        })),
+      },
+      {
+        id: 'ai-visible',
+        role: 'ai',
+        parentId: 'human-transient',
+        name: null,
+        content: await gzipAsync(JSON.stringify('你好。')),
+        tool_calls: '[]',
+        additional_kwargs_binary: null,
+      },
+    ];
+    const conversations = [{ id: 'conv-transient', latestMessageId: 'ai-visible' }];
+    const database = {
+      get: async (table: string, query: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        return rows.filter((row) =>
+          Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value),
+        );
+      },
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        for (const row of rows) {
+          if (Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value)) {
+            Object.assign(row, update);
+          }
+        }
+      },
+      remove: async () => undefined,
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 2,
+      migrated: 2,
+      structuredRowsMigrated: 0,
+      legacyDirectHumanRowsTagged: 0,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
+      danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 1,
+      invisibleMessageNamesCleared: 1,
+      emptyAssistantRowsRemoved: 0,
+    });
+
+    expect(messages[0].name).toBeNull();
+    const persisted = JSON.parse((await gunzipAsync(messages[0].additional_kwargs_binary as Buffer)).toString());
+    expect(persisted).toEqual({
+      qqbot_speaker_format: {
+        version: 'speaker_id_v1',
+        speakerId: '1405359129',
+        speakerName: '高康嘉',
+        isDirect: false,
+        preformatted: true,
+      },
+      qqbot_attachment_refs: [{ refId: 'att_1', kind: 'image' }],
+    });
   });
 
   it('collapses legacy submit_reply_plan tool-call history into visible assistant text', async () => {
@@ -671,6 +781,8 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
       completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -778,6 +890,8 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 2,
       danglingToolCallTailRowsRemoved: 0,
       completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -865,6 +979,8 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 2,
       completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -959,6 +1075,8 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 4,
       completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -1042,6 +1160,8 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
       completedToolTraceRowsMigrated: 2,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -1124,6 +1244,8 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
       completedToolTraceRowsMigrated: 2,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -1211,6 +1333,8 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
       completedToolTraceRowsMigrated: 2,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -1316,6 +1440,8 @@ describe('chatluna prompt pollution regression', () => {
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
       completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
       emptyAssistantRowsRemoved: 3,
     });
 

@@ -23,6 +23,8 @@ export interface StructuredReplyHistoryMigrationResult {
   failedToolCallErrorRowsRemoved: number;
   danglingToolCallTailRowsRemoved: number;
   completedToolTraceRowsMigrated: number;
+  transientAdditionalKwargsRowsCleaned: number;
+  invisibleMessageNamesCleared: number;
   emptyAssistantRowsRemoved: number;
 }
 
@@ -224,6 +226,26 @@ async function decodeStoredStringContent(content: unknown): Promise<string | nul
   }
 }
 
+async function decodeStoredJsonObject(content: unknown): Promise<Record<string, unknown> | null> {
+  if (!content) return null;
+
+  let decoded: string;
+  try {
+    decoded = (await gunzipAsync(content as never)).toString();
+  } catch {
+    return null;
+  }
+
+  try {
+    const storedContent = JSON.parse(decoded) as unknown;
+    return storedContent && typeof storedContent === 'object' && !Array.isArray(storedContent)
+      ? storedContent as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function decodeStructuredReplyHistoryContent(content: unknown): Promise<string | null> {
   const storedContent = await decodeStoredStringContent(content);
   if (storedContent == null) return null;
@@ -322,6 +344,18 @@ const HISTORY_ROW_FIELDS = [
   'content',
   'tool_call_id',
   'tool_calls',
+  'additional_kwargs_binary',
+] as const;
+
+const TRANSIENT_ADDITIONAL_KWARG_KEYS = [
+  'qqbot_final_response_contract',
+  'qqbot_final_response_schema',
+  'qqbot_final_response_instruction',
+  'qqbot_input_content_meta',
+  'qqbot_override_request_params',
+  'qqbot_reply_mode',
+  'qqbot_request_budget_policy',
+  'overrideRequestParams',
 ] as const;
 
 const CONVERSATION_ROW_FIELDS = [
@@ -477,7 +511,40 @@ export async function migrateStructuredReplyHistoryRows(
   let failedToolCallErrorRowsRemoved = 0;
   let danglingToolCallTailRowsRemoved = 0;
   let completedToolTraceRowsMigrated = 0;
+  let transientAdditionalKwargsRowsCleaned = 0;
+  let invisibleMessageNamesCleared = 0;
   let emptyAssistantRowsRemoved = 0;
+
+  for (const row of allRows) {
+    const id = normalizeId(row.id);
+    if (!id) continue;
+
+    const name = normalizeText(row.name);
+    if (name && !stripFormatControls(name)) {
+      await database.set('chatluna_message', { id }, { name: null });
+      invisibleMessageNamesCleared += 1;
+    }
+
+    const additionalKwargs = await decodeStoredJsonObject(row.additional_kwargs_binary);
+    if (!additionalKwargs) continue;
+
+    let changed = false;
+    const cleanedAdditionalKwargs = { ...additionalKwargs };
+    for (const key of TRANSIENT_ADDITIONAL_KWARG_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(cleanedAdditionalKwargs, key)) {
+        delete cleanedAdditionalKwargs[key];
+        changed = true;
+      }
+    }
+    if (!changed) continue;
+
+    await database.set('chatluna_message', { id }, {
+      additional_kwargs_binary: Object.keys(cleanedAdditionalKwargs).length > 0
+        ? await gzipAsync(JSON.stringify(cleanedAdditionalKwargs))
+        : null,
+    });
+    transientAdditionalKwargsRowsCleaned += 1;
+  }
 
   for (const row of allRows) {
     const id = normalizeId(row.id);
@@ -748,6 +815,8 @@ export async function migrateStructuredReplyHistoryRows(
     failedToolCallErrorRowsRemoved +
     danglingToolCallTailRowsRemoved +
     completedToolTraceRowsMigrated +
+    transientAdditionalKwargsRowsCleaned +
+    invisibleMessageNamesCleared +
     emptyAssistantRowsRemoved;
 
   return {
@@ -761,6 +830,8 @@ export async function migrateStructuredReplyHistoryRows(
     failedToolCallErrorRowsRemoved,
     danglingToolCallTailRowsRemoved,
     completedToolTraceRowsMigrated,
+    transientAdditionalKwargsRowsCleaned,
+    invisibleMessageNamesCleared,
     emptyAssistantRowsRemoved,
   };
 }
