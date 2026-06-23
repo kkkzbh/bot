@@ -1481,7 +1481,7 @@ async function deliverReplyPlanCore(args: {
   const historyText = renderDeliveredReplyPlanHistoryText(plan);
   const fallbackText = renderReplyPlanFallbackText(plan);
   if (session.platform !== 'onebot' || !session.channelId) {
-    return { status: 'failed_before_send', fallbackText, historyText };
+    throw new Error('reply plan delivery requires a onebot session with channelId.');
   }
 
   const preparedVoice = await prepareVoiceDeliveries({

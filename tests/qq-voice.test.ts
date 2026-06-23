@@ -156,7 +156,7 @@ vi.mock('../src/plugins/shared/prompt-context/index.js', async () => {
 });
 
 import { sendVoiceByBridge } from '../src/plugins/bot-console/voice-bridge.js';
-import { apply, ensureCanSendRecord, inject } from '../src/plugins/reply/index.js';
+import { apply, deliverStandaloneReplyPlan, ensureCanSendRecord, inject } from '../src/plugins/reply/index.js';
 import { ReplyRuntime } from '../src/plugins/reply/runtime/index.js';
 import { resolveMainChatRuntimeProfileFromEnv } from '../src/plugins/shared/llm/index.js';
 import { mainChatRuntimeState } from '../src/plugins/shared/llm/main-chat-runtime.js';
@@ -761,6 +761,27 @@ describe('qq voice plugin', () => {
     expect(
       loggerMocks.warn.mock.calls.some(([message]) => String(message).includes('fallback to optimistic record support')),
     ).toBe(false);
+  });
+
+  it('rejects standalone reply delivery outside onebot instead of falling back to ChatLuna send', async () => {
+    const { bot } = createHarness();
+    const session = createSession(bot, { platform: 'discord' });
+
+    await expect(
+      deliverStandaloneReplyPlan({
+        runtime: {} as never,
+        session: session as never,
+        plan: {
+          segments: [
+            {
+              kind: 'message',
+              parts: [{ kind: 'text', content: '不应该交给 ChatLuna fallback 发送' }],
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow('reply plan delivery requires a onebot session with channelId.');
+    expect(bot.sendMessage).not.toHaveBeenCalled();
   });
 
   it('does not preheat canSendRecord during ready', async () => {
