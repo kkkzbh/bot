@@ -1902,6 +1902,51 @@ describe('qq voice plugin', () => {
     ).toBe(true);
   });
 
+  it('stops chatluna fallback when the first onebot send fails before delivery', async () => {
+    const { ready, getExecutor, bot, chatluna } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    bot.sendMessage.mockRejectedValueOnce(new Error('ordinary onebot send failure'));
+    const session = createSession(bot, {
+      content: '普通聊聊',
+      strippedContent: '普通聊聊',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        room: createPluginRoom('conv-send-failed-before-delivery'),
+        responseMessage: createReplyV2Response('今晚先这样吧'),
+      },
+    };
+
+    const result = await executor?.(session, context);
+    expect(result).toBe(1);
+    expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+    expect(context.options.responseMessage).toBeNull();
+    expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-send-failed-before-delivery' }),
+      '',
+    );
+    expect(
+      loggerMocks.warn.mock.calls.some(([message]) =>
+        String(message).includes('reply plan delivery failed'),
+      ),
+    ).toBe(true);
+  });
+
   it('executes an inline mention structured reply through the executor as one atomic mention message', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
@@ -2186,7 +2231,7 @@ describe('qq voice plugin', () => {
     }
   });
 
-  it('falls back to a safe refusal when onebot rejects the first group send with retcode 1200', async () => {
+  it('sends a safe refusal itself when onebot rejects the first group send with retcode 1200', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -2212,8 +2257,10 @@ describe('qq voice plugin', () => {
 
     const result = await executor?.(session, context);
     expect(typeof result).toBe('number');
-    expect(bot.sendMessage).toHaveBeenCalledTimes(1);
-    expect(context.options.responseMessage.content).toBe('这个话题我不方便在群里展开，换个别的吧。');
+    expect(bot.sendMessage).toHaveBeenCalledTimes(2);
+    const sendCalls = bot.sendMessage.mock.calls as unknown[][];
+    expect(extractVisibleMessageText(sendCalls[1]?.[1])).toBe('这个话题我不方便在群里展开，换个别的吧。');
+    expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-sensitive' }),
       expectedVisibleAssistantHistory('这个话题我不方便在群里展开，换个别的吧。'),

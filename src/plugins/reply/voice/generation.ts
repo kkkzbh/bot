@@ -282,7 +282,7 @@ interface PreparedStickerDelivery {
 
 type ReplyPlanDeliveryResult =
   | { status: 'delivered'; historyText: string }
-  | { status: 'failed_before_send'; fallbackText: string; historyText: string }
+  | { status: 'failed_before_send'; historyText: string }
   | { status: 'failed_after_partial_send'; historyText: string }
   | { status: 'transport_unavailable'; historyText: string }
   | { status: 'interrupted'; historyText: string };
@@ -669,28 +669,6 @@ export function buildReplyTransportPlanFromResolvedActions(actions: ResolvedActi
   }
 
   return { segments };
-}
-
-function renderReplyPlanSegmentTextForFallback(segment: ReplyTransportPlan['segments'][number]): string {
-  if (segment.kind === 'sticker') return '';
-  if (segment.kind === 'image') {
-    return sanitizeStructuredReplyText(segment.alt ?? '', 'image_alt');
-  }
-  if (segment.kind === 'message') {
-    return renderMessageVisibleText(segment);
-  }
-  if (segment.kind === 'structured_block') {
-    return sanitizeStructuredReplyText(segment.content, 'structured_block');
-  }
-  return sanitizeStructuredReplyText(segment.content, 'voice');
-}
-
-function renderReplyPlanFallbackText(plan: ReplyTransportPlan): string {
-  return plan.segments
-    .map((segment) => renderReplyPlanSegmentTextForFallback(segment))
-    .filter((segment) => segment.trim().length > 0)
-    .join('\n')
-    .trim();
 }
 
 function renderDeliveredReplyPlanHistoryText(
@@ -1479,7 +1457,6 @@ async function deliverReplyPlanCore(args: {
     onDeliveryReceipt,
   } = args;
   const historyText = renderDeliveredReplyPlanHistoryText(plan);
-  const fallbackText = renderReplyPlanFallbackText(plan);
   if (session.platform !== 'onebot' || !session.channelId) {
     throw new Error('reply plan delivery requires a onebot session with channelId.');
   }
@@ -1498,12 +1475,11 @@ async function deliverReplyPlanCore(args: {
   const effectivePlan = preparedSticker.effectivePlan;
   const outboundPlan = buildOutboundMessagePlanFromReplyPlan(effectivePlan);
   if (!outboundPlan.segments.length) {
-    return { status: 'failed_before_send', fallbackText, historyText };
+    return { status: 'failed_before_send', historyText: '' };
   }
 
   const bot = session.bot as OneBotBotLike;
   const effectiveHistoryText = renderDeliveredReplyPlanHistoryText(effectivePlan, preparedSticker.preparedByRaw) || historyText;
-  const effectiveFallbackText = renderReplyPlanFallbackText(effectivePlan) || fallbackText;
   const plannedUnitHistoryLines = buildPlannedUnitHistoryLines({
     outboundPlan,
     preparedVoiceByRaw: preparedVoice.preparedByRaw,
@@ -1623,10 +1599,16 @@ async function deliverReplyPlanCore(args: {
     if (beganSending) {
       return { status: 'failed_after_partial_send', historyText: committedHistoryText };
     }
-    const failedFallbackText = isOneBotContentBlockedError(error)
-      ? buildContentBlockedFallbackText(session)
-      : effectiveFallbackText;
-    return { status: 'failed_before_send', fallbackText: failedFallbackText, historyText: failedFallbackText };
+    if (isOneBotContentBlockedError(error)) {
+      const blockedFallbackText = buildContentBlockedFallbackText(session);
+      try {
+        await sendFailureReply(session, blockedFallbackText);
+        return { status: 'delivered', historyText: blockedFallbackText };
+      } catch (fallbackError) {
+        logger.warn('content blocked reply replacement failed: %s', (fallbackError as Error).message);
+      }
+    }
+    return { status: 'failed_before_send', historyText: '' };
   }
 
   if ((beginSend && !sendAbortSignal) || wasSendAborted() || wasInterrupted?.()) {
@@ -2154,11 +2136,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             runId,
           });
 
-          if (result.status === 'failed_before_send') {
-            if (responseMessage) {
-              responseMessage.content = result.fallbackText;
-            }
-          } else if (result.status === 'transport_unavailable') {
+          if (result.status === 'failed_before_send' || result.status === 'transport_unavailable') {
             if (context.options) {
               context.options.responseMessage = null;
             }
@@ -2176,7 +2154,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           }
 
           if (result.status === 'failed_before_send') {
-            return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
+            return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
           }
           if (result.status === 'transport_unavailable') {
             return ChatLunaChains.ChainMiddlewareRunStatus.STOP;

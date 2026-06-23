@@ -21,10 +21,8 @@ import {
 } from '../reply/index.js';
 import {
   createBypassLineSplitOptions,
-  createTextOnlyOutboundMessagePlan,
   dispatchNormalizedOutboundMessage,
   dispatchNormalizedOutboundMessageWithMention,
-  renderOutboundMessageSegmentsHistoryText,
   normalizeOutboundMessage,
   type BotMessageContent,
   type BotMessageSender,
@@ -1115,13 +1113,7 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
     let deliveryReceipt = stringifyReceipt(delivery.receipts);
 
     if (delivery.status === 'failed_before_send') {
-      const fallbackText = delivery.fallbackText.trim();
-      if (!fallbackText) {
-        throw new Error('automation structured reply delivery failed before send');
-      }
-      const receipts = await sendBotMessageByLines(bot, job.channelId, fallbackText);
-      outputText = renderOutboundMessageSegmentsHistoryText(createTextOnlyOutboundMessagePlan(fallbackText).segments) || fallbackText;
-      deliveryReceipt = stringifyReceipt(receipts);
+      throw new Error('automation structured reply delivery failed before send');
     }
 
     await finishJobRun(ctx, run.id, {
