@@ -120,6 +120,27 @@ describe('prompt assembly', () => {
     expect(compiledContent).toContain('"explicit": false');
   });
 
+  it('rejects non-serializable JSON fragments instead of rendering object fallback text', () => {
+    const value: Record<string, unknown> = {
+      kind: 'bad-json',
+    };
+    value.self = value;
+
+    expect(() => compilePromptEnvelopeFromFragments([
+      {
+        source: 'bad_internal_state',
+        title: 'Bad Internal State',
+        authority: 'assistant_state',
+        trust: 'trusted',
+        ttl: 'turn',
+        payload: {
+          kind: 'json',
+          value,
+        },
+      },
+    ])).toThrow(/prompt fragment bad_internal_state JSON payload must be serializable/u);
+  });
+
   it('builds explicit agent prompt envelopes through the reply compiler', () => {
     const envelope = compileReplyPromptEnvelope(
       buildReplyPromptCompilerInput(

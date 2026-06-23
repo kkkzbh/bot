@@ -89,15 +89,16 @@ function ttlRank(ttl: PromptFragmentTtl): number {
   return ttl === 'sticky' ? 0 : 1;
 }
 
-function payloadToContent(payload: PromptFragmentPayload): string {
+function payloadToContent(payload: PromptFragmentPayload, source: string): string {
   if (payload.kind === 'text') {
     return String(payload.value ?? '').trim();
   }
 
   try {
     return JSON.stringify(payload.value, null, 2).trim();
-  } catch {
-    return String(payload.value ?? '').trim();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`prompt fragment ${source} JSON payload must be serializable: ${message}`);
   }
 }
 
@@ -115,8 +116,7 @@ function indentBlock(content: string, prefix = '  '): string {
     .join('\n');
 }
 
-function renderFragment(fragment: PromptFragment): string {
-  const content = payloadToContent(fragment.payload);
+function renderFragment(fragment: PromptFragment, content: string): string {
   if (!content) return '';
 
   return [
@@ -135,20 +135,25 @@ function renderFragment(fragment: PromptFragment): string {
 
 function compileRegisteredFragments(fragments: RegisteredPromptFragment[]): PromptEnvelope | null {
   const allFragments = fragments
-    .filter((fragment) => payloadToContent(fragment.payload))
+    .map((fragment) => ({
+      fragment,
+      payloadContent: payloadToContent(fragment.payload, fragment.source),
+    }))
+    .filter((item) => item.payloadContent)
     .sort((left, right) => {
-      const authorityDelta = authorityRank(left.authority) - authorityRank(right.authority);
+      const authorityDelta = authorityRank(left.fragment.authority) - authorityRank(right.fragment.authority);
       if (authorityDelta !== 0) return authorityDelta;
-      const ttlDelta = ttlRank(left.ttl) - ttlRank(right.ttl);
+      const ttlDelta = ttlRank(left.fragment.ttl) - ttlRank(right.fragment.ttl);
       if (ttlDelta !== 0) return ttlDelta;
-      return left.registeredOrder - right.registeredOrder;
+      return left.fragment.registeredOrder - right.fragment.registeredOrder;
     });
 
   if (!allFragments.length) return null;
 
   const compiledFragments: CompiledPromptFragment[] = [];
-  for (const [index, { registeredOrder: _registeredOrder, ...fragment }] of allFragments.entries()) {
-    const content = renderFragment(fragment);
+  for (const [index, item] of allFragments.entries()) {
+    const { registeredOrder: _registeredOrder, ...fragment } = item.fragment;
+    const content = renderFragment(fragment, item.payloadContent);
     if (!content) continue;
     compiledFragments.push({
       ...fragment,
