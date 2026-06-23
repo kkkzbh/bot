@@ -936,10 +936,10 @@ describe('affinity service random history sync', () => {
             {
               at: replyAt,
               speaker: 'Alice',
-              summary: '说可以先画出 SCC 缩点后的 DAG。',
+              summary: '说可以先画出 SCC 缩点后的 DAG。<at id="2219854433" name="⁢小祥"/>',
             },
           ]),
-          responderNames: JSON.stringify(['Alice']),
+          responderNames: JSON.stringify(['Alice', '⁢小祥']),
           createdAt: memoryCreatedAt,
           lastResponseAt: replyAt,
           expiresAt: NOW + 30 * 24 * 60 * 60 * 1000,
@@ -955,7 +955,10 @@ describe('affinity service random history sync', () => {
     expect(injectedText).toContain('昨天那道缩点题，我还是有一点在意。');
     expect(injectedText).toContain('2026-06-16 09:00:00 +08:00，1天前');
     expect(injectedText).toContain('2026-06-17 08:50:00 +08:00，10分钟前');
-    expect(injectedText).toContain('Alice（2026-06-17 08:50:00 +08:00，10分钟前）：说可以先画出 SCC 缩点后的 DAG。');
+    expect(injectedText).toContain('Alice（2026-06-17 08:50:00 +08:00，10分钟前）：说可以先画出 SCC 缩点后的 DAG。 @小祥');
+    expect(injectedText).toContain('回应者：Alice、小祥');
+    expect(injectedText).not.toContain('<at id="2219854433"');
+    expect(injectedText).not.toContain('⁢');
     expect(injectedText).not.toContain(String(memoryCreatedAt));
     expect(injectedText).not.toContain(String(replyAt));
   });
@@ -1130,8 +1133,8 @@ describe('affinity service random history sync', () => {
       channelId: '829573670',
       userId: 'u-1',
       messageId: 'reply-1',
-      content: '这个算法是不是缩点以后再拓扑排序？',
-      stripped: { content: '这个算法是不是缩点以后再拓扑排序？' },
+      content: '这个算法是不是缩点以后再拓扑排序？<at id="2219854433" name="⁢小祥"/>',
+      stripped: { content: '这个算法是不是缩点以后再拓扑排序？<at id="2219854433" name="⁢小祥"/>' },
       author: { nick: 'Alice' },
       bot: { selfId: 'bot-1' },
     } as any);
@@ -1149,6 +1152,9 @@ describe('affinity service random history sync', () => {
       speaker: 'Alice',
       summary: expect.stringContaining('缩点'),
     }));
+    expect(responses[0].summary).toContain('@小祥');
+    expect(responses[0].summary).not.toContain('<at');
+    expect(responses[0].summary).not.toContain('⁢');
     expect(memory.lastResponseAt).toEqual(responses[0].at);
     const audit = db.tables.affinity_audit.find((row) => row.eventType === 'random_memory_updated');
     expect(parseAuditDetail(audit)).toEqual(expect.objectContaining({
@@ -1156,6 +1162,49 @@ describe('affinity service random history sync', () => {
       speaker: 'Alice',
       eventType: 'answer_random_prompt',
     }));
+  });
+
+  it('migrates stored random memory prompt text away from platform control tags', async () => {
+    const { db, service } = createHarness({
+      randomMemories: [
+        {
+          id: 88,
+          characterId: CHARACTER_ID,
+          scopeKind: 'group',
+          scopeId: '829573670',
+          direction: 'daily_greeting',
+          sourcePlanId: 42,
+          messageText: '前面那句话，我稍微补一句。',
+          contextSummary: null,
+          materialJson: null,
+          responseSummary: JSON.stringify([
+            {
+              at: NOW - 1000,
+              speaker: '⁢小祥',
+              summary: '<at id="2219854433" name="⁢小祥"/> 这个可以继续看。',
+            },
+          ]),
+          responderNames: JSON.stringify(['⁢小祥']),
+          createdAt: NOW - 2000,
+          lastResponseAt: NOW - 1000,
+          expiresAt: NOW + 30 * 24 * 60 * 60 * 1000,
+          updatedAt: NOW - 1000,
+        },
+      ],
+    });
+
+    await expect(service.normalizeStoredRandomMemoryPromptText()).resolves.toBe(1);
+
+    const memory = db.tables.affinity_random_memory[0];
+    expect(JSON.parse(memory.responseSummary)).toEqual([
+      {
+        at: NOW - 1000,
+        speaker: '小祥',
+        summary: '@小祥 这个可以继续看。',
+      },
+    ]);
+    expect(JSON.parse(memory.responderNames)).toEqual(['小祥']);
+    expect(memory.updatedAt).toEqual(expect.any(Number));
   });
 
   it('injects active proactive thread context into the next ChatLuna turn after a user reply', async () => {

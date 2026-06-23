@@ -420,7 +420,12 @@ export function apply(ctx: Context, config: Config): void {
     return true;
   };
 
-  ctx.on('ready', () => {
+  ctx.on('ready', async () => {
+    const cleanedRandomMemories = await service.normalizeStoredRandomMemoryPromptText();
+    if (cleanedRandomMemories > 0) {
+      logger.info('cleaned %d affinity random memory prompt text row(s).', cleanedRandomMemories);
+    }
+
     registerChatLunaHooks();
 
     if (runtime.enabled) {

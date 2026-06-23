@@ -4,6 +4,7 @@ import { Logger, type Context, type Session } from 'koishi';
 import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
 import { registerPromptFragment } from '../shared/prompt-context/index.js';
 import type { ReplyTransportPlan } from '../shared/outbound/index.js';
+import { normalizeMentionLikeText } from '../shared/mention-text.js';
 import { resolveSessionDisplayName } from '../shared/session/index.js';
 import { decodeStoredMessageText } from '../shared/stored-message.js';
 import { buildGroupScopeKey, realtimeMessageCache } from '../realtime-message/index.js';
@@ -73,6 +74,7 @@ import {
 import { proactiveDirectionUsesConversationContext } from './proactive-task.js';
 
 const logger = new Logger('affinity');
+const INVISIBLE_OR_CONTROL_TEXT_PATTERN = /[\p{Cf}\p{Cc}\p{Cs}]/gu;
 
 export type AffinityDatabaseLike = {
   get(table: string, query: Record<string, unknown>): Promise<any[]>;
@@ -228,6 +230,18 @@ const SESSION_RESULT_KEY = Symbol('qqbot-affinity-result');
 
 function normalizeText(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function sanitizePromptMemoryText(value: unknown): string {
+  return normalizeMentionLikeText(String(value ?? ''))
+    .replace(/\[CQ:reply,[^\]]+\]/gi, ' ')
+    .replace(/<img\b[^>]*>/gi, ' ')
+    .replace(/\[CQ:image,[^\]]+\]/gi, ' ')
+    .replace(/<audio\b[^>]*\/?>/gi, ' ')
+    .replace(/\[CQ:record,[^\]]+\]/gi, ' ')
+    .replace(INVISIBLE_OR_CONTROL_TEXT_PATTERN, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {
@@ -396,7 +410,7 @@ function buildPanelHistoryMetadata(view: AffinityPanelView): Record<string, unkn
 function parseStringArray(raw: string | null | undefined): string[] {
   const parsed = parseJson<unknown>(raw, []);
   return Array.isArray(parsed)
-    ? parsed.map((item) => normalizeText(item)).filter(Boolean)
+    ? parsed.map((item) => sanitizePromptMemoryText(item)).filter(Boolean)
     : [];
 }
 
@@ -407,8 +421,8 @@ function parseResponseSummary(raw: string | null | undefined): Array<{ at: numbe
     .map((item) => {
       if (!item || typeof item !== 'object') return null;
       const record = item as Record<string, unknown>;
-      const speaker = normalizeText(record.speaker);
-      const summary = normalizeText(record.summary);
+      const speaker = sanitizePromptMemoryText(record.speaker);
+      const summary = sanitizePromptMemoryText(record.summary);
       const at = Number(record.at);
       if (!speaker || !summary || !Number.isFinite(at)) return null;
       return { at, speaker, summary };
@@ -443,6 +457,39 @@ function formatResponseSummaryForPrompt(raw: string | null | undefined, now: num
     .slice(-8)
     .map((item) => `${item.speaker}(${formatAgeForPrompt(now, item.at)}): ${truncateText(item.summary, 80)}`)
     .join('；');
+}
+
+function parseStoredJsonArray(raw: string | null | undefined): unknown[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStoredResponseSummaryJson(raw: string | null | undefined): string | null {
+  const parsed = parseStoredJsonArray(raw);
+  if (!parsed) return null;
+  const normalized = parsed
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const record = item as Record<string, unknown>;
+      const at = Number(record.at);
+      const speaker = sanitizePromptMemoryText(record.speaker);
+      const summary = sanitizePromptMemoryText(record.summary);
+      if (!Number.isFinite(at) || !speaker || !summary) return null;
+      return { at, speaker, summary };
+    })
+    .filter((item): item is { at: number; speaker: string; summary: string } => Boolean(item));
+  return stringifyJson(normalized);
+}
+
+function normalizeStoredStringArrayJson(raw: string | null | undefined): string | null {
+  const parsed = parseStoredJsonArray(raw);
+  if (!parsed) return null;
+  return stringifyJson(parsed.map((item) => sanitizePromptMemoryText(item)).filter(Boolean));
 }
 
 function hotTopicLooksUnsafe(title: string): boolean {
@@ -717,6 +764,27 @@ export class AffinityService implements AffinityServiceLike {
     if (this.settingsCache) return this.settingsCache;
     this.settingsCache = this.applyRuntimeGate(await this.loadStoredSettings());
     return this.settingsCache;
+  }
+
+  async normalizeStoredRandomMemoryPromptText(): Promise<number> {
+    const rows = await this.database.get('affinity_random_memory', { characterId: CHARACTER_ID }) as AffinityRandomMemoryRecord[];
+    let cleaned = 0;
+    for (const row of rows) {
+      const update: Record<string, unknown> = {};
+      const responseSummary = normalizeStoredResponseSummaryJson(row.responseSummary);
+      if (responseSummary != null && responseSummary !== row.responseSummary) {
+        update.responseSummary = responseSummary;
+      }
+      const responderNames = normalizeStoredStringArrayJson(row.responderNames);
+      if (responderNames != null && responderNames !== row.responderNames) {
+        update.responderNames = responderNames;
+      }
+      if (!Object.keys(update).length) continue;
+      update.updatedAt = Date.now();
+      await this.database.set('affinity_random_memory', { id: row.id }, update);
+      cleaned += 1;
+    }
+    return cleaned;
   }
 
   async saveSettings(settingsPatch: Partial<AffinitySettings>): Promise<AffinityStateSummary> {
@@ -1357,12 +1425,12 @@ export class AffinityService implements AffinityServiceLike {
     }) as AffinityRandomMemoryRecord[];
     if (!memory?.id) return;
 
-    const speaker = normalizeText(args.speakerName) || 'unknown';
+    const speaker = sanitizePromptMemoryText(args.speakerName) || 'unknown';
     const responses = parseResponseSummary(memory.responseSummary);
     responses.push({
       at: args.now,
       speaker,
-      summary: truncateText(args.analysis.evidence ?? args.text, 120),
+      summary: truncateText(sanitizePromptMemoryText(args.analysis.evidence ?? args.text), 120),
     });
     const responderNames = new Set(parseStringArray(memory.responderNames));
     responderNames.add(speaker);
@@ -1474,7 +1542,7 @@ export class AffinityService implements AffinityServiceLike {
       if (row.role === 'human' || row.role === 'ai') {
         const text = normalizeText(await decodeStoredMessageText(row.content));
         const parsed = parseSpeakerTaggedText(text);
-        const normalized = normalizeText(parsed.text || text);
+        const normalized = sanitizePromptMemoryText(parsed.text || text);
         if (normalized) {
           turns.push({
             role: row.role,
@@ -1511,8 +1579,8 @@ export class AffinityService implements AffinityServiceLike {
     return {
       turns: entries.map((entry): AffinityRandomContextTurn => ({
         role: 'human',
-        text: truncateText([entry.text, entry.voiceTranscript ?? ''].filter(Boolean).join('\n'), 220),
-        speakerName: entry.speakerName,
+        text: truncateText(sanitizePromptMemoryText([entry.text, entry.voiceTranscript ?? ''].filter(Boolean).join('\n')), 220),
+        speakerName: sanitizePromptMemoryText(entry.speakerName),
         observedAt: entry.capturedAt,
         source: 'realtime',
       })).filter((turn) => Boolean(turn.text)),

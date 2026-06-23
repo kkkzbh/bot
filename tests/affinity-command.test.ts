@@ -129,7 +129,10 @@ describe('affinity panel command', () => {
       model: {
         extend: vi.fn(),
       },
-      database: {},
+      database: {
+        get: vi.fn(async () => []),
+        set: vi.fn(async () => undefined),
+      },
       puppeteer: {},
       chatluna,
       command,
