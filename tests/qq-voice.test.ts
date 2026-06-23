@@ -478,18 +478,6 @@ function createReplyV2Response(input: string | Record<string, unknown>) {
   };
 }
 
-function encodeExpectedChatReplyV1History(content: string): string {
-  return [
-    'CHAT_REPLY_V1 history',
-    'DECISION reply',
-    'BEGIN message',
-    'CONTENT',
-    ...content.split('\n').map((line) => `|${line}`),
-    'END',
-    'DONE history',
-  ].join('\n');
-}
-
 function createChatReplyV1Response(content: string, nonce: string) {
   return {
     content: [
@@ -1634,7 +1622,7 @@ describe('qq voice plugin', () => {
     );
   });
 
-  it('keeps CHAT_REPLY_V1 assistant history as protocol text after executor delivery', async () => {
+  it('stores CHAT_REPLY_V1 assistant history as visible text after executor delivery', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
@@ -1688,19 +1676,11 @@ describe('qq voice plugin', () => {
     expect(context.options.responseMessage).toBeNull();
     expect(chatluna.normalizeResearchReplyHistory).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-chat-reply-v1' }),
-      [
-        'CHAT_REPLY_V1 history',
-        'DECISION reply',
-        'BEGIN message',
-        'CONTENT',
-        '|今晚先这样吧',
-        'END',
-        'DONE history',
-      ].join('\n'),
+      '今晚先这样吧',
     );
   });
 
-  it('keeps CHAT_REPLY_V1 assistant history protocol-shaped across five consecutive executor turns', async () => {
+  it('stores CHAT_REPLY_V1 assistant history as visible text across five consecutive executor turns', async () => {
     const { ready, getExecutor, bot, chatluna } = createHarness();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
     vi.useFakeTimers();
@@ -1803,7 +1783,7 @@ describe('qq voice plugin', () => {
       expect(chatluna.normalizeResearchReplyHistory).toHaveBeenNthCalledWith(
         turn,
         expect.objectContaining({ conversationId: 'conv-five-executor-chat-reply-v1-turns' }),
-        encodeExpectedChatReplyV1History(turnResponses[turn - 1]!.visible),
+        turnResponses[turn - 1]!.visible,
       );
     }
     expect(loggerMocks.error.mock.calls.some(([message]) => String(message).includes('reply plan executor suppressed structured model failure'))).toBe(false);

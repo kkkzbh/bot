@@ -660,15 +660,6 @@ describe('reply pipeline v3', () => {
         outbound_messages: [{ type: 'message', content: '收到。' }],
       },
       actions: [{ kind: 'message', parts: [{ kind: 'text', content: '收到。' }] }],
-      assistantHistoryText: [
-        'CHAT_REPLY_V1 history',
-        'DECISION reply',
-        'BEGIN message',
-        'CONTENT',
-        '|收到。',
-        'END',
-        'DONE history',
-      ].join('\n'),
     });
   });
 

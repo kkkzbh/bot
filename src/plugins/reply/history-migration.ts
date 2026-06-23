@@ -1,11 +1,10 @@
 import { gunzip, gzip } from 'node:zlib';
 import { promisify } from 'node:util';
-import { ChatReplyV1Parser, encodeChatReplyV1 } from './pipeline/chat-reply-v1.js';
+import { ChatReplyV1Parser } from './pipeline/chat-reply-v1.js';
 import type { StructuredReply, StructuredReplyMessage } from './pipeline/types.js';
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
-const CHAT_REPLY_V1_HISTORY_NONCE = 'history';
 
 type DatabaseLike = {
   get: (table: string, query: Record<string, unknown>, fields?: string[]) => Promise<Array<Record<string, unknown>>>;
@@ -198,8 +197,7 @@ function normalizeLegacyChatReplyV1History(raw: string): string | null {
 
   try {
     const parsed = new ChatReplyV1Parser().parse(withoutLegacyMentionHeader);
-    const normalized = encodeChatReplyV1(parsed, CHAT_REPLY_V1_HISTORY_NONCE);
-    return normalized === trimmed ? null : normalized;
+    return renderMigratedStructuredReplyHistory(parsed) || null;
   } catch {
     return null;
   }

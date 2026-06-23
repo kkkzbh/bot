@@ -674,8 +674,10 @@ describe('affinity service random history sync', () => {
       role: 'ai',
     }));
     const content = await decodeStoredMessageText(message?.content);
-    expect(content).toContain('"decision":"reply"');
-    expect(content).toContain(RANDOM_MESSAGE);
+    expect(content).toBe(RANDOM_MESSAGE);
+    expect(content).not.toContain('"decision"');
+    expect(content).not.toContain('outbound_messages');
+    expect(content).not.toContain('CHAT_REPLY_V1');
     const additional = await decodeStoredMessageJson<Record<string, any>>(message?.additional_kwargs_binary);
     expect(additional?.qqbot_affinity_random_event).toEqual(expect.objectContaining({
       version: 'v1',
@@ -997,8 +999,10 @@ describe('affinity service random history sync', () => {
       role: 'ai',
     }));
     const historyText = await decodeStoredMessageText(historyMessage?.content);
-    expect(historyText).toContain('"decision":"reply"');
-    expect(historyText).toContain(declarativeMessage);
+    expect(historyText).toBe(declarativeMessage);
+    expect(historyText).not.toContain('"decision"');
+    expect(historyText).not.toContain('outbound_messages');
+    expect(historyText).not.toContain('CHAT_REPLY_V1');
     const additional = await decodeStoredMessageJson<Record<string, any>>(historyMessage?.additional_kwargs_binary);
     expect(additional?.qqbot_affinity_random_event).toEqual(expect.objectContaining({
       visibleText: declarativeMessage,

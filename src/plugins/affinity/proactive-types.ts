@@ -47,7 +47,6 @@ export interface AffinityRandomGenerationResult {
   reason: string;
   risk: 'low' | 'medium' | 'high';
   skipReason: string | null;
-  assistantHistoryText?: string | null;
   outputProtocol?: string | null;
   deliveryHistoryText?: string | null;
 }

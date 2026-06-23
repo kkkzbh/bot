@@ -88,7 +88,6 @@ export type AffinityProactiveChatLunaConversation = {
 
 export interface AffinityProactiveGenerationResult extends AffinityRandomGenerationResult {
   transportPlan: ReplyTransportPlan | null;
-  assistantHistoryText: string | null;
   outputProtocol: ReplyOutputProtocol | null;
 }
 
@@ -193,7 +192,6 @@ function skipResult(reason: string): AffinityProactiveGenerationResult {
     risk: 'low',
     skipReason: reason,
     transportPlan: null,
-    assistantHistoryText: null,
     outputProtocol: null,
   };
 }
@@ -281,7 +279,6 @@ export async function generateAffinityProactiveViaChatLuna(args: {
       risk: 'low',
       skipReason: null,
       transportPlan,
-      assistantHistoryText: orchestration.assistantHistoryText,
       outputProtocol: outputContract.protocol,
     };
   } catch (error) {

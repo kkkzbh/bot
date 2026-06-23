@@ -1,7 +1,6 @@
 import type { Session } from 'koishi';
 import type { PromptFragment } from '../../shared/prompt-context/types.js';
 import { StructuredReplyCompilerService, type ReplyCompilerOutputProtocol } from './compiler.js';
-import { encodeChatReplyV1 } from './chat-reply-v1.js';
 import { buildReplyTurnContext } from './context-builder.js';
 import { ActionResolverService } from './resolver.js';
 import type {
@@ -45,21 +44,7 @@ export type ReplyOrchestratorHandleResult =
       turnContext: TurnContext;
       reply: StructuredReply;
       actions: ResolvedAction[];
-      assistantHistoryText: string;
     };
-
-const ASSISTANT_HISTORY_NONCE = 'history';
-
-export function buildStructuredReplyAssistantHistoryText(
-  reply: StructuredReply,
-  outputProtocol: ReplyCompilerOutputProtocol = 'native_chat_json_schema',
-): string {
-  if (outputProtocol === 'chat_reply_v1') {
-    return encodeChatReplyV1(reply, ASSISTANT_HISTORY_NONCE);
-  }
-
-  return JSON.stringify(reply);
-}
 
 export class ReplyOrchestratorService {
   constructor(private readonly actionResolver = new ActionResolverService()) {}
@@ -107,7 +92,6 @@ export class ReplyOrchestratorService {
       turnContext,
       reply,
       actions,
-      assistantHistoryText: buildStructuredReplyAssistantHistoryText(reply, context.outputProtocol),
     };
   }
 }

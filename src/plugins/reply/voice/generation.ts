@@ -60,10 +60,7 @@ import {
   StructuredReplyEmptyModelOutputError,
   type ReplyCompilerOutputProtocol,
 } from '../pipeline/compiler.js';
-import {
-  buildStructuredReplyAssistantHistoryText,
-  ReplyOrchestratorService,
-} from '../pipeline/orchestrator.js';
+import { ReplyOrchestratorService } from '../pipeline/orchestrator.js';
 import { buildReplyTurnInput, normalizeReplyRouteHint } from '../pipeline/context-builder.js';
 import {
   buildReplyOutputContract,
@@ -75,7 +72,6 @@ import { mainChatRuntimeState } from '../../shared/llm/main-chat-runtime.js';
 import {
   type ReplyRoute,
   type ResolvedAction,
-  type StructuredReply,
   type TurnContext,
   type TurnInput,
 } from '../pipeline/types.js';
@@ -774,39 +770,24 @@ function buildOptimisticPlannedUnitHistoryLines(plan: ReplyTransportPlan): strin
 async function normalizeResearchReplyHistory(
   ctx: Context,
   room: Record<string, unknown> | undefined,
-  assistantHistoryText: string,
+  visibleHistoryText: string,
 ): Promise<void> {
   const chatluna = (ctx.get?.('chatluna') ?? (ctx as { chatluna?: any }).chatluna) as
     | {
-        normalizeResearchReplyHistory?: (room: Record<string, unknown>, assistantHistoryText: string) => Promise<unknown>;
+        normalizeResearchReplyHistory?: (room: Record<string, unknown>, visibleHistoryText: string) => Promise<unknown>;
       }
     | undefined;
   const conversationId = typeof room?.conversationId === 'string' ? room.conversationId.trim() : '';
   const normalizeHistory = chatluna?.normalizeResearchReplyHistory?.bind(chatluna);
   if (!normalizeHistory || !conversationId) return;
-  await normalizeHistory(room!, assistantHistoryText.trim());
+  await normalizeHistory(room!, visibleHistoryText.trim());
 }
 
 function buildTextOnlyAssistantHistoryText(
   text: string,
-  outputProtocol: ReplyCompilerOutputProtocol | undefined,
+  _outputProtocol: ReplyCompilerOutputProtocol | undefined,
 ): string {
-  const normalized = text.trim();
-  if (!normalized) return '';
-  if (outputProtocol !== 'chat_reply_v1') return normalized;
-
-  return buildStructuredReplyAssistantHistoryText(
-    {
-      decision: 'reply',
-      outbound_messages: [
-        {
-          type: 'message',
-          content: normalized,
-        },
-      ],
-    } satisfies StructuredReply,
-    outputProtocol,
-  );
+  return text.trim();
 }
 
 export async function ensureCanSendRecord(
@@ -2187,8 +2168,8 @@ export function apply(ctx: Context, config: Config = {}): void {
 
           if (result.status !== 'transport_unavailable') {
             try {
-              const assistantHistoryText = buildTextOnlyAssistantHistoryText(result.historyText, outputProtocol);
-              await normalizeResearchReplyHistory(ctx, room, assistantHistoryText);
+              const visibleHistoryText = buildTextOnlyAssistantHistoryText(result.historyText, outputProtocol);
+              await normalizeResearchReplyHistory(ctx, room, visibleHistoryText);
             } catch (error) {
               logger.warn('research reply history normalization failed: %s', (error as Error).message);
             }

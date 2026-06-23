@@ -509,7 +509,6 @@ export class AffinityService implements AffinityServiceLike {
       risk: 'low',
       skipReason: reason,
       transportPlan: null,
-      assistantHistoryText: null,
       outputProtocol: null,
     };
   }
@@ -1933,9 +1932,7 @@ export class AffinityService implements AffinityServiceLike {
         };
       }
 
-      const historyContent = normalizeText(generation.assistantHistoryText)
-        || normalizeText(generation.deliveryHistoryText)
-        || messageText;
+      const historyContent = normalizeText(generation.deliveryHistoryText) || messageText;
       await writer.addMessages([
         new AIMessage({
           content: historyContent,

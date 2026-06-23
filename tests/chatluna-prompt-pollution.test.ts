@@ -372,7 +372,7 @@ describe('chatluna prompt pollution regression', () => {
     await expect(gunzipAsync(rows[1].content).then((value) => value.toString())).resolves.toBe(JSON.stringify('普通历史'));
   });
 
-  it('normalizes legacy CHAT_REPLY_V1 history rows to the current history nonce without mention headers', async () => {
+  it('normalizes legacy CHAT_REPLY_V1 history rows to visible assistant text without mention headers', async () => {
     const rows = [
       {
         id: 'legacy-chat-reply-v1-ai',
@@ -415,8 +415,8 @@ describe('chatluna prompt pollution regression', () => {
 
     await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
       scanned: 2,
-      migrated: 1,
-      structuredRowsMigrated: 1,
+      migrated: 2,
+      structuredRowsMigrated: 2,
       submitReplyPlansMigrated: 0,
       emptySubmitReplyPlanToolsRemoved: 0,
       protocolViolationPromptsRemoved: 0,
@@ -430,25 +430,14 @@ describe('chatluna prompt pollution regression', () => {
         query: { id: 'legacy-chat-reply-v1-ai' },
         update: { content: expect.any(Buffer) },
       },
+      {
+        table: 'chatluna_message',
+        query: { id: 'current-chat-reply-v1-ai' },
+        update: { content: expect.any(Buffer) },
+      },
     ]);
-    await expect(gunzipAsync(rows[0].content).then((value) => value.toString())).resolves.toBe(JSON.stringify([
-      'CHAT_REPLY_V1 history',
-      'DECISION reply',
-      'BEGIN message',
-      'CONTENT',
-      '|今晚先这样吧',
-      'END',
-      'DONE history',
-    ].join('\n')));
-    await expect(gunzipAsync(rows[1].content).then((value) => value.toString())).resolves.toBe(JSON.stringify([
-      'CHAT_REPLY_V1 history',
-      'DECISION reply',
-      'BEGIN message',
-      'CONTENT',
-      '|已经是当前格式',
-      'END',
-      'DONE history',
-    ].join('\n')));
+    await expect(gunzipAsync(rows[0].content).then((value) => value.toString())).resolves.toBe(JSON.stringify('今晚先这样吧'));
+    await expect(gunzipAsync(rows[1].content).then((value) => value.toString())).resolves.toBe(JSON.stringify('已经是当前格式'));
   });
 
   it('collapses legacy submit_reply_plan tool-call history into visible assistant text', async () => {
