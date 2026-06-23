@@ -868,6 +868,63 @@ describe('affinity service random history sync', () => {
     }));
   });
 
+  it('stores generated random material as structured ChatLuna history metadata', async () => {
+    const { db, service } = createHarness({
+      plan: { direction: 'computer_knowledge' },
+    });
+
+    await service.runDueRandomPlans(NOW);
+
+    const historyMessage = db.tables.chatluna_message.find((row) => row.id === 'affinity-random-plan:2');
+    const additional = await decodeStoredMessageJson<Record<string, any>>(historyMessage?.additional_kwargs_binary);
+    const material = additional?.qqbot_affinity_random_event?.material;
+    expect(material).toEqual(expect.objectContaining({
+      kind: 'computer',
+      title: expect.any(String),
+      summary: expect.any(String),
+      sourceLabel: null,
+      sourceUrl: null,
+      tags: expect.any(Array),
+      promptHints: expect.any(Array),
+    }));
+    expect(material.title).not.toBe('');
+    expect(material.summary).not.toBe('');
+    expect(material.tags.length).toBeGreaterThan(0);
+    expect(material.promptHints.length).toBeGreaterThan(0);
+  });
+
+  it('rejects invalid generated random material metadata instead of writing null material', async () => {
+    const { db, service } = createHarness({
+      plan: { direction: 'computer_knowledge' },
+    });
+
+    const result = await (service as any).syncRandomMessageToChatHistory({
+      plan: db.tables.affinity_random_plan[0],
+      scope: db.tables.affinity_scope_config[0],
+      messageText: RANDOM_MESSAGE,
+      generation: {
+        shouldSend: true,
+        message: RANDOM_MESSAGE,
+        contextSeedSummary: 'seed',
+        eventTypeHint: 'computer_knowledge',
+        memorySummary: null,
+        reason: 'chatluna_provider_reply',
+        risk: 'low',
+        skipReason: null,
+      },
+      materialJson: '{"kind":',
+    });
+
+    expect(result).toEqual({ synced: false, reason: 'write_failed', conversationId: 'conv-affinity' });
+    expect(db.tables.chatluna_message.some((row) => row.id === 'affinity-random-plan:2')).toBe(false);
+    const audit = db.tables.affinity_audit.find((row) => row.eventType === 'random_history_sync_skipped');
+    expect(parseAuditDetail(audit)).toEqual(expect.objectContaining({
+      reason: 'write_failed',
+      conversationId: 'conv-affinity',
+      error: 'affinity random materialJson must contain valid JSON.',
+    }));
+  });
+
   it('creates and cleans a temporary ChatLuna conversation for scheduled proactive generation', async () => {
     let tempConversationId = '';
     let dbRef: MemoryDatabase | null = null;

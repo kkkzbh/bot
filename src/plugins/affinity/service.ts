@@ -312,6 +312,14 @@ function parseRequiredJsonRecord(raw: string | null | undefined, label: string):
   return parsed as Record<string, unknown>;
 }
 
+function parseGeneratedJson(raw: string, label: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`${label} must contain valid JSON.`);
+  }
+}
+
 function parseRandomThreadPayload(raw: string | null | undefined): RandomThreadPayload {
   const label = 'affinity_open_thread.payloadJson';
   const record = parseRequiredJsonRecord(raw, label);
@@ -2279,7 +2287,7 @@ export class AffinityService implements AffinityServiceLike {
               outputProtocol: generation.outputProtocol ?? null,
               contextSeedSummary: generation.contextSeedSummary,
               eventTypeHint: generation.eventTypeHint,
-              material: materialJson ? parseJson<unknown>(materialJson, null) : null,
+              material: materialJson ? parseGeneratedJson(materialJson, 'affinity random materialJson') : null,
             },
           },
         }),
