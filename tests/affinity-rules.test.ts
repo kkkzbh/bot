@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MainChatRuntimeProfile } from '../src/plugins/shared/llm/main-chat-tabs.js';
 import {
   createInitialState,
@@ -47,6 +47,10 @@ function mainProfile(): MainChatRuntimeProfile {
 }
 
 describe('affinity rules', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('reduces positive gains when the current stage is near its soft cap', () => {
     const now = Date.now();
     const low = createInitialState(now);
@@ -107,7 +111,7 @@ describe('affinity rules', () => {
     }
   });
 
-  it('falls back to the main chat model when analysis model core fields are empty', () => {
+  it('uses the main chat model when analysis model core fields are empty', () => {
     const resolved = resolveAnalysisModelConfig({
       baseUrl: '',
       apiKey: '',
@@ -145,6 +149,50 @@ describe('affinity rules', () => {
       route: 'random_event_reply',
       eventType: 'answer_random_prompt',
       reasonCode: 'heuristic_random_followup',
+    }));
+  });
+
+  it('ignores non-thread relationship keywords when the analysis model is unavailable', async () => {
+    const result = await analyzeAffinityEvent({
+      text: 'saki 我给你泡一杯红茶，不急，等你想说再说。',
+      openThreads: [],
+      randomPending: false,
+      relationSummary: {},
+    }, null);
+
+    expect(result).toEqual(expect.objectContaining({
+      route: 'ignore',
+      eventType: 'none',
+      effectTier: 'ignore',
+      reasonCode: 'analysis_model_unavailable',
+    }));
+  });
+
+  it('ignores invalid model output instead of applying relationship heuristics', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ output_text: 'not json' }),
+    })));
+
+    const result = await analyzeAffinityEvent({
+      text: 'saki 我给你泡一杯红茶。',
+      openThreads: [],
+      randomPending: false,
+      relationSummary: {},
+    }, {
+      baseUrl: 'https://example.com/v1',
+      apiKey: 'sk-test',
+      model: 'test-model',
+      requestMode: 'responses',
+      structuredOutputProtocol: 'native_responses_json_schema',
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      route: 'ignore',
+      eventType: 'none',
+      effectTier: 'ignore',
+      reasonCode: 'analysis_model_invalid_response',
     }));
   });
 });

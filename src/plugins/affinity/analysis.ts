@@ -145,68 +145,24 @@ function normalizeAnalysis(value: unknown): AffinityEventAnalysis | null {
   };
 }
 
-function fallbackAnalysis(input: AnalyzeAffinityInput): AffinityEventAnalysis {
+function ignoredAnalysis(input: AnalyzeAffinityInput, reasonCode: string): AffinityEventAnalysis {
   const text = input.text.trim();
-  const lower = text.toLowerCase();
+  return {
+    route: 'ignore',
+    eventType: 'none',
+    effectTier: 'ignore',
+    category: 'none',
+    confidence: 0,
+    evidence: text ? text.slice(0, 80) : null,
+    replyHint: null,
+    risk: 'none',
+    reasonCode: text ? reasonCode : 'empty',
+  };
+}
+
+function resolveActiveRandomThreadAnalysis(input: AnalyzeAffinityInput): AffinityEventAnalysis | null {
+  const text = input.text.trim();
   const hasOpenThread = Boolean(input.randomPending || input.openThreads?.length);
-
-  if (!text) {
-    return {
-      route: 'ignore',
-      eventType: 'none',
-      effectTier: 'ignore',
-      category: 'none',
-      confidence: 0,
-      evidence: null,
-      replyHint: null,
-      risk: 'none',
-      reasonCode: 'empty',
-    };
-  }
-
-  const pressurePattern = /(快回|怎么不说话|理我|必须|赶紧|刷|小祥.*小祥.*小祥|祥子.*祥子.*祥子)/u;
-  if (pressurePattern.test(text)) {
-    return {
-      route: 'boundary_risk',
-      eventType: 'pressure_or_spam',
-      effectTier: 'progress',
-      category: 'pressure',
-      confidence: 0.82,
-      evidence: text.slice(0, 80),
-      replyHint: 'guarded',
-      risk: 'medium',
-      reasonCode: 'heuristic_pressure',
-    };
-  }
-
-  if (/(不急|别勉强|等你想说|休息|不用勉强|给你空间)/u.test(text)) {
-    return {
-      route: 'affinity_candidate',
-      eventType: 'boundary_respect',
-      effectTier: 'progress',
-      category: 'boundary',
-      confidence: 0.78,
-      evidence: text.slice(0, 80),
-      replyHint: 'calm',
-      risk: 'none',
-      reasonCode: 'heuristic_boundary_respect',
-    };
-  }
-
-  if (/(红茶|茶|茶会|倒一杯|泡一杯)/u.test(text)) {
-    return {
-      route: 'affinity_candidate',
-      eventType: 'offer_tea',
-      effectTier: 'progress',
-      category: 'tea',
-      confidence: 0.76,
-      evidence: text.slice(0, 80),
-      replyHint: 'reserved_appreciation',
-      risk: 'none',
-      reasonCode: 'heuristic_tea',
-    };
-  }
-
   if (
     hasOpenThread &&
     /(前面|刚才|你说|你前面|你刚才|接一下|继续|补充|这个|这道|那道|我想了|我觉得|确实|应该|可以|不太对|懂了|明白了|回应一下)/u.test(text)
@@ -223,74 +179,11 @@ function fallbackAnalysis(input: AnalyzeAffinityInput): AffinityEventAnalysis {
       reasonCode: 'heuristic_random_followup',
     };
   }
+  return null;
+}
 
-  if (/(谱|钢琴|排练|乐队|整理|标记|练习|帮你)/u.test(text)) {
-    return {
-      route: hasOpenThread ? 'group_event_progress' : 'affinity_candidate',
-      eventType: 'music_help',
-      effectTier: 'progress',
-      category: 'music',
-      confidence: 0.8,
-      evidence: text.slice(0, 80),
-      replyHint: 'focused',
-      risk: 'none',
-      reasonCode: 'heuristic_music',
-    };
-  }
-
-  if (/(算法|题|图论|dp|动态规划|代码|cf|codeforces|atcoder|洛谷|牛客|scc|dag|缩点|强连通|拓扑|可达)/iu.test(lower)) {
-    return {
-      route: hasOpenThread ? 'random_event_reply' : 'affinity_candidate',
-      eventType: hasOpenThread ? 'answer_random_prompt' : 'contest_discussion',
-      effectTier: hasOpenThread ? 'progress' : 'mood',
-      category: 'contest',
-      confidence: 0.74,
-      evidence: text.slice(0, 80),
-      replyHint: 'curious',
-      risk: 'none',
-      reasonCode: 'heuristic_contest',
-    };
-  }
-
-  if (/(linux|编译|内核|网络|数据库|typescript|c\\+\\+|程序|电脑|计算机)/iu.test(lower)) {
-    return {
-      route: hasOpenThread ? 'random_event_reply' : 'affinity_flavor',
-      eventType: hasOpenThread ? 'answer_random_prompt' : 'computer_knowledge',
-      effectTier: hasOpenThread ? 'progress' : 'mood',
-      category: 'computer',
-      confidence: 0.68,
-      evidence: text.slice(0, 80),
-      replyHint: 'curious',
-      risk: 'none',
-      reasonCode: 'heuristic_computer',
-    };
-  }
-
-  if (/(早|午安|晚上好|晚安|辛苦|小祥|祥子|sakiko|saki)/iu.test(lower)) {
-    return {
-      route: 'affinity_flavor',
-      eventType: 'greeting_contextual',
-      effectTier: 'mood',
-      category: 'greeting',
-      confidence: 0.62,
-      evidence: text.slice(0, 80),
-      replyHint: 'polite',
-      risk: 'none',
-      reasonCode: 'heuristic_greeting',
-    };
-  }
-
-  return {
-    route: 'normal_chat',
-    eventType: 'none',
-    effectTier: 'ignore',
-    category: 'none',
-    confidence: 0.4,
-    evidence: text.slice(0, 80),
-    replyHint: null,
-    risk: 'none',
-    reasonCode: 'heuristic_no_affinity_signal',
-  };
+function resolveAnalysisUnavailable(input: AnalyzeAffinityInput, reasonCode: string): AffinityEventAnalysis {
+  return resolveActiveRandomThreadAnalysis(input) ?? ignoredAnalysis(input, reasonCode);
 }
 
 async function fetchChatCompletions(config: AffinityAnalysisModelConfig, prompt: string, signal: AbortSignal): Promise<string | null> {
@@ -390,7 +283,7 @@ export async function analyzeAffinityEvent(
   config: AffinityAnalysisModelConfig | null,
 ): Promise<AffinityEventAnalysis> {
   if (!config?.baseUrl || !config.apiKey || !config.model) {
-    return fallbackAnalysis(input);
+    return resolveAnalysisUnavailable(input, 'analysis_model_unavailable');
   }
 
   const controller = new AbortController();
@@ -400,13 +293,13 @@ export async function analyzeAffinityEvent(
     const raw = config.requestMode === 'responses'
       ? await fetchResponses(config, prompt, controller.signal)
       : await fetchChatCompletions(config, prompt, controller.signal);
-    if (!raw) return fallbackAnalysis(input);
+    if (!raw) return resolveAnalysisUnavailable(input, 'analysis_model_empty_response');
     const json = extractJsonObject(raw);
-    if (!json) return fallbackAnalysis(input);
+    if (!json) return resolveAnalysisUnavailable(input, 'analysis_model_invalid_response');
     const parsed = normalizeAnalysis(JSON.parse(json));
-    return parsed ?? fallbackAnalysis(input);
+    return parsed ?? resolveAnalysisUnavailable(input, 'analysis_model_invalid_analysis');
   } catch {
-    return fallbackAnalysis(input);
+    return resolveAnalysisUnavailable(input, 'analysis_model_error');
   } finally {
     clearTimeout(timer);
   }
