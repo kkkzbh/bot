@@ -266,6 +266,54 @@ describe('prompt assembly', () => {
     expect(consumePromptEnvelope('conv-1')).toBeNull();
   });
 
+  it('deduplicates identical fragments within the same turn', () => {
+    beginPromptAssemblyTurn('conv-1');
+    const fragment = {
+      source: 'qqbot_recent_attachments',
+      title: 'Recent Attachments',
+      authority: 'reference' as const,
+      trust: 'trusted' as const,
+      ttl: 'turn' as const,
+      payload: {
+        kind: 'text' as const,
+        value: 'att_1 image/png screenshot.png',
+      },
+    };
+
+    registerPromptFragment('conv-1', fragment);
+    registerPromptFragment('conv-1', fragment);
+
+    const envelope = compilePromptEnvelope('conv-1');
+    expect(envelope?.fragments.map((item) => item.source)).toEqual(['qqbot_recent_attachments']);
+    expect(envelope?.messages.map((item) => item.content).join('\n')).toContain('att_1 image/png screenshot.png');
+  });
+
+  it('keeps same-source fragments when their payloads differ', () => {
+    beginPromptAssemblyTurn('conv-1');
+    for (const value of ['att_1 image/png screenshot.png', 'att_2 application/pdf report.pdf']) {
+      registerPromptFragment('conv-1', {
+        source: 'qqbot_recent_attachments',
+        title: 'Recent Attachments',
+        authority: 'reference',
+        trust: 'trusted',
+        ttl: 'turn',
+        payload: {
+          kind: 'text',
+          value,
+        },
+      });
+    }
+
+    const envelope = compilePromptEnvelope('conv-1');
+    expect(envelope?.fragments.map((item) => item.source)).toEqual([
+      'qqbot_recent_attachments',
+      'qqbot_recent_attachments',
+    ]);
+    const content = envelope?.messages.map((item) => item.content).join('\n') ?? '';
+    expect(content).toContain('att_1 image/png screenshot.png');
+    expect(content).toContain('att_2 application/pdf report.pdf');
+  });
+
   it('preserves fragments registered before the turn formally begins', () => {
     registerPromptFragment('conv-1', {
       source: 'qqbot_live_reply_continuation',

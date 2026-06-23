@@ -133,13 +133,32 @@ function renderFragment(fragment: PromptFragment, content: string): string {
   ].join('\n');
 }
 
+function fragmentIdentityKey(fragment: PromptFragment, payloadContent: string): string {
+  return JSON.stringify([
+    fragment.source,
+    fragment.title,
+    fragment.authority,
+    fragment.trust,
+    fragment.ttl,
+    fragment.payload.kind,
+    payloadContent,
+  ]);
+}
+
 function compileRegisteredFragments(fragments: RegisteredPromptFragment[]): PromptEnvelope | null {
+  const seenFragmentKeys = new Set<string>();
   const allFragments = fragments
     .map((fragment) => ({
       fragment,
       payloadContent: payloadToContent(fragment.payload, fragment.source),
     }))
     .filter((item) => item.payloadContent)
+    .filter((item) => {
+      const key = fragmentIdentityKey(item.fragment, item.payloadContent);
+      if (seenFragmentKeys.has(key)) return false;
+      seenFragmentKeys.add(key);
+      return true;
+    })
     .sort((left, right) => {
       const authorityDelta = authorityRank(left.fragment.authority) - authorityRank(right.fragment.authority);
       if (authorityDelta !== 0) return authorityDelta;
