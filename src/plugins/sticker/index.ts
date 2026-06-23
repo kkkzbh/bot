@@ -136,13 +136,12 @@ export function apply(ctx: Context, config: Config): void {
     logger.info('loaded sticker catalog with %d entry(ies).', catalog.entries.length);
   }
 
-  ctx.on('ready', () => {
+  let policyRegistered = false;
+  const ensurePolicyRegistered = (): boolean => {
+    if (policyRegistered) return true;
     const chatluna = resolveChatLunaService(ctx as ContextWithChatLuna);
     const chain = chatluna?.chatChain;
-    if (!chain) {
-      logger.warn('chatluna service is not available, skip sticker reply policy middleware.');
-      return;
-    }
+    if (!chain) return false;
 
     chain
       .middleware('qqbot_sticker_policy', async (rawSession, rawContext) => {
@@ -161,5 +160,15 @@ export function apply(ctx: Context, config: Config): void {
       })
       .after('read_chat_message')
       .before('lifecycle-handle_command');
+    policyRegistered = true;
+    return true;
+  };
+
+  ctx.on('ready', () => {
+    ensurePolicyRegistered();
+  });
+
+  ctx.on('chatluna/chat-chain-added', () => {
+    ensurePolicyRegistered();
   });
 }

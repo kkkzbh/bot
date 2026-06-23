@@ -69,10 +69,14 @@ function createChainBuilder(store: Map<string, ChainMiddleware>) {
   };
 }
 
-function createHarness() {
+function createHarness(options: { chatChainAvailableInitially?: boolean } = {}) {
   const events = new Map<string, EventHandler[]>();
   const chainMiddlewares = new Map<string, ChainMiddleware>();
-  const chatluna = { chatChain: createChainBuilder(chainMiddlewares) };
+  const chatChain = createChainBuilder(chainMiddlewares);
+  const chatluna: Record<string, unknown> = {};
+  if (options.chatChainAvailableInitially !== false) {
+    chatluna.chatChain = chatChain;
+  }
 
   const ctx = {
     chatluna,
@@ -86,8 +90,18 @@ function createHarness() {
 
   apply(ctx as never, { stickerDir: './data/chathub/stickers' });
 
+  const runHook = async (name: string) => {
+    for (const handler of events.get(name) ?? []) {
+      await handler();
+    }
+  };
+
   return {
-    ready: (events.get('ready') ?? [])[0],
+    ready: () => runHook('ready'),
+    runChatChainAdded: () => runHook('chatluna/chat-chain-added'),
+    setChatChainAvailable: () => {
+      chatluna.chatChain = chatChain;
+    },
     getPolicy: () => chainMiddlewares.get('qqbot_sticker_policy'),
   };
 }
@@ -143,9 +157,30 @@ describe('chatluna sticker plugin', () => {
     stickerCoreMocks.buildStickerCapabilityPolicy.mockReturnValue('sticker policy');
 
     const { ready, getPolicy } = createHarness();
-    await ready?.();
+    await ready();
 
     expect(getPolicy()).toBeTypeOf('function');
+  });
+
+  it('registers sticker policy after ChatLuna adds the chat chain', async () => {
+    stickerCoreMocks.loadStickerCatalog.mockReturnValue({
+      entries: [
+        {
+          id: 'bored',
+          scopes: ['persona:sakiko'],
+        },
+      ],
+    });
+
+    const harness = createHarness({ chatChainAvailableInitially: false });
+    await harness.ready();
+
+    expect(harness.getPolicy()).toBeUndefined();
+
+    harness.setChatChainAvailable();
+    await harness.runChatChainAdded();
+
+    expect(harness.getPolicy()).toBeTypeOf('function');
   });
 
   it('stores sticker capability state on the session without injecting prompt fragments', async () => {
@@ -186,7 +221,7 @@ describe('chatluna sticker plugin', () => {
     stickerCoreMocks.buildStickerCapabilityPolicy.mockReturnValue('sticker policy');
 
     const { ready, getPolicy } = createHarness();
-    await ready?.();
+    await ready();
 
     const policy = getPolicy();
     const session = createSession();
@@ -237,7 +272,7 @@ describe('chatluna sticker plugin', () => {
     stickerCoreMocks.buildStickerCapabilityPolicy.mockReturnValue(null);
 
     const { ready, getPolicy } = createHarness();
-    await ready?.();
+    await ready();
 
     const policy = getPolicy();
     const session = createSession();
