@@ -209,6 +209,37 @@ function normalizeLegacyChatReplyV1History(raw: string): string | null {
   }
 }
 
+const LEGACY_ASSISTANT_MENTION_HEADER_PATTERN = /^\[assistant_message\s+mentions=(\[[^\]\n]*\])\]\s*/u;
+
+function parseLegacyMentionIds(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.map((item) => normalizeId(item)).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeLegacyAssistantMentionHeaderHistory(raw: string): string | null {
+  let changed = false;
+  const lines = raw.split(/\r\n?|\n/u).map((line) => {
+    const match = LEGACY_ASSISTANT_MENTION_HEADER_PATTERN.exec(line);
+    if (!match) return line;
+    changed = true;
+
+    const content = line.slice(match[0].length).trimStart();
+    if (content) return content;
+
+    const mentionIds = parseLegacyMentionIds(match[1] ?? '[]');
+    return mentionIds.length > 0 ? `（提及用户：${mentionIds.join('、')}）` : '';
+  });
+
+  if (!changed) return null;
+  return lines.join('\n').trim();
+}
+
 async function decodeStoredStringContent(content: unknown): Promise<string | null> {
   if (!content) return null;
 
@@ -253,6 +284,9 @@ async function decodeStructuredReplyHistoryContent(content: unknown): Promise<st
 
   const normalizedChatReplyV1 = normalizeLegacyChatReplyV1History(storedContent);
   if (normalizedChatReplyV1) return normalizedChatReplyV1;
+
+  const normalizedAssistantMentionHeader = normalizeLegacyAssistantMentionHeaderHistory(storedContent);
+  if (normalizedAssistantMentionHeader) return normalizedAssistantMentionHeader;
 
   let structured: unknown;
   try {

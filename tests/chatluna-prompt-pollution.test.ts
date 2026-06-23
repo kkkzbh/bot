@@ -549,6 +549,53 @@ describe('chatluna prompt pollution regression', () => {
     await expect(gunzipAsync(rows[1].content).then((value) => value.toString())).resolves.toBe(JSON.stringify('已经是当前格式'));
   });
 
+  it('strips legacy assistant mention headers from visible assistant history', async () => {
+    const rows = [
+      {
+        id: 'assistant-mention-header',
+        role: 'ai',
+        content: await gzipAsync(JSON.stringify('[assistant_message mentions=["1405359129"]] 已经记下了。')),
+      },
+      {
+        id: 'assistant-action-mention-header',
+        role: 'ai',
+        content: await gzipAsync(JSON.stringify('（发送图片：出局.png）\n[assistant_message mentions=["1405359129"]] 出局。')),
+      },
+    ];
+    const database = {
+      get: async () => rows,
+      set: async (_table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        const row = rows.find((item) => item.id === query.id);
+        Object.assign(row ?? {}, update);
+      },
+      remove: async () => undefined,
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 2,
+      migrated: 2,
+      structuredRowsMigrated: 2,
+      legacyDirectHumanRowsTagged: 0,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
+      danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 0,
+      invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
+      emptyAssistantRowsRemoved: 0,
+    });
+
+    await expect(
+      gunzipAsync(rows[0].content).then((value) => value.toString()),
+    ).resolves.toBe(JSON.stringify('已经记下了。'));
+    await expect(
+      gunzipAsync(rows[1].content).then((value) => value.toString()),
+    ).resolves.toBe(JSON.stringify('（发送图片：出局.png）\n出局。'));
+  });
+
   it('tags deterministic legacy direct human history rows with speaker identity', async () => {
     const messages = [
       {
