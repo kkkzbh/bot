@@ -27,6 +27,11 @@ import {
   transcribeAudio,
   type OneBotVoiceBotLike,
 } from '../shared/voice/index.js';
+import {
+  resolveChatLunaRoomLike,
+  type QqbotChatLunaContextOptionsLike,
+  type QqbotChatLunaRoomLike,
+} from '../shared/chatluna-conversation.js';
 
 export { buildGroupScopeKey, realtimeMessageCache };
 
@@ -53,16 +58,10 @@ type ChainHookBuilder = {
   before: (name: string) => ChainHookBuilder;
 };
 
-type PromotionRoom = {
-  conversationId?: string;
-  roomId?: string | number;
-  model?: string;
-};
+type PromotionRoom = QqbotChatLunaRoomLike;
 
 type MiddlewareContextLike = {
-  options?: {
-    room?: PromotionRoom;
-  };
+  options?: QqbotChatLunaContextOptionsLike;
 };
 
 type DatabaseLike = {
@@ -257,7 +256,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           return CHAT_CHAIN_CONTINUE;
         }
 
-        const room = context.options?.room;
+        const room = resolveChatLunaRoomLike(context.options);
         const conversationId = typeof room?.conversationId === 'string' ? room.conversationId.trim() : '';
         if (!room || !conversationId) {
           return CHAT_CHAIN_CONTINUE;
@@ -303,6 +302,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         );
         return CHAT_CHAIN_CONTINUE;
       })
+      .after('resolve_conversation')
       .after('chatluna_model_guard')
       .before('resolve_model');
 

@@ -1,16 +1,11 @@
 import type { Logger } from 'koishi';
-
-type RoomLike = {
-  roomId?: number | string;
-  conversationId?: string;
-  model?: string;
-  preset?: string;
-};
+import {
+  resolveChatLunaRoomLike,
+  type QqbotChatLunaContextOptionsLike,
+} from '../../shared/chatluna-conversation.js';
 
 type MiddlewareContextLike = {
-  options?: {
-    room?: RoomLike;
-  };
+  options?: QqbotChatLunaContextOptionsLike;
 };
 
 function trimOptionalText(value: unknown): string | null {
@@ -46,7 +41,7 @@ export function buildReplyPlanDebugPayload(
   context: MiddlewareContextLike,
   details: Record<string, unknown>,
 ): Record<string, unknown> {
-  const room = context.options?.room;
+  const room = resolveChatLunaRoomLike(context.options);
   return {
     conversationId: trimOptionalText(room?.conversationId) ?? null,
     roomId: room?.roomId ?? null,

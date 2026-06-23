@@ -6,6 +6,10 @@ import {
   type LoadedStickerCatalog,
   type StickerCapabilityState,
 } from './selection.js';
+import {
+  resolveChatLunaRoomLike,
+  type QqbotChatLunaContextOptionsLike,
+} from '../shared/chatluna-conversation.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -43,24 +47,18 @@ type SessionWithStickerState = Session & {
   };
 };
 
-type RoomLike = {
-  conversationId?: string;
-  preset?: string;
-  [key: string]: unknown;
+type MiddlewareContextLike = {
+  options?: QqbotChatLunaContextOptionsLike;
 };
 
-type MiddlewareContextLike = {
-  options?: {
-    room?: RoomLike;
-  };
+type ChainHookBuilder = {
+  after: (name: string) => ChainHookBuilder;
+  before: (name: string) => unknown;
 };
 
 type ChatLunaLike = {
   chatChain?: {
-    middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => {
-      after: (name: string) => { before: (name: string) => unknown };
-      before: (name: string) => unknown;
-    };
+    middleware: (name: string, middleware: (session: unknown, context: unknown) => Promise<number>) => ChainHookBuilder;
   };
 };
 
@@ -152,12 +150,13 @@ export function apply(ctx: Context, config: Config): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         }
 
-        const room = context.options?.room;
+        const room = resolveChatLunaRoomLike(context.options);
         const preset = room?.preset?.trim() || null;
         const { state } = resolveStickerCapabilityArtifacts(preset);
         setStickerCapabilityState(session, state);
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
+      .after('resolve_conversation')
       .after('read_chat_message')
       .before('lifecycle-handle_command');
     policyRegistered = true;

@@ -14,7 +14,10 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { getMessageContent, getMimeTypeFromSource } from 'koishi-plugin-chatluna/utils/string';
 import type { ChatLunaTool, ChatLunaToolRunnable } from 'koishi-plugin-chatluna/llm-core/platform/types';
-import { ModelCapabilities } from 'koishi-plugin-chatluna/llm-core/platform/types';
+import {
+  resolveChatLunaRoomLike,
+  type QqbotChatLunaContextOptionsLike,
+} from '../shared/chatluna-conversation.js';
 import { registerPromptFragment } from '../shared/prompt-context/index.js';
 import { transcribeAudio } from '../shared/voice/input.js';
 import {
@@ -177,7 +180,6 @@ type ContextWithAttachment = Context & {
       }) => void;
     };
     platform?: {
-      findModel: (model?: string) => { value?: { capabilities?: ModelCapabilities[] } } | undefined;
       registerTool?: (name: string, tool: ChatLunaTool) => () => void;
     };
   };
@@ -680,7 +682,6 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
   async buildAttachmentContextMessages(args: {
     attachments: QqbotAttachmentRecord[];
     userText: string;
-    model?: string | null;
     maxInjectTotalBytes: number;
     maxInjectPerFileBytes: number;
     maxPdfPreviewPagesPerFile: number;
@@ -729,7 +730,6 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
     refs: string[];
     purpose: string;
     provider: string;
-    model?: string | null;
   }): Promise<{
     resolved: QqbotAttachmentReplayItem[];
     skipped: QqbotAttachmentReplaySkip[];
@@ -809,11 +809,6 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
       skipped,
       cacheHits,
     };
-  }
-
-  private resolveModelCapabilities(model: string | null | undefined): ModelCapabilities[] {
-    const capabilities = this.ctx.chatluna.platform?.findModel(model ?? undefined)?.value?.capabilities;
-    return Array.isArray(capabilities) ? capabilities : [];
   }
 
   private async loadProjectionText(record: QqbotAttachmentRecord, maxChars: number): Promise<string | null> {
@@ -1382,7 +1377,6 @@ class AttachmentReplayTool extends StructuredTool {
       refs: input.refs,
       purpose: input.purpose,
       provider: resolveProviderName(config),
-      model: config.configurable.model?.modelName ?? null,
     });
 
     return JSON.stringify({
@@ -1437,17 +1431,14 @@ export function apply(ctx: Context, config: Config): void {
     chain
       .middleware('qqbot_attachment_archive', async (_rawSession, rawContext) => {
         const context = rawContext as {
-          options?: {
-            room?: {
-              conversationId?: string;
-            };
+          options?: QqbotChatLunaContextOptionsLike & {
             inputMessage?: BaseMessage & {
               additional_kwargs?: Record<string, unknown>;
             };
           };
         };
 
-        const conversationId = normalizeText(context.options?.room?.conversationId);
+        const conversationId = normalizeText(resolveChatLunaRoomLike(context.options)?.conversationId);
         const inputMessage = context.options?.inputMessage;
         if (!conversationId || !inputMessage) {
           return CHAT_CHAIN_CONTINUE;
@@ -1474,22 +1465,18 @@ export function apply(ctx: Context, config: Config): void {
 
         return CHAT_CHAIN_CONTINUE;
       })
-      .after('read_chat_message')
+      .after('transform_chat_message')
       .before('chatluna_time_context');
 
     chain
       .middleware('qqbot_attachment_context', async (_rawSession, rawContext) => {
         const context = rawContext as {
-          options?: {
-            room?: {
-              conversationId?: string;
-              model?: string;
-            };
+          options?: QqbotChatLunaContextOptionsLike & {
             inputMessage?: BaseMessage;
           };
         };
 
-        const conversationId = normalizeText(context.options?.room?.conversationId);
+        const conversationId = normalizeText(resolveChatLunaRoomLike(context.options)?.conversationId);
         const inputMessage = context.options?.inputMessage;
         if (!conversationId || !inputMessage) {
           return CHAT_CHAIN_CONTINUE;
@@ -1513,7 +1500,6 @@ export function apply(ctx: Context, config: Config): void {
         const hydrated = await service.buildAttachmentContextMessages({
           attachments: resolution.selected,
           userText,
-          model: context.options?.room?.model ?? null,
           maxInjectTotalBytes: runtime.maxInjectTotalBytes,
           maxInjectPerFileBytes: runtime.maxInjectPerFileBytes,
           maxPdfPreviewPagesPerFile: runtime.maxPdfPreviewPagesPerFile,

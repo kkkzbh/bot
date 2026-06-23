@@ -96,6 +96,11 @@ vi.mock('koishi-plugin-chatluna/llm-core/memory/message', () => ({
 type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
 type ChatChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;
 type EventListener = (...args: any[]) => unknown;
+type ChainConstraint = {
+  name: string;
+  kind: 'after' | 'before';
+  target: string;
+};
 
 function createHarness(
   options: {
@@ -108,6 +113,7 @@ function createHarness(
   const middlewares: Middleware[] = [];
   const listeners = new Map<string, EventListener[]>();
   const chatChainMiddlewares = new Map<string, ChatChainMiddleware>();
+  const constraints: ChainConstraint[] = [];
   const addMessages = mockRealtimeHistoryAddMessages;
   const database = {
     get: vi.fn(async (table: string, query: Record<string, unknown>) => {
@@ -153,8 +159,14 @@ function createHarness(
     middleware: vi.fn((name: string, middleware: ChatChainMiddleware) => {
       chatChainMiddlewares.set(name, middleware);
       const builder = {
-        after: () => builder,
-        before: () => builder,
+        after: (target: string) => {
+          constraints.push({ name, kind: 'after', target });
+          return builder;
+        },
+        before: (target: string) => {
+          constraints.push({ name, kind: 'before', target });
+          return builder;
+        },
       };
       return builder;
     }),
@@ -197,6 +209,7 @@ function createHarness(
     database,
     messageTransformer,
     chatluna,
+    constraints,
     chatChainMiddlewares,
     tools,
     setChatChainAvailable() {
@@ -538,6 +551,60 @@ describe('realtime message plugin', () => {
       }),
     ]);
     expect(addMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('promotes cached messages from ChatLuna conversation resolution without legacy room data', async () => {
+    const { middleware, runReady, chatChainMiddlewares, addMessages, messageTransformer, database, constraints } = createHarness();
+    await runReady();
+
+    await middleware(
+      createSession({
+        userId: 'u8',
+        messageId: 'msg-conversation-image',
+        content: '这张图',
+        stripped: { content: '这张图' },
+        elements: [{ type: 'img', attrs: { src: 'https://example.com/conversation-only.png' }, children: [] }],
+      }),
+      async () => undefined,
+    );
+
+    const promotion = chatChainMiddlewares.get('qqbot_realtime_message_promotion');
+    const triggerSession = createSession({
+      userId: 'u9',
+      messageId: 'msg-trigger-conversation-only',
+      content: '触发一下',
+    });
+
+    await promotion?.(triggerSession, {
+      options: {
+        conversation: {
+          conversationId: 'conv-realtime-resolution',
+          effectiveModel: 'openai/gpt-5.4-mini',
+          conversation: {
+            id: 'conv-realtime-resolution',
+            model: 'stale-model',
+          },
+        },
+      },
+    });
+
+    expect(database.get).toHaveBeenCalledWith('chatluna_conversation', { id: 'conv-realtime-resolution' }, ['id']);
+    expect(messageTransformer.transform).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Array),
+      'openai/gpt-5.4-mini',
+      undefined,
+      expect.objectContaining({
+        quote: false,
+        includeQuoteReply: false,
+      }),
+    );
+    expect(addMessages).toHaveBeenCalledTimes(1);
+    expect(constraints).toContainEqual({
+      name: 'qqbot_realtime_message_promotion',
+      kind: 'after',
+      target: 'resolve_conversation',
+    });
   });
 
   it('promotes image messages through the real multimodal transform path', async () => {

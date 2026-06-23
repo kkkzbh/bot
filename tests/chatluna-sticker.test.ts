@@ -55,14 +55,25 @@ import { apply, inject } from '../src/plugins/sticker/index.js';
 
 type EventHandler = (...args: any[]) => Promise<unknown> | unknown;
 type ChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;
+type ChainConstraint = {
+  name: string;
+  kind: 'after' | 'before';
+  target: string;
+};
 
-function createChainBuilder(store: Map<string, ChainMiddleware>) {
+function createChainBuilder(store: Map<string, ChainMiddleware>, constraints: ChainConstraint[]) {
   return {
     middleware: (name: string, middleware: ChainMiddleware) => {
       store.set(name, middleware);
       const builder = {
-        after: () => builder,
-        before: () => builder,
+        after: (target: string) => {
+          constraints.push({ name, kind: 'after', target });
+          return builder;
+        },
+        before: (target: string) => {
+          constraints.push({ name, kind: 'before', target });
+          return builder;
+        },
       };
       return builder;
     },
@@ -72,7 +83,8 @@ function createChainBuilder(store: Map<string, ChainMiddleware>) {
 function createHarness(options: { chatChainAvailableInitially?: boolean } = {}) {
   const events = new Map<string, EventHandler[]>();
   const chainMiddlewares = new Map<string, ChainMiddleware>();
-  const chatChain = createChainBuilder(chainMiddlewares);
+  const constraints: ChainConstraint[] = [];
+  const chatChain = createChainBuilder(chainMiddlewares, constraints);
   const chatluna: Record<string, unknown> = {};
   if (options.chatChainAvailableInitially !== false) {
     chatluna.chatChain = chatChain;
@@ -103,6 +115,7 @@ function createHarness(options: { chatChainAvailableInitially?: boolean } = {}) 
       chatluna.chatChain = chatChain;
     },
     getPolicy: () => chainMiddlewares.get('qqbot_sticker_policy'),
+    getConstraints: () => constraints,
   };
 }
 
@@ -242,6 +255,78 @@ describe('chatluna sticker plugin', () => {
       availableCount: 1,
     });
     expect(promptAssemblyMocks.registerPromptFragment).not.toHaveBeenCalled();
+  });
+
+  it('resolves sticker persona from ChatLuna conversation resolution without legacy room data', async () => {
+    const catalog = {
+      version: 1,
+      generatedAt: '2026-03-16T00:00:00.000Z',
+      model: 'doubao-seed-2-0-mini-260215',
+      entries: [
+        {
+          id: 'bored',
+          file: 'images/personas/sakiko/bored.png',
+          hash: 'hash-1',
+          mime: 'image/png',
+          scopes: ['persona:sakiko'],
+          caption: '无语少女',
+          keywords: ['无语'],
+          moods: ['无语'],
+          scenes: ['吐槽'],
+          historyLabel: '无语少女',
+          confidence: 0.95,
+          buffer: Buffer.from('fake'),
+        },
+      ],
+      byId: new Map(),
+    };
+    stickerCoreMocks.loadStickerCatalog.mockReturnValue(catalog);
+    stickerCoreMocks.buildStickerCapabilityDescriptor.mockReturnValue({
+      sticker: {
+        available: true,
+        available_count: 1,
+        scope: 'persona:sakiko',
+        selection_mode: 'natural_intent',
+        sequence_mode: 'ordered_segments',
+        content_rule: 'single_image_intent',
+      },
+    });
+    stickerCoreMocks.buildStickerCapabilityPolicy.mockReturnValue('sticker policy');
+
+    const { ready, getPolicy, getConstraints } = createHarness();
+    await ready();
+
+    const policy = getPolicy();
+    const session = createSession();
+    const context = {
+      options: {
+        conversation: {
+          conversationId: 'conv-1',
+          effectivePreset: 'sakiko',
+          conversation: {
+            id: 'conv-1',
+            preset: 'stale',
+          },
+        },
+        inputMessage: {
+          content: '来个表情',
+          additional_kwargs: {},
+        },
+      },
+    };
+
+    await policy?.(session, context);
+
+    expect(session.state.qqSticker).toEqual({
+      catalog,
+      preset: 'sakiko',
+      availableCount: 1,
+    });
+    expect(getConstraints()).toContainEqual({
+      name: 'qqbot_sticker_policy',
+      kind: 'after',
+      target: 'resolve_conversation',
+    });
   });
 
   it('skips policy injection when no scoped sticker is available', async () => {

@@ -246,13 +246,7 @@ function createAttachmentService(records: QqbotAttachmentRecord[], options?: {
         return null;
       },
     },
-    chatluna: {
-      platform: {
-        findModel() {
-          return { value: { capabilities: [] } };
-        },
-      },
-    },
+    chatluna: {},
   };
 
   const runtime = {
@@ -317,7 +311,6 @@ describe('attachment multimodal projection', () => {
     const result = await service.buildAttachmentContextMessages({
       attachments: [image, pdf],
       userText: '继续看这两个附件',
-      model: 'openai/gpt-5.4-mini',
       maxInjectTotalBytes: 16 * 1024 * 1024,
       maxInjectPerFileBytes: 6 * 1024 * 1024,
       maxPdfPreviewPagesPerFile: 6,
@@ -425,14 +418,12 @@ describe('attachment multimodal projection', () => {
       refs: [pdf.refId],
       purpose: '重新查看这个 PDF',
       provider: 'openai',
-      model: 'openai/gpt-5.4-mini',
     });
     const second = await service.replayAttachments({
       conversationId: pdf.conversationId,
       refs: [pdf.refId],
       purpose: '重新查看这个 PDF',
       provider: 'openai',
-      model: 'openai/gpt-5.4-mini',
     });
 
     expect(first.cacheHits).toBe(0);
@@ -444,6 +435,11 @@ describe('attachment multimodal projection', () => {
 
 type AttachmentEventHandler = () => Promise<unknown> | unknown;
 type AttachmentChainMiddleware = (session: unknown, context: unknown) => Promise<number>;
+type AttachmentChainConstraint = {
+  name: string;
+  kind: 'after' | 'before';
+  target: string;
+};
 
 function attachmentConfig() {
   return {
@@ -466,16 +462,27 @@ function attachmentConfig() {
   };
 }
 
-function createAttachmentLifecycleHarness(options: { chatChainInitially?: boolean; contextManager?: boolean } = {}) {
+function createAttachmentLifecycleHarness(options: {
+  chatChainInitially?: boolean;
+  contextManager?: boolean;
+  attachments?: QqbotAttachmentRecord[];
+} = {}) {
   const events = new Map<string, AttachmentEventHandler[]>();
   const chainMiddlewares = new Map<string, AttachmentChainMiddleware>();
+  const constraints: AttachmentChainConstraint[] = [];
   const disposeTool = vi.fn();
   const chatChain = {
     middleware: vi.fn((name: string, middleware: AttachmentChainMiddleware) => {
       chainMiddlewares.set(name, middleware);
       const builder = {
-        after: () => builder,
-        before: () => builder,
+        after: (target: string) => {
+          constraints.push({ name, kind: 'after', target });
+          return builder;
+        },
+        before: (target: string) => {
+          constraints.push({ name, kind: 'before', target });
+          return builder;
+        },
       };
       return builder;
     }),
@@ -495,7 +502,9 @@ function createAttachmentLifecycleHarness(options: { chatChainInitially?: boolea
 
   const ctx = {
     model: { extend: vi.fn() },
-    database: createMockDatabase(),
+    database: createMockDatabase({
+      attachments: options.attachments,
+    }),
     chatluna,
     chatluna_storage: {
       createTempFile: vi.fn(),
@@ -522,6 +531,7 @@ function createAttachmentLifecycleHarness(options: { chatChainInitially?: boolea
     chainMiddlewares,
     chatChain,
     chatluna,
+    constraints,
     ctx,
     disposeTool,
     runHook,
@@ -555,6 +565,78 @@ describe('attachment ChatLuna lifecycle', () => {
 
     await harness.runHook('dispose');
     expect(harness.disposeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('archives current-turn attachments from ChatLuna conversation resolution without legacy room data', async () => {
+    const harness = createAttachmentLifecycleHarness();
+    await harness.runHook('ready');
+
+    const archive = harness.chainMiddlewares.get('qqbot_attachment_archive');
+    const message = new HumanMessage({ content: '没有附件也要写预算策略' }) as HumanMessage & {
+      additional_kwargs?: Record<string, unknown>;
+    };
+
+    await archive?.({}, {
+      options: {
+        conversation: {
+          conversationId: 'conv-attachment-resolution',
+          conversation: {
+            id: 'conv-attachment-resolution',
+          },
+        },
+        inputMessage: message,
+      },
+    });
+
+    expect(message.additional_kwargs).toEqual(expect.objectContaining({
+      qqbot_request_budget_policy: expect.any(Object),
+    }));
+    expect(harness.constraints).toContainEqual({
+      name: 'qqbot_attachment_archive',
+      kind: 'after',
+      target: 'transform_chat_message',
+    });
+  });
+
+  it('injects referenced attachment context from ChatLuna conversation resolution without legacy room data', async () => {
+    const attachment = createRecord({
+      refId: 'att_conv1234',
+      conversationId: 'conv-attachment-context',
+      kind: 'image',
+      filename: 'conv-only.png',
+    });
+    const harness = createAttachmentLifecycleHarness({ attachments: [attachment] });
+    await harness.runHook('ready');
+
+    const contextMiddleware = harness.chainMiddlewares.get('qqbot_attachment_context');
+    const inputMessage = new HumanMessage({ content: '继续看 att_conv1234' });
+
+    await contextMiddleware?.({}, {
+      options: {
+        conversation: {
+          conversationId: 'conv-attachment-context',
+          effectiveModel: 'openai/gpt-5.4-mini',
+          conversation: {
+            id: 'conv-attachment-context',
+            model: 'stale-model',
+          },
+        },
+        inputMessage,
+      },
+    });
+
+    expect((harness.chatluna.contextManager as { inject: ReturnType<typeof vi.fn> }).inject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conv-attachment-context',
+        name: 'read_files_context',
+        stage: 'after_scratchpad',
+      }),
+    );
+    expect(harness.constraints).toContainEqual({
+      name: 'qqbot_attachment_context',
+      kind: 'after',
+      target: 'qqbot_attachment_archive',
+    });
   });
 
   it('fails fast when ChatLuna exposes a chain without contextManager', async () => {

@@ -135,7 +135,6 @@ export interface QqbotAttachmentServiceLike {
   buildAttachmentContextMessages(args: {
     attachments: QqbotAttachmentRecord[];
     userText: string;
-    model?: string | null;
     maxInjectTotalBytes: number;
     maxInjectPerFileBytes: number;
     maxPdfPreviewPagesPerFile: number;
@@ -152,7 +151,6 @@ export interface QqbotAttachmentServiceLike {
     refs: string[];
     purpose: string;
     provider: string;
-    model?: string | null;
   }): Promise<{
     resolved: QqbotAttachmentReplayItem[];
     skipped: QqbotAttachmentReplaySkip[];
