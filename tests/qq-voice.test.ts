@@ -640,15 +640,43 @@ describe('qq voice plugin', () => {
 
   it('declares required services so reply plan middleware can register on the live chat chain', () => {
     if (Array.isArray(inject)) {
-      expect(inject).toEqual(expect.arrayContaining(['chatluna', 'database']));
+      expect(inject).toEqual(expect.arrayContaining(['chatluna', 'database', 'featurePolicy']));
       return;
     }
 
     expect(inject).toEqual(
       expect.objectContaining({
-        required: expect.arrayContaining(['chatluna', 'database']),
+        required: expect.arrayContaining(['chatluna', 'database', 'featurePolicy']),
       }),
     );
+  });
+
+  it('fails fast without the required feature policy service', () => {
+    expect(() =>
+      apply({
+        bots: [],
+        chatluna: {},
+        database: {},
+        get: vi.fn(),
+        middleware: vi.fn(),
+        on: vi.fn(),
+      } as never, {
+        inputEnabled: true,
+        outputEnabled: true,
+        asrBaseUrl: 'http://127.0.0.1:8081',
+        asrApiKey: 'qqbot-voice-asr-token',
+        ttsBaseUrl: 'http://127.0.0.1:8082',
+        ttsApiKey: 'qqbot-voice-tts-token',
+        inputMaxSeconds: 60,
+        outputMaxWords: 80,
+        outputMaxSeconds: 45,
+        voiceOutputLanguage: 'zh',
+        transcribeTimeoutMs: 30_000,
+        synthTimeoutMs: 300_000,
+        replyInterruptCollectWindowMs: 400,
+        replyInterruptMaxPendingInputs: 8,
+      }),
+    ).toThrow('qq-voice requires featurePolicy service.');
   });
 
   it('fails fast when server voice output points at loopback', () => {

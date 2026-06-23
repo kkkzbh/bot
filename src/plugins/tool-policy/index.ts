@@ -26,7 +26,7 @@ import { normalizeReplyChatMode } from '../shared/reply-chat-mode.js';
 import { normalizeGroupId, parseGroupSet } from '../shared/group-id.js';
 
 export const name = 'tool-policy';
-export const inject = { required: ['database', 'chatluna'], optional: ['featurePolicy'] } as const;
+export const inject = { required: ['database', 'chatluna', 'featurePolicy'] } as const;
 
 const logger = new Logger(name);
 const FILE_SYSTEM_GROUP_RESTRICTED_TOOLS = new Set([
@@ -161,7 +161,7 @@ export class ToolPolicyService implements ToolPolicyServiceLike {
 
   constructor(
     private readonly database: DatabaseLike,
-    private readonly featurePolicy?: FeaturePolicyServiceLike,
+    private readonly featurePolicy: FeaturePolicyServiceLike,
     private readonly resolveChatLuna?: () => ChatLunaLike | undefined,
     private readonly fileSystemAllowedGroupIds = parseGroupSet(process.env[FILE_SYSTEM_ALLOWED_GROUPS_ENV]),
   ) {}
@@ -395,7 +395,7 @@ export class ToolPolicyService implements ToolPolicyServiceLike {
       if (roomId != null) {
         privateConversationScopeId = String(roomId);
       } else {
-        const target = await this.featurePolicy?.resolvePrivateConversationTarget?.(session);
+        const target = await this.featurePolicy.resolvePrivateConversationTarget(session);
         privateConversationScopeId = target?.scopeId ?? null;
       }
     }
@@ -442,8 +442,8 @@ export class ToolPolicyService implements ToolPolicyServiceLike {
   }
 
   private async listConversationTargets(): Promise<ConversationTarget[]> {
-    const targets = await this.featurePolicy?.listConversationTargets?.();
-    return (targets ?? []).map((target) => ({ ...target }));
+    const targets = await this.featurePolicy.listConversationTargets();
+    return targets.map((target) => ({ ...target }));
   }
 
   private buildScopes(conversationTargets: ConversationTarget[]): ToolPolicyScope[] {
@@ -604,6 +604,10 @@ export function apply(ctx: Context): void {
   if (!database) {
     throw new Error('tool-policy requires database service.');
   }
+  const featurePolicy = serviceCtx.featurePolicy;
+  if (!featurePolicy) {
+    throw new Error('tool-policy requires featurePolicy service.');
+  }
 
   if (typeof serviceCtx.model?.extend === 'function') {
     serviceCtx.model.extend(
@@ -624,7 +628,7 @@ export function apply(ctx: Context): void {
     );
   }
 
-  const service = new ToolPolicyService(database, serviceCtx.featurePolicy, () => resolveChatLunaService(serviceCtx));
+  const service = new ToolPolicyService(database, featurePolicy, () => resolveChatLunaService(serviceCtx));
   if (typeof serviceCtx.provide === 'function' && typeof serviceCtx.set === 'function') {
     serviceCtx.provide('toolPolicy');
     serviceCtx.set('toolPolicy', service);

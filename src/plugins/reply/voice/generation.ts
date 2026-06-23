@@ -107,7 +107,7 @@ const VOICE_WORD_SEGMENTER =
     ? new Intl.Segmenter('zh', { granularity: 'word' })
     : null;
 export const name = 'qq-voice';
-export const inject = { required: ['chatluna', 'database'], optional: ['featurePolicy'] } as const;
+export const inject = { required: ['chatluna', 'database', 'featurePolicy'] } as const;
 const sharedReplyTransportSendStrand = createKeyedStrandRunner();
 const sharedReplyTransportCanSendRecordCache = new Map<string, boolean>();
 const sharedReplyTransportTtsCapabilityStates = new Map<string, TtsCapabilityState>();
@@ -1711,6 +1711,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
   assertVoiceRuntimeConfig(runtime);
   const featurePolicy = (ctx as ContextWithChatLuna).featurePolicy;
+  if (!featurePolicy) {
+    throw new Error('qq-voice requires featurePolicy service.');
+  }
   const replyOrchestrator = new ReplyOrchestratorService();
   const replyCapabilitySnapshots = new Map<string, ReplyCapabilitySnapshot>();
   let initialTtsProbeTimer: NodeJS.Timeout | null = null;
@@ -1726,13 +1729,6 @@ export function apply(ctx: Context, config: Config = {}): void {
     inputEnabled: boolean;
     outputEnabled: boolean;
   }> => {
-    if (!featurePolicy) {
-      return {
-        inputEnabled: runtime.inputEnabled,
-        outputEnabled: runtime.outputEnabled,
-      };
-    }
-
     const [inputEnabled, outputEnabled] = await Promise.all([
       featurePolicy.resolveFeatureEnabled(session, 'QQ_VOICE_INPUT_ENABLED'),
       featurePolicy.resolveFeatureEnabled(session, 'QQ_VOICE_OUTPUT_ENABLED'),
@@ -1746,9 +1742,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   const resolveReplyRunMode = async (session: SessionWithVoiceState): Promise<ReplyRunMode> => {
     const replyInterruptFeatureKey = 'QQBOT_REPLY_INTERRUPT_ENABLED' as ScopedFeatureKey;
-    const replyInterruptEnabled = featurePolicy
-      ? await featurePolicy.resolveFeatureEnabled(session, replyInterruptFeatureKey)
-      : requireBooleanEnv(process.env, 'QQBOT_REPLY_INTERRUPT_ENABLED');
+    const replyInterruptEnabled = await featurePolicy.resolveFeatureEnabled(session, replyInterruptFeatureKey);
     return replyInterruptEnabled ? 'interrupt' : 'queue';
   };
 

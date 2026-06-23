@@ -297,8 +297,25 @@ function stubVoiceRuntimeEnv(overrides: Record<string, string> = {}): void {
 }
 
 describe('realtime message plugin', () => {
-  it('declares chatluna as a required injection', () => {
-    expect(inject).toEqual({ required: ['chatluna'], optional: ['featurePolicy'] });
+  it('declares runtime services as required injections', () => {
+    expect(inject).toEqual({ required: ['chatluna', 'featurePolicy'] });
+  });
+
+  it('fails fast without the required feature policy service', () => {
+    const ctx = {
+      middleware: vi.fn(),
+      on: vi.fn(),
+      chatluna: {
+        platform: { registerTool: vi.fn() },
+      },
+      database: {
+        get: vi.fn(),
+      },
+    };
+
+    expect(() => apply(ctx as never, { maxInjectCount: 12 })).toThrow(
+      'realtime-message requires featurePolicy service.',
+    );
   });
 
   it('captures group user messages only when the realtime feature is enabled', async () => {

@@ -81,6 +81,9 @@ function createHarness(
     }),
   };
   const chatlunaService = { registerAllowReplyResolver, chatChain, messageTransformer };
+  const featurePolicy = {
+    resolveFeatureEnabled: vi.fn(async () => true),
+  };
   const ctx: Record<string, unknown> = {
     middleware: vi.fn((handler: Middleware) => {
       middlewares.push(handler);
@@ -91,6 +94,7 @@ function createHarness(
       listeners.set(name, bucket);
     }),
     chatluna: chatlunaService,
+    featurePolicy,
   };
 
   apply(ctx as never, {
@@ -167,8 +171,38 @@ describe('group natural trigger middleware', () => {
     vi.unstubAllEnvs();
   });
 
-  it('declares chatluna as a required injection', () => {
-    expect(inject).toEqual({ required: ['chatluna'], optional: ['featurePolicy'] });
+  it('declares runtime services as required injections', () => {
+    expect(inject).toEqual({ required: ['chatluna', 'featurePolicy'] });
+  });
+
+  it('fails fast without the required feature policy service', () => {
+    const ctx = {
+      middleware: vi.fn(),
+      on: vi.fn(),
+      chatluna: {
+        registerAllowReplyResolver: vi.fn(),
+      },
+    };
+
+    expect(() =>
+      apply(ctx as never, {
+        enabled: true,
+        enabledGroups: '100',
+        aliases: '祥子',
+        directTriggerProbability: 0,
+        focusWindowMs: 300_000,
+        replyIntervalMs: 2_000,
+        spamWindowMs: 10_000,
+        spamThreshold: 10,
+        spamMuteMs: 180_000,
+        decisionEnabled: false,
+        decisionBaseUrl: 'https://decision.example/v1',
+        decisionApiKey: '',
+        decisionModel: '',
+        decisionTimeoutMs: 4_000,
+        decisionMinConfidence: 0.62,
+      }),
+    ).toThrow('group-natural-trigger requires featurePolicy service.');
   });
 
   it('fails fast when the enabled config is missing', () => {

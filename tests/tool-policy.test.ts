@@ -13,7 +13,7 @@ vi.mock('koishi', () => {
   };
 });
 
-import { apply } from '../src/plugins/tool-policy/index.js';
+import { apply, inject } from '../src/plugins/tool-policy/index.js';
 import { GLOBAL_DEFAULT_SCOPE_ID, PRIVATE_DEFAULT_SCOPE_ID, TOOL_CATALOG } from '../src/plugins/tool-policy/catalog.js';
 import type { ToolCatalogEntry } from '../src/types/tool-policy.js';
 
@@ -172,12 +172,25 @@ function createHarness(
 }
 
 describe('tool policy service', () => {
+  it('declares runtime services as required injections', () => {
+    expect(inject).toEqual({ required: ['database', 'chatluna', 'featurePolicy'] });
+  });
+
   it('fails fast without the required database service', () => {
     expect(() => apply({
       chatluna: {},
       model: { extend: vi.fn() },
       on: vi.fn(),
     } as any)).toThrow('tool-policy requires database service.');
+  });
+
+  it('fails fast without the required feature policy service', () => {
+    expect(() => apply({
+      database: createDatabase(),
+      chatluna: {},
+      model: { extend: vi.fn() },
+      on: vi.fn(),
+    } as any)).toThrow('tool-policy requires featurePolicy service.');
   });
 
   it('resolves scoped overrides for agent with private and group precedence', async () => {

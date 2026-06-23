@@ -34,7 +34,7 @@ const logger = new Logger('realtime-message');
 const CHAT_CHAIN_CONTINUE = 2;
 
 export const name = 'realtime-message';
-export const inject = { required: ['chatluna'], optional: ['featurePolicy'] } as const;
+export const inject = { required: ['chatluna', 'featurePolicy'] } as const;
 
 export interface Config {
   maxInjectCount?: number;
@@ -133,18 +133,6 @@ async function createChatHistoryWriter(
   };
 }
 
-function requireBooleanEnv(key: string): boolean {
-  const value = process.env[key];
-  const raw = String(value ?? '').trim().toLowerCase();
-  if (!raw) {
-    throw new Error(`${key} 未配置。默认值必须由 env/koishi.yml 显式提供。`);
-  }
-  if (raw !== 'true' && raw !== 'false') {
-    throw new Error(`${key} 必须是 true 或 false。`);
-  }
-  return raw === 'true';
-}
-
 function requireNaturalConfig(config: Config, key: keyof Config): number {
   const value = config[key];
   const parsed = Number(value);
@@ -165,33 +153,24 @@ function resolveMessageId(value: unknown): string | null {
   return normalized || null;
 }
 
-function resolveRealtimeEnabledFallback(session: Session): boolean {
-  if (session.isDirect) return false;
-  return requireBooleanEnv('QQBOT_REALTIME_MESSAGE_ENABLED');
-}
-
 async function resolveRealtimeFeatureEnabled(
-  featurePolicy: FeaturePolicyServiceLike | undefined,
+  featurePolicy: FeaturePolicyServiceLike,
   session: Session,
 ): Promise<boolean> {
   if (session.isDirect) return false;
-  if (!featurePolicy) return resolveRealtimeEnabledFallback(session);
   return featurePolicy.resolveFeatureEnabled(session, 'QQBOT_REALTIME_MESSAGE_ENABLED');
 }
 
 async function resolveVoiceInputFeatureEnabled(
-  featurePolicy: FeaturePolicyServiceLike | undefined,
+  featurePolicy: FeaturePolicyServiceLike,
   session: Session,
 ): Promise<boolean> {
-  if (!featurePolicy) {
-    return requireBooleanEnv('QQ_VOICE_INPUT_ENABLED');
-  }
   return featurePolicy.resolveFeatureEnabled(session, 'QQ_VOICE_INPUT_ENABLED');
 }
 
 async function captureRealtimeEntry(
   session: Session & RealtimeMessageSessionLike,
-  featurePolicy: FeaturePolicyServiceLike | undefined,
+  featurePolicy: FeaturePolicyServiceLike,
 ): Promise<RealtimeMessageEntry | null> {
   const groupScopeKey = buildGroupScopeKey(session);
   if (!groupScopeKey) return null;
@@ -256,6 +235,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
   const serviceCtx = ctx as unknown as ContextWithRealtime;
   const featurePolicy = serviceCtx.featurePolicy;
+  if (!featurePolicy) {
+    throw new Error('realtime-message requires featurePolicy service.');
+  }
   let promotionRegistered = false;
   let toolsRegistered = false;
   let toolDisposers: Array<() => void> = [];

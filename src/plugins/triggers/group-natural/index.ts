@@ -20,7 +20,7 @@ const logger = new Logger('group-natural-trigger');
 const allowReplyResolverName = 'group-natural-trigger';
 
 export const name = 'group-natural-trigger';
-export const inject = { required: ['chatluna'], optional: ['featurePolicy'] } as const;
+export const inject = { required: ['chatluna', 'featurePolicy'] } as const;
 export {
   getNaturalTriggerState,
   setNaturalTriggerState,
@@ -312,6 +312,9 @@ export function apply(ctx: Context, config: Config): void {
   const runtime = toRuntimeConfig(config);
   const serviceCtx = ctx as ContextWithFeaturePolicy;
   const featurePolicy = serviceCtx.featurePolicy;
+  if (!featurePolicy) {
+    throw new Error('group-natural-trigger requires featurePolicy service.');
+  }
   const focusExpires = new Map<string, number>();
   const spamStates = new Map<string, SpamState>();
   const nextReplyAt = new Map<string, number>();
@@ -336,7 +339,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.middleware(async (session, next) => {
     if (!runtime.enabled) return next();
-    if (featurePolicy && !(await featurePolicy.resolveFeatureEnabled(session, 'CHAT_NATURAL_TRIGGER_ENABLED'))) {
+    if (!(await featurePolicy.resolveFeatureEnabled(session, 'CHAT_NATURAL_TRIGGER_ENABLED'))) {
       return next();
     }
     if (!session.userId || session.userId === session.bot?.selfId) return next();
