@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { apply, inject as affinityInject, isAffinityPanelCommandSession, registerAffinityPanelCommand } from '../src/plugins/affinity/index.js';
+import { AffinityService, apply, inject as affinityInject, isAffinityPanelCommandSession, registerAffinityPanelCommand } from '../src/plugins/affinity/index.js';
 import type { AffinityPanelView, AffinityServiceLike } from '../src/types/affinity.js';
 
 vi.mock('koishi', () => {
@@ -108,7 +108,9 @@ describe('affinity panel command', () => {
   it('registers ChatLuna hooks from the chat-chain-added lifecycle event', async () => {
     const listeners = new Map<string, Array<() => unknown>>();
     const middlewares = new Map<string, unknown>();
+    const chainConstraints: Array<{ name: string; kind: 'after' | 'before'; target: string }> = [];
     const registerAllowReplyResolver = vi.fn(() => vi.fn());
+    const injectPromptForTurn = vi.spyOn(AffinityService.prototype, 'injectPromptForTurn').mockResolvedValue(undefined);
     const chatluna: Record<string, unknown> = {
       registerAllowReplyResolver,
     };
@@ -116,8 +118,14 @@ describe('affinity panel command', () => {
       middleware: vi.fn((name: string, middleware: unknown) => {
         middlewares.set(name, middleware);
         const builder = {
-          after: () => builder,
-          before: () => builder,
+          after: (target: string) => {
+            chainConstraints.push({ name, kind: 'after', target });
+            return builder;
+          },
+          before: (target: string) => {
+            chainConstraints.push({ name, kind: 'before', target });
+            return builder;
+          },
         };
         return builder;
       }),
@@ -149,24 +157,52 @@ describe('affinity panel command', () => {
       }
     };
 
-    apply(ctx as never, {
-      enabled: false,
-      proactiveEnabled: false,
-      pollIntervalMs: 1000,
-      randomWindowStartHour: 0,
-      randomWindowEndHour: 1,
-    });
+    try {
+      apply(ctx as never, {
+        enabled: false,
+        proactiveEnabled: false,
+        pollIntervalMs: 1000,
+        randomWindowStartHour: 0,
+        randomWindowEndHour: 1,
+      });
 
-    await runHook('ready');
+      await runHook('ready');
 
-    expect(registerAllowReplyResolver).not.toHaveBeenCalled();
-    expect(middlewares.has('qqbot_affinity_prompt_context')).toBe(false);
+      expect(registerAllowReplyResolver).not.toHaveBeenCalled();
+      expect(middlewares.has('qqbot_affinity_prompt_context')).toBe(false);
 
-    chatluna.chatChain = chain;
-    await runHook('chatluna/chat-chain-added');
+      chatluna.chatChain = chain;
+      await runHook('chatluna/chat-chain-added');
 
-    expect(registerAllowReplyResolver).toHaveBeenCalledWith('qqbot-affinity', expect.any(Function));
-    expect(middlewares.get('qqbot_affinity_prompt_context')).toBeTypeOf('function');
+      expect(registerAllowReplyResolver).toHaveBeenCalledWith('qqbot-affinity', expect.any(Function));
+      const middleware = middlewares.get('qqbot_affinity_prompt_context') as
+        | ((session: Record<string, unknown>, context: Record<string, unknown>) => Promise<unknown>)
+        | undefined;
+      expect(middleware).toBeTypeOf('function');
+
+      await middleware?.(
+        { userId: '10001', bot: { selfId: '20001' } },
+        {
+          options: {
+            conversation: {
+              conversationId: 'conv-effective',
+              conversation: {
+                id: 'conv-effective',
+              },
+            },
+          },
+        },
+      );
+
+      expect(injectPromptForTurn).toHaveBeenCalledWith('conv-effective', expect.any(Object));
+      expect(chainConstraints).toContainEqual({
+        name: 'qqbot_affinity_prompt_context',
+        kind: 'after',
+        target: 'resolve_conversation',
+      });
+    } finally {
+      injectPromptForTurn.mockRestore();
+    }
   });
 
   it('identifies the exact 好感 command so incoming affinity analysis can skip it', () => {

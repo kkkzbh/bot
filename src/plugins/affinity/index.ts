@@ -4,6 +4,10 @@ import { AffinityService, getSessionAffinityResult, type AffinityDatabaseLike } 
 import { AffinityRandomPlanScheduler } from './scheduler.js';
 import { isAffinityPanelCommandSession } from './command.js';
 import { renderAffinityPanelImage, type AffinityPanelPuppeteerLike } from './panel.js';
+import {
+  resolveChatLunaRoomLike,
+  type QqbotChatLunaContextOptionsLike,
+} from '../shared/chatluna-conversation.js';
 export {
   AffinityService,
   affinityMutationResponse,
@@ -61,11 +65,7 @@ type ChatLunaLike = {
 };
 
 type MiddlewareContextLike = {
-  options?: {
-    room?: {
-      conversationId?: string;
-    };
-  };
+  options?: QqbotChatLunaContextOptionsLike;
 };
 
 type ContextWithAffinity = Context & {
@@ -407,12 +407,13 @@ export function apply(ctx: Context, config: Config): void {
       .middleware('qqbot_affinity_prompt_context', async (rawSession, rawContext) => {
         const session = rawSession as Session;
         const context = rawContext as MiddlewareContextLike;
-        const conversationId = context.options?.room?.conversationId?.trim();
+        const conversationId = resolveChatLunaRoomLike(context.options)?.conversationId?.trim();
         if (conversationId) {
           await service.injectPromptForTurn(conversationId, session);
         }
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
+      .after('resolve_conversation')
       .after('chatluna_time_context')
       .before('lifecycle-handle_command');
     chatlunaHooksRegistered = true;
