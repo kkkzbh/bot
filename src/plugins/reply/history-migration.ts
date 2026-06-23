@@ -61,6 +61,12 @@ function normalizeLegacyStructuredReply(raw: unknown): StructuredReply | null {
       messages.push(migrated);
       continue;
     }
+    if (typeof message.kind === 'string') {
+      const migrated = normalizeLegacyMessageItem(message);
+      if (!migrated) return null;
+      messages.push(migrated);
+      continue;
+    }
     return null;
   }
 
@@ -71,12 +77,15 @@ function normalizeLegacyStructuredReply(raw: unknown): StructuredReply | null {
 }
 
 function normalizeLegacyMessageItem(message: Record<string, unknown>): StructuredReplyMessage | null {
-  const modality = message.modality;
+  const modality = message.modality ?? message.kind;
   if (modality === 'text' || modality === 'message') {
-    if (typeof message.content !== 'string') return null;
+    const content = typeof message.content === 'string'
+      ? message.content
+      : renderLegacySegments(message.segments);
+    if (!content) return null;
     return {
       type: 'message',
-      content: message.content.trim(),
+      content: content.trim(),
     };
   }
 
@@ -90,10 +99,13 @@ function normalizeLegacyMessageItem(message: Record<string, unknown>): Structure
   }
 
   if (modality === 'voice') {
-    if (typeof message.content !== 'string') return null;
+    const content = typeof message.content === 'string'
+      ? message.content
+      : renderLegacySegments(message.segments);
+    if (!content) return null;
     return {
       type: 'voice',
-      content: message.content.trim(),
+      content: content.trim(),
     };
   }
 
@@ -141,6 +153,11 @@ function renderLegacyRichTextSegment(segment: unknown): string {
     return alt ? `（发送图片：${alt}）` : '（发送图片）';
   }
   return '';
+}
+
+function renderLegacySegments(segments: unknown): string {
+  if (!Array.isArray(segments)) return '';
+  return segments.map((segment) => renderLegacyRichTextSegment(segment)).join('').trim();
 }
 
 function renderMigratedStructuredReplyHistory(reply: StructuredReply): string {

@@ -318,6 +318,11 @@ describe('chatluna prompt pollution regression', () => {
               ],
             },
             { modality: 'meme', content: '无语' },
+            {
+              modality: 'voice',
+              segments: [{ kind: 'text', text: '当然记得' }],
+            },
+            { kind: 'text', content: '补一句' },
           ],
         }))),
       },
@@ -357,6 +362,8 @@ describe('chatluna prompt pollution regression', () => {
     await expect(gunzipAsync(rows[0].content).then((value) => value.toString())).resolves.toBe(JSON.stringify([
       '@241389951 我查到了',
       '（发送表情包：无语）',
+      '（发送语音：当然记得）',
+      '补一句',
     ].join('\n')));
     await expect(gunzipAsync(rows[1].content).then((value) => value.toString())).resolves.toBe(JSON.stringify('普通历史'));
   });
