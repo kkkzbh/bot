@@ -49,9 +49,9 @@ export function resolveChatLunaRoomLike(
       ...(options?.room ?? {}),
       conversationId,
       roomId: typeof conversation?.legacyRoomId === 'number' ? conversation.legacyRoomId : options?.room?.roomId,
-      model: normalizeString(conversation?.model) ?? options?.room?.model,
-      preset: normalizeString(conversation?.preset) ?? options?.room?.preset,
-      chatMode: normalizeString(conversation?.chatMode) ?? options?.room?.chatMode,
+      model: normalizeString(options?.conversation?.effectiveModel) ?? normalizeString(conversation?.model) ?? options?.room?.model,
+      preset: normalizeString(options?.conversation?.effectivePreset) ?? normalizeString(conversation?.preset) ?? options?.room?.preset,
+      chatMode: normalizeString(options?.conversation?.effectiveChatMode) ?? normalizeString(conversation?.chatMode) ?? options?.room?.chatMode,
     };
   }
 
