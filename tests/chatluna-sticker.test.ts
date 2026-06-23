@@ -240,9 +240,13 @@ describe('chatluna sticker plugin', () => {
     const session = createSession();
     const context = {
       options: {
-        room: {
+        conversation: {
           conversationId: 'conv-1',
-          preset: 'sakiko',
+          effectivePreset: 'sakiko',
+          conversation: {
+            id: 'conv-1',
+            preset: 'sakiko',
+          },
         },
       },
     };
@@ -363,9 +367,13 @@ describe('chatluna sticker plugin', () => {
     const session = createSession();
     await policy?.(session, {
       options: {
-        room: {
+        conversation: {
           conversationId: 'conv-2',
-          preset: 'other',
+          effectivePreset: 'other',
+          conversation: {
+            id: 'conv-2',
+            preset: 'other',
+          },
         },
       },
     });

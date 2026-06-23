@@ -251,6 +251,20 @@ function createSession(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
+function createConversation(conversationId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const model = overrides.model ?? 'openai/gpt-5.4-mini';
+  const roomId = overrides.roomId ?? 1;
+  return {
+    conversationId,
+    effectiveModel: model,
+    conversation: {
+      id: conversationId,
+      legacyRoomId: roomId,
+      model,
+    },
+  };
+}
+
 async function callTool(harness: ReturnType<typeof createHarness>, session: Record<string, any>, input: Record<string, unknown> = {}) {
   const entry = harness.tools.get(REALTIME_MESSAGE_HISTORY_TOOL);
   expect(entry).toBeDefined();
@@ -465,11 +479,7 @@ describe('realtime message plugin', () => {
     await middleware(triggerSession, async () => {
       await promotion?.(triggerSession, {
         options: {
-          room: {
-            roomId: 1,
-            conversationId: 'conv-1',
-            model: 'openai/gpt-5.4-mini',
-          },
+          conversation: createConversation('conv-1'),
         },
       });
       return undefined;
@@ -493,11 +503,7 @@ describe('realtime message plugin', () => {
     await middleware(nextTrigger, async () => {
       await promotion?.(nextTrigger, {
         options: {
-          room: {
-            roomId: 1,
-            conversationId: 'conv-2',
-            model: 'openai/gpt-5.4-mini',
-          },
+          conversation: createConversation('conv-2'),
         },
       });
       return undefined;
@@ -533,11 +539,7 @@ describe('realtime message plugin', () => {
     await expect(
       promotion?.(triggerSession, {
         options: {
-          room: {
-            roomId: 1,
-            conversationId: 'conv-bind-1',
-            model: 'openai/gpt-5.4-mini',
-          },
+          conversation: createConversation('conv-bind-1'),
         },
       }),
     ).resolves.toBe(2);
@@ -632,11 +634,7 @@ describe('realtime message plugin', () => {
     await middleware(triggerSession, async () => {
       await promotion?.(triggerSession, {
         options: {
-          room: {
-            roomId: 1,
-            conversationId: 'conv-image-1',
-            model: 'openai/gpt-5.4-mini',
-          },
+          conversation: createConversation('conv-image-1'),
         },
       });
       return undefined;
@@ -677,11 +675,7 @@ describe('realtime message plugin', () => {
     await middleware(triggerSession, async () => {
       await promotion?.(triggerSession, {
         options: {
-          room: {
-            roomId: 1,
-            conversationId: 'conv-image-fallback',
-            model: 'openai/gpt-5.4-mini',
-          },
+          conversation: createConversation('conv-image-fallback'),
         },
       });
       return undefined;
@@ -799,11 +793,7 @@ describe('realtime message plugin', () => {
     await middleware(triggerSession, async () => {
       await promotion?.(triggerSession, {
         options: {
-          room: {
-            roomId: 1,
-            conversationId: 'conv-tool-1',
-            model: 'openai/gpt-5.4-mini',
-          },
+          conversation: createConversation('conv-tool-1'),
         },
       });
       return undefined;
