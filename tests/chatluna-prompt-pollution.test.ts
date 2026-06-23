@@ -287,6 +287,7 @@ describe('chatluna prompt pollution regression', () => {
       protocolViolationPromptsRemoved: 0,
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -357,6 +358,7 @@ describe('chatluna prompt pollution regression', () => {
       protocolViolationPromptsRemoved: 0,
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -427,6 +429,7 @@ describe('chatluna prompt pollution regression', () => {
       protocolViolationPromptsRemoved: 0,
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -544,6 +547,7 @@ describe('chatluna prompt pollution regression', () => {
       protocolViolationPromptsRemoved: 0,
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -666,6 +670,7 @@ describe('chatluna prompt pollution regression', () => {
       protocolViolationPromptsRemoved: 1,
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -772,6 +777,7 @@ describe('chatluna prompt pollution regression', () => {
       protocolViolationPromptsRemoved: 0,
       failedToolCallErrorRowsRemoved: 2,
       danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -858,6 +864,7 @@ describe('chatluna prompt pollution regression', () => {
       protocolViolationPromptsRemoved: 0,
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 2,
+      completedToolTraceRowsMigrated: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -951,6 +958,7 @@ describe('chatluna prompt pollution regression', () => {
       protocolViolationPromptsRemoved: 0,
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 4,
+      completedToolTraceRowsMigrated: 0,
       emptyAssistantRowsRemoved: 0,
     });
 
@@ -961,6 +969,257 @@ describe('chatluna prompt pollution regression', () => {
       { table: 'chatluna_message', query: { id: 'ai-tool-call-2' } },
       { table: 'chatluna_message', query: { id: 'tool-result-1' } },
       { table: 'chatluna_message', query: { id: 'ai-tool-call-1' } },
+    ]);
+  });
+
+  it('removes completed non-output tool traces while preserving the visible assistant reply', async () => {
+    const messages = [
+      {
+        id: 'human-1',
+        role: 'human',
+        parentId: null,
+        name: 'user',
+        content: await gzipAsync(JSON.stringify('帮我搜一下')),
+      },
+      {
+        id: 'ai-search',
+        role: 'ai',
+        parentId: 'human-1',
+        name: null,
+        content: await gzipAsync(JSON.stringify('')),
+        tool_calls: JSON.stringify([{ id: 'call-search', name: 'web_search', args: { input: 'example' } }]),
+      },
+      {
+        id: 'tool-search',
+        role: 'tool',
+        parentId: 'ai-search',
+        name: 'web_search',
+        tool_call_id: 'call-search',
+        content: await gzipAsync(JSON.stringify('[{"title":"结果","url":"https://example.com"}]')),
+      },
+      {
+        id: 'ai-answer',
+        role: 'ai',
+        parentId: 'tool-search',
+        name: null,
+        content: await gzipAsync(JSON.stringify('我查到结果了。')),
+        tool_calls: '[]',
+      },
+    ];
+    const conversations = [{ id: 'conv-completed-tool', latestMessageId: 'ai-answer' }];
+    const removed: Array<{ table: string; query: Record<string, unknown> }> = [];
+    const database = {
+      get: async (table: string, query: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        return rows.filter((row) =>
+          Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value),
+        );
+      },
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        for (const row of rows) {
+          if (Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value)) {
+            Object.assign(row, update);
+          }
+        }
+      },
+      remove: async (table: string, query: Record<string, unknown>) => {
+        removed.push({ table, query });
+        if (table !== 'chatluna_message') return;
+        const index = messages.findIndex((row) => row.id === query.id);
+        if (index >= 0) messages.splice(index, 1);
+      },
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 4,
+      migrated: 2,
+      structuredRowsMigrated: 0,
+      legacyDirectHumanRowsTagged: 0,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
+      danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 2,
+      emptyAssistantRowsRemoved: 0,
+    });
+
+    expect(messages.map((row) => row.id)).toEqual(['human-1', 'ai-answer']);
+    expect(messages.find((row) => row.id === 'ai-answer')).toEqual(expect.objectContaining({ parentId: 'human-1' }));
+    expect(conversations[0].latestMessageId).toBe('ai-answer');
+    expect(removed).toEqual([
+      { table: 'chatluna_message', query: { id: 'tool-search' } },
+      { table: 'chatluna_message', query: { id: 'ai-search' } },
+    ]);
+  });
+
+  it('normalizes legacy send_sticker tool traces into visible assistant action history', async () => {
+    const messages = [
+      {
+        id: 'human-1',
+        role: 'human',
+        parentId: null,
+        name: 'user',
+        content: await gzipAsync(JSON.stringify('发表情')),
+      },
+      {
+        id: 'ai-sticker',
+        role: 'ai',
+        parentId: 'human-1',
+        name: null,
+        content: await gzipAsync(JSON.stringify('')),
+        tool_calls: JSON.stringify([{ id: 'call-sticker', name: 'send_sticker', args: { tag: 'piano' } }]),
+      },
+      {
+        id: 'tool-sticker',
+        role: 'tool',
+        parentId: 'ai-sticker',
+        name: 'send_sticker',
+        tool_call_id: 'call-sticker',
+        content: await gzipAsync(JSON.stringify('已发送表情包: piano')),
+      },
+      {
+        id: 'ai-answer',
+        role: 'ai',
+        parentId: 'tool-sticker',
+        name: null,
+        content: await gzipAsync(JSON.stringify('这样聊天会更轻松一点。')),
+        tool_calls: '[]',
+      },
+    ];
+    const conversations = [{ id: 'conv-sticker-tool', latestMessageId: 'ai-answer' }];
+    const removed: Array<{ table: string; query: Record<string, unknown> }> = [];
+    const database = {
+      get: async (table: string, query: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        return rows.filter((row) =>
+          Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value),
+        );
+      },
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        for (const row of rows) {
+          if (Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value)) {
+            Object.assign(row, update);
+          }
+        }
+      },
+      remove: async (table: string, query: Record<string, unknown>) => {
+        removed.push({ table, query });
+        if (table !== 'chatluna_message') return;
+        const index = messages.findIndex((row) => row.id === query.id);
+        if (index >= 0) messages.splice(index, 1);
+      },
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 4,
+      migrated: 2,
+      structuredRowsMigrated: 0,
+      legacyDirectHumanRowsTagged: 0,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
+      danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 2,
+      emptyAssistantRowsRemoved: 0,
+    });
+
+    expect(messages.map((row) => row.id)).toEqual(['human-1', 'ai-sticker', 'ai-answer']);
+    expect(messages.find((row) => row.id === 'ai-sticker')).toEqual(expect.objectContaining({
+      parentId: 'human-1',
+      tool_calls: [],
+    }));
+    expect(messages.find((row) => row.id === 'ai-answer')).toEqual(expect.objectContaining({ parentId: 'ai-sticker' }));
+    expect(conversations[0].latestMessageId).toBe('ai-answer');
+    expect(removed).toEqual([
+      { table: 'chatluna_message', query: { id: 'tool-sticker' } },
+    ]);
+    await expect(
+      gunzipAsync(messages.find((row) => row.id === 'ai-sticker')!.content).then((value) => value.toString()),
+    ).resolves.toBe(JSON.stringify('（发送表情包：piano）'));
+  });
+
+  it('removes stale tool traces even when the next visible turn is human', async () => {
+    const messages = [
+      {
+        id: 'human-1',
+        role: 'human',
+        parentId: null,
+        name: 'user',
+        content: await gzipAsync(JSON.stringify('抓一下网页')),
+      },
+      {
+        id: 'ai-fetch',
+        role: 'ai',
+        parentId: 'human-1',
+        name: null,
+        content: await gzipAsync(JSON.stringify('')),
+        tool_calls: JSON.stringify([{ id: 'call-fetch', name: 'web_fetch', args: { url: 'https://example.com' } }]),
+      },
+      {
+        id: 'tool-fetch',
+        role: 'tool',
+        parentId: 'ai-fetch',
+        name: 'web_fetch',
+        tool_call_id: 'call-fetch',
+        content: await gzipAsync(JSON.stringify('<html>large page</html>')),
+      },
+      {
+        id: 'human-2',
+        role: 'human',
+        parentId: 'tool-fetch',
+        name: 'user',
+        content: await gzipAsync(JSON.stringify('继续')),
+      },
+    ];
+    const conversations = [{ id: 'conv-fetch-tool', latestMessageId: 'human-2' }];
+    const removed: Array<{ table: string; query: Record<string, unknown> }> = [];
+    const database = {
+      get: async (table: string, query: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        return rows.filter((row) =>
+          Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value),
+        );
+      },
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        for (const row of rows) {
+          if (Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value)) {
+            Object.assign(row, update);
+          }
+        }
+      },
+      remove: async (table: string, query: Record<string, unknown>) => {
+        removed.push({ table, query });
+        if (table !== 'chatluna_message') return;
+        const index = messages.findIndex((row) => row.id === query.id);
+        if (index >= 0) messages.splice(index, 1);
+      },
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 4,
+      migrated: 2,
+      structuredRowsMigrated: 0,
+      legacyDirectHumanRowsTagged: 0,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
+      danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 2,
+      emptyAssistantRowsRemoved: 0,
+    });
+
+    expect(messages.map((row) => row.id)).toEqual(['human-1', 'human-2']);
+    expect(messages.find((row) => row.id === 'human-2')).toEqual(expect.objectContaining({ parentId: 'human-1' }));
+    expect(conversations[0].latestMessageId).toBe('human-2');
+    expect(removed).toEqual([
+      { table: 'chatluna_message', query: { id: 'tool-fetch' } },
+      { table: 'chatluna_message', query: { id: 'ai-fetch' } },
     ]);
   });
 
@@ -1056,6 +1315,7 @@ describe('chatluna prompt pollution regression', () => {
       protocolViolationPromptsRemoved: 0,
       failedToolCallErrorRowsRemoved: 0,
       danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
       emptyAssistantRowsRemoved: 3,
     });
 
