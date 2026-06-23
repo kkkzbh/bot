@@ -130,6 +130,19 @@ function normalizePayload(payload: unknown, source: string): PromptFragmentPaylo
   if (!PAYLOAD_KINDS.has(record.kind as PromptFragmentPayloadKind)) {
     throw new Error(`prompt fragment ${source} payload kind is invalid.`);
   }
+  if (record.kind === 'text') {
+    if (typeof record.value !== 'string') {
+      throw new Error(`prompt fragment ${source} text payload must be a string.`);
+    }
+    const value = record.value.trim();
+    if (!value) {
+      throw new Error(`prompt fragment ${source} text payload is empty.`);
+    }
+    return {
+      kind: 'text',
+      value,
+    };
+  }
   return {
     kind: record.kind as PromptFragmentPayloadKind,
     value: record.value,
@@ -170,14 +183,15 @@ function ttlRank(ttl: PromptFragmentTtl): number {
 
 function payloadToContent(payload: PromptFragmentPayload, source: string): string {
   if (payload.kind === 'text') {
-    if (typeof payload.value !== 'string') {
-      throw new Error(`prompt fragment ${source} text payload must be a string.`);
-    }
-    return payload.value.trim();
+    return payload.value as string;
   }
 
   try {
-    return JSON.stringify(payload.value, null, 2).trim();
+    const serialized = JSON.stringify(payload.value, null, 2);
+    if (typeof serialized !== 'string') {
+      throw new Error('JSON.stringify returned no content');
+    }
+    return serialized.trim();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`prompt fragment ${source} JSON payload must be serializable: ${message}`);
@@ -199,8 +213,6 @@ function indentBlock(content: string, prefix = '  '): string {
 }
 
 function renderFragment(fragment: PromptFragment, content: string): string {
-  if (!content) return '';
-
   return [
     '[qqbot-context]',
     `kind: ${sectionKindForFragment(fragment)}`,
@@ -234,7 +246,6 @@ function compileRegisteredFragments(fragments: RegisteredPromptFragment[]): Prom
       fragment,
       payloadContent: payloadToContent(fragment.payload, fragment.source),
     }))
-    .filter((item) => item.payloadContent)
     .filter((item) => {
       const key = fragmentIdentityKey(item.fragment, item.payloadContent);
       if (seenFragmentKeys.has(key)) return false;
@@ -255,7 +266,6 @@ function compileRegisteredFragments(fragments: RegisteredPromptFragment[]): Prom
   for (const [index, item] of allFragments.entries()) {
     const { registeredOrder: _registeredOrder, ...fragment } = item.fragment;
     const content = renderFragment(fragment, item.payloadContent);
-    if (!content) continue;
     compiledFragments.push({
       ...fragment,
       compiledOrder: index,

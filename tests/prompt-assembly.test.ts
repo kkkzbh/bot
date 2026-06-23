@@ -157,6 +157,22 @@ describe('prompt assembly', () => {
     ])).toThrow(/prompt fragment bad_text_state text payload must be a string/u);
   });
 
+  it('rejects empty text fragments instead of silently dropping registered context', () => {
+    expect(() => compilePromptEnvelopeFromFragments([
+      {
+        source: 'empty_text_state',
+        title: 'Empty Text State',
+        authority: 'assistant_state',
+        trust: 'trusted',
+        ttl: 'turn',
+        payload: {
+          kind: 'text',
+          value: '   ',
+        },
+      },
+    ])).toThrow(/prompt fragment empty_text_state text payload is empty/u);
+  });
+
   it('rejects multiline fragment metadata before rendering context headers', () => {
     expect(() => compilePromptEnvelopeFromFragments([
       {
