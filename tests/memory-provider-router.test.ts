@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { requestChatMemoryPlainText } from '../src/plugins/memory/providers/chat-client.js';
 import { isNonRetryableMemoryProviderError } from '../src/plugins/memory/providers/http-error.js';
+import { requestJsonModeMemoryWithRepair } from '../src/plugins/memory/providers/json-mode-repair.js';
 import { parseMemoryExtractionJson } from '../src/plugins/memory/providers/schemas.js';
 import { resolveMemoryOutputProtocol, type MemoryProviderProfile } from '../src/plugins/memory/providers/router.js';
 
@@ -90,5 +91,55 @@ describe('memory provider router', () => {
       kind: 'preference',
       topicKey: 'music',
     });
+  });
+
+  it('repairs malformed JSON mode output without adding synthetic target turns', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: unknown[] = [];
+    globalThis.fetch = async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body ?? '{}')));
+      if (requests.length === 1) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'not-json-memory-output' } }],
+        }));
+      }
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: [
+              '<memory_extraction>',
+              'FACT|subject=target_user|owner=10001|evidenceMessages=m-1|evidenceSpeakers=10001|kind=preference|topic=answer-style|visibility=source_context_only|sensitivity=low|confidence=0.82|importance=0.70|用户喜欢简洁回答',
+              '</memory_extraction>',
+            ].join('\n'),
+          },
+        }],
+      }));
+    };
+
+    try {
+      const result = await requestJsonModeMemoryWithRepair(
+        profile({ structuredOutputProtocol: 'json_mode', supportsJsonMode: true }),
+        [{
+          id: 'm-1',
+          role: 'human',
+          text: '我喜欢简洁回答',
+          speakerId: '10001',
+          speakerName: 'Alice',
+          ownerUserKey: 'onebot:10001',
+          isTarget: true,
+          attributionSource: 'additional_kwargs',
+        }],
+        { speakerId: '10001', speakerName: 'Alice' },
+      );
+
+      expect(result.candidates).toHaveLength(1);
+      expect(requests).toHaveLength(2);
+      const repairPrompt = String((requests[1] as { messages?: Array<{ content?: unknown }> }).messages?.[1]?.content ?? '');
+      expect(repairPrompt).toContain('not-json-memory-output');
+      expect(repairPrompt).not.toContain('message_id=repair');
+      expect(repairPrompt).not.toContain('[target speaker_id=10001 speaker_name="Alice" message_id=repair');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
