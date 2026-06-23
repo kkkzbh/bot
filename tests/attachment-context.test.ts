@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { HumanMessage } from '@langchain/core/messages';
 import type { QqbotAttachmentRecord } from '../src/types/attachment.js';
-import { resolveReferencedAttachmentsFromCatalog } from '../src/plugins/attachment/resolution.js';
+import {
+  createResolutionText,
+  resolveReferencedAttachmentsFromCatalog,
+} from '../src/plugins/attachment/resolution.js';
 
 vi.mock('koishi', () => {
   type MockSchemaNode = {
@@ -165,6 +168,28 @@ describe('attachment context resolution', () => {
 
     expect(result.selected).toEqual([]);
     expect(result.ambiguous.map((item) => item.refId)).toEqual(['att_pdf1', 'att_pdf2']);
+  });
+
+  it('describes selected attachments as replayable refs instead of already injected originals', () => {
+    const image = createRecord({
+      refId: 'att_image01',
+      conversationId: 'conv-4',
+      kind: 'image',
+      filename: 'screen.png',
+    });
+
+    const text = createResolutionText({
+      selected: [image],
+      ambiguous: [],
+      requestedCount: 1,
+      kindHint: 'image',
+      reason: 'explicit_ref',
+    });
+
+    expect(text).toContain('历史附件引用');
+    expect(text).toContain('附件回放工具');
+    expect(text).not.toContain('已经看到原件');
+    expect(text).not.toContain('并回灌到上下文');
   });
 });
 

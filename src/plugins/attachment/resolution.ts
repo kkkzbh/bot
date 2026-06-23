@@ -89,7 +89,7 @@ export function createResolutionText(resolution: QqbotResolvedAttachmentSelectio
     return '';
   }
 
-  const lines = ['本轮已解析到以下历史附件并回灌到上下文：'];
+  const lines = ['本轮已解析到以下历史附件引用，可根据需要调用附件回放工具：'];
   for (const record of resolution.selected) {
     lines.push(`- ${record.refId} | ${record.kind} | ${record.filename ?? 'unnamed'}`);
   }
