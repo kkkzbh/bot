@@ -143,8 +143,11 @@ function normalizePayload(payload: unknown, source: string): PromptFragmentPaylo
       value,
     };
   }
+  if (!record.value || typeof record.value !== 'object' || Array.isArray(record.value)) {
+    throw new Error(`prompt fragment ${source} JSON payload must be a non-array object.`);
+  }
   return {
-    kind: record.kind as PromptFragmentPayloadKind,
+    kind: 'json',
     value: record.value,
   };
 }

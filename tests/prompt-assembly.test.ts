@@ -141,6 +141,36 @@ describe('prompt assembly', () => {
     ])).toThrow(/prompt fragment bad_internal_state JSON payload must be serializable/u);
   });
 
+  it('rejects non-object JSON fragments instead of injecting low-signal payloads', () => {
+    expect(() => compilePromptEnvelopeFromFragments([
+      {
+        source: 'null_json_state',
+        title: 'Null JSON State',
+        authority: 'assistant_state',
+        trust: 'trusted',
+        ttl: 'turn',
+        payload: {
+          kind: 'json',
+          value: null,
+        },
+      },
+    ])).toThrow(/prompt fragment null_json_state JSON payload must be a non-array object/u);
+
+    expect(() => compilePromptEnvelopeFromFragments([
+      {
+        source: 'array_json_state',
+        title: 'Array JSON State',
+        authority: 'assistant_state',
+        trust: 'trusted',
+        ttl: 'turn',
+        payload: {
+          kind: 'json',
+          value: ['orphaned', 'items'],
+        },
+      },
+    ])).toThrow(/prompt fragment array_json_state JSON payload must be a non-array object/u);
+  });
+
   it('rejects non-string text fragments instead of rendering object fallback text', () => {
     expect(() => compilePromptEnvelopeFromFragments([
       {
