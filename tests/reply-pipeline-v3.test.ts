@@ -6,7 +6,7 @@ vi.mock('koishi', () => ({
   },
 }));
 
-import { normalizeReplyChatMode } from '../src/plugins/reply/compat.js';
+import { normalizeReplyChatMode } from '../src/plugins/shared/reply-chat-mode.js';
 import { buildReplyTurnContext, buildReplyTurnInput, normalizeReplyRouteHint } from '../src/plugins/reply/pipeline/context-builder.js';
 import {
   StructuredReplyCompilerError,

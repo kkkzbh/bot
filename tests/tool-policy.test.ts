@@ -172,6 +172,14 @@ function createHarness(
 }
 
 describe('tool policy service', () => {
+  it('fails fast without the required database service', () => {
+    expect(() => apply({
+      chatluna: {},
+      model: { extend: vi.fn() },
+      on: vi.fn(),
+    } as any)).toThrow('tool-policy requires database service.');
+  });
+
   it('resolves scoped overrides for agent with private and group precedence', async () => {
     const { ctx } = createHarness();
     const service = ctx.toolPolicy!;

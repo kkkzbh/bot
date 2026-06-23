@@ -54,7 +54,7 @@ import {
 import {
   registerReplyToolMemoryFragment,
 } from '../pipeline/protocol.js';
-import { normalizeReplyChatMode } from '../compat.js';
+import { normalizeReplyChatMode } from '../../shared/reply-chat-mode.js';
 import {
   StructuredReplyCompilerError,
   StructuredReplyEmptyModelOutputError,
@@ -305,11 +305,6 @@ type ChatLunaLike = {
     }) => void;
   };
   normalizeResearchReplyHistory?: (
-    room: unknown,
-    finalVisibleText: string,
-    updatedAt?: Date,
-  ) => Promise<unknown>;
-  normalizeReplyAgentHistory?: (
     room: unknown,
     finalVisibleText: string,
     updatedAt?: Date,

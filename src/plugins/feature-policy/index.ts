@@ -572,8 +572,7 @@ class FeaturePolicyService implements FeaturePolicyServiceLike {
 export function apply(ctx: Context): void {
   const database = (ctx as { database?: DatabaseLike }).database;
   if (!database) {
-    logger.warn('database service is unavailable, skip feature policy setup.');
-    return;
+    throw new Error('feature-policy requires database service.');
   }
 
   const model = (ctx as { model?: { extend?: (...args: any[]) => unknown } }).model;

@@ -602,8 +602,7 @@ export function apply(ctx: Context): void {
   const serviceCtx = ctx as unknown as ServiceContext;
   const database = serviceCtx.database;
   if (!database) {
-    logger.warn('database service is unavailable, skip tool policy setup.');
-    return;
+    throw new Error('tool-policy requires database service.');
   }
 
   if (typeof serviceCtx.model?.extend === 'function') {

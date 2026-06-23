@@ -125,11 +125,8 @@ async function createChatHistory(args: { conversationId: string; latestId: strin
 
 function normalizeHistory(history: {
   normalizeResearchReplyHistory?: (text: string, updatedAt?: Date) => Promise<any>;
-  normalizeReplyAgentHistory?: (text: string, updatedAt?: Date) => Promise<any>;
 }, finalVisibleText: string, updatedAt?: Date) {
-  const normalize =
-    history.normalizeResearchReplyHistory?.bind(history) ??
-    history.normalizeReplyAgentHistory?.bind(history);
+  const normalize = history.normalizeResearchReplyHistory?.bind(history);
   if (!normalize) {
     throw new Error('missing research history normalization method');
   }

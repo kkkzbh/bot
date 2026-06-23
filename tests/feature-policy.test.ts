@@ -118,6 +118,13 @@ function createHarness(seed: Record<string, Row[]> = {}) {
 }
 
 describe('feature policy service', () => {
+  it('fails fast without the required database service', () => {
+    expect(() => apply({
+      model: { extend: vi.fn() },
+      command: vi.fn(),
+    } as any)).toThrow('feature-policy requires database service.');
+  });
+
   it('registers feature policy and chathub table models', () => {
     const { extend } = createHarness();
     const tables = extend.mock.calls.map((call) => call[0]);
