@@ -272,6 +272,7 @@ function createHarness(overrides: {
   databaseSetImpl?: (table: string, query: Record<string, unknown>, data: Record<string, unknown>) => Promise<unknown>;
   databaseUpsertImpl?: (table: string, rows: Record<string, unknown>[]) => Promise<unknown>;
   databaseRemoveImpl?: (table: string, query: Record<string, unknown>) => Promise<unknown>;
+  normalizeResearchReplyHistory?: boolean;
   normalizeResearchReplyHistoryImpl?: (room: Record<string, unknown>, finalVisibleText: string) => Promise<unknown>;
   chatChainInitially?: boolean;
   contextManager?: boolean;
@@ -375,7 +376,9 @@ function createHarness(overrides: {
           }),
         })),
     })),
-    normalizeResearchReplyHistory: vi.fn(async (room: Record<string, unknown>, finalVisibleText: string) => {
+  };
+  if (overrides.normalizeResearchReplyHistory !== false) {
+    chatluna.normalizeResearchReplyHistory = vi.fn(async (room: Record<string, unknown>, finalVisibleText: string) => {
       if (overrides.normalizeResearchReplyHistoryImpl) {
         return overrides.normalizeResearchReplyHistoryImpl(room, finalVisibleText);
       }
@@ -385,8 +388,8 @@ function createHarness(overrides: {
         normalizedMessageId: 'msg-ai-normalized',
         normalizedText: finalVisibleText,
       };
-    }),
-  };
+    });
+  }
   if (overrides.contextManager !== false) {
     chatluna.contextManager = { inject };
   }
@@ -1198,6 +1201,13 @@ describe('qq voice plugin', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
 
     await expect(ready()).rejects.toThrow('reply runtime requires chatluna.contextManager.');
+  });
+
+  it('fails fast when ChatLuna exposes a chain without reply history normalization', async () => {
+    const { ready } = createHarness({ normalizeResearchReplyHistory: false });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await expect(ready()).rejects.toThrow('reply runtime requires chatluna.normalizeResearchReplyHistory.');
   });
 
   it('delays the initial tts health probe until after startup grace period', async () => {

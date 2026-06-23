@@ -756,9 +756,20 @@ async function normalizeResearchReplyHistory(
       }
     | undefined;
   const conversationId = typeof room?.conversationId === 'string' ? room.conversationId.trim() : '';
-  const normalizeHistory = chatluna?.normalizeResearchReplyHistory?.bind(chatluna);
-  if (!normalizeHistory || !conversationId) return;
+  const normalizeHistory = requireReplyHistoryNormalizer(chatluna);
+  if (!conversationId) {
+    throw new Error('reply runtime history normalization requires room.conversationId.');
+  }
   await normalizeHistory(room!, visibleHistoryText.trim());
+}
+
+function requireReplyHistoryNormalizer(
+  chatluna: { normalizeResearchReplyHistory?: (room: Record<string, unknown>, visibleHistoryText: string) => Promise<unknown> } | undefined,
+): (room: Record<string, unknown>, visibleHistoryText: string) => Promise<unknown> {
+  if (typeof chatluna?.normalizeResearchReplyHistory !== 'function') {
+    throw new Error('reply runtime requires chatluna.normalizeResearchReplyHistory.');
+  }
+  return chatluna.normalizeResearchReplyHistory.bind(chatluna);
 }
 
 function buildTextOnlyAssistantHistoryText(
@@ -1794,6 +1805,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (!chatluna.contextManager) {
       throw new Error('reply runtime requires chatluna.contextManager.');
     }
+    requireReplyHistoryNormalizer(chatluna);
 
     const prepareBuilder = chain.middleware('qqbot_reply_runtime_prepare', async (rawSession, rawContext) => {
         const session = rawSession as SessionWithVoiceState;
