@@ -2073,7 +2073,6 @@ export function apply(ctx: Context, config: Config = {}): void {
             orchestration = await replyOrchestrator.handle(turnInput, session, {
               responseMessage,
               outputProtocol,
-              promptFragments: [],
               capabilitySnapshot: turnCapabilitySnapshot,
               continuationContext: null,
               routeHint,

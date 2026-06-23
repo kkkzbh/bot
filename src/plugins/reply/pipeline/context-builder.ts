@@ -1,5 +1,4 @@
 import type { Session } from 'koishi';
-import type { PromptFragment } from '../../shared/prompt-context/types.js';
 import { resolveSessionDisplayName } from '../../shared/session/index.js';
 import { normalizeMentionLikeText } from '../../shared/mention-text.js';
 import type { ReplyRuntimeRoomLike } from '../runtime/index.js';
@@ -35,7 +34,6 @@ function normalizeInputText(text: string): string {
 
 export interface BuildReplyTurnContextOptions {
   room?: ReplyRuntimeRoomLike | null;
-  promptFragments?: PromptFragment[];
   capabilitySnapshot?: TurnContext['capabilitySnapshot'];
   continuationContext?: TurnContext['continuationContext'];
   routeHint?: ReplyRoute | null;
@@ -106,7 +104,6 @@ export function buildReplyTurnContext(
     route,
     turnContext: {
       input: turnInput,
-      promptFragments: [...(options.promptFragments ?? [])],
       capabilitySnapshot: options.capabilitySnapshot ?? null,
       policySnapshot: {
         route,

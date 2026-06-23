@@ -1,5 +1,4 @@
 import type { Session } from 'koishi';
-import type { PromptFragment } from '../../shared/prompt-context/types.js';
 import { StructuredReplyCompilerService, type ReplyCompilerOutputProtocol } from './compiler.js';
 import { buildReplyTurnContext } from './context-builder.js';
 import { ActionResolverService } from './resolver.js';
@@ -16,7 +15,6 @@ export interface ReplyOrchestratorHandleContext {
     content?: unknown;
     additional_kwargs?: Record<string, unknown>;
   } | null;
-  promptFragments?: PromptFragment[];
   capabilitySnapshot?: TurnContext['capabilitySnapshot'];
   continuationContext?: TurnContext['continuationContext'];
   routeHint?: ReplyRoute | null;
@@ -55,7 +53,6 @@ export class ReplyOrchestratorService {
     context: ReplyOrchestratorHandleContext = {},
   ): Promise<ReplyOrchestratorHandleResult> {
     const { route, turnContext } = buildReplyTurnContext(turnInput, {
-      promptFragments: context.promptFragments,
       capabilitySnapshot: context.capabilitySnapshot,
       continuationContext: context.continuationContext,
       routeHint: context.routeHint,
