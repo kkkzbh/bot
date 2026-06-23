@@ -224,14 +224,22 @@ type RoomLike = {
   [key: string]: unknown;
 };
 
+export type ReplyInputMessageLike = {
+  content?: unknown;
+  additional_kwargs?: Record<string, unknown>;
+};
+
+export type ReplyOutputContractApplyOptions = {
+  replyMode?: 'agent' | 'automation';
+  capabilitySnapshot?: Pick<NonNullable<TurnContext['capabilitySnapshot']>, 'canMention' | 'canVoice' | 'canSticker' | 'voiceOutputLanguage'> | null;
+  replyOutputContract?: MainChatReplyOutputContract;
+};
+
 type MiddlewareContextLike = {
   options?: QqbotChatLunaContextOptionsLike & {
     room?: RoomLike;
     messageId?: string;
-    inputMessage?: {
-      content?: unknown;
-      additional_kwargs?: Record<string, unknown>;
-    };
+    inputMessage?: ReplyInputMessageLike;
     responseMessage?: {
       content?: unknown;
       additional_kwargs?: Record<string, unknown>;
@@ -941,12 +949,18 @@ export function ensureSupportedStructuredReplyModel(room: ReplyRuntimeRoomLike |
 
 export function applyReplyOutputContract(
   room: ReplyRuntimeRoomLike | undefined,
-  inputMessage: NonNullable<MiddlewareContextLike['options']>['inputMessage'] | undefined,
-  options: {
-    replyMode?: 'agent' | 'automation';
-    capabilitySnapshot?: Pick<NonNullable<TurnContext['capabilitySnapshot']>, 'canMention' | 'canVoice' | 'canSticker' | 'voiceOutputLanguage'> | null;
-    replyOutputContract?: MainChatReplyOutputContract;
-  } = {},
+  inputMessage: ReplyInputMessageLike,
+  options?: ReplyOutputContractApplyOptions,
+): MainChatReplyOutputContract;
+export function applyReplyOutputContract(
+  room: ReplyRuntimeRoomLike | undefined,
+  inputMessage: ReplyInputMessageLike | undefined,
+  options?: ReplyOutputContractApplyOptions,
+): MainChatReplyOutputContract | null;
+export function applyReplyOutputContract(
+  room: ReplyRuntimeRoomLike | undefined,
+  inputMessage: ReplyInputMessageLike | undefined,
+  options: ReplyOutputContractApplyOptions = {},
 ): MainChatReplyOutputContract | null {
   if (!inputMessage) return null;
 
@@ -993,7 +1007,7 @@ function asPlainRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function resolveReplyOutputProtocolFromMessage(
-  inputMessage: NonNullable<MiddlewareContextLike['options']>['inputMessage'] | undefined,
+  inputMessage: ReplyInputMessageLike | undefined,
 ): ReplyCompilerOutputProtocol {
   const contract = asPlainRecord(inputMessage?.additional_kwargs?.qqbot_final_response_contract);
   const protocol = contract?.protocol;
@@ -1008,7 +1022,7 @@ function resolveReplyOutputProtocolFromMessage(
 }
 
 function applyReplyTurnInputMetadata(
-  inputMessage: NonNullable<MiddlewareContextLike['options']>['inputMessage'] | undefined,
+  inputMessage: ReplyInputMessageLike | undefined,
   turnInput: Pick<TurnInput, 'hasImageInput' | 'imageCount' | 'displayName' | 'userId' | 'isDirect'>,
 ): void {
   if (!inputMessage) return;

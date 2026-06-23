@@ -1,23 +1,20 @@
 import type { Session } from 'koishi';
 import type { ReplyOutputProtocol } from '../shared/llm/reply-output-contract.js';
 import {
-  buildReplyOutputContract,
-  buildReplyOutputContractAdditionalKwargs,
-} from '../shared/llm/index.js';
-import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
-import {
   buildOutboundMessagePlanFromReplyPlan,
   renderOutboundMessageSegmentsHistoryText,
   type ReplyTransportPlan,
 } from '../shared/outbound/index.js';
 import type { PromptEnvelopeMessage } from '../shared/prompt-context/index.js';
 import {
+  applyReplyOutputContract,
   buildReplyTransportPlanFromResolvedActions,
   buildReplyPromptCompilerInput,
   buildReplyTurnInput,
   compileReplyPromptEnvelope,
   isVoiceOutputConfigured,
   ReplyOrchestratorService,
+  type ReplyInputMessageLike,
   type RuntimeConfig as ReplyVoiceRuntimeConfig,
   type TurnContext,
 } from '../reply/index.js';
@@ -32,10 +29,7 @@ import {
   summarizeProactiveContext,
 } from './proactive-task.js';
 
-type ChatLunaMessageLike = {
-  content?: unknown;
-  additional_kwargs?: Record<string, unknown>;
-};
+type ChatLunaMessageLike = ReplyInputMessageLike;
 
 export type AffinityProactiveChatLunaService = {
   chat?: (
@@ -133,29 +127,6 @@ function buildProactiveTriggerText(input: AffinityRandomGenerationInput): string
   ].join('\n');
 }
 
-function attachReplyOutputContract(
-  message: ChatLunaMessageLike,
-  capabilitySnapshot: NonNullable<TurnContext['capabilitySnapshot']>,
-): ReturnType<typeof buildReplyOutputContract> {
-  const profile = mainChatRuntimeState.getProfile();
-  const contract = buildReplyOutputContract({
-    profile,
-    model: profile.canonicalModel,
-    canMention: capabilitySnapshot.canMention !== false,
-    canVoice: capabilitySnapshot.canVoice === true,
-    canMeme: capabilitySnapshot.canSticker === true,
-    voiceOutputLanguage: capabilitySnapshot.voiceOutputLanguage,
-  });
-  message.additional_kwargs = {
-    ...(message.additional_kwargs ?? {}),
-    qqbot_reply_mode: 'agent',
-    ...buildReplyOutputContractAdditionalKwargs(contract, {
-      overrideRequestParams: contract.overrideRequestParams,
-    }),
-  };
-  return contract;
-}
-
 function skipResult(reason: string): AffinityProactiveGenerationResult {
   return {
     shouldSend: false,
@@ -201,7 +172,9 @@ export async function generateAffinityProactiveViaChatLuna(args: {
     content: buildProactiveTriggerText(args.input),
     additional_kwargs: {},
   };
-  const outputContract = attachReplyOutputContract(message, capabilitySnapshot);
+  const outputContract = applyReplyOutputContract({ conversationId }, message, {
+    capabilitySnapshot,
+  });
   const turnInput = buildReplyTurnInput(args.session, { conversationId }, message);
   const taskFragment = buildProactiveTaskFragment(args.input);
   const envelope = compileReplyPromptEnvelope(buildReplyPromptCompilerInput({

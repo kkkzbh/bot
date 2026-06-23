@@ -15,6 +15,8 @@ export {
   synthesizeVoice,
   type OneBotBotLike,
   type ReplyCapabilitySnapshot,
+  type ReplyInputMessageLike,
+  type ReplyOutputContractApplyOptions,
   type RuntimeConfig,
 } from './voice/generation.js';
 export { formatStructuredLogBlock } from './pipeline/debug.js';
