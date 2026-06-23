@@ -777,6 +777,68 @@ describe('chatluna prompt pollution regression', () => {
     });
   });
 
+  it('strips provider reasoning from visible assistant history without tool calls', async () => {
+    const messages = [
+      {
+        id: 'human-reasoning',
+        role: 'human',
+        parentId: null,
+        name: 'user',
+        content: await gzipAsync(JSON.stringify('你好')),
+        tool_calls: null,
+        additional_kwargs_binary: null,
+      },
+      {
+        id: 'ai-reasoning',
+        role: 'ai',
+        parentId: 'human-reasoning',
+        name: null,
+        content: await gzipAsync(JSON.stringify('你好。')),
+        tool_calls: '[]',
+        additional_kwargs_binary: await gzipAsync(JSON.stringify({
+          reasoning_content: '这里是 provider 的内部推理，不应进入后续 ChatLuna 请求。',
+        })),
+      },
+    ];
+    const conversations = [{ id: 'conv-reasoning', latestMessageId: 'ai-reasoning' }];
+    const database = {
+      get: async (table: string, query: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        return rows.filter((row) =>
+          Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value),
+        );
+      },
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        for (const row of rows) {
+          if (Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value)) {
+            Object.assign(row, update);
+          }
+        }
+      },
+      remove: async () => undefined,
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 2,
+      migrated: 1,
+      structuredRowsMigrated: 0,
+      legacyDirectHumanRowsTagged: 0,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
+      danglingToolCallTailRowsRemoved: 0,
+      completedToolTraceRowsMigrated: 0,
+      transientAdditionalKwargsRowsCleaned: 1,
+      invisibleMessageNamesCleared: 0,
+      nonAiToolCallsCleared: 0,
+      emptyAssistantRowsRemoved: 0,
+    });
+
+    expect(messages[1].additional_kwargs_binary).toBeNull();
+  });
+
   it('collapses legacy submit_reply_plan tool-call history into visible assistant text', async () => {
     const messages = [
       {

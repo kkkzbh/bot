@@ -366,6 +366,8 @@ const TRANSIENT_ADDITIONAL_KWARG_KEYS = [
   '__chatluna_provider_response_diagnostic_v1',
 ] as const;
 
+const PROVIDER_REASONING_CONTENT_KEY = 'reasoning_content';
+
 const CONVERSATION_ROW_FIELDS = [
   'id',
   'bindingKey',
@@ -549,6 +551,14 @@ export async function migrateStructuredReplyHistoryRows(
         delete cleanedAdditionalKwargs[key];
         changed = true;
       }
+    }
+    if (
+      row.role === 'ai' &&
+      parseToolCalls(row.tool_calls).length < 1 &&
+      Object.prototype.hasOwnProperty.call(cleanedAdditionalKwargs, PROVIDER_REASONING_CONTENT_KEY)
+    ) {
+      delete cleanedAdditionalKwargs[PROVIDER_REASONING_CONTENT_KEY];
+      changed = true;
     }
     if (!changed) continue;
 
