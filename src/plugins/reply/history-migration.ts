@@ -16,6 +16,7 @@ export interface StructuredReplyHistoryMigrationResult {
   scanned: number;
   migrated: number;
   structuredRowsMigrated: number;
+  legacyDirectHumanRowsTagged: number;
   submitReplyPlansMigrated: number;
   emptySubmitReplyPlanToolsRemoved: number;
   protocolViolationPromptsRemoved: number;
@@ -257,6 +258,10 @@ function normalizeText(value: unknown): string {
   return String(value ?? '').trim();
 }
 
+function stripFormatControls(value: string): string {
+  return value.replace(/\p{Cf}/gu, '').trim();
+}
+
 function normalizeId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -317,6 +322,76 @@ const HISTORY_ROW_FIELDS = [
   'tool_calls',
 ] as const;
 
+const CONVERSATION_ROW_FIELDS = [
+  'id',
+  'bindingKey',
+  'createdBy',
+  'title',
+  'legacyMeta',
+] as const;
+
+type LegacyDirectSpeaker = {
+  speakerId: string;
+  speakerName: string;
+};
+
+function parseLegacyMeta(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveLegacyDirectSpeaker(conversation: Record<string, unknown> | undefined): LegacyDirectSpeaker | null {
+  const bindingKey = normalizeText(conversation?.bindingKey);
+  const createdBy = normalizeId(conversation?.createdBy);
+  const directMatch = bindingKey.match(/^personal:legacy:legacy:direct:(\d+)$/u);
+  if (!directMatch || !createdBy || directMatch[1] !== createdBy) return null;
+
+  const legacyMeta = parseLegacyMeta(conversation?.legacyMeta);
+  if (!legacyMeta || legacyMeta.visibility !== 'private') return null;
+  const members = Array.isArray(legacyMeta.members) ? legacyMeta.members : [];
+  if (members.length !== 1) return null;
+  const member = members[0] as Record<string, unknown> | undefined;
+  if (normalizeId(member?.userId) !== createdBy) return null;
+
+  const titleName = stripFormatControls(normalizeText(conversation?.title).replace(/\s*的房间$/u, ''));
+  return {
+    speakerId: createdBy,
+    speakerName: titleName || createdBy,
+  };
+}
+
+function resolveLegacyDirectHumanSpeakerName(row: Record<string, unknown>, directSpeaker: LegacyDirectSpeaker): string {
+  const rowName = stripFormatControls(normalizeText(row.name));
+  return rowName || directSpeaker.speakerName;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeLegacyDirectHumanText(text: string, directSpeaker: LegacyDirectSpeaker, speakerName: string): string {
+  const normalized = text.trim();
+  const legacyPrefixPattern = new RegExp(
+    `^(?:${[speakerName, directSpeaker.speakerId]
+      .map((candidate) => candidate.trim())
+      .filter(Boolean)
+      .map(escapeRegExp)
+      .join('|')}),\\s*\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}:\\s*([\\s\\S]+)$`,
+    'u',
+  );
+  const legacyPrefixMatch = legacyPrefixPattern.exec(normalized);
+  return (legacyPrefixMatch?.[1] ?? normalized).trim();
+}
+
+function formatSpeakerTag(speakerId: string, speakerName: string): string {
+  return `[speaker_id=${speakerId} speaker_name=${JSON.stringify(speakerName)}]`;
+}
+
 function buildRowsByParent(rows: Record<string, unknown>[]): Map<string, Record<string, unknown>[]> {
   const rowsByParent = new Map<string, Record<string, unknown>[]>();
   for (const row of rows) {
@@ -363,10 +438,10 @@ async function isGenericChatLunaToolError(content: unknown): Promise<boolean> {
 export async function migrateStructuredReplyHistoryRows(
   database: DatabaseLike,
 ): Promise<StructuredReplyHistoryMigrationResult> {
-  const rows = await database.get('chatluna_message', { role: 'ai' }, ['id', 'role', 'content']);
+  const aiRows = await database.get('chatluna_message', { role: 'ai' }, ['id', 'role', 'content']);
   let structuredRowsMigrated = 0;
 
-  for (const row of rows) {
+  for (const row of aiRows) {
     const id = typeof row.id === 'string' ? row.id.trim() : '';
     if (!id) continue;
 
@@ -380,13 +455,36 @@ export async function migrateStructuredReplyHistoryRows(
   }
 
   const allRows = await database.get('chatluna_message', {}, [...HISTORY_ROW_FIELDS]);
+  const conversations = await database.get('chatluna_conversation', {}, [...CONVERSATION_ROW_FIELDS]);
+  const conversationsById = buildRowsById(conversations);
   const rowsByParent = buildRowsByParent(allRows);
 
+  let legacyDirectHumanRowsTagged = 0;
   let submitReplyPlansMigrated = 0;
   let emptySubmitReplyPlanToolsRemoved = 0;
   let protocolViolationPromptsRemoved = 0;
   let failedToolCallErrorRowsRemoved = 0;
   let emptyAssistantRowsRemoved = 0;
+
+  for (const row of allRows) {
+    const id = normalizeId(row.id);
+    if (!id || row.role !== 'human') continue;
+    const conversationId = normalizeId(row.conversationId);
+    const directSpeaker = resolveLegacyDirectSpeaker(conversationsById.get(conversationId));
+    if (!directSpeaker) continue;
+
+    const content = await decodeStoredStringContent(row.content);
+    if (!content || content.trim().startsWith('[speaker_id=')) continue;
+
+    const speakerName = resolveLegacyDirectHumanSpeakerName(row, directSpeaker);
+    const visibleText = normalizeLegacyDirectHumanText(content, directSpeaker, speakerName);
+    if (!visibleText) continue;
+
+    await database.set('chatluna_message', { id }, {
+      content: await gzipAsync(JSON.stringify(`${formatSpeakerTag(directSpeaker.speakerId, speakerName)} ${visibleText}`)),
+    });
+    legacyDirectHumanRowsTagged += 1;
+  }
 
   for (const row of allRows) {
     const id = normalizeId(row.id);
@@ -521,6 +619,7 @@ export async function migrateStructuredReplyHistoryRows(
 
   const migrated =
     structuredRowsMigrated +
+    legacyDirectHumanRowsTagged +
     submitReplyPlansMigrated +
     emptySubmitReplyPlanToolsRemoved +
     protocolViolationPromptsRemoved +
@@ -528,9 +627,10 @@ export async function migrateStructuredReplyHistoryRows(
     emptyAssistantRowsRemoved;
 
   return {
-    scanned: rows.length,
+    scanned: allRows.length,
     migrated,
     structuredRowsMigrated,
+    legacyDirectHumanRowsTagged,
     submitReplyPlansMigrated,
     emptySubmitReplyPlanToolsRemoved,
     protocolViolationPromptsRemoved,

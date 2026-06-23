@@ -281,6 +281,7 @@ describe('chatluna prompt pollution regression', () => {
       scanned: 2,
       migrated: 1,
       structuredRowsMigrated: 1,
+      legacyDirectHumanRowsTagged: 0,
       submitReplyPlansMigrated: 0,
       emptySubmitReplyPlanToolsRemoved: 0,
       protocolViolationPromptsRemoved: 0,
@@ -349,6 +350,7 @@ describe('chatluna prompt pollution regression', () => {
       scanned: 2,
       migrated: 1,
       structuredRowsMigrated: 1,
+      legacyDirectHumanRowsTagged: 0,
       submitReplyPlansMigrated: 0,
       emptySubmitReplyPlanToolsRemoved: 0,
       protocolViolationPromptsRemoved: 0,
@@ -417,6 +419,7 @@ describe('chatluna prompt pollution regression', () => {
       scanned: 2,
       migrated: 2,
       structuredRowsMigrated: 2,
+      legacyDirectHumanRowsTagged: 0,
       submitReplyPlansMigrated: 0,
       emptySubmitReplyPlanToolsRemoved: 0,
       protocolViolationPromptsRemoved: 0,
@@ -438,6 +441,132 @@ describe('chatluna prompt pollution regression', () => {
     ]);
     await expect(gunzipAsync(rows[0].content).then((value) => value.toString())).resolves.toBe(JSON.stringify('今晚先这样吧'));
     await expect(gunzipAsync(rows[1].content).then((value) => value.toString())).resolves.toBe(JSON.stringify('已经是当前格式'));
+  });
+
+  it('tags deterministic legacy direct human history rows with speaker identity', async () => {
+    const messages = [
+      {
+        id: 'direct-invisible-name',
+        conversationId: 'conv-direct-invisible',
+        role: 'human',
+        parentId: null,
+        name: '⁢',
+        content: await gzipAsync(JSON.stringify('晚安')),
+      },
+      {
+        id: 'direct-named-import',
+        conversationId: 'conv-direct-named',
+        role: 'human',
+        parentId: null,
+        name: '失真',
+        content: await gzipAsync(JSON.stringify('失真, 2026-03-09 20:17:37: 你没发现我就是不想让你练习吗')),
+      },
+      {
+        id: 'direct-already-tagged',
+        conversationId: 'conv-direct-named',
+        role: 'human',
+        parentId: 'direct-named-import',
+        name: '失真',
+        content: await gzipAsync(JSON.stringify('[speaker_id=180329167 speaker_name="失真"] 已经迁移')),
+      },
+      {
+        id: 'group-legacy',
+        conversationId: 'conv-group',
+        role: 'human',
+        parentId: null,
+        name: '秋鹤.',
+        content: await gzipAsync(JSON.stringify('祥子 是人吗')),
+      },
+    ];
+    const conversations = [
+      {
+        id: 'conv-direct-invisible',
+        bindingKey: 'personal:legacy:legacy:direct:1405359129',
+        createdBy: '1405359129',
+        title: '⁢ 的房间',
+        legacyMeta: JSON.stringify({
+          visibility: 'private',
+          members: [{ userId: '1405359129' }],
+        }),
+      },
+      {
+        id: 'conv-direct-named',
+        bindingKey: 'personal:legacy:legacy:direct:180329167',
+        createdBy: '180329167',
+        title: '180329167 的房间',
+        legacyMeta: JSON.stringify({
+          visibility: 'private',
+          members: [{ userId: '180329167' }],
+        }),
+      },
+      {
+        id: 'conv-group',
+        bindingKey: 'custom:legacy:room:110',
+        createdBy: '1405359129',
+        title: '群聊房间',
+        legacyMeta: JSON.stringify({
+          visibility: 'template_clone',
+          groups: ['1091610889'],
+          members: [{ userId: '1405359129' }, { userId: '241389951' }],
+        }),
+      },
+    ];
+    const updates: Array<{ table: string; query: Record<string, unknown>; update: Record<string, unknown> }> = [];
+    const database = {
+      get: async (table: string, query: Record<string, unknown>) => {
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        return rows.filter((row) =>
+          Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value),
+        );
+      },
+      set: async (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => {
+        updates.push({ table, query, update });
+        const rows = table === 'chatluna_conversation' ? conversations : messages;
+        for (const row of rows) {
+          if (Object.entries(query).every(([key, value]) => (row as Record<string, unknown>)[key] === value)) {
+            Object.assign(row, update);
+          }
+        }
+      },
+      remove: async () => undefined,
+    };
+
+    await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
+      scanned: 4,
+      migrated: 2,
+      structuredRowsMigrated: 0,
+      legacyDirectHumanRowsTagged: 2,
+      submitReplyPlansMigrated: 0,
+      emptySubmitReplyPlanToolsRemoved: 0,
+      protocolViolationPromptsRemoved: 0,
+      failedToolCallErrorRowsRemoved: 0,
+      emptyAssistantRowsRemoved: 0,
+    });
+
+    expect(updates).toEqual([
+      {
+        table: 'chatluna_message',
+        query: { id: 'direct-invisible-name' },
+        update: { content: expect.any(Buffer) },
+      },
+      {
+        table: 'chatluna_message',
+        query: { id: 'direct-named-import' },
+        update: { content: expect.any(Buffer) },
+      },
+    ]);
+    await expect(
+      gunzipAsync(messages.find((row) => row.id === 'direct-invisible-name')!.content).then((value) => value.toString()),
+    ).resolves.toBe(JSON.stringify('[speaker_id=1405359129 speaker_name="1405359129"] 晚安'));
+    await expect(
+      gunzipAsync(messages.find((row) => row.id === 'direct-named-import')!.content).then((value) => value.toString()),
+    ).resolves.toBe(JSON.stringify('[speaker_id=180329167 speaker_name="失真"] 你没发现我就是不想让你练习吗'));
+    await expect(
+      gunzipAsync(messages.find((row) => row.id === 'direct-already-tagged')!.content).then((value) => value.toString()),
+    ).resolves.toBe(JSON.stringify('[speaker_id=180329167 speaker_name="失真"] 已经迁移'));
+    await expect(
+      gunzipAsync(messages.find((row) => row.id === 'group-legacy')!.content).then((value) => value.toString()),
+    ).resolves.toBe(JSON.stringify('祥子 是人吗'));
   });
 
   it('collapses legacy submit_reply_plan tool-call history into visible assistant text', async () => {
@@ -524,9 +653,10 @@ describe('chatluna prompt pollution regression', () => {
     };
 
     await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
-      scanned: 1,
+      scanned: 5,
       migrated: 3,
       structuredRowsMigrated: 0,
+      legacyDirectHumanRowsTagged: 0,
       submitReplyPlansMigrated: 1,
       emptySubmitReplyPlanToolsRemoved: 1,
       protocolViolationPromptsRemoved: 1,
@@ -628,9 +758,10 @@ describe('chatluna prompt pollution regression', () => {
     };
 
     await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
-      scanned: 2,
+      scanned: 4,
       migrated: 2,
       structuredRowsMigrated: 0,
+      legacyDirectHumanRowsTagged: 0,
       submitReplyPlansMigrated: 0,
       emptySubmitReplyPlanToolsRemoved: 0,
       protocolViolationPromptsRemoved: 0,
@@ -730,9 +861,10 @@ describe('chatluna prompt pollution regression', () => {
     };
 
     await expect(migrateStructuredReplyHistoryRows(database)).resolves.toEqual({
-      scanned: 3,
+      scanned: 6,
       migrated: 3,
       structuredRowsMigrated: 0,
+      legacyDirectHumanRowsTagged: 0,
       submitReplyPlansMigrated: 0,
       emptySubmitReplyPlanToolsRemoved: 0,
       protocolViolationPromptsRemoved: 0,
