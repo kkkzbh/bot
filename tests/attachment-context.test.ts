@@ -320,6 +320,7 @@ describe('attachment multimodal projection', () => {
 
     expect(result.projections).toHaveLength(2);
     expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.getType()).toBe('system');
     expect(typeof result.messages[0]?.content).toBe('string');
     expect(String(result.messages[0]?.content)).toContain('历史附件引用上下文');
     expect(String(result.messages[0]?.content)).toContain('att_pdf01');

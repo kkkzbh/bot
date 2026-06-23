@@ -1,6 +1,7 @@
 import {
   BaseMessage,
   HumanMessage,
+  SystemMessage,
   type MessageContent,
   type MessageContentComplex,
 } from '@langchain/core/messages';
@@ -715,7 +716,7 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
     const projectionText = createProjectionText(projections, skipped);
     return {
       messages: [
-        new HumanMessage({
+        new SystemMessage({
           content: projectionText,
         }),
       ],
