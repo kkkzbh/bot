@@ -3,6 +3,11 @@ import { AIMessage } from '@langchain/core/messages';
 import { Logger, type Context, type Session } from 'koishi';
 import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
 import { registerPromptFragment } from '../shared/prompt-context/index.js';
+import {
+  createChatLunaHistoryWriter,
+  type ChatLunaHistoryServiceLike,
+  type ChatLunaHistoryWriter,
+} from '../shared/chatluna-history.js';
 import type { ReplyTransportPlan } from '../shared/outbound/index.js';
 import { normalizeMentionLikeText } from '../shared/mention-text.js';
 import { resolveSessionDisplayName } from '../shared/session/index.js';
@@ -84,7 +89,7 @@ export type AffinityDatabaseLike = {
   set(table: string, query: Record<string, unknown>, data: Record<string, unknown>): Promise<unknown>;
   create(table: string, row: Record<string, unknown>): Promise<Record<string, unknown>>;
   remove(table: string, query: Record<string, unknown>): Promise<unknown>;
-  upsert?: (table: string, rows: Record<string, unknown>[], keys?: string[]) => Promise<unknown>;
+  upsert: (table: string, rows: Record<string, unknown>[], keys?: string[]) => Promise<unknown>;
 };
 
 type AffinityBotLike = {
@@ -117,7 +122,7 @@ type ChatLunaConversationRecord = {
   autoTitle?: boolean | number | null;
 };
 
-type ChatLunaHistoryLike = {
+type ChatLunaHistoryLike = ChatLunaHistoryServiceLike & {
   chat?: (
     session: Session,
     conversation: AffinityProactiveChatLunaConversation,
@@ -130,7 +135,6 @@ type ChatLunaHistoryLike = {
       toolMask?: unknown;
     },
   ) => Promise<{ content?: unknown; additional_kwargs?: Record<string, unknown> } | null | undefined>;
-  config?: unknown;
   contextManager?: {
     inject: (options: {
       name: string;
@@ -148,7 +152,7 @@ type ChatHistoryWriterResolution =
   | {
       ok: true;
       conversationId: string;
-      addMessages: (messages: unknown[]) => Promise<void>;
+      addMessages: ChatLunaHistoryWriter['addMessages'];
     }
   | {
       ok: false;
@@ -884,26 +888,17 @@ export class AffinityService implements AffinityServiceLike {
       };
     }
 
-    const historyModule = require('koishi-plugin-chatluna/llm-core/memory/message') as {
-      KoishiChatMessageHistory: new (
-        ctx: unknown,
-        conversationId: string,
-        maxMessagesCount: number,
-        chatluna: unknown,
-      ) => { addMessages: (messages: unknown[]) => Promise<void> };
-    };
-    const { KoishiChatMessageHistory } = historyModule;
-    const history = new KoishiChatMessageHistory(
-      { database: this.database, logger } as never,
-      normalizedConversationId,
-      10_000,
-      chatluna as never,
-    );
+    const history = await createChatLunaHistoryWriter({
+      database: this.database,
+      logger,
+      conversationId: normalizedConversationId,
+      chatluna,
+    });
 
     return {
       ok: true,
       conversationId: normalizedConversationId,
-      addMessages: (messages) => history.addMessages(messages as never),
+      addMessages: (messages) => history.addMessages(messages),
     };
   }
 

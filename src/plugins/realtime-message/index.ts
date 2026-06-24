@@ -32,6 +32,12 @@ import {
   type QqbotChatLunaContextOptionsLike,
   type QqbotChatLunaRoomLike,
 } from '../shared/chatluna-conversation.js';
+import {
+  createChatLunaHistoryWriter,
+  type ChatLunaHistoryDatabaseLike,
+  type ChatLunaHistoryServiceLike,
+  type ChatLunaHistoryWriter,
+} from '../shared/chatluna-history.js';
 
 export { buildGroupScopeKey, realtimeMessageCache };
 
@@ -64,27 +70,10 @@ type MiddlewareContextLike = {
   options?: QqbotChatLunaContextOptionsLike;
 };
 
-type DatabaseLike = {
-  get: (table: string, query: Record<string, unknown>, fields?: string[]) => Promise<Array<Record<string, unknown>>>;
-};
-
-type ChatHistoryWriter = {
-  addMessages: (messages: unknown[]) => Promise<void>;
-};
-
-type ChatHistoryModule = {
-  KoishiChatMessageHistory: new (
-    ctx: unknown,
-    conversationId: string,
-    maxMessagesCount: number,
-    chatluna: unknown,
-  ) => ChatHistoryWriter;
-};
-
 type ContextWithRealtime = {
   featurePolicy?: FeaturePolicyServiceLike;
-  database?: DatabaseLike;
-  chatluna: {
+  database?: ChatLunaHistoryDatabaseLike;
+  chatluna: ChatLunaHistoryServiceLike & {
     platform?: {
       registerTool?: (...args: any[]) => () => void;
     };
@@ -106,7 +95,7 @@ type ContextWithRealtime = {
 async function createChatHistoryWriter(
   serviceCtx: ContextWithRealtime,
   conversationId: string,
-): Promise<ChatHistoryWriter> {
+): Promise<ChatLunaHistoryWriter> {
   const database = serviceCtx.database;
   if (!database) {
     throw new Error('realtime-message requires Koishi database service.');
@@ -117,19 +106,12 @@ async function createChatHistoryWriter(
     throw new Error(`realtime-message conversation is unavailable: ${conversationId}`);
   }
 
-  const { KoishiChatMessageHistory } = await import(
-    'koishi-plugin-chatluna/llm-core/memory/message'
-  ) as unknown as ChatHistoryModule;
-  const history = new KoishiChatMessageHistory(
-    { database, logger } as never,
+  return createChatLunaHistoryWriter({
+    database,
+    logger,
     conversationId,
-    10_000,
-    serviceCtx.chatluna as never,
-  );
-
-  return {
-    addMessages: (messages) => history.addMessages(messages as never),
-  };
+    chatluna: serviceCtx.chatluna,
+  });
 }
 
 function requireNaturalConfig(config: Config, key: keyof Config): number {
