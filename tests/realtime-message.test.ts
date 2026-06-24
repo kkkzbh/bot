@@ -253,13 +253,11 @@ function createSession(overrides: Record<string, unknown> = {}): Record<string, 
 
 function createConversation(conversationId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const model = overrides.model ?? 'openai/gpt-5.4-mini';
-  const roomId = overrides.roomId ?? 1;
   return {
     conversationId,
     effectiveModel: model,
     conversation: {
       id: conversationId,
-      legacyRoomId: roomId,
       model,
     },
   };
@@ -647,6 +645,56 @@ describe('realtime message plugin', () => {
       { type: 'text', text: '[speaker_id=u8 speaker_name="u8"]' },
       { type: 'image_url', image_url: { url: 'https://example.com/cache.png' } },
     ]);
+  });
+
+  it('does not duplicate text already preserved by the multimodal transform', async () => {
+    const { middleware, runReady, chatChainMiddlewares, addMessages, messageTransformer } = createHarness();
+    await runReady();
+    messageTransformer.transform.mockResolvedValueOnce({
+      content: [
+        { type: 'text', text: '帮我看下[image:https://example.com/mixed.png]这个' },
+        { type: 'image_url', image_url: { url: 'https://example.com/mixed.png' } },
+      ],
+    });
+
+    await middleware(
+      createSession({
+        userId: 'u8',
+        messageId: 'msg-image-text-mixed',
+        content: '帮我看下这个',
+        stripped: { content: '帮我看下这个' },
+        elements: [
+          { type: 'text', attrs: { content: '帮我看下' }, children: [] },
+          { type: 'img', attrs: { src: 'https://example.com/mixed.png' }, children: [] },
+          { type: 'text', attrs: { content: '这个' }, children: [] },
+        ],
+      }),
+      async () => undefined,
+    );
+
+    const promotion = chatChainMiddlewares.get('qqbot_realtime_message_promotion');
+    const triggerSession = createSession({
+      userId: 'u9',
+      messageId: 'msg-trigger-image-text-mixed',
+      content: '触发一下',
+    });
+
+    await middleware(triggerSession, async () => {
+      await promotion?.(triggerSession, {
+        options: {
+          conversation: createConversation('conv-image-text-mixed'),
+        },
+      });
+      return undefined;
+    });
+
+    const promotedCall = addMessages.mock.calls.at(0) as unknown[] | undefined;
+    const promotedMessages = (promotedCall?.[0] ?? []) as Array<{ content?: unknown }>;
+    expect(promotedMessages[0]?.content).toEqual([
+      { type: 'text', text: '[speaker_id=u8 speaker_name="u8"] 帮我看下[image:https://example.com/mixed.png]这个' },
+      { type: 'image_url', image_url: { url: 'https://example.com/mixed.png' } },
+    ]);
+    expect(JSON.stringify(promotedMessages[0]?.content)).not.toContain('帮我看下这个');
   });
 
   it('falls back to structured image urls when multimodal transform fails', async () => {

@@ -43,6 +43,7 @@ interface PromptTurnDraft {
   fragments: RegisteredPromptFragment[];
   nextOrder: number;
   started: boolean;
+  turnId: string | null;
 }
 
 const turnDrafts = new Map<string, PromptTurnDraft>();
@@ -70,10 +71,24 @@ function ensureDraft(conversationId: string): PromptTurnDraft {
       fragments: [],
       nextOrder: 0,
       started: false,
+      turnId: null,
     };
     turnDrafts.set(normalized, draft);
   }
   return draft;
+}
+
+function normalizeTurnId(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function createStartedDraft(turnId: string | null): PromptTurnDraft {
+  return {
+    fragments: [],
+    nextOrder: 0,
+    started: true,
+    turnId,
+  };
 }
 
 function normalizeSource(source: unknown): string {
@@ -201,11 +216,8 @@ function payloadToContent(payload: PromptFragmentPayload, source: string): strin
   }
 }
 
-function sectionKindForFragment(fragment: PromptFragment): string {
-  if (fragment.authority === 'assistant_state') return 'assistant_state';
-  if (fragment.authority === 'reference') return 'reference';
-  if (fragment.ttl === 'turn') return 'turn_state';
-  return 'internal_contract';
+function sectionKindForFragment(fragment: PromptFragment): PromptFragmentAuthority {
+  return fragment.authority;
 }
 
 function indentBlock(content: string, prefix = '  '): string {
@@ -219,12 +231,8 @@ function renderFragment(fragment: PromptFragment, content: string): string {
   return [
     '[qqbot-context]',
     `kind: ${sectionKindForFragment(fragment)}`,
-    `source: ${fragment.source}`,
     `title: ${fragment.title}`,
-    `authority: ${fragment.authority}`,
     `trust: ${fragment.trust}`,
-    `ttl: ${fragment.ttl}`,
-    `payload_kind: ${fragment.payload.kind}`,
     'payload:',
     indentBlock(content),
   ].join('\n');
@@ -303,32 +311,21 @@ export function compilePromptEnvelopeFromFragments(fragments: PromptFragment[]):
   return compileRegisteredFragments(normalized);
 }
 
-export function beginPromptAssemblyTurn(conversationId: string): void {
+export function beginPromptAssemblyTurn(conversationId: string, options: { turnId?: string } = {}): void {
   const normalized = normalizeConversationId(conversationId);
   if (!normalized) return;
+  const turnId = normalizeTurnId(options.turnId);
   const existing = turnDrafts.get(normalized);
   if (!existing) {
-    turnDrafts.set(normalized, {
-      fragments: [],
-      nextOrder: 0,
-      started: true,
-    });
+    turnDrafts.set(normalized, createStartedDraft(turnId));
     return;
   }
 
-  // Preserve fragments that were registered before the turn formally started
-  // (for example, reply interrupt state injected during interrupt
-  // reconciliation), but clear leftovers from an already-started stale turn.
-  if (existing.started) {
-    turnDrafts.set(normalized, {
-      fragments: [],
-      nextOrder: 0,
-      started: true,
-    });
+  if (existing.started && turnId && existing.turnId === turnId) {
     return;
   }
 
-  existing.started = true;
+  turnDrafts.set(normalized, createStartedDraft(turnId));
 }
 
 export function clearPromptAssemblyTurn(conversationId: string): void {

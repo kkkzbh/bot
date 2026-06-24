@@ -18,6 +18,7 @@ import {
   ReplyOrchestratorService,
   resolveReplyCapabilitySnapshot,
   type TurnContext,
+  type ReplySessionLike,
 } from '../reply/index.js';
 import {
   createBypassLineSplitOptions,
@@ -67,9 +68,9 @@ interface RuntimeConfig {
 }
 
 type DatabaseLike = {
-  get(table: string, query: Record<string, unknown>): Promise<any[]>;
+  get<T = Record<string, unknown>>(table: string, query: Record<string, unknown>): Promise<T[]>;
   set(table: string, query: Record<string, unknown>, data: Record<string, unknown>): Promise<unknown>;
-  create(table: string, row: Record<string, unknown>): Promise<Record<string, unknown>>;
+  create<T = Record<string, unknown>>(table: string, row: Record<string, unknown>): Promise<T>;
   remove(table: string, query: Record<string, unknown>): Promise<unknown>;
   upsert?(table: string, rows: Record<string, unknown>[], keys?: string[]): Promise<unknown>;
 };
@@ -108,7 +109,7 @@ type ChatLunaBot = BotMessageSender & {
 
 type ChatLunaServiceLike = {
   chat: (
-    session: any,
+    session: ReplySessionLike,
     room: AutomationRoomRow,
     message: ChatLunaMessage,
     event: Record<string, ((...args: any[]) => Promise<void>) | undefined>,
@@ -132,16 +133,38 @@ type ChatLunaServiceLike = {
   };
 };
 
-type ContextWithAutomation = Context & {
-  database: any;
+type AutomationServicesLike = {
+  database: DatabaseLike;
   chatluna: ChatLunaServiceLike;
   toolPolicy: ToolPolicyServiceLike;
   bots: ChatLunaBot[];
 };
 
+type ContextWithAutomation = Context & AutomationServicesLike;
+
+function automationServices(ctx: ContextWithAutomation): AutomationServicesLike {
+  return ctx as unknown as AutomationServicesLike;
+}
+
+function automationDatabase(ctx: ContextWithAutomation): DatabaseLike {
+  return automationServices(ctx).database;
+}
+
+function automationChatLuna(ctx: ContextWithAutomation): ChatLunaServiceLike {
+  return automationServices(ctx).chatluna;
+}
+
+function automationToolPolicy(ctx: ContextWithAutomation): ToolPolicyServiceLike {
+  return automationServices(ctx).toolPolicy;
+}
+
+function automationBots(ctx: ContextWithAutomation): ChatLunaBot[] {
+  return automationServices(ctx).bots ?? [];
+}
+
 type SourceRoomContext = {
   room: AutomationRoomRow;
-  session: Session;
+  session: ReplySessionLike;
 };
 
 type ReplyAutomationRoom = Omit<AutomationRoomRow, 'conversationId'> & {
@@ -161,7 +184,7 @@ type AutomationToolDeps = {
 
 type ToolCurrentRoom = {
   room: AutomationRoomRow;
-  session: Session;
+  session: ReplySessionLike;
   conversationId: string;
 };
 
@@ -342,15 +365,13 @@ function createAutomationPrompt(job: AutomationJob, triggeredAt: number): string
 }
 
 async function getJobById(ctx: ContextWithAutomation, id: number): Promise<AutomationJob | null> {
-  const db = (ctx as any).database;
-  const rows = await db.get('automation_job', { id });
-  const job = rows[0] as AutomationJob | undefined;
+  const rows = await automationDatabase(ctx).get<AutomationJob>('automation_job', { id });
+  const job = rows[0];
   return job ?? null;
 }
 
 async function createJobRun(ctx: ContextWithAutomation, jobId: number, triggeredAt: number): Promise<AutomationJobRun> {
-  const db = (ctx as any).database;
-  const created = (await db.create('automation_job_run', {
+  const created = await automationDatabase(ctx).create<AutomationJobRun>('automation_job_run', {
     jobId,
     triggeredAt,
     startedAt: Date.now(),
@@ -360,7 +381,7 @@ async function createJobRun(ctx: ContextWithAutomation, jobId: number, triggered
     outputText: null,
     outputPayload: null,
     deliveryReceipt: null,
-  })) as unknown as AutomationJobRun;
+  });
   return created;
 }
 
@@ -369,8 +390,7 @@ async function finishJobRun(
   runId: number,
   patch: Pick<AutomationJobRun, 'status' | 'error' | 'outputText' | 'outputPayload' | 'deliveryReceipt'>,
 ): Promise<void> {
-  const db = (ctx as any).database;
-  await db.set(
+  await automationDatabase(ctx).set(
     'automation_job_run',
     { id: runId },
     {
@@ -381,8 +401,7 @@ async function finishJobRun(
 }
 
 async function markInterruptedRunsFailed(ctx: ContextWithAutomation): Promise<void> {
-  const db = (ctx as any).database;
-  await db.set(
+  await automationDatabase(ctx).set(
     'automation_job_run',
     { status: 'running' },
     {
@@ -394,8 +413,7 @@ async function markInterruptedRunsFailed(ctx: ContextWithAutomation): Promise<vo
 }
 
 async function resolveCurrentRoom(ctx: ContextWithAutomation, conversationId: string): Promise<AutomationRoomRow | null> {
-  const db = (ctx as any).database;
-  const rows = (await db.get('chathub_room', { conversationId })) as AutomationRoomRow[];
+  const rows = await automationDatabase(ctx).get<AutomationRoomRow>('chathub_room', { conversationId });
   return rows[0] ?? null;
 }
 
@@ -430,8 +448,7 @@ function resolveJobScope(session: Session): TaskScope {
 }
 
 async function countAliveJobsForUser(ctx: ContextWithAutomation, userId: string): Promise<number> {
-  const db = (ctx as any).database;
-  const jobs = (await db.get('automation_job', { creatorId: userId })) as AutomationJob[];
+  const jobs = await automationDatabase(ctx).get<AutomationJob>('automation_job', { creatorId: userId });
   return jobs.filter((job) => job.status === 'active' || job.status === 'paused').length;
 }
 
@@ -459,8 +476,7 @@ async function createAutomationJob(
   }
 
   const now = Date.now();
-  const db = (ctx as any).database;
-  const created = (await db.create('automation_job', {
+  const created = await automationDatabase(ctx).create<AutomationJob>('automation_job', {
     creatorId: args.session.userId,
     scope: resolveJobScope(args.session),
     channelId: args.session.channelId,
@@ -479,7 +495,7 @@ async function createAutomationJob(
     status: 'active',
     createdAt: now,
     updatedAt: now,
-  })) as unknown as AutomationJob;
+  });
 
   if (created.kind === 'cron') {
     deps.lifecycle.registerCronJob(created);
@@ -489,21 +505,19 @@ async function createAutomationJob(
 }
 
 async function getScopedJobs(ctx: ContextWithAutomation, roomId: number, userId: string): Promise<AutomationJob[]> {
-  const db = (ctx as any).database;
-  const jobs = (await db.get('automation_job', {
+  const jobs = await automationDatabase(ctx).get<AutomationJob>('automation_job', {
     sourceRoomId: roomId,
     creatorId: userId,
-  })) as AutomationJob[];
+  });
   return jobs.filter((job) => job.status !== 'deleted').sort((left, right) => left.id - right.id);
 }
 
 async function getScopedJob(ctx: ContextWithAutomation, roomId: number, userId: string, id: number): Promise<AutomationJob | null> {
-  const db = (ctx as any).database;
-  const [job] = (await db.get('automation_job', {
+  const [job] = await automationDatabase(ctx).get<AutomationJob>('automation_job', {
     id,
     sourceRoomId: roomId,
     creatorId: userId,
-  })) as AutomationJob[];
+  });
   return job ?? null;
 }
 
@@ -664,7 +678,7 @@ async function updateAutomationJob(
     deps.lifecycle.disposeCronJob(job.id);
   }
 
-  await (deps.ctx as any).database.set('automation_job', { id: job.id }, patch);
+  await automationDatabase(deps.ctx).set('automation_job', { id: job.id }, patch);
 
   if (updated.kind === 'cron' && updated.status === 'active') {
     deps.lifecycle.registerCronJob(updated);
@@ -684,8 +698,7 @@ function stringifyReceipt(receipts: unknown[]): string | null {
 }
 
 async function getNextRoomId(ctx: ContextWithAutomation): Promise<number> {
-  const db = (ctx as any).database;
-  const rooms = (await db.get('chathub_room', {} as Record<string, never>)) as AutomationRoomRow[];
+  const rooms = await automationDatabase(ctx).get<AutomationRoomRow>('chathub_room', {} as Record<string, never>);
   const maxRoomId = rooms.reduce((current, room) => Math.max(current, Number(room.roomId ?? 0)), 0);
   return maxRoomId + 1;
 }
@@ -695,14 +708,14 @@ async function createConversationRoomRecord(
   session: Session,
   room: AutomationRoomRow,
 ): Promise<void> {
-  const db = (ctx as any).database;
-  await db.create('chathub_room', room);
-  await db.create('chathub_room_member', {
+  const database = automationDatabase(ctx);
+  await database.create('chathub_room', room);
+  await database.create('chathub_room_member', {
     userId: session.userId,
     roomId: room.roomId,
     roomPermission: session.userId === room.roomMasterId ? 'owner' : 'member',
   });
-  await db.upsert?.('chathub_user', [
+  await database.upsert?.('chathub_user', [
     {
       userId: session.userId,
       defaultRoomId: room.roomId,
@@ -710,7 +723,7 @@ async function createConversationRoomRecord(
     },
   ]);
   if (!session.isDirect && session.guildId) {
-    await db.create('chathub_room_group_member', {
+    await database.create('chathub_room_group_member', {
       groupId: session.guildId,
       roomId: room.roomId,
       roomVisibility: room.visibility,
@@ -719,15 +732,15 @@ async function createConversationRoomRecord(
 }
 
 async function deleteConversationRoomRecord(ctx: ContextWithAutomation, room: AutomationRoomRow): Promise<void> {
-  const db = (ctx as any).database;
-  await db.remove('chathub_room_group_member', { roomId: room.roomId });
-  await db.remove('chathub_room_member', { roomId: room.roomId });
-  await db.remove('chathub_user', { defaultRoomId: room.roomId });
+  const database = automationDatabase(ctx);
+  await database.remove('chathub_room_group_member', { roomId: room.roomId });
+  await database.remove('chathub_room_member', { roomId: room.roomId });
+  await database.remove('chathub_user', { defaultRoomId: room.roomId });
   if (room.conversationId) {
-    await db.remove('chatluna_message', { conversationId: room.conversationId });
-    await db.remove('chatluna_conversation', { id: room.conversationId });
+    await database.remove('chatluna_message', { conversationId: room.conversationId });
+    await database.remove('chatluna_conversation', { id: room.conversationId });
   }
-  await db.remove('chathub_room', { roomId: room.roomId });
+  await database.remove('chathub_room', { roomId: room.roomId });
 }
 
 export async function sendBotMessageByLines(
@@ -778,7 +791,7 @@ export async function sendBotMessageByLines(
 }
 
 function resolveTaskBot(ctx: ContextWithAutomation, job: AutomationJob): ChatLunaBot | null {
-  const bots = ((ctx as any).bots ?? []) as ChatLunaBot[];
+  const bots = automationBots(ctx);
   return (
     bots.find((bot) => bot.selfId === job.botSelfId && bot.platform === job.platform) ??
     bots.find((bot) => bot.platform === job.platform) ??
@@ -786,12 +799,12 @@ function resolveTaskBot(ctx: ContextWithAutomation, job: AutomationJob): ChatLun
   );
 }
 
-function createExecutionSession(bot: ChatLunaBot, job: AutomationJob): Session {
+function createExecutionSession(bot: ChatLunaBot, job: AutomationJob): ReplySessionLike {
   const event = sanitizeEventSnapshot(job.event) ?? {};
   const created = typeof bot.session === 'function' ? bot.session(event) : ({} as Session);
-  const session = created as unknown as Session & { event?: Record<string, unknown> };
-  session.event = event as any;
+  const session = created as ReplySessionLike & { event?: Record<string, unknown> };
   Object.assign(session, {
+    event,
     platform: job.platform,
     channelId: job.channelId,
     guildId: job.guildId || undefined,
@@ -821,15 +834,14 @@ async function resolveSourceRoomContext(ctx: ContextWithAutomation, job: Automat
 }
 
 async function getCurrentSourceRoom(ctx: ContextWithAutomation, roomId: number): Promise<AutomationRoomRow | null> {
-  const db = (ctx as any).database;
-  const rows = (await db.get('chathub_room', { roomId })) as AutomationRoomRow[];
+  const rows = await automationDatabase(ctx).get<AutomationRoomRow>('chathub_room', { roomId });
   return rows[0] ?? null;
 }
 
 async function createTemporaryExecutionRoom(
   ctx: ContextWithAutomation,
   sourceRoom: AutomationRoomRow,
-  session: Session,
+  session: ReplySessionLike,
   job: AutomationJob,
 ): Promise<AutomationRoomRow> {
   const tempRoom: AutomationRoomRow = {
@@ -851,12 +863,11 @@ async function resolveAutomationToolMask(
   session: Session,
   sourceRoom: AutomationRoomRow,
 ): Promise<ToolMask | undefined> {
-  const { toolPolicy } = ctx as unknown as { toolPolicy: ToolPolicyServiceLike };
-  return toolPolicy.resolveToolMask(session as any, 'automation', {
+  return automationToolPolicy(ctx).resolveToolMask(session, 'automation', {
     roomId: sourceRoom.roomId,
     conversationId: sourceRoom.conversationId?.trim() || null,
     groupId: session.guildId ?? null,
-  } as any);
+  });
 }
 
 async function loadRecentConversationTurns(
@@ -867,19 +878,19 @@ async function loadRecentConversationTurns(
   const normalizedConversationId = conversationId?.trim();
   if (!normalizedConversationId) return [];
 
-  const db = (ctx as any).database;
-  const [conversation] = (await db.get('chatluna_conversation', { id: normalizedConversationId })) as Array<{
+  const database = automationDatabase(ctx);
+  const [conversation] = await database.get<{
     id?: string;
     latestMessageId?: string | null;
-  }>;
+  }>('chatluna_conversation', { id: normalizedConversationId });
   if (!conversation?.id || !conversation.latestMessageId) return [];
 
-  const rows = (await db.get('chatluna_message', { conversationId: normalizedConversationId })) as Array<{
+  const rows = await database.get<{
     id: string;
     role?: string | null;
     parentId?: string | null;
     content?: unknown;
-  }>;
+  }>('chatluna_message', { conversationId: normalizedConversationId });
   const messageMap = new Map(rows.map((row) => [row.id, row]));
   const turns: Array<{ role: 'human' | 'ai'; text: string }> = [];
   let cursor: string | null | undefined = conversation.latestMessageId;
@@ -961,7 +972,7 @@ function injectAutomationPromptFragments(
     content: string;
     additional_kwargs?: Record<string, unknown>;
   }>;
-  const contextManager = ((ctx as any).chatluna as { contextManager?: { inject: (options: any) => void } } | undefined)?.contextManager;
+  const contextManager = automationChatLuna(ctx).contextManager;
   if (!contextManager) {
     throw new Error('automation prompt injection requires chatluna.contextManager.');
   }
@@ -985,7 +996,7 @@ async function prepareAutomationExecutionContext(
   ctx: ContextWithAutomation,
   sourceRoom: AutomationRoomRow,
   tempRoom: AutomationRoomRow,
-  session: Session,
+  session: ReplySessionLike,
 ): Promise<AutomationCapabilitySnapshot> {
   const stickerArtifacts = resolveStickerCapabilityArtifacts(sourceRoom.preset?.trim() || null);
   const currentState = ((session as Session & { state?: Record<string, unknown> }).state ?? {}) as Record<string, unknown>;
@@ -995,11 +1006,11 @@ async function prepareAutomationExecutionContext(
   const voiceRuntime = createVoiceRuntimeConfigFromEnv();
   const replyCapability = await resolveReplyCapabilitySnapshot({
     runtime: voiceRuntime,
-    session: session as never,
+    session,
     voiceOutputEnabled: voiceRuntime.outputEnabled,
     waitForProbe: true,
   });
-  const capabilitySnapshot = buildTurnCapabilitySnapshot(session as never, replyCapability);
+  const capabilitySnapshot = buildTurnCapabilitySnapshot(session, replyCapability);
   const recentContextTurns = await loadRecentConversationTurns(ctx, sourceRoom.conversationId);
   const recentContextFragment = buildAutomationRecentContextFragment(recentContextTurns);
   const fragments = recentContextFragment ? [recentContextFragment] : [];
@@ -1026,15 +1037,13 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
     const toolMask = await resolveAutomationToolMask(ctx, source.session, source.room);
     const message: ChatLunaMessage = {
       content: createAutomationPrompt(job, run.triggeredAt),
-      additional_kwargs: {},
     };
-    const replyOutputContract = applyReplyOutputContract(replyRoom, message as never, {
+    const replyOutputContract = applyReplyOutputContract(replyRoom, message, {
       replyMode: 'automation',
       capabilitySnapshot,
     });
 
-    const chatluna = (ctx as any).chatluna;
-    const response = await chatluna.chat(
+    const response = await automationChatLuna(ctx).chat(
       source.session,
       tempRoom,
       message,
@@ -1045,8 +1054,8 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
       `automation-job:${job.id}:${run.id}`,
       toolMask,
     );
-    const turnInput = buildReplyTurnInput(source.session as never, replyRoom, message);
-    const orchestration = await automationReplyOrchestrator.handle(turnInput, source.session as never, {
+    const turnInput = buildReplyTurnInput(source.session, replyRoom, message);
+    const orchestration = await automationReplyOrchestrator.handle(turnInput, source.session, {
       responseMessage: response,
       outputProtocol: replyOutputContract?.protocol,
       capabilitySnapshot,
@@ -1096,7 +1105,7 @@ async function executeAutomationJobRun(ctx: ContextWithAutomation, job: Automati
     const voiceRuntime = createVoiceRuntimeConfigFromEnv();
     const delivery = await deliverStandaloneReplyPlan({
       runtime: voiceRuntime,
-      session: source.session as never,
+      session: source.session,
       plan,
     });
     if (delivery.status === 'interrupted') {
@@ -1153,7 +1162,7 @@ async function executeAutomationJob(ctx: ContextWithAutomation, jobId: number): 
     logger.warn('automation job #%d failed: %s', job.id, (error as Error).message);
   } finally {
     if (job.kind === 'once') {
-      await (ctx as any).database.set('automation_job', { id: job.id }, { status: 'done', updatedAt: Date.now() });
+      await automationDatabase(ctx).set('automation_job', { id: job.id }, { status: 'done', updatedAt: Date.now() });
     }
   }
 }
@@ -1284,7 +1293,7 @@ class AutomationPauseTool extends StructuredTool {
     }
 
     this.deps.lifecycle.disposeCronJob(job.id);
-    await (this.deps.ctx as any).database.set('automation_job', { id: job.id }, { status: 'paused', updatedAt: Date.now() });
+    await automationDatabase(this.deps.ctx).set('automation_job', { id: job.id }, { status: 'paused', updatedAt: Date.now() });
     return `已暂停自动化任务 #${job.id}。`;
   }
 }
@@ -1307,7 +1316,7 @@ class AutomationResumeTool extends StructuredTool {
       throw new Error(`未找到自动化任务 #${input.taskId}。`);
     }
 
-    await (this.deps.ctx as any).database.set('automation_job', { id: job.id }, { status: 'active', updatedAt: Date.now() });
+    await automationDatabase(this.deps.ctx).set('automation_job', { id: job.id }, { status: 'active', updatedAt: Date.now() });
     if (job.kind === 'cron') {
       this.deps.lifecycle.registerCronJob({ ...job, status: 'active' });
     }
@@ -1335,14 +1344,14 @@ class AutomationDeleteTool extends StructuredTool {
     }
 
     this.deps.lifecycle.disposeCronJob(job.id);
-    await (this.deps.ctx as any).database.set('automation_job', { id: job.id }, { status: 'deleted', updatedAt: Date.now() });
+    await automationDatabase(this.deps.ctx).set('automation_job', { id: job.id }, { status: 'deleted', updatedAt: Date.now() });
     return `已删除自动化任务 #${job.id}。`;
   }
 }
 
 function registerAutomationTools(ctx: ContextWithAutomation, runtime: RuntimeConfig, lifecycle: AutomationToolDeps['lifecycle']): Array<() => void> {
   const deps: AutomationToolDeps = { ctx, runtime, lifecycle };
-  const platform = (ctx as any).chatluna.platform;
+  const platform = automationChatLuna(ctx).platform;
   return [
     platform.registerTool(
       AUTOMATION_TOOL_NAMES.create,
@@ -1457,11 +1466,11 @@ export function apply(ctx: Context, config: Config): void {
   };
 
   const tickOnceJobs = async (): Promise<void> => {
-    const dueJobs = (await (serviceCtx as any).database.get('automation_job', {
+    const dueJobs = await automationDatabase(serviceCtx).get<AutomationJob>('automation_job', {
       kind: 'once',
       status: 'active',
       runAt: { $lte: Date.now() },
-    })) as AutomationJob[];
+    });
 
     for (const job of dueJobs) {
       await runJobIfNeeded(job.id);
@@ -1475,10 +1484,10 @@ export function apply(ctx: Context, config: Config): void {
       disposeCronJob,
     });
 
-    const cronJobs = (await (serviceCtx as any).database.get('automation_job', {
+    const cronJobs = await automationDatabase(serviceCtx).get<AutomationJob>('automation_job', {
       kind: 'cron',
       status: 'active',
-    })) as AutomationJob[];
+    });
     cronJobs.forEach(registerCronJob);
 
     onceTimer = setInterval(() => {

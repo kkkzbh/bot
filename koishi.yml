@@ -127,15 +127,8 @@ plugins:
       stickerDir: ${{ env.CHATLUNA_STICKER_DIR || './data/chathub/stickers' }}
     ./dist/plugins/attachment:attachment:
       maxInjectCount: ${{ +env.QQBOT_ATTACHMENT_MAX_INJECT_COUNT || 5 }}
-      maxInjectTotalBytes: ${{ +env.QQBOT_ATTACHMENT_MAX_INJECT_TOTAL_BYTES || 16777216 }}
-      maxInjectPerFileBytes: ${{ +env.QQBOT_ATTACHMENT_MAX_INJECT_PER_FILE_BYTES || 6291456 }}
-      maxPdfPreviewPagesPerFile: ${{ +env.QQBOT_ATTACHMENT_MAX_PDF_PREVIEW_PAGES_PER_FILE || 6 }}
-      maxPdfPreviewPagesTotal: ${{ +env.QQBOT_ATTACHMENT_MAX_PDF_PREVIEW_PAGES_TOTAL || 15 }}
       maxTextCharsPerFile: ${{ +env.QQBOT_ATTACHMENT_MAX_TEXT_CHARS_PER_FILE || 24000 }}
       recentCatalogSize: ${{ +env.QQBOT_ATTACHMENT_RECENT_CATALOG_SIZE || 12 }}
-      historyWindow: ${{ +env.QQBOT_ATTACHMENT_HISTORY_WINDOW || 80 }}
-      historyTriggerCount: ${{ +env.QQBOT_ATTACHMENT_HISTORY_TRIGGER_COUNT || 120 }}
-      historyTokenRatio: ${{ +env.QQBOT_ATTACHMENT_HISTORY_TOKEN_RATIO || 0.7 }}
       projectionTextChars: ${{ +env.QQBOT_ATTACHMENT_PROJECTION_TEXT_CHARS || 1200 }}
       replayTextChars: ${{ +env.QQBOT_ATTACHMENT_REPLAY_TEXT_CHARS || 4000 }}
       replayMaxRefs: ${{ +env.QQBOT_ATTACHMENT_REPLAY_MAX_REFS || 5 }}

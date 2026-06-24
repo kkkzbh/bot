@@ -253,8 +253,6 @@ function createConversation(conversationId = 'conv-affinity'): Row {
     compression: null,
     archivedAt: null,
     archiveId: null,
-    legacyRoomId: null,
-    legacyMeta: null,
     autoTitle: false,
   };
 }
@@ -931,7 +929,10 @@ describe('affinity service random history sync', () => {
     const chat = vi.fn(async (_session: any, conversation: any) => {
       tempConversationId = conversation.id;
       expect(tempConversationId).toMatch(/^affinity-proactive-/u);
-      expect(dbRef?.tables.chatluna_conversation.some((row) => row.id === tempConversationId)).toBe(true);
+      const tempConversation = dbRef?.tables.chatluna_conversation.find((row) => row.id === tempConversationId);
+      expect(tempConversation).toBeTruthy();
+      expect(tempConversation).not.toHaveProperty('legacyRoomId');
+      expect(tempConversation).not.toHaveProperty('legacyMeta');
       return {
         content: JSON.stringify({
           decision: 'reply',
@@ -1204,7 +1205,12 @@ describe('affinity service random history sync', () => {
       value: expect.arrayContaining([
         expect.objectContaining({
           role: 'system',
-          content: expect.stringContaining('qqbot_affinity_proactive_task'),
+          content: expect.stringContaining('Affinity Proactive Task'),
+          additional_kwargs: expect.objectContaining({
+            qqbot_context: expect.objectContaining({
+              source: 'qqbot_affinity_proactive_task',
+            }),
+          }),
         }),
       ]),
     }));
@@ -1484,14 +1490,17 @@ describe('affinity service random history sync', () => {
       .find((fragment) => fragment.source === 'qqbot_affinity')
       ?.content ?? '';
 
-    expect(content).toContain('activeRandomThreads');
-    expect(content).toContain('random:daily_greeting');
+    expect(content).toContain('activeProactiveThreads');
     expect(content).toContain(RANDOM_MESSAGE);
-    expect(content).toContain('"planId": 2');
     expect(content).toContain('"direction": "daily_greeting"');
-    expect(content).toContain('contextSeedSummary');
+    expect(content).toContain('contextSummary');
+    expect(content).toContain('eventTypeHint');
     expect(content).toContain('answer_random_prompt');
-    expect(content).not.toContain('"payload": {}');
+    expect(content).not.toContain('activeRandomThreads');
+    expect(content).not.toContain('random:daily_greeting');
+    expect(content).not.toContain('"planId"');
+    expect(content).not.toContain('chatluna_provider_reply');
+    expect(content).not.toContain('"reasonCode"');
     expect(content).toContain('eventResult');
   });
 

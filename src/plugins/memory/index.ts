@@ -426,7 +426,7 @@ export function apply(ctx: Context, config: Config): void {
       .after('qqbot_memory')
       .after('qqbot_sticker_policy')
       .after('qqbot_reply_transport_policy')
-      .after('chatluna_time_context')
+      .after('qqbot_turn_context')
       .before('lifecycle-handle_command');
 
     memoryRuntimeRegistered = true;

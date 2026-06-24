@@ -24,7 +24,7 @@ describe('chatluna prompt pollution regression', () => {
   it('keeps qqbot prompt envelope as system messages only', () => {
     beginPromptAssemblyTurn('conv-prompt-pollution');
     registerPromptFragment('conv-prompt-pollution', {
-      source: 'chatluna_time_context',
+      source: 'qqbot_turn_context',
       title: 'User Turn Metadata',
       authority: 'reference',
       trust: 'trusted',
@@ -64,7 +64,7 @@ describe('chatluna prompt pollution regression', () => {
         },
         [
           {
-            source: 'chatluna_time_context',
+            source: 'qqbot_turn_context',
             title: 'User Turn Metadata',
             authority: 'reference',
             trust: 'trusted',
@@ -732,7 +732,7 @@ describe('chatluna prompt pollution regression', () => {
     ).resolves.toBe(JSON.stringify('祥子 是人吗'));
   });
 
-  it('removes transient qqbot request metadata while preserving durable speaker and attachment metadata', async () => {
+  it('removes transient qqbot request metadata while preserving durable speaker metadata', async () => {
     const messages = [
       {
         id: 'human-transient',
@@ -820,7 +820,6 @@ describe('chatluna prompt pollution regression', () => {
         isDirect: false,
         preformatted: true,
       },
-      qqbot_attachment_refs: [{ refId: 'att_1', kind: 'image' }],
     });
   });
 

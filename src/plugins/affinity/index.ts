@@ -414,7 +414,7 @@ export function apply(ctx: Context, config: Config): void {
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       })
       .after('resolve_conversation')
-      .after('chatluna_time_context')
+      .after('qqbot_turn_context')
       .before('lifecycle-handle_command');
     chatlunaHooksRegistered = true;
     logger.info('affinity prompt middleware registered.');

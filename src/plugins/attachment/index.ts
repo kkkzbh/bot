@@ -9,7 +9,7 @@ import { StructuredTool } from '@langchain/core/tools';
 import { Context, Logger, Schema } from 'koishi';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -24,7 +24,6 @@ import { transcribeAudio } from '../shared/voice/input.js';
 import {
   createAmbiguousResolutionText,
   createAttachmentCatalogText,
-  createResolutionText,
   mentionsAttachmentReference,
   resolveReferencedAttachmentsFromCatalog,
 } from './resolution.js';
@@ -39,7 +38,6 @@ import type {
   QqbotAttachmentReplaySkip,
   QqbotAttachmentRecord,
   QqbotAttachmentRef,
-  QqbotRequestBudgetPolicy,
   QqbotAttachmentServiceLike,
   QqbotResolvedAttachmentSelection,
 } from '../../types/attachment.js';
@@ -48,45 +46,15 @@ import '../../types/attachment.js';
 const logger = new Logger('qqbot-attachment');
 const execFileAsync = promisify(execFile);
 const CHAT_CHAIN_CONTINUE = 2;
-const DEFAULT_IMAGE_DETAIL = 'high';
 const DEFAULT_REPLAY_MAX_REFS = 5;
-const HIGH_DETAIL_IMAGE_KEYWORDS = [
-  'ocr',
-  '识别',
-  '看清',
-  '细节',
-  '小字',
-  '放大',
-  '局部',
-  '左上',
-  '右上',
-  '左下',
-  '右下',
-  '坐标',
-  '位置',
-  '按钮',
-  '界面',
-  'ui',
-  '图表',
-  '表格',
-  '版式',
-];
-const PDF_VISUAL_KEYWORDS = ['图表', '图', '页面', '版式', '排版', '截图', '第', '页'];
 
 export const name = 'qqbot-attachment';
 export const inject = { required: ['database', 'chatluna', 'chatluna_storage'] } as const;
 
 export interface Config {
   maxInjectCount?: number;
-  maxInjectTotalBytes?: number;
-  maxInjectPerFileBytes?: number;
-  maxPdfPreviewPagesPerFile?: number;
-  maxPdfPreviewPagesTotal?: number;
   maxTextCharsPerFile?: number;
   recentCatalogSize?: number;
-  historyWindow?: number;
-  historyTriggerCount?: number;
-  historyTokenRatio?: number;
   projectionTextChars?: number;
   replayTextChars?: number;
   replayMaxRefs?: number;
@@ -96,16 +64,9 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  maxInjectCount: Schema.natural().description('每轮最多回灌多少个历史附件。'),
-  maxInjectTotalBytes: Schema.natural().description('单轮附件回灌的总字节预算。'),
-  maxInjectPerFileBytes: Schema.natural().description('单个附件回灌的字节预算。'),
-  maxPdfPreviewPagesPerFile: Schema.natural().description('单个 PDF 最多生成多少页预览。'),
-  maxPdfPreviewPagesTotal: Schema.natural().description('单轮所有 PDF 最多回灌多少页预览。'),
+  maxInjectCount: Schema.natural().description('每轮最多注入多少个历史附件文本投影。'),
   maxTextCharsPerFile: Schema.natural().description('单个文本派生物的最大字符数。'),
   recentCatalogSize: Schema.natural().description('最近附件目录最多列出多少个附件。'),
-  historyWindow: Schema.natural().description('附件历史扫描窗口消息数。'),
-  historyTriggerCount: Schema.natural().description('触发附件目录回灌的历史附件数量阈值。'),
-  historyTokenRatio: Schema.number().min(0).max(1).description('附件历史回灌 token 比例。'),
   projectionTextChars: Schema.natural().description('附件摘要投影最大字符数。'),
   replayTextChars: Schema.natural().description('附件回放文本最大字符数。'),
   replayMaxRefs: Schema.natural().description('单次附件回放最大引用数量。'),
@@ -116,15 +77,8 @@ export const Config: Schema<Config> = Schema.object({
 
 interface RuntimeConfig {
   maxInjectCount: number;
-  maxInjectTotalBytes: number;
-  maxInjectPerFileBytes: number;
-  maxPdfPreviewPagesPerFile: number;
-  maxPdfPreviewPagesTotal: number;
   maxTextCharsPerFile: number;
   recentCatalogSize: number;
-  historyWindow: number;
-  historyTriggerCount: number;
-  historyTokenRatio: number;
   projectionTextChars: number;
   replayTextChars: number;
   replayMaxRefs: number;
@@ -206,14 +160,6 @@ function requireNaturalConfig(config: Config, key: keyof Config): number {
   return Math.floor(parsed);
 }
 
-function requireRatioConfig(config: Config, key: keyof Config): number {
-  const parsed = Number(config[key]);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) {
-    throw new Error(`附件配置缺失或非法：${String(key)}。默认值必须由 koishi.yml 显式传入。`);
-  }
-  return parsed;
-}
-
 function requireStringConfig(config: Config, key: keyof Config): string {
   const value = config[key];
   if (value == null) {
@@ -225,15 +171,8 @@ function requireStringConfig(config: Config, key: keyof Config): string {
 function toRuntimeConfig(config: Config): RuntimeConfig {
   return {
     maxInjectCount: requireNaturalConfig(config, 'maxInjectCount'),
-    maxInjectTotalBytes: requireNaturalConfig(config, 'maxInjectTotalBytes'),
-    maxInjectPerFileBytes: requireNaturalConfig(config, 'maxInjectPerFileBytes'),
-    maxPdfPreviewPagesPerFile: requireNaturalConfig(config, 'maxPdfPreviewPagesPerFile'),
-    maxPdfPreviewPagesTotal: requireNaturalConfig(config, 'maxPdfPreviewPagesTotal'),
     maxTextCharsPerFile: requireNaturalConfig(config, 'maxTextCharsPerFile'),
     recentCatalogSize: requireNaturalConfig(config, 'recentCatalogSize'),
-    historyWindow: requireNaturalConfig(config, 'historyWindow'),
-    historyTriggerCount: requireNaturalConfig(config, 'historyTriggerCount'),
-    historyTokenRatio: requireRatioConfig(config, 'historyTokenRatio'),
     projectionTextChars: requireNaturalConfig(config, 'projectionTextChars'),
     replayTextChars: requireNaturalConfig(config, 'replayTextChars'),
     replayMaxRefs: requireNaturalConfig(config, 'replayMaxRefs'),
@@ -363,16 +302,6 @@ function formatAttachmentKind(kind: QqbotAttachmentKind): string {
   }
 }
 
-function needsOriginalImageDetail(userText: string): boolean {
-  const lower = userText.toLowerCase();
-  return HIGH_DETAIL_IMAGE_KEYWORDS.some((keyword) => lower.includes(keyword));
-}
-
-function needsPdfVisualContext(userText: string): boolean {
-  const lower = userText.toLowerCase();
-  return PDF_VISUAL_KEYWORDS.some((keyword) => lower.includes(keyword));
-}
-
 function formatBytes(byteSize: number): string {
   if (!Number.isFinite(byteSize) || byteSize < 1) {
     return '0 B';
@@ -460,14 +389,6 @@ function createToolEntry(name: string, description: string, createTool: () => St
   };
 }
 
-function resolveBudgetPolicy(runtime: RuntimeConfig): QqbotRequestBudgetPolicy {
-  return {
-    historyWindow: runtime.historyWindow,
-    historyTriggerCount: runtime.historyTriggerCount,
-    historyTokenRatio: runtime.historyTokenRatio,
-  };
-}
-
 function resolveProviderName(config: ChatLunaToolRunnable): string {
   const model = config.configurable.model;
   const modelInfo = model?.modelInfo as Record<string, unknown> | undefined;
@@ -523,26 +444,6 @@ async function extractPdfPageCount(buffer: Buffer): Promise<number | null> {
       return Number(match[1]);
     });
   } catch {
-    return null;
-  }
-}
-
-async function renderPdfPagePreview(buffer: Buffer, pageNumber: number): Promise<Buffer | null> {
-  try {
-    return await withTempFile(buffer, '.pdf', async (filePath) => {
-      const outputPrefix = path.join(path.dirname(filePath), `preview-${pageNumber}`);
-      await execFileAsync(
-        'pdftoppm',
-        ['-png', '-singlefile', '-f', String(pageNumber), '-l', String(pageNumber), filePath, outputPrefix],
-        {
-          maxBuffer: 8 * 1024 * 1024,
-        },
-      );
-      const outputPath = `${outputPrefix}.png`;
-      return await readFile(outputPath);
-    });
-  } catch (error) {
-    logger.warn('pdf page preview failed: %s', (error as Error).message);
     return null;
   }
 }
@@ -680,22 +581,14 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
     });
   }
 
-  async buildAttachmentContextMessages(args: {
+  async buildAttachmentProjectionMessages(args: {
     attachments: QqbotAttachmentRecord[];
-    userText: string;
-    maxInjectTotalBytes: number;
-    maxInjectPerFileBytes: number;
-    maxPdfPreviewPagesPerFile: number;
-    maxPdfPreviewPagesTotal: number;
-    maxTextCharsPerFile: number;
   }): Promise<{
     messages: BaseMessage[];
     projections: QqbotAttachmentContextProjection[];
-    injected: QqbotAttachmentRecord[];
     skipped: Array<{ refId: string; reason: string }>;
   }> {
     const projections: QqbotAttachmentContextProjection[] = [];
-    const injected: QqbotAttachmentRecord[] = [];
     const skipped: Array<{ refId: string; reason: string }> = [];
 
     for (const record of args.attachments) {
@@ -704,13 +597,12 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
         continue;
       }
 
-      const processedText = await this.loadProjectionText(record, Math.min(args.maxTextCharsPerFile, this.runtime.projectionTextChars));
+      const processedText = await this.loadProjectionText(record, this.runtime.projectionTextChars);
       projections.push(formatProjection(record, processedText));
-      injected.push(record);
     }
 
     if (projections.length < 1) {
-      return { messages: [], projections, injected, skipped };
+      return { messages: [], projections, skipped };
     }
 
     const projectionText = createProjectionText(projections, skipped);
@@ -721,7 +613,6 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
         }),
       ],
       projections,
-      injected,
       skipped,
     };
   }
@@ -1140,66 +1031,6 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
     return null;
   }
 
-  private async ensurePdfPagePreviewDerivatives(
-    record: QqbotAttachmentRecord,
-    maxPages: number,
-  ): Promise<QqbotAttachmentDerivativeRecord[]> {
-    if (maxPages < 1) {
-      return [];
-    }
-
-    const existingRows = ((await this.ctx.database.get('qqbot_attachment_derivative', {
-      attachmentRefId: record.refId,
-      kind: 'pdf_page_preview',
-    })) as QqbotAttachmentDerivativeRecord[])
-      .slice()
-      .sort((left, right) => left.orderIndex - right.orderIndex);
-
-    if (existingRows.length >= maxPages) {
-      return existingRows.slice(0, maxPages);
-    }
-
-    const tempFile = await this.ctx.chatluna_storage.getTempFile(record.storageFileId);
-    if (!tempFile) {
-      return existingRows.slice(0, maxPages);
-    }
-
-    const buffer = await tempFile.data;
-    const startPage = existingRows.length + 1;
-    for (let pageNumber = startPage; pageNumber <= maxPages; pageNumber++) {
-      const preview = await renderPdfPagePreview(buffer, pageNumber);
-      if (!preview) {
-        break;
-      }
-      const stored = await this.ctx.chatluna_storage.createTempFile(
-        preview,
-        `${record.refId}-page-${pageNumber}.png`,
-        undefined,
-        'image/png',
-      );
-      await this.upsertDerivative(record.refId, {
-        kind: 'pdf_page_preview',
-        orderIndex: pageNumber - 1,
-        textContent: null,
-        mimeType: 'image/png',
-        storageFileId: stored.id,
-        storageUrl: stored.url,
-        metadata: JSON.stringify({ pageNumber }),
-        byteSize: stored.size,
-      });
-    }
-
-    const nextRows = (await this.ctx.database.get('qqbot_attachment_derivative', {
-      attachmentRefId: record.refId,
-      kind: 'pdf_page_preview',
-    })) as QqbotAttachmentDerivativeRecord[];
-
-    return nextRows
-      .slice()
-      .sort((left, right) => left.orderIndex - right.orderIndex)
-      .slice(0, maxPages);
-  }
-
   private async getDerivative(
     attachmentRefId: string,
     kind: QqbotAttachmentDerivativeKind,
@@ -1298,8 +1129,17 @@ export class AttachmentService implements QqbotAttachmentServiceLike {
   }
 }
 
-function applyPromptFragments(conversationId: string, recent: QqbotAttachmentRecord[], resolution: QqbotResolvedAttachmentSelection): void {
-  if (recent.length > 0) {
+function applyPromptFragments(
+  conversationId: string,
+  userText: string,
+  recent: QqbotAttachmentRecord[],
+  resolution: QqbotResolvedAttachmentSelection,
+): void {
+  const shouldExposeRecentCatalog =
+    recent.length > 0 &&
+    mentionsAttachmentReference(userText) &&
+    resolution.selected.length < 1;
+  if (shouldExposeRecentCatalog) {
     registerPromptFragment(conversationId, {
       source: 'qqbot_recent_attachments',
       title: 'Recent Attachments',
@@ -1327,21 +1167,6 @@ function applyPromptFragments(conversationId: string, recent: QqbotAttachmentRec
       },
     });
     return;
-  }
-
-  const resolutionText = createResolutionText(resolution);
-  if (resolutionText) {
-    registerPromptFragment(conversationId, {
-      source: 'qqbot_attachment_resolution',
-      title: 'Attachment Resolution',
-      authority: 'reference',
-      trust: 'trusted',
-      ttl: 'turn',
-      payload: {
-        kind: 'text',
-        value: resolutionText,
-      },
-    });
   }
 }
 
@@ -1451,23 +1276,13 @@ export function apply(ctx: Context, config: Config): void {
         });
 
         if (refs.length > 0) {
-          inputMessage.additional_kwargs = {
-            ...(inputMessage.additional_kwargs ?? {}),
-            qqbot_attachment_refs: refs,
-            qqbot_request_budget_policy: resolveBudgetPolicy(runtime),
-          };
           await service.rewriteArchivedInputMessage(inputMessage, refs);
-        } else {
-          inputMessage.additional_kwargs = {
-            ...(inputMessage.additional_kwargs ?? {}),
-            qqbot_request_budget_policy: resolveBudgetPolicy(runtime),
-          };
         }
 
         return CHAT_CHAIN_CONTINUE;
       })
       .after('transform_chat_message')
-      .before('chatluna_time_context');
+      .before('qqbot_turn_context');
 
     chain
       .middleware('qqbot_attachment_context', async (_rawSession, rawContext) => {
@@ -1492,20 +1307,14 @@ export function apply(ctx: Context, config: Config): void {
           recent,
         });
 
-        applyPromptFragments(conversationId, recent, resolution);
+        applyPromptFragments(conversationId, userText, recent, resolution);
 
         if (resolution.ambiguous.length > 0 || resolution.selected.length < 1) {
           return CHAT_CHAIN_CONTINUE;
         }
 
-        const hydrated = await service.buildAttachmentContextMessages({
+        const hydrated = await service.buildAttachmentProjectionMessages({
           attachments: resolution.selected,
-          userText,
-          maxInjectTotalBytes: runtime.maxInjectTotalBytes,
-          maxInjectPerFileBytes: runtime.maxInjectPerFileBytes,
-          maxPdfPreviewPagesPerFile: runtime.maxPdfPreviewPagesPerFile,
-          maxPdfPreviewPagesTotal: runtime.maxPdfPreviewPagesTotal,
-          maxTextCharsPerFile: runtime.maxTextCharsPerFile,
         });
 
         if (hydrated.messages.length > 0) {
@@ -1529,15 +1338,14 @@ export function apply(ctx: Context, config: Config): void {
         return CHAT_CHAIN_CONTINUE;
       })
       .after('qqbot_attachment_archive')
-      .after('chatluna_time_context')
+      .after('qqbot_turn_context')
       .before('qqbot_prompt_envelope');
 
     logger.info(
-      'attachment context loaded: maxInjectCount=%d recentCatalogSize=%d historyWindow=%d historyTriggerCount=%d',
+      'attachment context loaded: maxInjectCount=%d recentCatalogSize=%d projectionTextChars=%d',
       runtime.maxInjectCount,
       runtime.recentCatalogSize,
-      runtime.historyWindow,
-      runtime.historyTriggerCount,
+      runtime.projectionTextChars,
     );
     attachmentRuntimeRegistered = true;
     return true;

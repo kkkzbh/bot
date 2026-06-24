@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HumanMessage } from '@langchain/core/messages';
 import type { QqbotAttachmentRecord } from '../src/types/attachment.js';
-import {
-  createResolutionText,
-  resolveReferencedAttachmentsFromCatalog,
-} from '../src/plugins/attachment/resolution.js';
+import { resolveReferencedAttachmentsFromCatalog } from '../src/plugins/attachment/resolution.js';
+
+const promptContextMocks = vi.hoisted(() => ({
+  registerPromptFragment: vi.fn(),
+}));
 
 vi.mock('koishi', () => {
   type MockSchemaNode = {
@@ -72,7 +73,7 @@ vi.mock('koishi-plugin-chatluna/llm-core/platform/types', () => ({
 }));
 
 vi.mock('../src/plugins/shared/prompt-context/index.js', () => ({
-  registerPromptFragment() {},
+  registerPromptFragment: promptContextMocks.registerPromptFragment,
 }));
 
 vi.mock('../src/plugins/shared/voice/input.js', () => ({
@@ -80,6 +81,10 @@ vi.mock('../src/plugins/shared/voice/input.js', () => ({
 }));
 
 import { AttachmentService, apply } from '../src/plugins/attachment/index.js';
+
+beforeEach(() => {
+  promptContextMocks.registerPromptFragment.mockClear();
+});
 
 function createRecord(input: Partial<QqbotAttachmentRecord> & Pick<QqbotAttachmentRecord, 'refId' | 'conversationId' | 'kind'>): QqbotAttachmentRecord {
   return {
@@ -170,27 +175,6 @@ describe('attachment context resolution', () => {
     expect(result.ambiguous.map((item) => item.refId)).toEqual(['att_pdf1', 'att_pdf2']);
   });
 
-  it('describes selected attachments as replayable refs instead of already injected originals', () => {
-    const image = createRecord({
-      refId: 'att_image01',
-      conversationId: 'conv-4',
-      kind: 'image',
-      filename: 'screen.png',
-    });
-
-    const text = createResolutionText({
-      selected: [image],
-      ambiguous: [],
-      requestedCount: 1,
-      kindHint: 'image',
-      reason: 'explicit_ref',
-    });
-
-    expect(text).toContain('历史附件引用');
-    expect(text).toContain('附件回放工具');
-    expect(text).not.toContain('已经看到原件');
-    expect(text).not.toContain('并回灌到上下文');
-  });
 });
 
 function createMockDatabase(seed?: {
@@ -251,15 +235,8 @@ function createAttachmentService(records: QqbotAttachmentRecord[], options?: {
 
   const runtime = {
     maxInjectCount: 5,
-    maxInjectTotalBytes: 16 * 1024 * 1024,
-    maxInjectPerFileBytes: 6 * 1024 * 1024,
-    maxPdfPreviewPagesPerFile: 6,
-    maxPdfPreviewPagesTotal: 15,
     maxTextCharsPerFile: 24_000,
     recentCatalogSize: 12,
-    historyWindow: 80,
-    historyTriggerCount: 120,
-    historyTokenRatio: 0.7,
     projectionTextChars: 1200,
     replayTextChars: 4000,
     replayMaxRefs: 5,
@@ -308,14 +285,8 @@ describe('attachment multimodal projection', () => {
       ],
     });
 
-    const result = await service.buildAttachmentContextMessages({
+    const result = await service.buildAttachmentProjectionMessages({
       attachments: [image, pdf],
-      userText: '继续看这两个附件',
-      maxInjectTotalBytes: 16 * 1024 * 1024,
-      maxInjectPerFileBytes: 6 * 1024 * 1024,
-      maxPdfPreviewPagesPerFile: 6,
-      maxPdfPreviewPagesTotal: 15,
-      maxTextCharsPerFile: 24_000,
     });
 
     expect(result.projections).toHaveLength(2);
@@ -323,9 +294,12 @@ describe('attachment multimodal projection', () => {
     expect(result.messages[0]?.getType()).toBe('system');
     expect(typeof result.messages[0]?.content).toBe('string');
     expect(String(result.messages[0]?.content)).toContain('历史附件引用上下文');
+    expect(String(result.messages[0]?.content)).toContain('qqbot_attachment_replay');
     expect(String(result.messages[0]?.content)).toContain('att_pdf01');
     expect(String(result.messages[0]?.content)).toContain('这是 PDF 的摘录内容');
     expect(String(result.messages[0]?.content)).not.toContain(image.storageUrl);
+    expect(String(result.messages[0]?.content)).toContain('不要假定已经看到原件');
+    expect(String(result.messages[0]?.content)).not.toContain('并回灌到上下文');
     expect(Array.isArray(result.messages[0]?.content)).toBe(false);
   });
 
@@ -445,15 +419,8 @@ type AttachmentChainConstraint = {
 function attachmentConfig() {
   return {
     maxInjectCount: 5,
-    maxInjectTotalBytes: 16 * 1024 * 1024,
-    maxInjectPerFileBytes: 6 * 1024 * 1024,
-    maxPdfPreviewPagesPerFile: 6,
-    maxPdfPreviewPagesTotal: 15,
     maxTextCharsPerFile: 24_000,
     recentCatalogSize: 12,
-    historyWindow: 80,
-    historyTriggerCount: 120,
-    historyTokenRatio: 0.7,
     projectionTextChars: 1200,
     replayTextChars: 4000,
     replayMaxRefs: 5,
@@ -568,12 +535,12 @@ describe('attachment ChatLuna lifecycle', () => {
     expect(harness.disposeTool).toHaveBeenCalledTimes(1);
   });
 
-  it('archives current-turn attachments from ChatLuna conversation resolution without legacy room data', async () => {
+  it('does not attach request metadata when the current turn has no attachments', async () => {
     const harness = createAttachmentLifecycleHarness();
     await harness.runHook('ready');
 
     const archive = harness.chainMiddlewares.get('qqbot_attachment_archive');
-    const message = new HumanMessage({ content: '没有附件也要写预算策略' }) as HumanMessage & {
+    const message = new HumanMessage({ content: '没有附件时不写额外请求元数据' }) as HumanMessage & {
       additional_kwargs?: Record<string, unknown>;
     };
 
@@ -589,9 +556,7 @@ describe('attachment ChatLuna lifecycle', () => {
       },
     });
 
-    expect(message.additional_kwargs).toEqual(expect.objectContaining({
-      qqbot_request_budget_policy: expect.any(Object),
-    }));
+    expect(message.additional_kwargs ?? {}).toEqual({});
     expect(harness.constraints).toContainEqual({
       name: 'qqbot_attachment_archive',
       kind: 'after',
@@ -633,11 +598,93 @@ describe('attachment ChatLuna lifecycle', () => {
         stage: 'after_scratchpad',
       }),
     );
+    expect(promptContextMocks.registerPromptFragment).not.toHaveBeenCalledWith(
+      'conv-attachment-context',
+      expect.objectContaining({ source: 'qqbot_attachment_resolution' }),
+    );
+    expect(promptContextMocks.registerPromptFragment).not.toHaveBeenCalledWith(
+      'conv-attachment-context',
+      expect.objectContaining({ source: 'qqbot_recent_attachments' }),
+    );
     expect(harness.constraints).toContainEqual({
       name: 'qqbot_attachment_context',
       kind: 'after',
       target: 'qqbot_attachment_archive',
     });
+  });
+
+  it('keeps recent attachment catalog for ambiguous references that need clarification', async () => {
+    const attachments = [
+      createRecord({
+        refId: 'att_rules',
+        conversationId: 'conv-attachment-ambiguous',
+        kind: 'pdf',
+        filename: 'rules.pdf',
+      }),
+      createRecord({
+        refId: 'att_specs',
+        conversationId: 'conv-attachment-ambiguous',
+        kind: 'pdf',
+        filename: 'specs.pdf',
+        createdAt: Date.now() - 1000,
+      }),
+    ];
+    const harness = createAttachmentLifecycleHarness({ attachments });
+    await harness.runHook('ready');
+
+    const contextMiddleware = harness.chainMiddlewares.get('qqbot_attachment_context');
+    const inputMessage = new HumanMessage({ content: '那个 pdf 里写了什么？' });
+
+    await contextMiddleware?.({}, {
+      options: {
+        conversation: {
+          conversationId: 'conv-attachment-ambiguous',
+          conversation: {
+            id: 'conv-attachment-ambiguous',
+          },
+        },
+        inputMessage,
+      },
+    });
+
+    expect(promptContextMocks.registerPromptFragment).toHaveBeenCalledWith(
+      'conv-attachment-ambiguous',
+      expect.objectContaining({ source: 'qqbot_recent_attachments' }),
+    );
+    expect(promptContextMocks.registerPromptFragment).toHaveBeenCalledWith(
+      'conv-attachment-ambiguous',
+      expect.objectContaining({ source: 'qqbot_attachment_resolution' }),
+    );
+    expect((harness.chatluna.contextManager as { inject: ReturnType<typeof vi.fn> }).inject).not.toHaveBeenCalled();
+  });
+
+  it('does not inject recent attachment catalog into turns that do not mention attachments', async () => {
+    const attachment = createRecord({
+      refId: 'att_unmentioned',
+      conversationId: 'conv-attachment-noise',
+      kind: 'image',
+      filename: 'old-screen.png',
+    });
+    const harness = createAttachmentLifecycleHarness({ attachments: [attachment] });
+    await harness.runHook('ready');
+
+    const contextMiddleware = harness.chainMiddlewares.get('qqbot_attachment_context');
+    const inputMessage = new HumanMessage({ content: '今天晚上吃什么？' });
+
+    await contextMiddleware?.({}, {
+      options: {
+        conversation: {
+          conversationId: 'conv-attachment-noise',
+          conversation: {
+            id: 'conv-attachment-noise',
+          },
+        },
+        inputMessage,
+      },
+    });
+
+    expect(promptContextMocks.registerPromptFragment).not.toHaveBeenCalled();
+    expect((harness.chatluna.contextManager as { inject: ReturnType<typeof vi.fn> }).inject).not.toHaveBeenCalled();
   });
 
   it('fails fast when ChatLuna exposes a chain without contextManager', async () => {

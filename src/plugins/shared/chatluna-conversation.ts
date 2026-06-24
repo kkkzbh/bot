@@ -1,6 +1,5 @@
 export type QqbotChatLunaRoomLike = {
   conversationId?: string;
-  roomId?: number | string;
   model?: string;
   preset?: string;
   chatMode?: string;
@@ -9,7 +8,6 @@ export type QqbotChatLunaRoomLike = {
 
 type ChatLunaConversationRecordLike = {
   id?: unknown;
-  legacyRoomId?: unknown;
   model?: unknown;
   preset?: unknown;
   chatMode?: unknown;
@@ -46,7 +44,6 @@ export function resolveChatLunaRoomLike(
   if (conversationId) {
     return {
       conversationId,
-      roomId: typeof conversation?.legacyRoomId === 'number' ? conversation.legacyRoomId : undefined,
       model: normalizeString(options?.conversation?.effectiveModel) ?? normalizeString(conversation?.model),
       preset: normalizeString(options?.conversation?.effectivePreset) ?? normalizeString(conversation?.preset),
       chatMode: normalizeString(options?.conversation?.effectiveChatMode) ?? normalizeString(conversation?.chatMode),

@@ -44,7 +44,6 @@ export function buildReplyPlanDebugPayload(
   const room = resolveChatLunaRoomLike(context.options);
   return {
     conversationId: trimOptionalText(room?.conversationId) ?? null,
-    roomId: room?.roomId ?? null,
     roomModel: trimOptionalText(room?.model) ?? null,
     preset: trimOptionalText(room?.preset) ?? null,
     ...details,

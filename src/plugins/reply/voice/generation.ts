@@ -42,6 +42,7 @@ import {
   type ReplyTransportPlan,
 } from '../../shared/outbound/index.js';
 import {
+  beginPromptAssemblyTurn,
   clearPromptAssemblyTurn,
   peekPromptFragments,
   registerPromptFragment,
@@ -51,9 +52,6 @@ import {
   resolveChatLunaRoomLike,
   type QqbotChatLunaContextOptionsLike,
 } from '../../shared/chatluna-conversation.js';
-import {
-  registerReplyToolMemoryFragment,
-} from '../pipeline/protocol.js';
 import { normalizeReplyChatMode } from '../../shared/reply-chat-mode.js';
 import {
   StructuredReplyCompilerError,
@@ -85,7 +83,10 @@ import {
   type ReplyRunMode,
   type ReplyRuntimeRoomLike,
 } from '../runtime/index.js';
-import { migrateStructuredReplyHistoryRows } from '../history-migration.js';
+import {
+  migrateStructuredReplyHistoryRows,
+  type StructuredReplyHistoryDatabaseLike,
+} from '../history-migration.js';
 
 const ChatLunaChains = require('koishi-plugin-chatluna/chains') as {
   ChainMiddlewareRunStatus: { STOP: number; CONTINUE: number };
@@ -186,7 +187,7 @@ interface ReplyV2State {
   route?: ReplyRoute;
 }
 
-type SessionWithVoiceState = Session & {
+export type ReplySessionLike = Session & {
   stripped?: { content?: string };
   state?: Record<string, unknown> & {
     qqVoice?: QqVoiceState;
@@ -195,6 +196,7 @@ type SessionWithVoiceState = Session & {
     qqSticker?: StickerCapabilityState;
   };
 };
+type SessionWithVoiceState = ReplySessionLike;
 
 export type OneBotInternalLike = {
   _request?: (action: string, params?: Record<string, unknown>) => Promise<unknown>;
@@ -216,14 +218,6 @@ export type OneBotBotLike = {
   ) => Promise<unknown>;
 };
 
-type RoomLike = {
-  conversationId?: string;
-  roomId?: number | string;
-  model?: string;
-  preset?: string;
-  [key: string]: unknown;
-};
-
 export type ReplyInputMessageLike = {
   content?: unknown;
   additional_kwargs?: Record<string, unknown>;
@@ -237,7 +231,6 @@ export type ReplyOutputContractApplyOptions = {
 
 type MiddlewareContextLike = {
   options?: QqbotChatLunaContextOptionsLike & {
-    room?: RoomLike;
     messageId?: string;
     inputMessage?: ReplyInputMessageLike;
     responseMessage?: {
@@ -325,7 +318,11 @@ type ChatLunaLike = {
 type ChatLunaChainLike = NonNullable<ChatLunaLike['chatChain']>;
 type ChatLunaChainBuilderLike = ReturnType<ChatLunaChainLike['middleware']>;
 
-type ContextWithChatLuna = Context & { chatluna?: ChatLunaLike; featurePolicy?: FeaturePolicyServiceLike };
+type ReplyVoiceServicesLike = {
+  chatluna?: ChatLunaLike;
+  featurePolicy?: FeaturePolicyServiceLike;
+  database: StructuredReplyHistoryDatabaseLike;
+};
 type RuntimeRole = 'local' | 'server' | 'unknown';
 
 function normalizeBaseUrl(input?: string | null): string {
@@ -990,9 +987,7 @@ export function mergeReplyOverrideRequestParams(
   additionalKwargs: Record<string, unknown> | undefined,
   overridePatch: Record<string, unknown> | null,
 ): Record<string, unknown> | null {
-  const existingOverride =
-    asPlainRecord(additionalKwargs?.overrideRequestParams) ??
-    asPlainRecord(additionalKwargs?.qqbot_override_request_params);
+  const existingOverride = asPlainRecord(additionalKwargs?.overrideRequestParams);
 
   if (!existingOverride && !overridePatch) return null;
   return {
@@ -1009,6 +1004,10 @@ function asPlainRecord(value: unknown): Record<string, unknown> | null {
 function resolveReplyOutputProtocolFromMessage(
   inputMessage: ReplyInputMessageLike | undefined,
 ): ReplyCompilerOutputProtocol {
+  if (!inputMessage) {
+    throw new Error('reply executor requires inputMessage with qqbot_final_response_contract.protocol.');
+  }
+
   const contract = asPlainRecord(inputMessage?.additional_kwargs?.qqbot_final_response_contract);
   const protocol = contract?.protocol;
   if (
@@ -1018,7 +1017,7 @@ function resolveReplyOutputProtocolFromMessage(
   ) {
     return protocol;
   }
-  return mainChatRuntimeState.getProfile().structuredOutputProtocol;
+  throw new Error('reply executor requires inputMessage with qqbot_final_response_contract.protocol.');
 }
 
 function applyReplyTurnInputMetadata(
@@ -1698,7 +1697,8 @@ function isReplyPlanSessionAvailable(session: Session): boolean {
 export function apply(ctx: Context, config: Config = {}): void {
   const runtime = toRuntimeConfig(config);
   assertVoiceRuntimeConfig(runtime);
-  const featurePolicy = (ctx as ContextWithChatLuna).featurePolicy;
+  const services = ctx as unknown as ReplyVoiceServicesLike;
+  const featurePolicy = services.featurePolicy;
   if (!featurePolicy) {
     throw new Error('qq-voice requires featurePolicy service.');
   }
@@ -1710,7 +1710,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const byGetter = typeof (ctx as { get?: (name: string) => unknown }).get === 'function'
       ? ((ctx as { get: (name: string) => unknown }).get('chatluna') as ChatLunaLike | undefined)
       : undefined;
-    return byGetter ?? (ctx as ContextWithChatLuna).chatluna;
+    return byGetter ?? services.chatluna;
   };
 
   const resolveVoiceFeatureState = async (session: SessionWithVoiceState): Promise<{
@@ -1738,7 +1738,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     stopChat: async (room, requestId) => {
       const chatluna = resolveChatLunaService();
       if (typeof chatluna?.stopChat !== 'function') return;
-      await chatluna.stopChat(room as never, requestId);
+      await chatluna.stopChat(room, requestId);
     },
     collectWindowMs: runtime.replyInterruptCollectWindowMs,
     maxPendingInputs: runtime.replyInterruptMaxPendingInputs,
@@ -1865,6 +1865,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
         }
         applyPreparedInputText(session, context, prepared.inputText, prepared.inputTextSpeakerTagged);
+        beginPromptAssemblyTurn(conversationId, { turnId: runId });
         registerReplyTurnStateFragment(conversationId, prepared.continuationContext);
         setReplyRunId(session, runId);
         registerReplyRunRequestModelGuard({
@@ -1882,26 +1883,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     prepareBuilder.after('resolve_conversation');
     prepareBuilder.after('chatluna_model_guard');
     prepareBuilder.before('message_delay');
-    prepareBuilder.before('chatluna_time_context');
+    prepareBuilder.before('qqbot_turn_context');
     prepareBuilder.before('qqbot_memory');
     prepareBuilder.before('qqbot_reply_transport_policy');
-
-    const toolMemoryBuilder = chain.middleware('qqbot_reply_tool_memory_state', async (rawSession, rawContext) => {
-        const session = rawSession as SessionWithVoiceState;
-        const context = rawContext as MiddlewareContextLike;
-        if (!isReplyPlanSessionAvailable(session)) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        if (!session.userId || session.userId === session.bot?.selfId) {
-          return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-        }
-
-        const conversationId = resolveChatLunaRoomLike(context.options)?.conversationId?.trim();
-        if (!conversationId) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-
-        await registerReplyToolMemoryFragment(ctx, conversationId, logger);
-        return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
-      }) as ChatLunaChainBuilderLike;
-    toolMemoryBuilder.after('qqbot_reply_runtime_prepare');
-    toolMemoryBuilder.before('qqbot_reply_transport_policy');
 
     const policyBuilder = chain.middleware('qqbot_reply_transport_policy', async (rawSession, rawContext) => {
         const session = rawSession as SessionWithVoiceState;
@@ -1930,8 +1914,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         rememberReplyCapabilitySnapshot(session, snapshot, replyCapabilitySnapshots);
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       }) as ChatLunaChainBuilderLike;
-    policyBuilder.after('qqbot_reply_tool_memory_state');
-    policyBuilder.after('chatluna_time_context');
+    policyBuilder.after('qqbot_turn_context');
     policyBuilder.after('qqbot_memory');
     policyBuilder.after('qqbot_sticker_policy');
     policyBuilder.before('lifecycle-handle_command');
@@ -1997,8 +1980,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
       }) as ChatLunaChainBuilderLike;
     promptCompilerBuilder.after('qqbot_reply_transport_policy');
-    promptCompilerBuilder.after('qqbot_reply_tool_memory_state');
-    promptCompilerBuilder.after('chatluna_time_context');
+    promptCompilerBuilder.after('qqbot_turn_context');
     promptCompilerBuilder.after('qqbot_memory');
     promptCompilerBuilder.after('qqbot_sticker_policy');
     promptCompilerBuilder.before('qqbot_prompt_envelope');
@@ -2047,7 +2029,6 @@ export function apply(ctx: Context, config: Config = {}): void {
             return ChatLunaChains.ChainMiddlewareRunStatus.STOP;
           }
           applyPreparedInputText(session, context, prepared.inputText, prepared.inputTextSpeakerTagged);
-          registerReplyTurnStateFragment(conversationId, prepared.continuationContext);
           setReplyRunId(session, runId);
           registerReplyRunRequestModelGuard({
             session,
@@ -2097,9 +2078,8 @@ export function apply(ctx: Context, config: Config = {}): void {
             }
             const diagnostic = error.diagnostic;
             logger.error(
-              'reply plan executor suppressed structured model failure: runId=%s roomId=%s conversationId=%s messageId=%s queueKey=%s actorKey=%s failureKind=%s requestMode=%s providerOutputTokens=%s toolCallCount=%s toolCallChunkCount=%s functionCallPresent=%s rawOutputKind=%s rawTextLength=%s outputProtocol=%s protocolErrorCode=%s protocolErrorLine=%s rawTextPreview=%j',
+              'reply plan executor suppressed structured model failure: runId=%s conversationId=%s messageId=%s queueKey=%s actorKey=%s failureKind=%s requestMode=%s providerOutputTokens=%s toolCallCount=%s toolCallChunkCount=%s functionCallPresent=%s rawOutputKind=%s rawTextLength=%s outputProtocol=%s protocolErrorCode=%s protocolErrorLine=%s rawTextPreview=%j',
               runId,
-              String(room?.roomId ?? '<unknown>'),
               conversationId ?? '<unknown>',
               String(session.messageId ?? '<unknown>'),
               queueKey ?? '<unknown>',
@@ -2201,7 +2181,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   };
 
   ctx.on('ready', async () => {
-    const historyMigration = await migrateStructuredReplyHistoryRows(ctx.database as never);
+    const historyMigration = await migrateStructuredReplyHistoryRows(services.database);
     if (historyMigration.migrated > 0) {
       logger.info(
         'migrated %d reply history row(s): structured=%d, legacyDirectHumans=%d, submitPlans=%d, emptySubmitTools=%d, protocolPrompts=%d, failedToolErrors=%d, danglingToolTails=%d, completedToolTraces=%d, transientKwargs=%d, invisibleNames=%d, nonAiToolCalls=%d, emptyAssistants=%d.',

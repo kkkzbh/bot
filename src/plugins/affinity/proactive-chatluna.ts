@@ -72,8 +72,6 @@ export type AffinityProactiveChatLunaConversation = {
   compression?: string | null;
   archivedAt?: Date | null;
   archiveId?: string | null;
-  legacyRoomId?: number | null;
-  legacyMeta?: string | null;
   autoTitle?: boolean | null;
   [key: string]: unknown;
 };
@@ -170,7 +168,6 @@ export async function generateAffinityProactiveViaChatLuna(args: {
   });
   const message: ChatLunaMessageLike = {
     content: buildProactiveTriggerText(args.input),
-    additional_kwargs: {},
   };
   const outputContract = applyReplyOutputContract({ conversationId }, message, {
     capabilitySnapshot,

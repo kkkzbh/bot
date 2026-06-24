@@ -25,6 +25,7 @@ import type {
   AffinityAnalysisStructuredOutputProtocol,
   AffinityAuditRecord,
   AffinityConfigRecord,
+  AffinityEffectTier,
   AffinityEventType,
   AffinityEventRecord,
   AffinityManualRandomPlanInput,
@@ -117,8 +118,6 @@ type ChatLunaConversationRecord = {
   compression?: string | null;
   archivedAt?: Date | number | string | null;
   archiveId?: string | null;
-  legacyRoomId?: number | null;
-  legacyMeta?: string | null;
   autoTitle?: boolean | number | null;
 };
 
@@ -185,6 +184,19 @@ type RandomThreadPayload = {
   reason: string;
 };
 
+type ActiveProactiveThreadPromptState = {
+  direction: AffinityRandomDirection;
+  message: string;
+  contextSummary: string | null;
+  eventTypeHint: AffinityEventType | 'none';
+};
+
+type AffinityPromptEventResult = {
+  eventType: AffinityEventType;
+  effectTier: AffinityEffectTier;
+  replyHint: string | null;
+};
+
 type RandomGenerationWithTransport = AffinityRandomGenerationResult & {
   transportPlan?: ReplyTransportPlan | null;
   deliveryHistoryText?: string | null;
@@ -221,7 +233,6 @@ export interface RuntimeConfig {
 export interface AffinitySessionResult {
   shouldAllowReply: boolean;
   analysis: AffinityEventAnalysis;
-  resolutionReason: string;
 }
 
 const DEFAULT_SETTINGS: AffinitySettings = {
@@ -357,6 +368,24 @@ function parseRandomThreadPayload(raw: string | null | undefined): RandomThreadP
     contextSeedSummary: record.contextSeedSummary ?? null,
     eventTypeHint: record.eventTypeHint as AffinityEventType | 'none',
     reason: record.reason,
+  };
+}
+
+function activeProactiveThreadPromptState(thread: OpenThreadSummary): ActiveProactiveThreadPromptState {
+  const payload = thread.randomPayload ?? parseRandomThreadPayload(thread.payloadJson);
+  return {
+    direction: payload.direction,
+    message: thread.summary ?? '',
+    contextSummary: payload.contextSeedSummary,
+    eventTypeHint: payload.eventTypeHint,
+  };
+}
+
+function affinityPromptEventResult(result: AffinitySessionResult): AffinityPromptEventResult {
+  return {
+    eventType: result.analysis.eventType,
+    effectTier: result.analysis.effectTier,
+    replyHint: result.analysis.replyHint,
   };
 }
 
@@ -929,8 +958,6 @@ export class AffinityService implements AffinityServiceLike {
       compression: null,
       archivedAt: null,
       archiveId: null,
-      legacyRoomId: null,
-      legacyMeta: null,
       autoTitle: false,
     };
     await this.database.create('chatluna_conversation', conversation as unknown as Record<string, unknown>);
@@ -1362,7 +1389,6 @@ export class AffinityService implements AffinityServiceLike {
     const result = {
       shouldAllowReply,
       analysis,
-      resolutionReason: resolution.reasonCode,
     };
     setSessionAffinityResult(session, result);
     return result;
@@ -1372,16 +1398,12 @@ export class AffinityService implements AffinityServiceLike {
     const userKey = userKeyFromSession(session);
     if (!userKey) return;
     const scope = scopeFromSession(session);
-    const activeRandomThreads = scope
+    const activeProactiveThreads = scope
       ? (await this.listOpenThreads(scope.scopeKind, scope.scopeId, userKey, Date.now()))
           .filter((thread) => normalizeText(thread.title).startsWith('random:'))
-          .map((thread) => ({
-            title: thread.title ?? 'random',
-            summary: thread.summary ?? '',
-            payload: thread.randomPayload ?? parseRandomThreadPayload(thread.payloadJson),
-          }))
+          .map(activeProactiveThreadPromptState)
       : [];
-    await this.injectPromptForUser(conversationId, userKey, getSessionAffinityResult(session), activeRandomThreads);
+    await this.injectPromptForUser(conversationId, userKey, getSessionAffinityResult(session), activeProactiveThreads);
   }
 
   async ensureDailyRandomPlans(now = Date.now()): Promise<void> {
@@ -1710,7 +1732,7 @@ export class AffinityService implements AffinityServiceLike {
     conversationId: string,
     userKey: string,
     result: AffinitySessionResult | null,
-    activeRandomThreads: Array<{ title: string; summary: string; payload: Record<string, unknown> }> = [],
+    activeProactiveThreads: ActiveProactiveThreadPromptState[] = [],
   ): Promise<void> {
     const [row] = await this.database.get('affinity_user_state', { characterId: CHARACTER_ID, userKey }) as AffinityUserStateRecord[];
     const state = applyTemporalDecay(stateFromRecord(row, Date.now()), Date.now());
@@ -1724,16 +1746,8 @@ export class AffinityService implements AffinityServiceLike {
         kind: 'json',
         value: {
           relation: formatStateForPrompt(state),
-          activeRandomThreads,
-          eventResult: result
-            ? {
-                route: result.analysis.route,
-                eventType: result.analysis.eventType,
-                effectTier: result.analysis.effectTier,
-                reasonCode: result.resolutionReason,
-                replyHint: result.analysis.replyHint,
-              }
-            : null,
+          activeProactiveThreads,
+          eventResult: result ? affinityPromptEventResult(result) : null,
         },
       },
     });

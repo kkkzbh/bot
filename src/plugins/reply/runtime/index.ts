@@ -5,7 +5,6 @@ export type ReplyRunState = 'computing' | 'computed' | 'sending';
 export type ReplyRunMode = 'interrupt' | 'queue';
 
 export interface ReplyRuntimeRoomLike {
-  roomId?: number | string;
   conversationId?: string;
   model?: string;
   [key: string]: unknown;

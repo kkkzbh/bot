@@ -5,6 +5,7 @@ vi.mock('koishi-plugin-chatluna/chains', () => ({
 }));
 
 const promptAssemblyMocks = vi.hoisted(() => ({
+  beginPromptAssemblyTurn: vi.fn(),
   registerPromptFragment: vi.fn(),
   peekPromptFragments: vi.fn(() => []),
   clearPromptAssemblyTurn: vi.fn(),
@@ -149,6 +150,7 @@ vi.mock('../src/plugins/shared/prompt-context/index.js', async () => {
   );
   return {
     ...actual,
+    beginPromptAssemblyTurn: promptAssemblyMocks.beginPromptAssemblyTurn,
     registerPromptFragment: promptAssemblyMocks.registerPromptFragment,
     peekPromptFragments: promptAssemblyMocks.peekPromptFragments,
     clearPromptAssemblyTurn: promptAssemblyMocks.clearPromptAssemblyTurn,
@@ -446,7 +448,6 @@ function createHarness(overrides: {
     capabilityMiddleware: middlewares[1],
     ready: (events.get('ready') ?? [])[0],
     getPrepare: () => chainMiddlewares.get('qqbot_reply_runtime_prepare'),
-    getToolMemoryState: () => chainMiddlewares.get('qqbot_reply_tool_memory_state'),
     getPolicy: () => chainMiddlewares.get('qqbot_reply_transport_policy'),
     getPromptCompiler: () => chainMiddlewares.get('qqbot_reply_prompt_compiler'),
     getExecutor: () => chainMiddlewares.get('qqbot_reply_plan_executor'),
@@ -482,7 +483,6 @@ function createSession(bot: Record<string, any>, overrides: Record<string, unkno
 function createPluginRoom(conversationId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     conversationId,
-    roomId: 7,
     model: 'Pro/moonshotai/Kimi-K2.5',
     preset: 'sakiko',
     chatMode: 'plugin',
@@ -506,7 +506,6 @@ function createPluginConversationFromRoom(room: Record<string, unknown>): Record
     effectiveChatMode: room.chatMode,
     conversation: {
       id: conversationId,
-      legacyRoomId: room.roomId,
       model: room.model,
       preset: room.preset,
       chatMode: room.chatMode,
@@ -580,6 +579,33 @@ function createRawReplyResponse(
   };
 }
 
+type TestReplyProtocol = 'native_chat_json_schema' | 'native_responses_json_schema' | 'chat_reply_v1';
+
+function createExecutorInputMessage(
+  content: unknown = '普通聊聊',
+  protocol: TestReplyProtocol = 'native_chat_json_schema',
+) {
+  return {
+    content,
+    additional_kwargs: {
+      qqbot_final_response_contract: { protocol },
+    },
+  };
+}
+
+function withExecutorInputContract<T extends { additional_kwargs?: Record<string, unknown> }>(
+  inputMessage: T,
+  protocol: TestReplyProtocol = 'native_chat_json_schema',
+): T & { additional_kwargs: Record<string, unknown> } {
+  return {
+    ...inputMessage,
+    additional_kwargs: {
+      ...(inputMessage.additional_kwargs ?? {}),
+      qqbot_final_response_contract: { protocol },
+    },
+  };
+}
+
 function hasStructuredFailureLog(args: {
   conversationId: string;
   messageId: string;
@@ -591,7 +617,6 @@ function hasStructuredFailureLog(args: {
     const [
       message,
       runId,
-      roomId,
       conversationId,
       messageId,
       queueKey,
@@ -604,7 +629,6 @@ function hasStructuredFailureLog(args: {
     return (
       String(message).includes('reply plan executor suppressed structured model failure') &&
       typeof runId === 'string' &&
-      roomId === '7' &&
       conversationId === args.conversationId &&
       messageId === args.messageId &&
       String(queueKey).includes('group:group-100') &&
@@ -650,6 +674,7 @@ describe('qq voice plugin', () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     promptAssemblyMocks.registerPromptFragment.mockReset();
+    promptAssemblyMocks.beginPromptAssemblyTurn.mockReset();
     promptAssemblyMocks.peekPromptFragments.mockReset();
     promptAssemblyMocks.peekPromptFragments.mockReturnValue([]);
     promptAssemblyMocks.clearPromptAssemblyTurn.mockReset();
@@ -913,6 +938,7 @@ describe('qq voice plugin', () => {
     await executor?.(session1, {
       options: {
         conversation: createPluginConversation('conv-serial'),
+        inputMessage: createExecutorInputMessage('第一条'),
         responseMessage: createReplyV2Response('第一条回复'),
       },
     });
@@ -998,6 +1024,7 @@ describe('qq voice plugin', () => {
     await executor?.(sessionB, {
       options: {
         conversation: createPluginConversationFromRoom(room),
+        inputMessage: withExecutorInputContract(contextB.options.inputMessage),
         responseMessage: createReplyV2Response('回复B'),
       },
     });
@@ -1169,6 +1196,7 @@ describe('qq voice plugin', () => {
     expect(getPolicy()).toBeTypeOf('function');
     expect(getPromptCompiler()).toBeTypeOf('function');
     expect(getExecutor()).toBeTypeOf('function');
+    expect(getChainConstraints().some((item) => item.name === 'qqbot_reply_tool_memory_state')).toBe(false);
     expect(getChainConstraints()).toContainEqual({
       name: 'qqbot_reply_runtime_prepare',
       kind: 'after',
@@ -1214,10 +1242,10 @@ describe('qq voice plugin', () => {
     expect(getPolicy()).toBeTypeOf('function');
     expect(getPromptCompiler()).toBeTypeOf('function');
     expect(getExecutor()).toBeTypeOf('function');
-    expect(chatChain.middleware).toHaveBeenCalledTimes(5);
+    expect(chatChain.middleware).toHaveBeenCalledTimes(4);
 
     await chatChainAdded?.();
-    expect(chatChain.middleware).toHaveBeenCalledTimes(5);
+    expect(chatChain.middleware).toHaveBeenCalledTimes(4);
   });
 
   it('fails fast when ChatLuna exposes a chain without contextManager', async () => {
@@ -1250,125 +1278,6 @@ describe('qq voice plugin', () => {
     expect(fetchMock.mock.calls.some((call: any[]) => String(call[0]).includes('http://127.0.0.1:8082/healthz'))).toBe(true);
   });
 
-  it('injects recent tool memory as assistant_state before reply planning', async () => {
-    const { ready, getToolMemoryState, bot } = createHarness({
-      databaseGetImpl: async (table: string, query: Record<string, unknown>) => {
-        if (table === 'chatluna_conversation') {
-          return [{
-            id: query.id ?? 'conv-memory',
-            additional_kwargs: JSON.stringify({
-              __chatluna_internal_tool_memory_v1: JSON.stringify([
-                {
-                  turnId: 'turn-1',
-                  createdAt: '2026-03-23T06:00:00.000Z',
-                  toolName: 'web_search',
-                  inputDigest: '{"query":"液态玻璃"}',
-                  snippetFormat: 'text',
-                  snippet: '搜索结果 A',
-                  freshnessHint: '2026-03-23T06:00:00.000Z',
-                },
-              ]),
-            }),
-          }];
-        }
-        if (table === 'chatluna_message') {
-          return createStoredResearchCompatibilityTail(String(query.conversationId ?? 'conv-memory'));
-        }
-        return [];
-      },
-    });
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
-
-    await ready();
-    await flushMicrotasks();
-
-    const middleware = getToolMemoryState();
-    const session = createSession(bot, {
-      content: '继续说',
-      strippedContent: '继续说',
-    });
-    const context = {
-      options: {
-        conversation: createPluginConversation('conv-memory'),
-        inputMessage: {
-          content: '继续说',
-          additional_kwargs: {},
-        },
-      },
-    };
-
-    await middleware?.(session, context);
-
-    expect(promptAssemblyMocks.registerPromptFragment).toHaveBeenCalledWith(
-      'conv-memory',
-      expect.objectContaining({
-        source: 'qqbot_reply_tool_memory',
-        authority: 'assistant_state',
-        payload: expect.objectContaining({
-          kind: 'text',
-          value: expect.stringContaining('搜索结果 A'),
-        }),
-      }),
-    );
-  });
-
-  it('rejects malformed tool memory instead of stringifying object fields into prompt context', async () => {
-    const { ready, getToolMemoryState, bot } = createHarness({
-      databaseGetImpl: async (table: string, query: Record<string, unknown>) => {
-        if (table === 'chatluna_conversation') {
-          return [{
-            id: query.id ?? 'conv-memory',
-            additional_kwargs: JSON.stringify({
-              __chatluna_internal_tool_memory_v1: JSON.stringify([
-                {
-                  turnId: 'turn-1',
-                  createdAt: '2026-03-23T06:00:00.000Z',
-                  toolName: 'web_search',
-                  inputDigest: '{"query":"液态玻璃"}',
-                  snippetFormat: 'text',
-                  snippet: { text: '搜索结果 A' },
-                  freshnessHint: '2026-03-23T06:00:00.000Z',
-                },
-              ]),
-            }),
-          }];
-        }
-        return [];
-      },
-    });
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
-
-    await ready();
-    await flushMicrotasks();
-
-    const middleware = getToolMemoryState();
-    const session = createSession(bot, {
-      content: '继续说',
-      strippedContent: '继续说',
-    });
-    const context = {
-      options: {
-        conversation: createPluginConversation('conv-memory'),
-        inputMessage: {
-          content: '继续说',
-          additional_kwargs: {},
-        },
-      },
-    };
-
-    await middleware?.(session, context);
-
-    expect(promptAssemblyMocks.registerPromptFragment).not.toHaveBeenCalledWith(
-      'conv-memory',
-      expect.objectContaining({
-        source: 'qqbot_reply_tool_memory',
-      }),
-    );
-    expect(
-      loggerMocks.warn.mock.calls.some(([message]) => String(message).includes('reply tool memory parse failed')),
-    ).toBe(true);
-  });
-
   it('compiles QQ reply turns into explicit agent prompt envelopes and requests structured output', async () => {
     const { ready, getPrepare, getPolicy, getPromptCompiler, bot, inject } = createHarness();
     vi.stubGlobal(
@@ -1398,7 +1307,6 @@ describe('qq voice plugin', () => {
           conversationId: 'conv-1',
           conversation: {
             id: 'conv-1',
-            legacyRoomId: 7,
             model: 'Pro/moonshotai/Kimi-K2.5',
             preset: 'sakiko',
             chatMode: 'plugin',
@@ -1412,6 +1320,11 @@ describe('qq voice plugin', () => {
     };
 
     await prepare?.(session, context);
+    const preparedOptions = context.options as typeof context.options & { messageId?: string };
+    expect(promptAssemblyMocks.beginPromptAssemblyTurn).toHaveBeenCalledWith(
+      'conv-1',
+      { turnId: preparedOptions.messageId },
+    );
     await policy?.(session, context);
     await promptCompiler?.(session, context);
     expect((context.options.conversation.conversation as any).chatMode).toBe('plugin');
@@ -1436,11 +1349,21 @@ describe('qq voice plugin', () => {
         value: expect.arrayContaining([
           expect.objectContaining({
             role: 'system',
-            content: expect.stringContaining('qqbot_context_interpretation_protocol'),
+            content: expect.stringContaining('Context Interpretation Protocol'),
+            additional_kwargs: expect.objectContaining({
+              qqbot_context: expect.objectContaining({
+                source: 'qqbot_context_interpretation_protocol',
+              }),
+            }),
           }),
           expect.objectContaining({
             role: 'system',
-            content: expect.stringContaining('qqbot_structured_reply_contract'),
+            content: expect.stringContaining('Structured Reply Contract'),
+            additional_kwargs: expect.objectContaining({
+              qqbot_context: expect.objectContaining({
+                source: 'qqbot_structured_reply_contract',
+              }),
+            }),
           }),
         ]),
       }),
@@ -1674,7 +1597,6 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-chat', {
-          roomId: 8,
           model: 'Pro/moonshotai/Kimi-K2.5',
           preset: 'sakiko',
           chatMode: 'chat',
@@ -1769,6 +1691,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-text'),
+        inputMessage: createExecutorInputMessage('普通聊聊'),
         responseMessage: createReplyV2Response('今晚先这样吧'),
       },
     };
@@ -1781,6 +1704,42 @@ describe('qq voice plugin', () => {
       expect.objectContaining({ conversationId: 'conv-text' }),
       expectedVisibleAssistantHistory('今晚先这样吧'),
     );
+  });
+
+  it('rejects executor contexts without the prompt compiler output contract', async () => {
+    const { ready, getExecutor, bot } = createHarness();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200 })));
+
+    await ready();
+    await flushMicrotasks();
+
+    const executor = getExecutor();
+    const session = createSession(bot, {
+      content: '普通聊聊',
+      strippedContent: '普通聊聊',
+      state: {
+        qqReplyTransport: {
+          capabilitySnapshot: {
+            canMultiline: true,
+            canVoice: false,
+            source: 'cached',
+            refreshedAt: Date.now(),
+          },
+        },
+      },
+    });
+    const context = {
+      options: {
+        conversation: createPluginConversation('conv-missing-contract'),
+        inputMessage: { content: '普通聊聊', additional_kwargs: {} },
+        responseMessage: createReplyV2Response('今晚先这样吧'),
+      },
+    };
+
+    await expect(executor?.(session, context)).rejects.toThrow(
+      'reply executor requires inputMessage with qqbot_final_response_contract.protocol.',
+    );
+    expect(bot.sendMessage).not.toHaveBeenCalled();
   });
 
   it('stores CHAT_REPLY_V1 assistant history as visible text after executor delivery', async () => {
@@ -1976,6 +1935,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-transport-down'),
+        inputMessage: createExecutorInputMessage('普通聊聊'),
         responseMessage: createReplyV2Response('今晚先这样吧'),
       },
     };
@@ -2018,6 +1978,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-send-failed-before-delivery'),
+        inputMessage: createExecutorInputMessage('普通聊聊'),
         responseMessage: createReplyV2Response('今晚先这样吧'),
       },
     };
@@ -2065,6 +2026,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-mention'),
+        inputMessage: createExecutorInputMessage('普通聊聊'),
         responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2117,6 +2079,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-handwritten-mention'),
+        inputMessage: createExecutorInputMessage('普通聊聊'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [
@@ -2165,6 +2128,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-mention-only'),
+        inputMessage: createExecutorInputMessage('普通聊聊'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [
@@ -2213,6 +2177,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-empty-reply'),
+        inputMessage: createExecutorInputMessage('先别说了'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [{ type: 'message', content: '' }],
@@ -2248,6 +2213,7 @@ describe('qq voice plugin', () => {
       const context = {
         options: {
           conversation: createPluginConversation('conv-quote-text'),
+          inputMessage: createExecutorInputMessage('B1'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2295,6 +2261,7 @@ describe('qq voice plugin', () => {
       const context = {
         options: {
           conversation: createPluginConversation('conv-quote-mention'),
+          inputMessage: createExecutorInputMessage('B1'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2337,6 +2304,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-sensitive'),
+        inputMessage: createExecutorInputMessage('中国的'),
         responseMessage: createReplyV2Response('如果您问的是中国大陆近年公开报道里、规模较大且最有代表性的群众性抗议，我会先提 2022 年 11 月的“白纸运动”。'),
       },
     };
@@ -2394,6 +2362,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-voice'),
+        inputMessage: createExecutorInputMessage('请只发一句语音'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [{ type: 'voice', content: '收到。' }],
@@ -2456,6 +2425,7 @@ describe('qq voice plugin', () => {
       const context = {
         options: {
           conversation: createPluginConversation('conv-quote-voice'),
+          inputMessage: createExecutorInputMessage('B1'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2503,6 +2473,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-voice-fallback'),
+        inputMessage: createExecutorInputMessage('请只发一句语音'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [{ type: 'voice', content: '收到。' }],
@@ -2541,6 +2512,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-sticker'),
+        inputMessage: createExecutorInputMessage('配一个表情包'),
         responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2595,6 +2567,7 @@ describe('qq voice plugin', () => {
       const context = {
         options: {
           conversation: createPluginConversation('conv-quote-sticker'),
+          inputMessage: createExecutorInputMessage('B1'),
           responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [{ type: 'meme', content: '无语地看对方一眼' }],
@@ -2640,6 +2613,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-sticker-drop'),
+        inputMessage: createExecutorInputMessage('配一个表情包'),
         responseMessage: createReplyV2Response({
             decision: 'reply',
             outbound_messages: [
@@ -2681,6 +2655,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-1'),
+        inputMessage: createExecutorInputMessage('给我两行命令'),
         responseMessage: createReplyV2Response('echo hi\npwd'),
       },
     };
@@ -2723,6 +2698,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-structured-multiline'),
+        inputMessage: createExecutorInputMessage('先说一句再给清单'),
         responseMessage: createReplyV2Response({
           decision: 'reply',
           outbound_messages: [
@@ -2779,6 +2755,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-broken'),
+        inputMessage: createExecutorInputMessage('普通聊聊'),
         responseMessage: createReplyV2Response('收到'),
       },
     };
@@ -2862,6 +2839,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-rerun'),
+        inputMessage: createExecutorInputMessage('发个表情包'),
         responseMessage: createRawReplyResponse('模型直接说了一句普通文本'),
       },
     };
@@ -2966,6 +2944,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-empty-model-output'),
+        inputMessage: createExecutorInputMessage('发个表情包'),
         responseMessage: createRawReplyResponse('   ', {
           requestMode: 'chat_completions',
           providerOutputTokens: 46,
@@ -3014,6 +2993,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-fenced-json'),
+        inputMessage: createExecutorInputMessage('发个表情包'),
         responseMessage: createRawReplyResponse(
           ['```json', '{"decision":"reply","outbound_messages":[{"type":"message","content":"收到"}]}', '```'].join('\n'),
         ),
@@ -3059,6 +3039,7 @@ describe('qq voice plugin', () => {
     const context = {
       options: {
         conversation: createPluginConversation('conv-invalid-schema'),
+        inputMessage: createExecutorInputMessage('发个表情包'),
         responseMessage: createRawReplyResponse(
           JSON.stringify({
             decision: 'reply',

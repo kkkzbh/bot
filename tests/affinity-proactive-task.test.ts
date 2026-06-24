@@ -147,8 +147,6 @@ const conversation = {
   compression: null,
   archivedAt: null,
   archiveId: null,
-  legacyRoomId: null,
-  legacyMeta: null,
   autoTitle: false,
 };
 
@@ -333,8 +331,16 @@ describe('affinity proactive task prompt and provider adapter', () => {
     const injectedText = chatluna.contextManager.inject.mock.calls[0]?.[0]?.value
       .map((message: { content: string }) => message.content)
       .join('\n\n');
-    expect(injectedText).toContain('qqbot_affinity_proactive_task');
-    expect(injectedText).toContain('qqbot_structured_reply_contract');
+    expect(injectedText).toContain('Affinity Proactive Task');
+    expect(injectedText).toContain('Structured Reply Contract');
+    expect(injectedText).not.toContain('source: qqbot_affinity_proactive_task');
+    expect(injectedText).not.toContain('source: qqbot_structured_reply_contract');
+    const injectedMessages = chatluna.contextManager.inject.mock.calls[0]?.[0]?.value as Array<{
+      additional_kwargs?: Record<string, { source?: string }>;
+    }>;
+    expect(injectedMessages.map((message) => message.additional_kwargs?.qqbot_context?.source)).toEqual(
+      expect.arrayContaining(['qqbot_affinity_proactive_task', 'qqbot_structured_reply_contract']),
+    );
   });
 
   it('keeps image, meme, and voice provider actions in the proactive transport plan', async () => {

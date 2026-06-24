@@ -5,7 +5,6 @@ export type QqbotAttachmentKind = 'image' | 'pdf' | 'text' | 'audio' | 'video' |
 
 export type QqbotAttachmentDerivativeKind =
   | 'pdf_text'
-  | 'pdf_page_preview'
   | 'text_excerpt'
   | 'audio_transcript';
 
@@ -114,12 +113,6 @@ export interface QqbotAttachmentReplaySkip {
   reason: string;
 }
 
-export interface QqbotRequestBudgetPolicy {
-  historyWindow: number;
-  historyTriggerCount: number;
-  historyTokenRatio: number;
-}
-
 export interface QqbotAttachmentServiceLike {
   archiveMessageAttachments(args: {
     conversationId: string;
@@ -132,18 +125,11 @@ export interface QqbotAttachmentServiceLike {
     limit: number;
     recent?: QqbotAttachmentRecord[];
   }): Promise<QqbotResolvedAttachmentSelection>;
-  buildAttachmentContextMessages(args: {
+  buildAttachmentProjectionMessages(args: {
     attachments: QqbotAttachmentRecord[];
-    userText: string;
-    maxInjectTotalBytes: number;
-    maxInjectPerFileBytes: number;
-    maxPdfPreviewPagesPerFile: number;
-    maxPdfPreviewPagesTotal: number;
-    maxTextCharsPerFile: number;
   }): Promise<{
     messages: BaseMessage[];
     projections: QqbotAttachmentContextProjection[];
-    injected: QqbotAttachmentRecord[];
     skipped: Array<{ refId: string; reason: string }>;
   }>;
   replayAttachments(args: {

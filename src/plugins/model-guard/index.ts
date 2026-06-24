@@ -13,6 +13,7 @@ import {
 import { mainChatRuntimeState } from '../shared/llm/main-chat-runtime.js';
 import {
   resolveChatLunaRoomLike,
+  type QqbotChatLunaRoomLike,
   type QqbotChatLunaContextOptionsLike,
 } from '../shared/chatluna-conversation.js';
 import { beginPromptAssemblyTurn, registerPromptFragment } from '../shared/prompt-context/index.js';
@@ -36,7 +37,7 @@ type ChainHookBuilder = {
 
 type ChatLunaLike = {
   awaitLoadPlatform?: (platform: string, timeout?: number) => Promise<void>;
-  clearCache?: (room: RoomLike) => Promise<unknown>;
+  clearCache?: (room: QqbotChatLunaRoomLike) => Promise<unknown>;
   conversation?: {
     createConversation?: (session: Session, options: {
       bindingKey?: string;
@@ -56,19 +57,11 @@ type ChatLunaLike = {
 
 type ContextServices = { chatluna?: ChatLunaLike };
 
-type RoomLike = {
-  roomId?: number | string;
-  conversationId?: string;
-  model?: string;
-  [key: string]: unknown;
-};
-
 type MiddlewareContextLike = {
   command?: string;
   config: unknown;
   send?: (message: string) => Promise<void>;
   options?: QqbotChatLunaContextOptionsLike & {
-    room?: RoomLike;
     messageId?: string;
     inputMessage?: {
       content?: unknown;
@@ -99,7 +92,7 @@ async function resolveOrEnsureReplyRoom(
   chatluna: ChatLunaLike,
   session: Session,
   context: MiddlewareContextLike,
-): Promise<RoomLike | undefined> {
+): Promise<QqbotChatLunaRoomLike | undefined> {
   const resolved = resolveChatLunaRoomLike(context.options);
   if (resolved) return resolved;
   if (!isQqReplySession(session)) return undefined;
@@ -159,14 +152,14 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (!chatluna || !chain) return false;
 
     chain
-      .middleware('chatluna_time_context', async (rawSession, rawContext) => {
+      .middleware('qqbot_turn_context', async (rawSession, rawContext) => {
         const session = rawSession as Session;
         const context = rawContext as MiddlewareContextLike;
         const inputMessage = context.options?.inputMessage;
         if (!inputMessage) return ChatLunaChains.ChainMiddlewareRunStatus.CONTINUE;
         const conversationId = resolveChatLunaRoomLike(context.options)?.conversationId?.trim();
         if (conversationId) {
-          beginPromptAssemblyTurn(conversationId);
+          beginPromptAssemblyTurn(conversationId, { turnId: context.options?.messageId });
         }
         const turnIntent = resolveUserTurnIntentState(session.stripped?.content, inputMessage.content);
         const userName = resolveSessionDisplayName(session);
@@ -174,7 +167,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const naturalTrigger = getNaturalTriggerState(session as unknown as Record<string, unknown>);
         if (conversationId) {
           registerPromptFragment(conversationId, {
-            source: 'chatluna_time_context',
+            source: 'qqbot_turn_context',
             title: 'User Turn Metadata',
             authority: 'reference',
             trust: 'trusted',
@@ -240,8 +233,8 @@ export function apply(ctx: Context, config: Config = {}): void {
           updateResolvedConversationModel(context.options, room.model);
           if (syncResult.changed) {
             logger.info(
-              'hot-switched room model for guard (roomId=%s, model=%s, generation=%s, strategy=%s, requestMode=%s).',
-              String(room.roomId ?? ''),
+              'hot-switched conversation model for guard (conversationId=%s, model=%s, generation=%s, strategy=%s, requestMode=%s).',
+              trimOptionalText(room.conversationId) ?? '<unknown>',
               syncResult.canonicalModel,
               String(syncResult.generation),
               syncResult.strategyId,
@@ -252,7 +245,6 @@ export function apply(ctx: Context, config: Config = {}): void {
             '%s',
             formatStructuredLogBlock('reply-plan-debug', {
               stage: 'model_guard_effective_model',
-              roomId: room.roomId ?? null,
               conversationId: trimOptionalText(room.conversationId) ?? null,
               originalRoomModel: syncResult.originalModel,
               effectiveModel: syncResult.canonicalModel,
@@ -271,9 +263,9 @@ export function apply(ctx: Context, config: Config = {}): void {
               await chatluna.awaitLoadPlatform(platform, 15000);
             } catch (error) {
               logger.warn(
-                'awaitLoadPlatform failed for %s (roomId=%s): %s',
+                'awaitLoadPlatform failed for %s (conversationId=%s): %s',
                 platform,
-                String(room.roomId ?? ''),
+                trimOptionalText(room.conversationId) ?? '<unknown>',
                 (error as Error).message,
               );
             }
@@ -284,8 +276,8 @@ export function apply(ctx: Context, config: Config = {}): void {
           if (!available) {
             const modelName = trimOptionalText(room.model) ?? 'unknown';
             logger.warn(
-              'current main chat model is unavailable (roomId=%s, model=%s).',
-              String(room.roomId ?? ''),
+              'current main chat model is unavailable (conversationId=%s, model=%s).',
+              trimOptionalText(room.conversationId) ?? '<unknown>',
               modelName,
             );
             if (context.send) {

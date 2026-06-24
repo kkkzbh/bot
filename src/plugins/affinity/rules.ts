@@ -553,7 +553,7 @@ export function formatStateForPrompt(state: AffinityStateInput): Record<string, 
     },
     rules: [
       'Do not reveal numeric affinity values unless the user explicitly asks in a management context.',
-      'Do not claim relationship state changed unless qqbot_affinity_event_result says it changed.',
+      'Do not claim relationship state changed unless eventResult.effectTier indicates a meaningful change.',
       'Prefer subtle Sakiko-style feedback over game-like score announcements.',
       'When attentionHeat is high, keep replies shorter and more guarded.',
     ],

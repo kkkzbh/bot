@@ -711,7 +711,12 @@ describe('task automation tools and execution', () => {
         value: expect.arrayContaining([
           expect.objectContaining({
             role: 'system',
-            content: expect.stringContaining('qqbot_automation_recent_context'),
+            content: expect.stringContaining('Automation Recent Conversation Window'),
+            additional_kwargs: expect.objectContaining({
+              qqbot_context: expect.objectContaining({
+                source: 'qqbot_automation_recent_context',
+              }),
+            }),
           }),
           expect.objectContaining({
             role: 'system',

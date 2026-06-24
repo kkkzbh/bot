@@ -3,7 +3,7 @@ import { resolveChatLunaRoomLike } from '../src/plugins/shared/chatluna-conversa
 
 describe('chatluna conversation resolution adapter', () => {
   it('uses effective conversation runtime fields instead of stale room or conversation values', () => {
-    const room = resolveChatLunaRoomLike({
+    const context = {
       conversation: {
         conversationId: 'conv-effective',
         effectiveModel: 'effective-model',
@@ -17,14 +17,16 @@ describe('chatluna conversation resolution adapter', () => {
           chatMode: 'chat',
         },
       },
-    });
+    };
+
+    const room = resolveChatLunaRoomLike(context);
 
     expect(room).toEqual(expect.objectContaining({
       conversationId: 'conv-effective',
-      roomId: 7,
       model: 'effective-model',
       preset: 'effective-preset',
       chatMode: 'plugin',
     }));
+    expect(room).not.toHaveProperty('roomId');
   });
 });

@@ -6,7 +6,7 @@ import type { StructuredReply, StructuredReplyMessage } from './pipeline/types.j
 
 const gzipAsync = promisify(gzip);
 
-type DatabaseLike = {
+export type StructuredReplyHistoryDatabaseLike = {
   get: (table: string, query: Record<string, unknown>, fields?: string[]) => Promise<Array<Record<string, unknown>>>;
   set: (table: string, query: Record<string, unknown>, update: Record<string, unknown>) => Promise<unknown>;
   remove: (table: string, query: Record<string, unknown>) => Promise<unknown>;
@@ -379,6 +379,7 @@ const TRANSIENT_ADDITIONAL_KWARG_KEYS = [
   'qqbot_final_response_schema',
   'qqbot_final_response_instruction',
   'qqbot_input_content_meta',
+  'qqbot_attachment_refs',
   'qqbot_override_request_params',
   'qqbot_reply_mode',
   'qqbot_request_budget_policy',
@@ -512,7 +513,7 @@ async function renderLegacyToolActionHistory(row: Record<string, unknown>): Prom
 }
 
 export async function migrateStructuredReplyHistoryRows(
-  database: DatabaseLike,
+  database: StructuredReplyHistoryDatabaseLike,
 ): Promise<StructuredReplyHistoryMigrationResult> {
   const aiRows = await database.get('chatluna_message', { role: 'ai' }, ['id', 'role', 'content']);
   let structuredRowsMigrated = 0;

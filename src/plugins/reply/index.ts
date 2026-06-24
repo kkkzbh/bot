@@ -17,6 +17,7 @@ export {
   type ReplyCapabilitySnapshot,
   type ReplyInputMessageLike,
   type ReplyOutputContractApplyOptions,
+  type ReplySessionLike,
   type RuntimeConfig,
 } from './voice/generation.js';
 export { formatStructuredLogBlock } from './pipeline/debug.js';
@@ -41,7 +42,7 @@ export {
   type ProactiveOpeningState,
   type UserTurnIntentMode,
   type UserTurnIntentState,
-} from './prompt/time-context.js';
+} from './prompt/turn-context.js';
 export {
   normalizeVoiceSynthesisText,
   pickVoiceStyle,

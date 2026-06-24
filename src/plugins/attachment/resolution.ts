@@ -84,18 +84,6 @@ export function createAttachmentCatalogText(records: QqbotAttachmentRecord[]): s
   return lines.join('\n');
 }
 
-export function createResolutionText(resolution: QqbotResolvedAttachmentSelection): string {
-  if (resolution.selected.length < 1) {
-    return '';
-  }
-
-  const lines = ['本轮已解析到以下历史附件引用，可根据需要调用附件回放工具：'];
-  for (const record of resolution.selected) {
-    lines.push(`- ${record.refId} | ${record.kind} | ${record.filename ?? 'unnamed'}`);
-  }
-  return lines.join('\n');
-}
-
 export function createAmbiguousResolutionText(resolution: QqbotResolvedAttachmentSelection): string {
   if (resolution.ambiguous.length < 1) {
     return '';

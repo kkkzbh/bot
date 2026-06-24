@@ -8,7 +8,7 @@ import {
   registerPromptFragment,
 } from '../src/plugins/shared/prompt-context/index.js';
 import { buildReplyPromptCompilerInput, compileReplyPromptEnvelope } from '../src/plugins/reply/prompt/compiler.js';
-import { buildNaturalTriggerReference } from '../src/plugins/reply/prompt/time-context.js';
+import { buildNaturalTriggerReference } from '../src/plugins/reply/prompt/turn-context.js';
 
 describe('prompt assembly', () => {
   afterEach(() => {
@@ -18,7 +18,7 @@ describe('prompt assembly', () => {
   it('compiles registered runtime contract before turn fragments without implicit reply builtins', () => {
     beginPromptAssemblyTurn('conv-1');
     registerPromptFragment('conv-1', {
-      source: 'chatluna_time_context',
+      source: 'qqbot_turn_context',
       title: 'User Turn Metadata',
       authority: 'reference',
       trust: 'trusted',
@@ -50,20 +50,35 @@ describe('prompt assembly', () => {
     const envelope = compilePromptEnvelope('conv-1');
     expect(envelope?.fragments.map((fragment) => fragment.source)).toEqual([
       'qqbot_reply_transport_capability',
-      'chatluna_time_context',
+      'qqbot_turn_context',
     ]);
     expect(envelope?.messages.every((message) => message.role === 'system')).toBe(true);
     const compiledContent = envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '';
     expect(compiledContent).toContain('[qqbot-context]');
-    expect(compiledContent).toContain('kind: turn_state');
+    expect(compiledContent).toContain('kind: runtime_contract');
     expect(compiledContent).toContain('kind: reference');
+    expect(compiledContent).toContain('trust: trusted');
+    expect(compiledContent).not.toContain('\nsource:');
+    expect(compiledContent).not.toContain('\nauthority:');
+    expect(compiledContent).not.toContain('\nttl:');
+    expect(compiledContent).not.toContain('\npayload_kind:');
+    expect(compiledContent).not.toContain('chatluna_time_context');
     expect(compiledContent).not.toContain('qqbot_reply_protocol');
+    expect(envelope?.messages[0]?.additional_kwargs?.qqbot_context).toEqual(
+      expect.objectContaining({
+        source: 'qqbot_reply_transport_capability',
+        authority: 'runtime_contract',
+        trust: 'trusted',
+        ttl: 'turn',
+        payload_kind: 'json',
+      }),
+    );
   });
 
   it('compiles ad-hoc fragments with the same ordering rules', () => {
     const envelope = compilePromptEnvelopeFromFragments([
       {
-        source: 'chatluna_time_context',
+        source: 'qqbot_turn_context',
         title: 'User Turn Metadata',
         authority: 'reference',
         trust: 'trusted',
@@ -88,12 +103,13 @@ describe('prompt assembly', () => {
 
     expect(envelope?.fragments.map((fragment) => fragment.source)).toEqual([
       'qqbot_persona',
-      'chatluna_time_context',
+      'qqbot_turn_context',
     ]);
     expect(envelope?.messages[0]).toMatchObject({
       role: 'system',
       content: expect.stringContaining('[qqbot-context]'),
     });
+    expect(envelope?.messages[0]?.content).toContain('kind: persona_core');
   });
 
   it('supports minimal weak natural trigger reference fragments', () => {
@@ -115,9 +131,14 @@ describe('prompt assembly', () => {
 
     const envelope = compilePromptEnvelope('conv-1');
     const compiledContent = envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '';
-    expect(compiledContent).toContain('source: qqbot_natural_trigger');
+    expect(compiledContent).not.toContain('source: qqbot_natural_trigger');
     expect(compiledContent).toContain('"reason": "focus"');
     expect(compiledContent).toContain('"explicit": false');
+    expect(envelope?.messages[0]?.additional_kwargs?.qqbot_context).toEqual(
+      expect.objectContaining({
+        source: 'qqbot_natural_trigger',
+      }),
+    );
   });
 
   it('rejects non-serializable JSON fragments instead of rendering object fallback text', () => {
@@ -250,7 +271,7 @@ describe('prompt assembly', () => {
         },
         [
           {
-            source: 'chatluna_time_context',
+            source: 'qqbot_turn_context',
             title: 'User Turn Metadata',
             authority: 'reference',
             trust: 'trusted',
@@ -453,7 +474,8 @@ describe('prompt assembly', () => {
     expect(content).toContain('att_2 application/pdf report.pdf');
   });
 
-  it('preserves fragments registered before the turn formally begins', () => {
+  it('keeps fragments when the same turn id begins twice', () => {
+    beginPromptAssemblyTurn('conv-1', { turnId: 'run-1' });
     registerPromptFragment('conv-1', {
       source: 'qqbot_live_reply_continuation',
       title: 'Assistant Continuation State',
@@ -466,9 +488,9 @@ describe('prompt assembly', () => {
       },
     });
 
-    beginPromptAssemblyTurn('conv-1');
+    beginPromptAssemblyTurn('conv-1', { turnId: 'run-1' });
     registerPromptFragment('conv-1', {
-      source: 'chatluna_time_context',
+      source: 'qqbot_turn_context',
       title: 'User Turn Metadata',
       authority: 'reference',
       trust: 'trusted',
@@ -482,6 +504,25 @@ describe('prompt assembly', () => {
     const envelope = compilePromptEnvelope('conv-1');
     expect(envelope?.fragments.map((fragment) => fragment.content).join('\n\n') ?? '').toContain('这是续写，不要重复前文。');
     expect(envelope?.fragments.map((fragment) => fragment.source)).toContain('qqbot_live_reply_continuation');
+  });
+
+  it('drops fragments registered before an explicit turn begins', () => {
+    registerPromptFragment('conv-1', {
+      source: 'stale_prestart_fragment',
+      title: 'Stale Prestart Fragment',
+      authority: 'reference',
+      trust: 'trusted',
+      ttl: 'turn',
+      payload: {
+        kind: 'text',
+        value: '不应该泄漏到下一轮',
+      },
+    });
+
+    beginPromptAssemblyTurn('conv-1', { turnId: 'run-1' });
+
+    const envelope = compilePromptEnvelope('conv-1');
+    expect(envelope).toBeNull();
   });
 
   it('clears stale fragments when a new started turn begins', () => {

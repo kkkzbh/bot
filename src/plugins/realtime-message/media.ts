@@ -21,6 +21,8 @@ type ChatLunaMediaLike = {
   messageTransformer?: MessageTransformerLike;
 };
 
+const TRANSFORMED_MEDIA_MARKER_PATTERN = /\[(?:image|audio|video|file):[^\]]+\]/giu;
+
 function formatSpeakerName(name: string): string {
   return JSON.stringify(name);
 }
@@ -50,6 +52,29 @@ function mergeVisibleText(baseText: string, extraText: string): string {
   return mergeVoiceInputText(baseText, extraText);
 }
 
+function extractTextFromContent(content: MessageContent): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((part) => isTextContentPart(part))
+    .map((part) => part.text)
+    .join('');
+}
+
+function normalizeComparableVisibleText(text: string): string {
+  return text
+    .replace(TRANSFORMED_MEDIA_MARKER_PATTERN, ' ')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function contentAlreadyContainsVisibleText(content: MessageContent, visibleText: string): boolean {
+  const normalizedVisibleText = normalizeComparableVisibleText(visibleText);
+  if (!normalizedVisibleText) return true;
+  const normalizedContentText = normalizeComparableVisibleText(extractTextFromContent(content));
+  return normalizedContentText.includes(normalizedVisibleText);
+}
+
 export function buildRealtimeVisibleText(entry: RealtimeMessageEntry): string {
   return mergeVisibleText(entry.text, entry.voiceTranscript ?? '');
 }
@@ -57,6 +82,7 @@ export function buildRealtimeVisibleText(entry: RealtimeMessageEntry): string {
 function mergeTextIntoContent(content: MessageContent, extraText: string): MessageContent {
   const visibleText = extraText.trim();
   if (!visibleText) return content;
+  if (contentAlreadyContainsVisibleText(content, visibleText)) return content;
 
   if (typeof content === 'string') {
     return mergeVisibleText(content, visibleText);

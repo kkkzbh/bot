@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildProactiveOpeningState,
   resolveUserTurnIntentState,
-} from '../src/plugins/reply/prompt/time-context.js';
+} from '../src/plugins/reply/prompt/turn-context.js';
 import {
   buildReplyOutputContract,
   buildStructuredReplyModelOverride,

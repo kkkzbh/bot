@@ -59,6 +59,8 @@ import { mainChatRuntimeState } from '../src/plugins/shared/llm/main-chat-runtim
 
 afterEach(() => {
   mainChatRuntimeState.initialize(resolveMainChatRuntimeProfileFromEnv({}));
+  promptAssemblyMocks.beginPromptAssemblyTurn.mockReset();
+  promptAssemblyMocks.registerPromptFragment.mockReset();
 });
 
 type ChainMiddleware = (session: Record<string, any>, context: Record<string, any>) => Promise<number>;
@@ -150,11 +152,11 @@ describe('chatluna model guard runtime shape', () => {
     expect(harness.middlewares).toHaveLength(0);
   });
 
-  it('registers only time-context and model-guard chain middlewares on ready', () => {
+  it('registers only turn-context and model-guard chain middlewares on ready', () => {
     const harness = createHarness();
     harness.ready?.();
 
-    expect(harness.chainMiddlewares.has('chatluna_time_context')).toBe(true);
+    expect(harness.chainMiddlewares.has('qqbot_turn_context')).toBe(true);
     expect(harness.chainMiddlewares.has('chatluna_model_guard')).toBe(true);
     expect(harness.chainMiddlewares.has('qqbot_live_replan_gate')).toBe(false);
     expect(constraints).toContainEqual({
@@ -173,14 +175,50 @@ describe('chatluna model guard runtime shape', () => {
     const harness = createHarness({ chatChainAvailableInitially: false });
     harness.ready?.();
 
-    expect(harness.chainMiddlewares.has('chatluna_time_context')).toBe(false);
+    expect(harness.chainMiddlewares.has('qqbot_turn_context')).toBe(false);
     expect(harness.chainMiddlewares.has('chatluna_model_guard')).toBe(false);
 
     harness.setChatChainAvailable();
     harness.chatChainAdded?.();
 
-    expect(harness.chainMiddlewares.has('chatluna_time_context')).toBe(true);
+    expect(harness.chainMiddlewares.has('qqbot_turn_context')).toBe(true);
     expect(harness.chainMiddlewares.has('chatluna_model_guard')).toBe(true);
+  });
+
+  it('starts prompt assembly with the resolved message id as the turn id', async () => {
+    const harness = createHarness();
+    harness.ready?.();
+
+    const turnContext = harness.chainMiddlewares.get('qqbot_turn_context');
+    await turnContext?.(
+      {
+        stripped: { content: '今天呢' },
+        userId: 'u1',
+        bot: { selfId: 'bot' },
+      },
+      {
+        options: {
+          messageId: 'qqreply:run-1',
+          conversation: {
+            conversationId: 'conv-1',
+            conversation: {
+              id: 'conv-1',
+              model: 'Pro/moonshotai/Kimi-K2.5',
+              preset: 'sakiko',
+              chatMode: 'plugin',
+            },
+          },
+          inputMessage: {
+            content: '今天呢',
+          },
+        },
+      },
+    );
+
+    expect(promptAssemblyMocks.beginPromptAssemblyTurn).toHaveBeenCalledWith(
+      'conv-1',
+      { turnId: 'qqreply:run-1' },
+    );
   });
 
   it('updates the live ChatLuna 1.4 conversation model before resolve_model reads it', async () => {
