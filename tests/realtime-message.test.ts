@@ -323,7 +323,7 @@ function stubVoiceRuntimeEnv(overrides: Record<string, string> = {}): void {
 
 describe('realtime message plugin', () => {
   it('declares runtime services as required injections', () => {
-    expect(inject).toEqual({ required: ['chatluna', 'featurePolicy'] });
+    expect(inject).toEqual({ required: ['chatluna', 'featurePolicy', 'database'] });
   });
 
   it('fails fast without the required feature policy service', () => {

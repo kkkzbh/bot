@@ -45,7 +45,7 @@ const logger = new Logger('realtime-message');
 const CHAT_CHAIN_CONTINUE = 2;
 
 export const name = 'realtime-message';
-export const inject = { required: ['chatluna', 'featurePolicy'] } as const;
+export const inject = { required: ['chatluna', 'featurePolicy', 'database'] } as const;
 
 export interface Config {
   maxInjectCount?: number;
