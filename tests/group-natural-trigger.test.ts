@@ -52,10 +52,12 @@ function createHarness(
   middleware: Middleware;
   chatChainMiddlewares: Map<string, ChatChainMiddleware>;
   messageTransformer: { transform: ReturnType<typeof vi.fn> };
+  featurePolicy: { resolveFeatureEnabled: ReturnType<typeof vi.fn> };
   registerAllowReplyResolver: ReturnType<typeof vi.fn>;
   disposeAllowReplyResolver: ReturnType<typeof vi.fn>;
   runReady: () => Promise<void>;
   runDispose: () => Promise<void>;
+  runBeforeCheckSender: (session: Record<string, any>) => Promise<unknown[]>;
 } {
   const middlewares: Middleware[] = [];
   const chatChainMiddlewares = new Map<string, ChatChainMiddleware>();
@@ -116,20 +118,28 @@ function createHarness(
     ...overrides,
   });
 
-  const runHook = async (name: string): Promise<void> => {
+  const runHook = async (name: string, ...args: unknown[]): Promise<unknown[]> => {
+    const results: unknown[] = [];
     for (const listener of listeners.get(name) ?? []) {
-      await listener();
+      results.push(await listener(...args));
     }
+    return results;
   };
 
   return {
     middleware: middlewares[0],
     chatChainMiddlewares,
     messageTransformer,
+    featurePolicy,
     registerAllowReplyResolver,
     disposeAllowReplyResolver,
-    runReady: () => runHook('ready'),
-    runDispose: () => runHook('dispose'),
+    runReady: async () => {
+      await runHook('ready');
+    },
+    runDispose: async () => {
+      await runHook('dispose');
+    },
+    runBeforeCheckSender: (session) => runHook('chatluna/before-check-sender', session),
   };
 }
 
@@ -304,6 +314,37 @@ describe('group natural trigger middleware', () => {
     );
 
     expect(result.naturalTrigger).toBeNull();
+  });
+
+  it('vetoes ChatLuna native group reply checks outside the natural trigger whitelist', async () => {
+    const { runBeforeCheckSender } = createHarness({ enabledGroups: '100', replyIntervalMs: 0 });
+
+    await expect(runBeforeCheckSender(createSession({
+      channelId: '999',
+      guildId: '999',
+      content: '祥子 在吗',
+    }))).resolves.toEqual([true]);
+  });
+
+  it('keeps ChatLuna native group reply checks available inside the natural trigger whitelist', async () => {
+    const { runBeforeCheckSender } = createHarness({ enabledGroups: '100', replyIntervalMs: 0 });
+
+    await expect(runBeforeCheckSender(createSession({
+      channelId: '100',
+      guildId: '100',
+      content: '祥子 在吗',
+    }))).resolves.toEqual([undefined]);
+  });
+
+  it('vetoes ChatLuna native group reply checks when feature policy disables natural trigger', async () => {
+    const { featurePolicy, runBeforeCheckSender } = createHarness({ enabledGroups: '100', replyIntervalMs: 0 });
+    featurePolicy.resolveFeatureEnabled.mockResolvedValue(false);
+
+    await expect(runBeforeCheckSender(createSession({
+      channelId: '100',
+      guildId: '100',
+      content: '祥子 在吗',
+    }))).resolves.toEqual([true]);
   });
 
   it('does not trigger without complete group session identity', async () => {

@@ -439,6 +439,14 @@ export function apply(ctx: Context, config: Config): void {
     }
   });
 
+  ctx.on('chatluna/before-check-sender', async (session) => {
+    if (session.isDirect) return;
+    if (getNaturalTriggerState(session as unknown as Record<string, unknown>)) return;
+    if (!runtime.enabled) return true;
+    if (!(await featurePolicy.resolveFeatureEnabled(session, 'CHAT_NATURAL_TRIGGER_ENABLED'))) return true;
+    if (!shouldHandleGroup(session, runtime)) return true;
+  });
+
   ctx.on('ready', () => {
     ensureAllowReplyResolverRegistered();
     logger.info(
