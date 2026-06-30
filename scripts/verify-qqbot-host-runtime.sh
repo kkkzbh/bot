@@ -4,6 +4,7 @@ set -euo pipefail
 PMHQ_CONTAINER="${QQBOT_PMHQ_CONTAINER_NAME:-pmhq}"
 PMHQ_HEALTH_HOST="${QQBOT_PMHQ_HEALTH_HOST:-127.0.0.1}"
 PMHQ_PORT="${PMHQ_PORT:-13000}"
+PMHQ_LOGIN_NETWORK_PROBE_URL="${QQBOT_PMHQ_LOGIN_NETWORK_PROBE_URL:-https://im.qq.com/}"
 LLBOT_WEBUI_PORT="${LLONEBOT_WEBUI_PORT:-3080}"
 LLONEBOT_WS_PORT="${LLONEBOT_WS_PORT:-3001}"
 LLBOT_UNIT="${QQBOT_LLBOT_UNIT:-qqbot-llbot.service}"
@@ -79,6 +80,17 @@ container_is_healthy() {
   [ "${health}" = "healthy" ] || [ "${health}" = "unknown" ]
 }
 
+container_has_default_route() {
+  podman exec "${PMHQ_CONTAINER}" sh -lc \
+    'grep -Eq "^[^[:space:]]+[[:space:]]+00000000[[:space:]]+" /proc/net/route'
+}
+
+container_can_reach_login_network() {
+  podman exec "${PMHQ_CONTAINER}" sh -lc \
+    'curl --noproxy "*" -fsS --connect-timeout 8 --max-time 15 "$1" -o /dev/null' \
+    sh "${PMHQ_LOGIN_NETWORK_PROBE_URL}"
+}
+
 llbot_logs_contain() {
   local pattern="$1"
   journalctl --user -u "${LLBOT_UNIT}" --no-pager -n 500 2>/dev/null | grep -F "${pattern}" >/dev/null
@@ -109,6 +121,14 @@ wait_until() {
 print_diagnostics() {
   echo "== pmhq inspect ==" >&2
   podman inspect "${PMHQ_CONTAINER}" 2>/dev/null || true
+  echo "== pmhq routes ==" >&2
+  podman exec "${PMHQ_CONTAINER}" sh -lc 'cat /proc/net/route' >&2 || true
+  echo "== pmhq resolv.conf ==" >&2
+  podman exec "${PMHQ_CONTAINER}" sh -lc 'cat /etc/resolv.conf' >&2 || true
+  echo "== pmhq login network probe ==" >&2
+  podman exec "${PMHQ_CONTAINER}" sh -lc \
+    'curl --noproxy "*" -I --connect-timeout 8 --max-time 15 "$1"' \
+    sh "${PMHQ_LOGIN_NETWORK_PROBE_URL}" >&2 || true
   echo "== pmhq logs ==" >&2
   podman logs "${PMHQ_CONTAINER}" 2>&1 || true
   echo "== ${LLBOT_UNIT} logs ==" >&2
@@ -120,6 +140,8 @@ print_diagnostics() {
 trap 'code=$?; if [ "$code" -ne 0 ]; then print_diagnostics; fi; exit "$code"' EXIT
 
 wait_until "${PMHQ_CONTAINER} is running" container_is_running
+wait_until "${PMHQ_CONTAINER} has a default route" container_has_default_route
+wait_until "${PMHQ_CONTAINER} can reach QQ login network" container_can_reach_login_network
 wait_until "${PMHQ_CONTAINER} is healthy" container_is_healthy
 wait_until "pmhq health endpoint is reachable" \
   node_http_probe "http://${PMHQ_HEALTH_HOST}:${PMHQ_PORT}/health" "pmhq health"

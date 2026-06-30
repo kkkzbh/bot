@@ -40,10 +40,13 @@ describe('qq voice config wiring', () => {
   it('keeps compose focused on pmhq and voice-asr only', () => {
     const content = readFileSync(resolve(process.cwd(), 'compose.yaml'), 'utf8');
 
-    expect(content).toContain('"${PMHQ_BIND_HOST:-127.0.0.1}:${PMHQ_PORT:-13000}:13000"');
+    expect(content).toContain(
+      'network_mode: "pasta:-t,${PMHQ_BIND_HOST:-127.0.0.1}/${PMHQ_PORT:-13000}:13000"',
+    );
     expect(content).toContain('voice-asr:');
     expect(content).toContain('"127.0.0.1:${VOICE_ASR_PORT:-5161}:8080"');
     expect(content).toContain('./data/voice/asr:/data/voice/asr:Z');
+    expect(content).not.toContain('"${PMHQ_BIND_HOST:-127.0.0.1}:${PMHQ_PORT:-13000}:13000"');
     expect(content).not.toContain('\n  llbot:\n');
     expect(content).not.toContain('qqbot-stack_app_network');
     expect(content).not.toContain('pmhq_host:');
@@ -134,6 +137,10 @@ describe('qq voice config wiring', () => {
     expect(pmhqScript).toContain('remove_legacy_cni_artifacts');
     expect(pmhqScript).toContain('podman network rm qqbot-stack_default qqbot-stack_app_network');
     expect(pmhqScript).toContain('rm -f /etc/cni/net.d/qqbot-stack_default.conflist /etc/cni/net.d/qqbot-stack_app_network.conflist');
+    expect(pmhqScript).toContain('host_login_network_ready');
+    expect(pmhqScript).toContain('pmhq_container_has_default_route');
+    expect(pmhqScript).toContain('pmhq_container_can_reach_login_network');
+    expect(pmhqScript).toContain('remove_unusable_pmhq_container');
   });
 
   it('ships a laptop-local TTS env template and user service example', () => {
@@ -242,6 +249,9 @@ describe('qq voice config wiring', () => {
     expect(content).toContain('compose up -d pmhq');
     expect(content).toContain('compose stop pmhq');
     expect(content).toContain('remove_legacy_llbot_container');
+    expect(content).toContain('QQBOT_PMHQ_LOGIN_NETWORK_PROBE_URL');
+    expect(content).toContain('wait_for "host login network is reachable"');
+    expect(content).toContain('wait_for "${PMHQ_CONTAINER} outbound network is ready"');
     expect(content).not.toContain('compose up -d llbot');
   });
 
@@ -249,6 +259,8 @@ describe('qq voice config wiring', () => {
     const content = readFileSync(resolve(process.cwd(), 'scripts/verify-qqbot-host-runtime.sh'), 'utf8');
 
     expect(content).toContain('wait_until "${PMHQ_CONTAINER} is running"');
+    expect(content).toContain('wait_until "${PMHQ_CONTAINER} has a default route"');
+    expect(content).toContain('wait_until "${PMHQ_CONTAINER} can reach QQ login network"');
     expect(content).toContain('wait_until "pmhq health endpoint is reachable"');
     expect(content).toContain('wait_until "llbot webui is reachable"');
     expect(content).toContain('wait_until "${LLBOT_UNIT} completes PMHQ WebSocket handshake"');

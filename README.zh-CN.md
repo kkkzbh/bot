@@ -146,7 +146,7 @@ LLBot 启动后打开 LLBot WebUI：
 http://127.0.0.1:3080
 ```
 
-从 PMHQ 或 LLBot 的登录提示完成 QQ 登录。托管的 LLBot 启动流程会在 `3001` 端口启用 OneBot WebSocket server。
+从 PMHQ 或 LLBot 的登录提示完成 QQ 登录。QQ 登录完成后，LLBot 会在 `3001` 端口暴露 OneBot WebSocket server。
 
 终端 3：启动 Koishi。
 

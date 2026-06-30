@@ -156,8 +156,8 @@ Open the LLBot WebUI after LLBot starts:
 http://127.0.0.1:3080
 ```
 
-Log in to QQ from the PMHQ or LLBot login prompt. The managed LLBot startup
-enables the OneBot WebSocket server on port `3001`.
+Log in to QQ from the PMHQ or LLBot login prompt. LLBot exposes the OneBot
+WebSocket server on port `3001` after QQ login completes.
 
 Terminal 3: start Koishi.
 

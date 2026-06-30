@@ -405,12 +405,9 @@ describe('llbot host runtime helpers', () => {
     expect(existsSync(join(qqMountSource, 'nt_qq_test', 'nt_data', 'Pic'))).toBe(true);
   });
 
-  it('keeps the host launcher running only after the OB11 websocket port is ready', async () => {
+  it('keeps the host launcher running until LLBot exits before QQ login', async () => {
     const { runtimeDir, dataDir, qqMountSource } = prepareLauncherRuntime([
-      'const net = require("node:net");',
-      'const port = Number(process.env.LLONEBOT_WS_PORT);',
-      'const server = net.createServer();',
-      'server.listen(port, "0.0.0.0", () => setTimeout(() => server.close(() => process.exit(0)), 300));',
+      'setTimeout(() => process.exit(0), 300);',
     ].join('\n'));
 
     const result = await runLlbotHostLauncher({
@@ -419,15 +416,17 @@ describe('llbot host runtime helpers', () => {
       LLONEBOT_DATA_DIR: dataDir,
       QQBOT_QQ_CONFIG_MOUNT_SOURCE: qqMountSource,
       LLONEBOT_WS_PORT: '30191',
-      LLBOT_OB11_READY_TIMEOUT_SEC: '3',
     });
 
     expect(result.code).toBe(0);
     expect(result.stderr).not.toContain('did not become ready');
   });
 
-  it('fails the host launcher when LLBot never exposes the OB11 websocket port', async () => {
-    const { runtimeDir, dataDir, qqMountSource } = prepareLauncherRuntime('setTimeout(() => undefined, 5000);');
+  it('propagates the LLBot process exit status', async () => {
+    const { runtimeDir, dataDir, qqMountSource } = prepareLauncherRuntime([
+      'process.stderr.write("llbot failed\\n");',
+      'process.exit(7);',
+    ].join('\n'));
 
     const result = await runLlbotHostLauncher({
       LLBOT_VERSION: '7.12.15',
@@ -435,10 +434,9 @@ describe('llbot host runtime helpers', () => {
       LLONEBOT_DATA_DIR: dataDir,
       QQBOT_QQ_CONFIG_MOUNT_SOURCE: qqMountSource,
       LLONEBOT_WS_PORT: '30192',
-      LLBOT_OB11_READY_TIMEOUT_SEC: '1',
     });
 
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain('LLBot OB11 websocket port 30192 did not become ready within 1s');
+    expect(result.code).toBe(7);
+    expect(result.stderr).toContain('llbot failed');
   });
 });
