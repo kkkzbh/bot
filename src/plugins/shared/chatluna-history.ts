@@ -34,6 +34,8 @@ type ChatLunaHistoryModule = {
   ) => ChatLunaHistoryWriter;
 };
 
+const ChatLunaHistory = require('koishi-plugin-chatluna/llm-core/memory/message') as ChatLunaHistoryModule;
+
 export async function createChatLunaHistoryWriter(args: {
   database: ChatLunaHistoryDatabaseLike;
   logger: Pick<Logger, 'warn'>;
@@ -41,9 +43,7 @@ export async function createChatLunaHistoryWriter(args: {
   chatluna: ChatLunaHistoryServiceLike;
   maxMessagesCount?: number;
 }): Promise<ChatLunaHistoryWriter> {
-  const { KoishiChatMessageHistory } = await import(
-    'koishi-plugin-chatluna/llm-core/memory/message'
-  ) as unknown as ChatLunaHistoryModule;
+  const { KoishiChatMessageHistory } = ChatLunaHistory;
 
   return new KoishiChatMessageHistory(
     { database: args.database, logger: args.logger },

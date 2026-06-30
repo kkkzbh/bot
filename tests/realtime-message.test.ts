@@ -83,14 +83,25 @@ vi.mock('koishi', () => {
   };
 });
 
-vi.mock('koishi-plugin-chatluna/llm-core/memory/message', () => ({
-  KoishiChatMessageHistory: class {
-    constructor(ctx: unknown, conversationId: string, maxMessagesCount: number, chatluna: unknown) {
-      mockRealtimeHistoryInstances.push({ ctx, conversationId, maxMessagesCount, chatluna });
-    }
+vi.mock('../src/plugins/shared/chatluna-history.js', () => ({
+  createChatLunaHistoryWriter: vi.fn(async (args: {
+    database: unknown;
+    logger: unknown;
+    conversationId: string;
+    chatluna: unknown;
+    maxMessagesCount?: number;
+  }) => {
+    mockRealtimeHistoryInstances.push({
+      ctx: { database: args.database, logger: args.logger },
+      conversationId: args.conversationId,
+      maxMessagesCount: args.maxMessagesCount ?? 10_000,
+      chatluna: args.chatluna,
+    });
 
-    addMessages = mockRealtimeHistoryAddMessages;
-  },
+    return {
+      addMessages: mockRealtimeHistoryAddMessages,
+    };
+  }),
 }));
 
 type Middleware = (session: Record<string, any>, next: () => Promise<unknown>) => Promise<unknown>;
