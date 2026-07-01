@@ -316,14 +316,34 @@ describe('group natural trigger middleware', () => {
     expect(result.naturalTrigger).toBeNull();
   });
 
-  it('vetoes ChatLuna native group reply checks outside the natural trigger whitelist', async () => {
+  it('leaves ChatLuna native group reply checks available outside the natural trigger whitelist', async () => {
     const { runBeforeCheckSender } = createHarness({ enabledGroups: '100', replyIntervalMs: 0 });
 
     await expect(runBeforeCheckSender(createSession({
       channelId: '999',
       guildId: '999',
       content: '祥子 在吗',
-    }))).resolves.toEqual([true]);
+    }))).resolves.toEqual([]);
+  });
+
+  it('does not claim or veto native at mentions outside the natural trigger whitelist', async () => {
+    const { middleware, runBeforeCheckSender } = createHarness({ enabledGroups: '100', replyIntervalMs: 0 });
+    const session = createSession({
+      channelId: '999',
+      guildId: '999',
+      content: '<at id="bot-1" name="小祥"/> 1',
+      stripped: { content: '1', atSelf: true },
+      elements: [
+        { type: 'at', attrs: { id: 'bot-1', name: '小祥' }, children: [] },
+        { type: 'text', attrs: { content: ' 1' }, children: [] },
+      ],
+    });
+
+    await expect(runAndCapture(middleware, session)).resolves.toEqual({
+      content: '<at id="bot-1" name="小祥"/> 1',
+      naturalTrigger: null,
+    });
+    await expect(runBeforeCheckSender(session)).resolves.toEqual([]);
   });
 
   it('keeps ChatLuna native group reply checks available inside the natural trigger whitelist', async () => {
@@ -333,10 +353,10 @@ describe('group natural trigger middleware', () => {
       channelId: '100',
       guildId: '100',
       content: '祥子 在吗',
-    }))).resolves.toEqual([undefined]);
+    }))).resolves.toEqual([]);
   });
 
-  it('vetoes ChatLuna native group reply checks when feature policy disables natural trigger', async () => {
+  it('leaves ChatLuna native group reply checks available when feature policy disables natural trigger', async () => {
     const { featurePolicy, runBeforeCheckSender } = createHarness({ enabledGroups: '100', replyIntervalMs: 0 });
     featurePolicy.resolveFeatureEnabled.mockResolvedValue(false);
 
@@ -344,7 +364,7 @@ describe('group natural trigger middleware', () => {
       channelId: '100',
       guildId: '100',
       content: '祥子 在吗',
-    }))).resolves.toEqual([true]);
+    }))).resolves.toEqual([]);
   });
 
   it('does not trigger without complete group session identity', async () => {

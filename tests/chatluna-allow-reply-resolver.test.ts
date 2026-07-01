@@ -13,6 +13,14 @@ describe('chatluna allow_reply resolver source and type export', () => {
     expect(content).toContain('chatluna/before-check-sender');
   });
 
+  it('keeps native at-mention checks in ChatLuna allow_reply', () => {
+    const content = readFileSync(`${CHATLUNA_CORE_ROOT}/src/middlewares/chat/allow_reply.ts`, 'utf8');
+
+    expect(content).toContain('session.stripped.atSelf');
+    expect(content).toContain("element.type === 'at'");
+    expect(content).toContain("element.attrs?.['id'] === botId");
+  });
+
   it('declares the allow-reply resolver contract in the chat service source', () => {
     const content = readFileSync(`${CHATLUNA_CORE_ROOT}/src/services/chat.ts`, 'utf8');
 
